@@ -16,6 +16,7 @@ export interface AdvisorProcedureProtection {
     fanOut: boolean;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+
     /**
      * `true` when the procedure declares an email-shaped argument. Read by the
      * `signup_mutation_without_disposable_gating` lint: `emailGateMiddleware`

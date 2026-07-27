@@ -30,6 +30,22 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { LunoraError } from "@lunora/errors";
+import {
+    analyzedSearchText,
+    assertSearchWithinCap,
+    createSearchAnalyzer,
+    createSearchBuilder,
+    finishSearchPage,
+    FTS_ID_COLUMN,
+    ftsTableName,
+    MAX_SEARCH_SCAN,
+    planSearchPage,
+    resolveSearchScan,
+    scoreDocument,
+    searchPageScan,
+    searchTermRange,
+    tokenizeSearch,
+} from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
@@ -38,6 +54,7 @@ import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from 
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
+import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { createCompanionSync } from "./ctx-db-companions";
@@ -58,6 +75,7 @@ import {
     rowToDocument,
     serializeSqlValue,
     tableColumns,
+    tryRowToDocument,
 } from "./do-sql";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import NotFoundError from "./not-found-error";
@@ -80,7 +98,6 @@ import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPred
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
-import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -178,9 +195,16 @@ interface IndexDefinitionLike {
 }
 
 interface SearchIndexDefinitionLike {
+    /** Indexed text column; a dot-separated path reads a nested field. */
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
+    /** Analysis profile (folding + stopwords) — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly language?: string;
     readonly name: string;
+    /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one; see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly strategy?: string;
 }
 
 /** Mirror of `@lunora/server`'s `GeoIndexDefinition` — a geohash companion over a `v.geoPoint()` column. */
@@ -905,90 +929,95 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
     return builder;
 };
 
-const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilterBuilderLike => {
-    const builder: SearchFilterBuilderLike = {
-        eq: (field, value) => {
-            if (!search.definition.filterFields?.includes(field)) {
-                throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
-            }
-
-            search.filters.push({ field, value });
-
-            return builder;
-        },
-        search: (field, query) => {
-            if (field !== search.definition.field) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`,
-                );
-            }
-
-            // Mutate the caller-owned stage in place (same object the query
-            // planner reads back); alias to a local so the param itself isn't
-            // reassigned.
-            const stage = search;
-
-            stage.field = field;
-            stage.query = query;
-            stage.hasQuery = true;
-
-            return builder;
-        },
-    };
-
-    return builder;
-};
+/**
+ * How many rows the scan fallback fetches to serve a read bounded by `limit`.
+ *
+ * The FTS5 and `.global()` layouts order by the true score in SQL, so their
+ * `LIMIT` is exact and none of them needs a window. This path has no index to
+ * order by relevance — it scores every row it fetched, in memory — so cutting
+ * at `limit` in SQL would discard rows before they were scored. It takes the
+ * cap's worth instead, and never less than the cap, because an unbounded read
+ * resolves to one row *past* it so {@link assertSearchWithinCap} can tell
+ * "exactly the cap" from "more than the cap".
+ */
+const scanCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARCH_SCAN);
 
 /**
- * Run a search via the FTS5 shadow table: MATCH the query against the indexed
- * text column, JOIN back to the document table on the stored id, narrow by any
- * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
+ * Run a search via the FTS5 shadow table, scoring in SQL from the index's own
+ * vocabulary view.
+ *
+ * FTS5 orders by bm25, which penalises document length and common terms; our
+ * contract orders by summed occurrences. The two are unrelated, so selecting a
+ * window with bm25 and re-ranking it in memory is not the contract's top-N —
+ * on a corpus where more documents match than the window holds, the documents
+ * the contract ranks highest can sit outside it entirely. `.take(3)` returned
+ * three arbitrary rows that claimed to be the best three.
+ *
+ * `fts5vocab(…, instance)` exposes one row per term instance, so a term's
+ * frequency in a document is a `COUNT`, and the query becomes the same shape
+ * the `.global()` layouts use — one `SUM(CASE …)` per term, added. Same answer
+ * by construction rather than by test, and `LIMIT` is exact, so an unbounded
+ * read's over-cap probe row survives to `assertSearchWithinCap`.
+ *
+ * One branch per term rather than one `WHERE … OR …`: SQLite's planner silently
+ * drops a range constraint OR'd with an equality on this module, returning no
+ * rows for the range half rather than an error.
  */
-const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
-    const tokens = tokenizeSearch(search.query);
+const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
+    const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
 
     if (tokens.length === 0) {
         return [];
     }
 
     const ftName = ftsTableName(tableName, search.indexName);
-    // MATCH must target the FTS table (by name or an indexed column), never the
-    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
-    // We match the indexed `__text__` column so the alias join still works.
-    const whereClauses: SQL[] = [dsql`f.${dsql.identifier("__text__")} MATCH ${buildFtsMatch(tokens)}`];
+    const vocabulary = `${ftName}__vocab`;
+    const lastIndex = tokens.length - 1;
+    const branches = tokens.map((token, index) => {
+        const range = searchTermRange(token, index === lastIndex);
+        const predicate = range.exact
+            ? dsql`${dsql.identifier("term")} = ${range.lower}`
+            : dsql`${dsql.identifier("term")} >= ${range.lower} AND ${dsql.identifier("term")} < ${range.upper}`;
+
+        return dsql`SELECT ${dsql.identifier("doc")}, ${dsql.raw(String(index))} AS ${dsql.identifier("__term__")}, COUNT(*) AS ${dsql.identifier("__n__")} FROM ${dsql.identifier(vocabulary)} WHERE ${predicate} GROUP BY ${dsql.identifier("doc")}`;
+    });
+    const perTerm = tokens.map(
+        (_, index) => dsql`SUM(CASE WHEN u.${dsql.identifier("__term__")} = ${dsql.raw(String(index))} THEN u.${dsql.identifier("__n__")} ELSE 0 END)`,
+    );
+    const scored = dsql`SELECT f.${dsql.identifier(FTS_ID_COLUMN)} AS ${dsql.identifier(FTS_ID_COLUMN)}, ${dsql.join(perTerm, dsql` + `)} AS ${dsql.identifier("__score__")} FROM (${dsql.join(branches, dsql` UNION ALL `)}) u JOIN ${dsql.identifier(ftName)} f ON f.rowid = u.${dsql.identifier("doc")} GROUP BY f.${dsql.identifier(FTS_ID_COLUMN)} HAVING ${dsql.join(
+        perTerm.map((term) => dsql`${term} > 0`),
+        dsql` AND `,
+    )}`;
+
+    const whereClauses: SQL[] = [];
 
     for (const filter of search.filters) {
         whereClauses.push(dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
     }
 
-    // Soft delete: the unqualified `__doc__` in the scope predicate resolves to
-    // the joined doc table `m` (the FTS table `f` has no `__doc__`).
     if (scopeCondition) {
         whereClauses.push(scopeCondition);
     }
 
-    // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
-    // tiebreak matches the scan fallback so equal-rank rows order newest-first
-    // on both engines.
-    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier("__id__")} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank, m._creationTime DESC`;
+    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM (${scored}) s JOIN ${dsql.identifier(tableName)} m ON m.id = s.${dsql.identifier(FTS_ID_COLUMN)}`;
 
-    if (typeof limit === "number") {
-        query = dsql`${query} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit))))}`;
+    if (whereClauses.length > 0) {
+        query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
     }
 
-    const rows = runDrizzle(sql, query).toArray();
-    const docs: Record<string, unknown>[] = [];
+    query = dsql`${query} ORDER BY s.${dsql.identifier("__score__")} DESC, m._creationTime DESC, m.id ASC LIMIT ${dsql.raw(String(limit))}`;
 
-    for (const row of rows) {
-        const record = rowToDocument(row);
+    const documents: Record<string, unknown>[] = [];
+
+    for (const row of runDrizzle(sql, query)) {
+        const record = tryRowToDocument(row);
 
         if (record) {
-            docs.push(record);
+            documents.push(record);
         }
     }
 
-    return docs;
+    return documents;
 };
 
 /**
@@ -998,8 +1027,9 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
  * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
  * by creation time (newest first).
  */
-const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
-    const tokens = tokenizeSearch(search.query);
+const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
+    const analyzer = createSearchAnalyzer(search.definition.language);
+    const tokens = tokenizeSearch(search.query, analyzer);
 
     if (tokens.length === 0) {
         return [];
@@ -1021,28 +1051,47 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
         query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
     }
 
+    // Bounded like every other search read. This path has no index to order by
+    // relevance, so the window is taken newest-first — deterministic, and the
+    // same order the tiebreak uses — rather than left to the engine. Past the
+    // cap the fallback is therefore approximate, which the FTS5 paths are not;
+    // it only runs on an engine without FTS5, which no Durable Object is.
+    query = dsql`${query} ORDER BY _creationTime DESC, id ASC LIMIT ${dsql.raw(String(scanCandidateWindow(limit)))}`;
+
     const rows = runDrizzle(sql, query).toArray();
-    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
+    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
 
     for (const row of rows) {
-        const record = rowToDocument(row);
+        // Safe-parsing, not `rowToDocument`: this scan reads every row of the
+        // table, so one unparseable document would otherwise turn *every*
+        // search on it into an error. Unsearchable, not fatal.
+        const record = tryRowToDocument(row);
 
         if (!record) {
             continue;
         }
 
-        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
+        // The *analyzed* text, not the raw field: every other layout stores and
+        // scores a token stream capped at `MAX_INDEXED_TOKENS`, so scoring the
+        // raw value here would make this path find matches past the cap that
+        // the others cannot — a divergence in the one direction no parity gate
+        // covers, since this path only runs where FTS5 is absent.
+        const score = scoreDocument(analyzedSearchText(record, search.definition), tokens, analyzer);
 
         if (score > 0) {
-            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
+            scored.push({
+                creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
+                doc: record,
+                id: typeof record["_id"] === "string" ? record["_id"] : "",
+                score,
+            });
         }
     }
 
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
+    // Same total order the FTS path sorts by, id-terminated (see `searchViaFts`).
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    const docs = scored.map((entry) => entry.doc);
-
-    return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+    return scored.slice(0, limit).map((entry) => entry.doc);
 };
 
 /** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
@@ -1527,13 +1576,30 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             throw new LunoraError("INTERNAL", "runSearchFetch called without a staged search");
         }
 
+        // Advance the backfill on read. `runShardMigrations` runs once per
+        // isolate, so a warm DO would otherwise index one page and then stop —
+        // a large table stays permanently half-indexed, serving partial results
+        // with no error and no signal. The page is bounded and a completed
+        // index costs one indexed state lookup, so reads pay almost nothing.
+        backfillSearchIndexesForTable(sql, tableName, tableDefinition);
+
         const filtered = stage.inMemoryFilters.length > 0;
-        const engineLimit = filtered ? undefined : limit;
+        // Relevance order means the engine read is always bounded: the caller's
+        // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when a
+        // `.filter()` runs on top, which narrows *within* that window rather than
+        // widening the read.
+        const engineLimit = resolveSearchScan(filtered ? undefined : limit);
         const docs = isFtsAvailable(sql)
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
         if (!filtered) {
+            // An unbounded read asked for one row past the cap; if it came back
+            // full, the caller would otherwise receive a prefix that looks whole.
+            if (limit === undefined) {
+                assertSearchWithinCap(docs);
+            }
+
             return docs;
         }
 
@@ -1550,6 +1616,18 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         }
 
         return result;
+    };
+
+    /**
+     * One page of a relevance-ordered search. The window is fetched one row
+     * past the page so `hasMore` is observed rather than guessed; everything
+     * else — cursor decoding, the bounded-page refusal, the cap — is the shared
+     * policy in `search-query`, so the two backends page identically.
+     */
+    const paginateSearchStage = (options: PaginationOptions): QueryPage => {
+        const plan = planSearchPage(options);
+
+        return finishSearchPage(runSearchFetch(searchPageScan(plan)), plan);
     };
 
     const buildOrderClause = (): SQL => {
@@ -1599,7 +1677,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             if (stage.search) {
-                throw new LunoraError("INTERNAL", "pagination is not supported on search queries; use .take(n) or .collect()");
+                return paginateSearchStage(options);
             }
 
             if (stage.geo) {
@@ -1681,7 +1759,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             };
 
             stage.search = searchStage;
-            search(createSearchBuilder(searchStage, tableName));
+            search(createSearchBuilder(searchStage, tableName, createSearchAnalyzer(definition.language)));
 
             if (!searchStage.hasQuery) {
                 throw new LunoraError("INTERNAL", `search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
@@ -2605,7 +2683,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Vectorize query can't be scoped — so a soft delete REMOVES the row
                 // from them (passing `undefined`/`op: "delete"`), exactly like a
                 // physical delete. `restore()` re-adds both via the patch path.
-                syncSearch(tableName, id, merged);
+                syncSearch(tableName, id, merged, existing);
                 // Like rank, the geo companion has no read-time marker filter, so a
                 // soft delete removes the row from it (restore re-adds via patch).
                 syncGeo(tableName, id, undefined);
@@ -3373,7 +3451,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
-            syncSearch(tableName, id, merged);
+            syncSearch(tableName, id, merged, existing);
             syncGeo(tableName, id, merged);
             syncAggregates(tableName, existing, merged);
             syncRanks(tableName, id, existing, merged);
@@ -3775,7 +3853,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
-            syncSearch(tableName, id, replaced);
+            syncSearch(tableName, id, replaced, previous);
             syncGeo(tableName, id, replaced);
             syncAggregates(tableName, previous, replaced);
             syncRanks(tableName, id, previous, replaced);
@@ -3859,7 +3937,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 };
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
-export { backfillAggregateIndexes, backfillRankIndexes } from "./ctx-db-backfill";
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange } from "./ctx-db-cdc";
 export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
@@ -3873,6 +3951,7 @@ export {
 } from "./ctx-db-global-shape-snapshot";
 export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { runShardMigrations } from "./ctx-db-migrations";
+export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";

@@ -56,11 +56,17 @@ export interface IndexIR {
 }
 
 export interface SearchIndexIR {
-    /** Primary text-search field. */
+    /** Primary text-search field; a dot-separated path reads a nested field. */
     field: string;
     /** Optional filter fields surfaced alongside the FTS column. */
     filterFields?: ReadonlyArray<string>;
+    /** Text-analysis profile (accent folding + that language's stopwords). */
+    language?: string;
     name: string;
+    /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
+    staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one (Postgres). */
+    strategy?: string;
 }
 
 /** A `.geoIndex(name, { field, precision? })` declaration — a geohash companion over a `v.geoPoint()` column. */
@@ -1012,10 +1018,20 @@ export interface ProcedureMiddlewareIR {
     exportName: string;
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
     fanOut: boolean;
-    /** `true` when the procedure declares an email-shaped argument (`email`, `emailAddress`, `userEmail`, …). Feeds `signup_mutation_without_disposable_gating`, which can only be actioned when there is an address to gate. */
-    hasEmailArg: boolean;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
+
+    /**
+     * `true` when the procedure declares an email-shaped argument (`email`,
+     * `emailAddress`, `userEmail`, …), `false` when it provably declares none,
+     * and **absent** when the argument list can't be read statically (a
+     * `.input(sharedSchema)`, a spread, or a factory whose `args` comes from a
+     * variable). Feeds `signup_mutation_without_disposable_gating`, which can
+     * only be actioned when there is an address to gate — so "unreadable" must
+     * stay distinguishable from "none", or the lint would clear itself on a
+     * registration that may well expose one.
+     */
+    hasEmailArg?: boolean;
     /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     kind: "action" | "mutation" | "query";
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */

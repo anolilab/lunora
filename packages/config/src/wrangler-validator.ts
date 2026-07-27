@@ -611,7 +611,9 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
 
         // `hintField` may name several accepted spellings — a field wrangler has
         // renamed still satisfies the rule under its old name (see `pipelines`).
-        const hintFields = Array.isArray(rule.hintField) ? rule.hintField : [rule.hintField];
+        // Narrowed with `typeof`, not `Array.isArray`: the latter widens a
+        // `ReadonlyArray<string> | string` union to `any[]`.
+        const hintFields = typeof rule.hintField === "string" ? [rule.hintField] : rule.hintField;
 
         if (!hintFields.some((field) => isNonEmptyString(entry[field]))) {
             warnings.push(rule.hintMessage(label, entry.binding));

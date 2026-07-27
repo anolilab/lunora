@@ -265,7 +265,9 @@ describe("reconcileWranglerBindings", () => {
 
         // Creem, not Stripe — the reminder must clear for every supported adapter,
         // not just the two it used to name.
-        writeFileSync(join(root, ".dev.vars"), "CREEM_API_KEY=creem_test_x\nCREEM_WEBHOOK_SECRET=whsec_x\n");
+        const devVars = ["CREEM_API_KEY=set", "CREEM_WEBHOOK_SECRET=set", ""].join("\n");
+
+        writeFileSync(join(root, ".dev.vars"), devVars);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
 

@@ -19,7 +19,30 @@
  */
 import type { SqlDialect } from "@lunora/sql-store";
 import { sqliteDecode, sqliteEncode } from "@lunora/sql-store";
+import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+
+/** Companion columns for the Postgres native layout: the document id and its indexed vector. */
+const VECTOR_ID_COLUMN = "__id__";
+const VECTOR_COLUMN = "__vector__";
+
+/** The companion's vector column, qualified by the alias the reader joins under. */
+const vectorRef = (companion: string): SQL => sql`${sql.identifier(companion)}.${sql.identifier(VECTOR_COLUMN)}`;
+
+/**
+ * Build the stored vector from an already-analyzed token stream.
+ *
+ * `simple` is deliberate on three counts: it applies no stemming or stopword
+ * list of its own (Lunora's analyzer already did that, and a second pass would
+ * disagree with every other backend), it makes `to_tsvector`/`to_tsquery`
+ * IMMUTABLE rather than STABLE — which is what lets Hyperdrive cache the read —
+ * and it keeps the stored vector a pure function of the tokens we hand it.
+ */
+const toVector = (analyzed: string): SQL => sql`to_tsvector('simple', ${analyzed})`;
+
+/** The query form of the same: every term ANDed, the final one as a prefix so it matches as-you-type. */
+const toQuery = (terms: ReadonlyArray<string>): SQL =>
+    sql`to_tsquery('simple', ${terms.map((term, index) => (index === terms.length - 1 ? `${term}:*` : term)).join(" & ")})`;
 
 /** Postgres unique-violation message (the SQLSTATE 23505 fallback when the driver omits `.code`). */
 const PG_UNIQUE_VIOLATION_RE = /duplicate key value violates unique constraint/iu;
@@ -103,7 +126,39 @@ export const postgresDialect: SqlDialect = {
         return code === "23505" || (error instanceof Error && PG_UNIQUE_VIOLATION_RE.test(error.message));
     },
     name: "postgres",
+    supportsFts5: false,
+
+    /**
+     * Postgres full text, opted into per index with `strategy: "native"`.
+     *
+     * The `simple` configuration is deliberate on three counts: it applies no
+     * stemming or stopword list of its own (Lunora's analyzer already did that,
+     * and a second pass would disagree with every other backend), it makes
+     * `to_tsvector`/`to_tsquery` IMMUTABLE rather than STABLE — which is what
+     * lets Hyperdrive cache the read — and it keeps the stored vector a pure
+     * function of the tokens we hand it.
+     *
+     * The final term gets `:*` so a native index prefix-matches as-you-type,
+     * matching what the portable path does with `LIKE`.
+     */
+    nativeTextSearch: {
+        createCompanion: (companion, keyType) =>
+            sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)} ${sql.raw(keyType)} PRIMARY KEY, ${sql.identifier(VECTOR_COLUMN)} tsvector)`,
+        createIndexes: (companion) => [
+            sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(`${companion}__gin`)} ON ${sql.identifier(companion)} USING GIN (${sql.identifier(VECTOR_COLUMN)})`,
+        ],
+        indexDocument: (companion, id, analyzed) =>
+            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)}, ${sql.identifier(VECTOR_COLUMN)}) VALUES (${id}, ${toVector(analyzed)})`,
+        matches: (companion, terms) => sql`${vectorRef(companion)} @@ ${toQuery(terms)}`,
+        rank: (companion, terms) => sql`ts_rank_cd(${vectorRef(companion)}, ${toQuery(terms)})`,
+    },
     supportsReturning: true,
+
+    // The search companion's token btree is scanned with `LIKE 'prefix%'` for a
+    // query's final term. A default `text_ops` btree built under a linguistic
+    // collation (e.g. `en_US.UTF-8`) can't answer that, so the token index
+    // declares the pattern operator class and the scan stays indexed.
+    textPatternOperatorClass: "text_pattern_ops",
 
     // Restrict to schemas on the effective search_path (excluding the implicit
     // pg_catalog with `false`) so an unqualified name resolves exactly as CREATE
@@ -153,6 +208,7 @@ export const mysqlDialect: SqlDialect = {
         return candidate.errno === 1062 || candidate.code === "ER_DUP_ENTRY";
     },
     name: "mysql",
+    supportsFts5: false,
     supportsReturning: false,
 
     tableExists: (table) => sql`SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ${table}`,
