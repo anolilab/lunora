@@ -25,9 +25,10 @@
  * moving an existing deployment.
  *
  * ```ts
- * // Inside a Durable Object (`this.state` / `this.ctx`):
+ * // Inside a Durable Object (`this.state` / `this.ctx`), with the constructor's
+ * // second argument kept as `this.env`:
  * const auth = createAuth({
- *     secret: env.AUTH_SECRET,
+ *     secret: this.env.AUTH_SECRET,
  *     database: lunoraDoAdapter(this.state.storage),
  *     plugins: [scim({ connections: [...] })],
  * });
