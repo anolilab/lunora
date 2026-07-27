@@ -92,7 +92,9 @@ describe("localTools", () => {
 
         await listFunctions?.handle({});
 
-        expect(urls.some((url) => url.startsWith("https://worker.example"))).toBe(true);
+        // Compare the parsed origin rather than a string prefix: `startsWith`
+        // would also accept `https://worker.example.evil.test`.
+        expect(urls.some((url) => new URL(url).origin === "https://worker.example")).toBe(true);
     });
 
     it("reuses one client per deployment so the function registry stays cached", async () => {

@@ -125,7 +125,9 @@ describe("createRemoteDocsIndex", () => {
         const hangingFetch = vi.fn<(input: string | URL, init?: RequestInit) => Promise<Response>>(
             async (_input, init) =>
                 new Promise((_resolve, reject) => {
-                    init?.signal?.addEventListener("abort", () => { reject(new Error("The operation was aborted")); });
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new Error("The operation was aborted"));
+                    });
                 }),
         ) as unknown as typeof fetch;
 

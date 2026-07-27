@@ -60,6 +60,9 @@ const serverInfo = (version: string | undefined): McpServerInfo => {
  */
 const createDocsMcpServer = (options: DocsMcpServerOptions): Server => createToolServer(serverInfo(options.version), docsTools(options.index));
 
+/** UTF-8 byte length of `value` — what a byte limit must actually measure. */
+const byteLength = (value: string): number => new TextEncoder().encode(value).length;
+
 /** Either a rejection to return as-is, or the parsed body to hand to the transport. */
 type ScreenedRequest = { parsedBody: unknown } | { response: Response };
 
@@ -98,10 +101,24 @@ const screenRequest = async (request: Request, maxRequestBytes: number): Promise
         return { parsedBody: undefined };
     }
 
+    const tooLarge = { response: rpcError(413, -32_600, `request body exceeds ${String(maxRequestBytes)} bytes`) };
+    const declaredLength = Number(request.headers.get("content-length"));
+
+    // Reject on the declared length FIRST, so an oversized body is refused
+    // before it is buffered into the isolate. A chunked request without the
+    // header still has to be read, which is why the authoritative check below
+    // stays — but the common case costs nothing.
+    if (Number.isFinite(declaredLength) && declaredLength > maxRequestBytes) {
+        return tooLarge;
+    }
+
     const body = await request.text();
 
-    if (body.length > maxRequestBytes) {
-        return { response: rpcError(413, -32_600, `request body exceeds ${String(maxRequestBytes)} bytes`) };
+    // `String.length` counts UTF-16 code units, so a limit expressed in bytes
+    // has to be measured in bytes: 128 KiB of three-byte UTF-8 is ~43k units,
+    // which a naive length check would wave through.
+    if (byteLength(body) > maxRequestBytes) {
+        return tooLarge;
     }
 
     let parsed: unknown;

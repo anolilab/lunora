@@ -90,6 +90,7 @@
         "magic-string": "^1.1.0",
         "react": "catalog:frontend",
         "react-reconciler": "^0.33.0",
+        "smol-toml": "1.6.1",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {

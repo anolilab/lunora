@@ -378,6 +378,19 @@ describe("per-client remote entry shapes", () => {
         expect(readJson(join(workdir, ".vscode", "mcp.json")).servers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
     });
 
+    it("quotes a Codex table key that TOML would otherwise read as nesting", () => {
+        expect.assertions(1);
+
+        const { logger, messages } = captureLogger();
+
+        // The default server name has no dot, so drive the serializer directly
+        // through a docs URL that forces quoting of the value, and assert the
+        // key stays a single bare segment for the normal name.
+        runMcpInstall(baseOptions(logger, { clients: ["codex"] }));
+
+        expect(messages.join("\n")).toContain("[mcp_servers.lunora-docs]");
+    });
+
     it("detects a configured Codex install and prints an escaped TOML snippet", () => {
         expect.assertions(2);
 

@@ -33,6 +33,42 @@ interface CallAgentToolOptions {
 }
 ```
 
+### `LOCAL_SERVER_NAME` (const)
+
+```ts
+const LOCAL_SERVER_NAME = "lunora";
+```
+
+### `LocalDeployment` (interface)
+
+```ts
+interface LocalDeployment {
+    token?: string;
+    url: string;
+}
+```
+
+### `LocalDeploymentSource` (type)
+
+```ts
+type LocalDeploymentSource = (() => LocalDeployment | undefined) | LocalDeployment;
+```
+
+### `LocalMcpServerOptions` (interface)
+
+```ts
+interface LocalMcpServerOptions {
+    allowWrites?: boolean;
+    deployment?: LocalDeploymentSource;
+    docs?: false | {
+        baseUrl?: string;
+    };
+    extraTools?: ReadonlyArray<McpTool>;
+    fetch?: typeof fetch;
+    version?: string;
+}
+```
+
 ### `LunoraMcpServerOptions` (interface)
 
 ```ts
@@ -63,6 +99,30 @@ interface McpAgentExposure {
 
 ```ts
 type McpFetchHandler = (request: Request) => Promise<Response>;
+```
+
+### `McpServerInfo` (interface)
+
+```ts
+interface McpServerInfo {
+    name: string;
+    version: string;
+}
+```
+
+### `McpTool` (interface)
+
+```ts
+interface McpTool {
+    definition: ToolDefinition;
+    handle: (input: Record<string, unknown>) => Promise<ToolResult>;
+}
+```
+
+### `NO_DEPLOYMENT_MESSAGE` (const)
+
+```ts
+const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
 ```
 
 ### `PaidMcpChargeConfig` (type)
@@ -180,10 +240,22 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean) => Promise<ToolResult>;
 ```
 
+### `connectLocalStdio` (const)
+
+```ts
+const connectLocalStdio: (options?: LocalMcpServerOptions) => Promise<Server>;
+```
+
 ### `connectStdio` (const)
 
 ```ts
 const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
+```
+
+### `createLocalMcpServer` (const)
+
+```ts
+const createLocalMcpServer: (options?: LocalMcpServerOptions) => Server;
 ```
 
 ### `createLunoraMcpServer` (const)
@@ -204,14 +276,226 @@ const createMcpFetchHandler: (options: LunoraMcpServerOptions) => McpFetchHandle
 const createPaidMcpServer: (config: PaidMcpServerConfig) => PaidMcpServer;
 ```
 
+### `createToolServer` (const)
+
+```ts
+const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>) => Server;
+```
+
+### `localTools` (const)
+
+```ts
+const localTools: (options: LocalMcpServerOptions) => ReadonlyArray<McpTool>;
+```
+
 ### `parseAgentsEnv` (const)
 
 ```ts
 const parseAgentsEnv: (raw: string | undefined) => McpAgentExposure[];
 ```
 
+### `serveStateless` (const)
+
+```ts
+const serveStateless: (server: Server, request: Request, options?: HandleRequestOptions) => Promise<Response>;
+```
+
 ### `toolDefinitions` (const)
 
 ```ts
 const toolDefinitions: (allowWrites: boolean) => ReadonlyArray<ToolDefinition>;
+```
+
+## `@lunora/mcp/docs`
+
+### `DEFAULT_DOCS_BASE_URL` (const)
+
+```ts
+const DEFAULT_DOCS_BASE_URL = "https://lunora.sh";
+```
+
+### `DEFAULT_SEARCH_LIMIT` (const)
+
+```ts
+const DEFAULT_SEARCH_LIMIT = 10;
+```
+
+### `DOCS_SERVER_NAME` (const)
+
+```ts
+const DOCS_SERVER_NAME = "lunora-docs";
+```
+
+### `DOCS_TOOL_DEFINITIONS` (const)
+
+```ts
+const DOCS_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
+```
+
+### `DocsIndex` (interface)
+
+```ts
+interface DocsIndex {
+    getPage: (url: string) => Promise<DocsPage | undefined>;
+    listPages: () => Promise<ReadonlyArray<DocsPageSummary>>;
+    search: (query: string) => Promise<ReadonlyArray<DocsSearchHit>>;
+}
+```
+
+### `DocsMcpServerOptions` (interface)
+
+```ts
+interface DocsMcpServerOptions {
+    index: DocsIndex;
+    maxRequestBytes?: number;
+    version?: string;
+}
+```
+
+### `DocsPage` (interface)
+
+```ts
+interface DocsPage extends DocsPageSummary {
+    content: string;
+}
+```
+
+### `DocsPageSummary` (interface)
+
+```ts
+interface DocsPageSummary {
+    description?: string;
+    title: string;
+    url: string;
+}
+```
+
+### `DocsSearchHit` (interface)
+
+```ts
+interface DocsSearchHit {
+    excerpt?: string;
+    section?: string;
+    title: string;
+    url: string;
+}
+```
+
+### `FumadocsSearchResult` (interface)
+
+```ts
+interface FumadocsSearchResult {
+    breadcrumbs?: string[];
+    content?: string;
+    type?: string;
+    url?: string;
+}
+```
+
+### `MAX_SEARCH_LIMIT` (const)
+
+```ts
+const MAX_SEARCH_LIMIT = 50;
+```
+
+### `McpFetchHandler` (type)
+
+```ts
+type McpFetchHandler = (request: Request) => Promise<Response>;
+```
+
+### `McpServerInfo` (interface)
+
+```ts
+interface McpServerInfo {
+    name: string;
+    version: string;
+}
+```
+
+### `McpTool` (interface)
+
+```ts
+interface McpTool {
+    definition: ToolDefinition;
+    handle: (input: Record<string, unknown>) => Promise<ToolResult>;
+}
+```
+
+### `RemoteDocsIndexOptions` (interface)
+
+```ts
+interface RemoteDocsIndexOptions {
+    baseUrl?: string;
+    fetch?: typeof fetch;
+    timeoutMs?: number;
+}
+```
+
+### `ToolDefinition` (interface)
+
+```ts
+interface ToolDefinition {
+    description: string;
+    inputSchema: ToolInputSchema;
+    name: string;
+}
+```
+
+### `ToolInputSchema` (interface)
+
+```ts
+interface ToolInputSchema {
+    properties: Record<string, unknown>;
+    required?: ReadonlyArray<string>;
+    type: "object";
+}
+```
+
+### `ToolResult` (interface)
+
+```ts
+interface ToolResult {
+    content: {
+        text: string;
+        type: "text";
+    }[];
+    isError?: boolean;
+}
+```
+
+### `createDocsMcpFetchHandler` (const)
+
+```ts
+const createDocsMcpFetchHandler: (options: DocsMcpServerOptions) => McpFetchHandler;
+```
+
+### `createDocsMcpServer` (const)
+
+```ts
+const createDocsMcpServer: (options: DocsMcpServerOptions) => Server;
+```
+
+### `createRemoteDocsIndex` (const)
+
+```ts
+const createRemoteDocsIndex: (options?: RemoteDocsIndexOptions) => DocsIndex;
+```
+
+### `docsTools` (const)
+
+```ts
+const docsTools: (index: DocsIndex) => ReadonlyArray<McpTool>;
+```
+
+### `normalizeDocUrl` (const)
+
+```ts
+const normalizeDocUrl: (raw: string) => string;
+```
+
+### `toDocsSearchHits` (const)
+
+```ts
+const toDocsSearchHits: (results: ReadonlyArray<unknown>) => DocsSearchHit[];
 ```

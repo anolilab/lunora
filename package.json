@@ -82,6 +82,7 @@
         "@visulima/vis": "catalog:prod",
         "conventional-changelog-conventionalcommits": "catalog:dev",
         "cz-conventional-changelog": "catalog:prod",
+        "es-module-lexer": "catalog:vite",
         "eslint": "catalog:lint",
         "eslint-plugin-jsx-a11y": "catalog:lint",
         "eslint-plugin-react": "catalog:lint",

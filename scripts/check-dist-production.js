@@ -22,6 +22,8 @@
  */
 
 import { execFileSync } from "node:child_process";
+
+import { init, parse } from "es-module-lexer";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -163,8 +165,18 @@ const EDGE_UNSAFE_SPECIFIERS = [
     { specifier: "@lunora/client", why: "the deployment client — the docs surface must not depend on it" },
 ];
 
-/** Every file `entry` pulls in, following relative imports transitively. */
-const chunkGraph = (entry) => {
+/**
+ * Every file `entry` pulls in, following relative imports transitively.
+ *
+ * Parsed with `es-module-lexer` rather than matched with regexes: the input is
+ * emitted, sometimes minified, bundler output, where all three edge forms —
+ * a `from` clause, a bare side-effect `import "./x"`, and a dynamic
+ * `import("./x")` — appear without the whitespace a pattern would key on.
+ * Missing one lets an unsafe chunk hide a hop behind it.
+ */
+const chunkGraph = async (entry) => {
+    await init;
+
     const seen = new Set();
     const queue = [entry];
 
@@ -177,11 +189,13 @@ const chunkGraph = (entry) => {
 
         seen.add(file);
 
-        for (const match of readFileSync(file, "utf8").matchAll(/from\s*["']([^"']+)["']/g)) {
-            const specifier = match[1];
+        const [imports] = parse(readFileSync(file, "utf8"), file);
 
-            if (specifier.startsWith(".")) {
-                queue.push(join(dirname(file), specifier));
+        for (const record of imports) {
+            // `n` is undefined for a dynamic import with a computed specifier,
+            // which we cannot resolve statically anyway.
+            if (record.n !== undefined && record.n.startsWith(".")) {
+                queue.push(join(dirname(file), record.n));
             }
         }
     }
@@ -189,7 +203,7 @@ const chunkGraph = (entry) => {
     return seen;
 };
 
-const checkDocsEntryIsEdgeSafe = () => {
+const checkDocsEntryIsEdgeSafe = async () => {
     const entry = join(packagesDir, "mcp", "dist", "docs", "index.mjs");
 
     if (!dirExists(join(packagesDir, "mcp", "dist"))) {
@@ -199,7 +213,7 @@ const checkDocsEntryIsEdgeSafe = () => {
     let files;
 
     try {
-        files = chunkGraph(entry);
+        files = await chunkGraph(entry);
     } catch (error) {
         console.error(`❌ Could not walk the @lunora/mcp/docs chunk graph from ${relative(rootDir, entry)}: ${error.message}`);
 
@@ -237,7 +251,7 @@ const checkDocsEntryIsEdgeSafe = () => {
 };
 
 const cliVersionOk = checkCliVersion();
-const docsEntryOk = checkDocsEntryIsEdgeSafe();
+const docsEntryOk = await checkDocsEntryIsEdgeSafe();
 
 if (violations.length > 0) {
     console.error(`❌ Development-build artifacts found in ${violations.length} file(s):\n`);

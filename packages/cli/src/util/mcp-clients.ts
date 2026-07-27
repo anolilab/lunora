@@ -14,6 +14,7 @@
  * rather than guessing at a format it cannot safely rewrite.
  */
 import { join } from "@visulima/path";
+import { stringify } from "smol-toml";
 
 /** How a client is told to reach an MCP server. */
 type McpServerSpec =
@@ -142,30 +143,24 @@ const claudeDesktopPath = ({ home, platform }: McpPathContext): string | undefin
     return undefined;
 };
 
-/** Escape a value for a TOML basic string, so a quote in a URL can't break the snippet. */
-const toml = (value: string): string =>
-    `"${value
-        .split("\\")
-        .join("\\\\")
-        .split('"')
-        .join(String.raw`\"`)}"`;
-
-/** Render a TOML `[mcp_servers.&lt;name>]` table — Codex's config format. */
-const codexSnippet = (name: string, spec: McpServerSpec): string => {
-    if (spec.transport === "http") {
-        return `[mcp_servers.${name}]\nurl = ${toml(spec.url)}\n`;
-    }
-
-    const args = spec.args.map((argument) => toml(argument)).join(", ");
-    const environment =
-        spec.env === undefined
-            ? ""
-            : `env = { ${Object.entries(spec.env)
-                  .map(([key, value]) => `${key} = ${toml(value)}`)
-                  .join(", ")} }\n`;
-
-    return `[mcp_servers.${name}]\ncommand = ${toml(spec.command)}\nargs = [${args}]\n${environment}`;
-};
+/**
+ * Render the `[mcp_servers.&lt;name>]` table Codex reads.
+ *
+ * Serialized by `smol-toml` rather than by hand: TOML has real rules about
+ * which keys may be bare (a dot in a server name silently becomes table
+ * nesting) and which characters a basic string may contain (a raw newline in an
+ * env value is invalid). Hand-rolling that is a bug farm, and the library is
+ * already in the tree — wrangler depends on it.
+ */
+const codexSnippet = (name: string, spec: McpServerSpec): string =>
+    stringify({
+        mcp_servers: {
+            [name]:
+                spec.transport === "http"
+                    ? { url: spec.url }
+                    : { args: [...spec.args], command: spec.command, ...(spec.env === undefined ? {} : { env: spec.env }) },
+        },
+    });
 
 /**
  * The supported clients, in the order `lunora mcp install --list` prints them:

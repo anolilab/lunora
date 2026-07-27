@@ -230,6 +230,24 @@ describe("createDocsMcpFetchHandler request screening", () => {
         expect(calls()).toBe(0);
     });
 
+    it("measures the cap in bytes, not UTF-16 code units", async () => {
+        expect.assertions(2);
+
+        const { calls, index: countedIndex } = countingIndex();
+        // 40 000 three-byte characters: ~120 KB of UTF-8 inside a 64 KB cap,
+        // but only 40 000 `String.length` units — a naive check waves it through.
+        const multiByte = JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: { query: "☃".repeat(40_000) }, name: "lunora_search_docs" },
+        });
+        const response = await post(createDocsMcpFetchHandler({ index: countedIndex, maxRequestBytes: 64 * 1024 }), multiByte);
+
+        expect(response.status).toBe(413);
+        expect(calls()).toBe(0);
+    });
+
     it("honours a caller-supplied size cap", async () => {
         expect.assertions(1);
 
