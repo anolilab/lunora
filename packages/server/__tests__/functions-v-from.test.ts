@@ -30,6 +30,7 @@ const makeMutationContext = (): MutationContext => {
         span: {
             addEvent: () => undefined,
             addLink: () => undefined,
+            recordEvaluation: () => undefined,
             recordException: () => undefined,
             setAttribute: () => undefined,
             setAttributes: () => undefined,

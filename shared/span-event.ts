@@ -107,7 +107,6 @@ export interface SpanHandle {
      */
     recordException: (error: unknown) => void;
 
-
     /** Set one attribute on the enclosing span (merged at record time; post-hoc wins on key clash). */
     setAttribute: (key: string, value: LogFields[string]) => void;
     /** Merge attributes onto the enclosing span (post-hoc wins on key clash). */

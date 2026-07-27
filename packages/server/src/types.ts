@@ -1554,6 +1554,7 @@ interface LunoraLogger {
  * three drift apart. Start attributes are snapshotted before the body runs;
  * handle writes are merged over them at record time, post-hoc winning on a clash.
  */
+
 /**
  * One AI **evaluation** verdict — a scorer's `{name, score, label?}` — to attach
  * to a generation span via {@link SpanHandle.recordEvaluation}. Declared
@@ -1587,7 +1588,7 @@ interface SpanHandle {
 
     /**
      * Attach an AI **evaluation** verdict to this (generation) span as the
-     * `gen_ai.evaluation.<name>.score` / `.label` OpenTelemetry attributes, so a
+     * `gen_ai.evaluation.&lt;name>.score` / `.label` OpenTelemetry attributes, so a
      * scorer's grade rides the same trace as the generation it graded. Convenience
      * over {@link SpanHandle.setAttributes} that owns the key format; privacy-safe —
      * only the name, score, and optional label are emitted. Throws on an empty name

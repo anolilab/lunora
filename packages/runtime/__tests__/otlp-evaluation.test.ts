@@ -6,12 +6,12 @@ import { otlpSpanBody } from "../src/otlp-export";
 /** One OTLP `KeyValue`, as `otlpSpanBody` encodes them. */
 type OtlpKeyValue = { key: string; value: { boolValue: boolean } | { doubleValue: number } | { intValue: string } | { stringValue: string } };
 
-/** Pull the single span's attribute list out of an `otlpSpanBody` export body. */
-const spanAttributes = (body: unknown): OtlpKeyValue[] => {
-    const parsed = body as { resourceSpans: { scopeSpans: { spans: { attributes: OtlpKeyValue[] }[] }[] }[] };
-
-    return parsed.resourceSpans[0]!.scopeSpans[0]!.spans[0]!.attributes;
-};
+/**
+ * Pull the attribute list off an `otlpSpanBody` result. `otlpSpanBody` encodes a
+ * single OTLP span; the `resourceSpans`/`scopeSpans` envelope is added a tier up
+ * by the exporter, so the span object is the top level here.
+ */
+const spanAttributes = (body: unknown): OtlpKeyValue[] => (body as { attributes: OtlpKeyValue[] }).attributes;
 
 const attrValue = (attributes: OtlpKeyValue[], key: string): OtlpKeyValue["value"] | undefined => attributes.find((entry) => entry.key === key)?.value;
 
@@ -23,19 +23,21 @@ const attrValue = (attributes: OtlpKeyValue[], key: string): OtlpKeyValue["value
  * those keys verbatim on the generation span rather than mangling or dropping them.
  */
 describe("otlpSpanBody — gen_ai.evaluation attributes", () => {
-    const generationSpan = (attributes: SpanEvent["attributes"]): SpanEvent => ({
-        attributes,
-        durationMs: 12,
-        functionPath: "chat:complete",
-        name: "chat gpt-4o-mini",
-        ok: true,
-        parentSpanId: "1111111111111111",
-        shardKey: undefined,
-        spanId: "2222222222222222",
-        startTs: 1_700_000_000_000,
-        traceId: "33333333333333333333333333333333",
-        userId: undefined,
-    });
+    const generationSpan = (attributes: SpanEvent["attributes"]): SpanEvent => {
+        return {
+            attributes,
+            durationMs: 12,
+            functionPath: "chat:complete",
+            name: "chat gpt-4o-mini",
+            ok: true,
+            parentSpanId: "1111111111111111",
+            shardKey: undefined,
+            spanId: "2222222222222222",
+            startTs: 1_700_000_000_000,
+            traceId: "33333333333333333333333333333333",
+            userId: undefined,
+        };
+    };
 
     it("encodes gen_ai.evaluation.<name>.score as a number and .label as a string", () => {
         expect.assertions(2);
@@ -46,7 +48,6 @@ describe("otlpSpanBody — gen_ai.evaluation attributes", () => {
                 "gen_ai.evaluation.exact-match.score": 1,
                 "gen_ai.request.model": "gpt-4o-mini",
             }),
-            "lunora",
         );
         const attributes = spanAttributes(body);
 
@@ -58,7 +59,7 @@ describe("otlpSpanBody — gen_ai.evaluation attributes", () => {
     it("encodes a fractional score as a doubleValue", () => {
         expect.assertions(1);
 
-        const body = otlpSpanBody(generationSpan({ "gen_ai.evaluation.keyword-coverage.score": 0.8 }), "lunora");
+        const body = otlpSpanBody(generationSpan({ "gen_ai.evaluation.keyword-coverage.score": 0.8 }));
 
         expect(attrValue(spanAttributes(body), "gen_ai.evaluation.keyword-coverage.score")).toStrictEqual({ doubleValue: 0.8 });
     });

@@ -21,6 +21,7 @@ import type {
     TableDefinition,
 } from "@lunora/server";
 
+import { evaluationAttributes } from "./evaluation-telemetry";
 import { createFakeScheduler } from "./fake-scheduler";
 import { createSqlExec } from "./node-sqlite";
 
@@ -331,6 +332,14 @@ const createRecordingSpan = (): { handle: SpanHandle; recorded: RecordedWideEven
         },
         addLink: (link) => {
             recorded.links.push({ spanId: link.spanId, traceId: link.traceId });
+        },
+        recordEvaluation: (evaluation) => {
+            // Merged into the recorded attributes exactly as production does, so a
+            // test asserting on `gen_ai.evaluation.<name>.score` sees the same keys
+            // the collector would. Reuses this package's own `evaluationAttributes`
+            // rather than the bundler-inlined `shared/` copy — same contract, no
+            // extra import path for the harness to carry.
+            Object.assign(recorded.attributes, evaluationAttributes(evaluation));
         },
         recordException: (error) => {
             // Mirrors the production recorder's attribute set, `exception.stacktrace`

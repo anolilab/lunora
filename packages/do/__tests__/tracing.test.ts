@@ -413,7 +413,11 @@ describe("ctx.trace", () => {
             "gen_ai.evaluation.keyword-coverage.score": 0.8,
         });
         // A non-finite score is caller misuse and surfaces rather than poisoning the grade.
-        await expect(trace("chat", (_child, handle) => handle.recordEvaluation({ name: "x", score: Number.NaN }))).rejects.toThrow("finite number");
+        await expect(
+            trace("chat", (_child, handle) => {
+                handle.recordEvaluation({ name: "x", score: Number.NaN });
+            }),
+        ).rejects.toThrow("finite number");
     });
 
     it("lets a post-hoc attribute win over a start attribute on a key clash", async () => {
