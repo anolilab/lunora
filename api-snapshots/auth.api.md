@@ -855,6 +855,10 @@ const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner
 const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
 ```
 
+### `lunoraDoAdapter` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `matchesWhere` (const)
 
 ```ts
