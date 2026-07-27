@@ -50,6 +50,13 @@ export interface TelemetryStore {
      * spans (🌐 per-cell provisioning).
      */
     readArchivedTrace: (input: { organizationId: string; traceId: string }) => Promise<SpanObservation[]>;
+    /**
+     * Read the archived spans in a `[from, to]` window (bounded by `limit`), so the
+     * Traces list can fold older traces straight out of the columnar archive when
+     * the browse window reaches past D1's hot retention. Same fail-open contract as
+     * {@link readArchivedTrace}: `[]` when R2 SQL isn't configured or on any failure.
+     */
+    readArchivedSpansInWindow: (input: { from: number; limit: number; organizationId: string; to: number }) => Promise<SpanObservation[]>;
     /** Record one ingest's issue/incident counts as an AE data point. */
     recordCounts: (counts: TelemetryCounts) => void;
     /** Write each `ctx.metrics.*` measurement to AE (`/v1/metrics`). No-op without the binding. */
@@ -141,6 +148,29 @@ export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): Telemetr
                 return (result.rows ?? []).map((row) => archiveRowToObservation(row));
             } catch {
                 // R2 SQL unreachable / table absent — degrade to the D1-only view.
+                return [];
+            }
+        },
+        readArchivedSpansInWindow: async ({ from, limit, organizationId, to }) => {
+            if (!env.R2_SQL_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID || !env.TELEMETRY_BUCKET_NAME) {
+                return [];
+            }
+
+            try {
+                const client = createR2Sql({
+                    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+                    apiToken: env.R2_SQL_TOKEN,
+                    bucket: env.TELEMETRY_BUCKET_NAME,
+                    ...(env.fetch ? { fetch: env.fetch } : {}),
+                });
+                const table = tableRef(env.TELEMETRY_SPAN_TABLE ?? DEFAULT_SPAN_ARCHIVE_TABLE);
+                // Newest-first, bounded — the caller folds these into trace rollups.
+                const result = await client.query(
+                    sql`SELECT * FROM ${raw(table)} WHERE recordType = ${"span"} AND organizationId = ${organizationId} AND startedAt >= ${from} AND startedAt <= ${to} ORDER BY startedAt DESC LIMIT ${limit}`,
+                );
+
+                return (result.rows ?? []).map((row) => archiveRowToObservation(row));
+            } catch {
                 return [];
             }
         },

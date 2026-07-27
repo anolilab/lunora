@@ -98,7 +98,9 @@ export interface ApiTypes {
         setRole: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, void>;
     };
     metrics: {
+        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<unknown> }, { ingested: number; }>;
         list: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
+        series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
@@ -131,6 +133,7 @@ export interface ApiTypes {
         get: FunctionReference<"query", { organizationId: Id<"organizations">; traceId: string }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
         getArchived: FunctionReference<"action", { organizationId: Id<"organizations">; traceId: string }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
         list: FunctionReference<"query", { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }, { durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
+        listArchived: FunctionReference<"action", { from: number; limit?: number; organizationId: Id<"organizations">; to: number }, { durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;
@@ -174,6 +177,9 @@ export interface InternalApiTypes {
     logs: {
         ingestInternal: FunctionReference<"mutation", { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
         orgForScript: FunctionReference<"query", { scriptName: string }, { organizationId: Id<"organizations">; } | null>;
+        prune: FunctionReference<"mutation", {}, { pruned: number; }>;
+    };
+    metrics: {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     organizations: {

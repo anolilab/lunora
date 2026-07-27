@@ -447,8 +447,15 @@ export const ingest = mutation
         },
     );
 
-/** Span observations older than this are pruned (matches the tenant-log retention window). */
-export const OBSERVATION_RETENTION_MS = 48 * 60 * 60 * 1000;
+/**
+ * Span observations older than this are pruned from D1's hot window. Set to 7
+ * days (up from the original 48 h) so recent Traces browse further back without
+ * a round-trip to the columnar archive. Traces older than this are served from
+ * the R2/Iceberg archive via {@link traces.listArchived} / {@link traces.getArchived},
+ * so history is effectively unbounded where a cell has provisioned the archive —
+ * the hot window is a latency/cost tier, not the retention limit.
+ */
+export const OBSERVATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** One stored observation row, for the retention scan. */
 interface ObservationRow {

@@ -27,8 +27,13 @@ crons.interval("enforce dunning", { hours: 6 }, internal.billing.enforceDunning,
 // Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
 crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
 
-// Span observations backing Traces — same 48 h retention as the logs.
+// Span observations backing Traces — 7-day hot window (older served from the archive).
 crons.interval("prune trace observations", { hours: 6 }, internal.telemetry.pruneObservations, {});
+
+// Exact metric points backing the Metrics tab — same 7-day hot window (older
+// served from the sampled AE mirror). Rides the shared 6h expression (no new
+// trigger — Cloudflare's 3-trigger cap).
+crons.interval("prune metric points", { hours: 6 }, internal.metrics.prune, {});
 
 // Prune superseded releases past the rollback retention (GAPS.md A1) so
 // dispatch namespaces never accumulate unboundedly.
