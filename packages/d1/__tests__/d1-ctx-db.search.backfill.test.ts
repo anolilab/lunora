@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
 import sqliteDialect from "../src/sqlite-dialect";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 /**
  * The backfill's own behaviour, against a real SQLite engine without fts5 — so

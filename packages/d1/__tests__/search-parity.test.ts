@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
 import sqliteDialect from "../src/sqlite-dialect";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec, FTS5_IN_BUILD } from "./_helpers/node-sqlite-d1";
 
 /**
  * The parity gate.
@@ -156,7 +156,12 @@ const seedBoth = async (): Promise<{ global: DatabaseWriterLike; inverted: Datab
 
 const idsOf = (documents: Record<string, unknown>[]): unknown[] => documents.map((document) => document["_id"]);
 
-describe("search parity — sharded DO vs .global()", () => {
+// All three engines have to be standable-up for a three-way comparison, and one
+// of them is the FTS5 shadow — which needs the module actually present in this
+// Node build (22.14 has none; 22.23 and 24 do). Where it isn't, there is no
+// meaningful parity gate to run, so it is skipped rather than quietly narrowed
+// to two engines under the same name. CI runs it on the Node that has it.
+describe.skipIf(!FTS5_IN_BUILD)("search parity — sharded DO vs .global()", () => {
     beforeEach(() => {
         doHarness = new DatabaseSync(":memory:");
         globalHarness = createD1Exec();

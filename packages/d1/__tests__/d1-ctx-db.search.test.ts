@@ -2,7 +2,7 @@ import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec, FTS5_IN_BUILD } from "./_helpers/node-sqlite-d1";
 
 /**
  * Behavioral coverage of `.withSearchIndex().search()` against the D1 column
@@ -67,7 +67,11 @@ const setupWriter = async (): Promise<DatabaseWriterLike> => {
     return createD1ContextDatabase({ clock, exec: harness.exec, idGenerator, schema: searchSchema });
 };
 
-describe("d1 ctx-db search", () => {
+// Gated on the module actually being present: this suite runs the real D1
+// factory, whose dialect declares FTS5 because D1 has it. A Node build without
+// the module cannot stand in for D1 here — the parity and backfill suites,
+// which override the dialect to the portable layout, cover it on every build.
+describe.skipIf(!FTS5_IN_BUILD)("d1 ctx-db search", () => {
     beforeEach(() => {
         harness = createD1Exec();
     });

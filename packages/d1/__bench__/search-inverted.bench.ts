@@ -3,7 +3,7 @@ import type { SqlDialect } from "@lunora/sql-store";
 import { backfillSqlSearchIndexes, createSqlCtxDb } from "@lunora/sql-store";
 import { beforeAll, bench, describe } from "vitest";
 
-import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
+import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1";
 import type { D1Exec } from "../src/d1-ctx-db";
 import sqliteDialect from "../src/sqlite-dialect";
 

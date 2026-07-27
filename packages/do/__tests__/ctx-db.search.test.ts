@@ -6,12 +6,47 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Behavioral coverage of `.withSearchIndex().search()` against a real SQLite
- * engine. `node:sqlite` ships *without* FTS5, so this exercises the portable
- * LIKE-scan fallback end to end: AND semantics, prefix on the final token,
- * `.eq()` filter narrowing, term-frequency ranking, and the builder guards.
- * The FTS5 production path (DDL + sync + MATCH SQL) is asserted separately in
+ * engine: AND semantics, prefix on the final token, `.eq()` filter narrowing,
+ * term-frequency ranking, the builder guards, paging and the result cap.
+ *
+ * Every case runs **twice**, once per engine shape the ctx-db supports — the
+ * FTS5 shadow table a Durable Object gets, and the LIKE scan over the document
+ * table it falls back to where the engine has no FTS5. Which one a bare
+ * `node:sqlite` gives depends on the Node build (22.14 has no FTS5, 22.23 and
+ * 24 do), so leaving it ambient means one branch is under test and the other is
+ * exercised by nobody. That is not hypothetical: an unguarded read-time
+ * backfill passed here on Node 24 and threw "no such table" on every search
+ * under 22.14, because the fallback creates no companion to back-fill.
+ *
+ * The FTS5 *emitted SQL* (DDL + sync + MATCH) is asserted separately in
  * `ctx-db.search.fts.test.ts` via a recording double.
  */
+
+/** Whether this Node build's `node:sqlite` carries the FTS5 module at all. */
+const FTS5_IN_BUILD = ((): boolean => {
+    const probe = createSqliteExec();
+
+    try {
+        probe.raw(`CREATE VIRTUAL TABLE "__fts5_build_probe__" USING fts5(x)`);
+
+        return true;
+    } catch {
+        return false;
+    } finally {
+        probe.close();
+    }
+})();
+
+/**
+ * The engine shapes to run every case against. The fallback is always
+ * reachable (the harness can refuse the fts5 DDL); the FTS5 leg needs the
+ * module to actually be there, so it drops out on a build without it rather
+ * than failing — CI's other Node runs it.
+ */
+const ENGINES: { label: string; withoutFts5: boolean }[] = [
+    ...(FTS5_IN_BUILD ? [{ label: "FTS5 shadow table", withoutFts5: false }] : []),
+    { label: "LIKE scan (no FTS5)", withoutFts5: true },
+];
 
 const searchSchema: SchemaLike = {
     tables: {
@@ -55,16 +90,16 @@ const setupWriter = (): DatabaseWriterLike => {
     });
 };
 
-describe("ctx-db search", () => {
+describe.each(ENGINES)("ctx-db search — $label", (engine) => {
     beforeEach(() => {
-        harness = createSqliteExec();
+        harness = createSqliteExec({ withoutFts5: engine.withoutFts5 });
     });
 
     afterEach(() => {
         harness.close();
     });
 
-    describe("ctx-db search — LIKE-scan fallback", () => {
+    describe("query semantics", () => {
         it("matches documents containing every query token (AND semantics)", async () => {
             expect.assertions(1);
 
@@ -216,7 +251,7 @@ describe("ctx-db search", () => {
         });
     });
 
-    describe("ctx-db search — builder guards", () => {
+    describe("builder guards", () => {
         it("throws on an unknown search index", () => {
             expect.assertions(1);
 
@@ -297,7 +332,7 @@ describe("ctx-db search", () => {
         });
     });
 
-    describe("ctx-db search — pagination", () => {
+    describe("pagination", () => {
         it("walks the relevance-ordered result set page by page", async () => {
             expect.assertions(4);
 
@@ -382,7 +417,7 @@ describe("ctx-db search", () => {
         });
     });
 
-    describe("ctx-db search — result cap", () => {
+    describe("result cap", () => {
         it("refuses a take() past the document cap rather than silently truncating", async () => {
             expect.assertions(1);
 
@@ -397,8 +432,99 @@ describe("ctx-db search", () => {
         });
     });
 
-    describe("ctx-db search — backfill robustness", () => {
-        it("skips a corrupt document instead of bricking the migration pass", async () => {
+    /**
+     * Everything that narrows a search *after* the engine has ranked it. The
+     * engine read is bounded by relevance, so a post-filter takes rows out of
+     * that window rather than reaching for more — which is the documented
+     * trade and the reason these need pinning rather than assuming.
+     */
+    describe("post-engine narrowing", () => {
+        it("applies an in-memory .filter() to the ranked window", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await writer.insert("docs", { body: "hello world", channel: "x", title: "keep" });
+            await writer.insert("docs", { body: "hello there", channel: "x", title: "drop" });
+
+            const kept = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .filter((document) => document["title"] === "keep")
+                .collect();
+
+            expect(kept.map((document) => document["title"])).toStrictEqual(["keep"]);
+
+            // The limit still bounds what comes back, counted *after* the
+            // predicate — not before, which would return fewer than asked for
+            // whenever the filter rejected anything in the window.
+            const bounded = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .filter((document) => document["title"] !== "keep")
+                .take(1);
+
+            expect(bounded.map((document) => document["title"])).toStrictEqual(["drop"]);
+        });
+
+        it("hides soft-deleted rows without touching the companion", async () => {
+            expect.assertions(2);
+
+            const softSchema: SchemaLike = {
+                tables: {
+                    docs: {
+                        indexes: [],
+                        searchIndexes: [{ field: "body", name: "by_body" }],
+                        shape: { body: { kind: "string" }, deletedAt: { kind: "number" } },
+                        softDeleteMode: { field: "deletedAt" },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, softSchema);
+
+            const writer = createShardContextDatabase({
+                idGenerator: ((): (() => string) => {
+                    let counter = 0;
+
+                    return () => {
+                        counter += 1;
+
+                        return `d${String(counter)}`;
+                    };
+                })(),
+                schema: softSchema,
+                sql: harness.sql,
+            });
+
+            await writer.insert("docs", { body: "hello world" });
+            await writer.insert("docs", { body: "hello there" });
+            await writer.delete("d2", "docs");
+
+            const results = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .collect();
+
+            // A soft delete is a column flip, not an index eviction — the
+            // companion still holds d2's text, so the exclusion has to happen
+            // where the documents are read.
+            expect(results.map((document) => document["_id"])).toStrictEqual(["d1"]);
+
+            // And a hard delete removes it from both.
+            await writer.delete("d1", "docs", { hard: true });
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                    .collect(),
+            ).resolves.toStrictEqual([]);
+        });
+    });
+
+    describe("corrupt documents", () => {
+        it("skips an unreadable document instead of failing the whole surface", async () => {
             expect.assertions(2);
 
             const writer = setupWriter();
@@ -406,10 +532,12 @@ describe("ctx-db search", () => {
             await writer.insert("docs", { body: "readable one", channel: "x", title: "ok" });
             await writer.insert("docs", { body: "readable two", channel: "x", title: "also ok" });
 
-            // Corrupt one stored blob, then drop the companion so a fresh
-            // migration pass has to re-index from scratch. `rowToDocument`
-            // JSON.parses the blob and throws — inside `runShardMigrations`,
-            // an unhandled throw would take the whole shard's cold start down.
+            // A stored blob that no longer parses. `rowToDocument` throws on it,
+            // and both engines walk every row: the FTS5 path re-indexes the
+            // table on a fresh migration pass, the scan path reads every
+            // document on every query. Either way one bad row must cost that row
+            // and nothing else — an unhandled throw here takes down the shard's
+            // cold start on one engine and every search on the other.
             harness.raw(`UPDATE "docs" SET "__doc__" = ? WHERE id = ?`, "{not json", "d1");
             harness.raw(`DROP TABLE IF EXISTS "docs__fts_by_body"`);
             harness.raw(`DELETE FROM "__lunora_search_state"`);
@@ -423,12 +551,12 @@ describe("ctx-db search", () => {
                 .withSearchIndex("by_body", (q) => q.search("body", "readable"))
                 .collect();
 
-            // The intact row is still indexed; only the unreadable one is lost.
+            // The intact row is still found; only the unreadable one is lost.
             expect(results.map((document) => document["title"])).toStrictEqual(["also ok"]);
         });
     });
 
-    describe("ctx-db search — nested fields", () => {
+    describe("nested fields", () => {
         it("indexes a dot-separated path into a nested object", async () => {
             expect.assertions(1);
 

@@ -26,7 +26,7 @@ import type { AggregateIndexDefinitionLike } from "./aggregates";
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
 import { readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue } from "./do-sql";
+import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue, tryRowToDocument } from "./do-sql";
 import { param } from "./drizzle";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
@@ -205,18 +205,11 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
         lastId = id;
 
-        // `rowToDocument` JSON.parses the stored blob and throws on a corrupt
-        // one. This runs inside `runShardMigrations`, so letting it propagate
-        // would make a single unparseable document brick the whole shard's cold
-        // start — skip the row and keep indexing instead. The cursor still
-        // advances past it, so the pass makes progress.
-        let record: Record<string, unknown> | undefined;
-
-        try {
-            record = rowToDocument(row);
-        } catch {
-            record = undefined;
-        }
+        // Safe-parsing, not `rowToDocument`: this runs inside
+        // `runShardMigrations`, so an unparseable document would brick the
+        // whole shard's cold start. The cursor still advances past it, so the
+        // pass makes progress.
+        const record = tryRowToDocument(row);
 
         if (!record) {
             // Drop whatever the companion still holds for this id. Skipping
@@ -245,9 +238,20 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
  * Index one page of every declared search index on `tableName`, unless the
  * index is `staged`. Called by `runShardMigrations` right after the shadow
  * tables exist, which is what makes `.searchIndex()` on a table that already
- * holds data searchable.
+ * holds data searchable — and again on every search read, so a warm DO keeps
+ * advancing a large table's backfill instead of stopping after one page.
+ *
+ * The FTS5 guard is load-bearing on that second call site. Migration only
+ * creates the shadow tables where the engine has FTS5, so on an engine without
+ * it (searches fall back to a LIKE scan over the document table) there is no
+ * companion to write to and every statement below would raise "no such table"
+ * — turning a working fallback into a search surface that throws on every read.
  */
 const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definition: { searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike> }): void => {
+    if (!isFtsAvailable(sql)) {
+        return;
+    }
+
     for (const index of definition.searchIndexes ?? []) {
         if (index.staged) {
             continue;

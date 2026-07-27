@@ -59,6 +59,7 @@ import {
     rowToDocument,
     serializeSqlValue,
     tableColumns,
+    tryRowToDocument,
 } from "./do-sql";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import NotFoundError from "./not-found-error";
@@ -1029,7 +1030,10 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
 
     for (const row of rows) {
-        const record = rowToDocument(row);
+        // Safe-parsing, not `rowToDocument`: this scan reads every row of the
+        // table, so one unparseable document would otherwise turn *every*
+        // search on it into an error. Unsearchable, not fatal.
+        const record = tryRowToDocument(row);
 
         if (!record) {
             continue;

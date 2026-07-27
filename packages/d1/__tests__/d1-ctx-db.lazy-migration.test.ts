@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { D1Exec } from "../src/d1-ctx-db";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
 import sqliteDialect from "../src/sqlite-dialect";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec, FTS5_IN_BUILD } from "./_helpers/node-sqlite-d1";
 
 /**
  * Audit-fix coverage for the D1 column dialect.
@@ -119,7 +119,7 @@ describe("d1 ctx-db lazy companion migration", () => {
         harness.close();
     });
 
-    it("creates the fts companion lazily so search writes and reads work without an explicit migration", async () => {
+    it.skipIf(!FTS5_IN_BUILD)("creates the fts companion lazily so search writes and reads work without an explicit migration", async () => {
         expect.assertions(2);
 
         // Works on both engine variants: where fts5 is present, ensureMigrated
@@ -142,7 +142,7 @@ describe("d1 ctx-db lazy companion migration", () => {
         expect(results.map((document) => document["title"])).toStrictEqual(["a"]);
     });
 
-    it("patch and delete do not throw against a lazily-created fts companion", async () => {
+    it.skipIf(!FTS5_IN_BUILD)("patch and delete do not throw against a lazily-created fts companion", async () => {
         expect.assertions(2);
 
         await createDocsTable(harness.exec);
