@@ -8,7 +8,7 @@
  * one module rather than beside either engine, and why changing one is a
  * migration (the analyzer's profile exists to detect exactly that). The read
  * side, whose decisions are re-made per query and cost nothing to change, lives
- * in `search-query.ts`.
+ * in `query.ts`; how far a backfill has got lives in `backfill.ts`.
  *
  * Each backend indexes into a companion table — an FTS5 shadow where the engine
  * ships FTS5 (Cloudflare DO SQLite, D1), a portable `(token, id, occurrences)`
@@ -19,8 +19,8 @@
  */
 
 import { resolveDocumentPath } from "../../../shared/document-path";
-import type { SearchAnalyzer } from "./search-analyzer";
-import { createSearchAnalyzer } from "./search-analyzer";
+import type { SearchAnalyzer } from "./analyzer";
+import { createSearchAnalyzer } from "./analyzer";
 
 /**
  * Name of the companion table backing a search index — the FTS5 shadow on
@@ -147,45 +147,4 @@ export const countSearchTokens = (text: string, analyzer: SearchAnalyzer): Map<s
     }
 
     return counts;
-};
-
-/**
- * How far a companion's backfill has progressed, and under which analysis.
- * Declared here rather than beside either engine's state table: both record the
- * same three facts, and the decisions made from them are the shared policy
- * below.
- */
-export interface SearchBackfillState {
-    /** Last `id` indexed, or `undefined` when no page has run yet. */
-    cursor: string | undefined;
-    /** True once a page came back short — the table is fully indexed. */
-    done: boolean;
-    /** Analyzer profile the stored rows were built with; `undefined` predates profile tracking. */
-    profile: string | undefined;
-}
-
-/** What a backfill pass should do, given where the last one got to. */
-export interface SearchBackfillPass {
-    /** Resume past this id; `undefined` starts from the beginning of the table. */
-    cursor: string | undefined;
-    /** Nothing left to index. */
-    finished: boolean;
-    /** Discard the companion's contents before walking — its rows were analyzed by rules the query side no longer uses. */
-    wipe: boolean;
-}
-
-/**
- * Decide a backfill pass from recorded progress. Pure, and shared, because this
- * is a *policy* rather than an engine detail — and when each backend owned a
- * copy they immediately disagreed about the two cases that matter: whether a
- * row with no recorded profile may be resumed (it may not — nothing says what
- * analyzed it), and whether a never-started index is worth wiping (it is not,
- * there is nothing in it).
- */
-export const planSearchBackfillPass = (state: SearchBackfillState, profile: string): SearchBackfillPass => {
-    if (state.profile !== profile) {
-        return { cursor: undefined, finished: false, wipe: state.cursor !== undefined || state.done };
-    }
-
-    return { cursor: state.cursor, finished: state.done, wipe: false };
 };

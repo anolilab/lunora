@@ -29,17 +29,17 @@ import {
     FTS_ID_COLUMN,
     FTS_TEXT_COLUMN,
     FTS_TOKEN_COLUMN,
+    ftsCandidateWindow,
     ftsTableName,
-    MAX_SEARCH_SCAN,
-    scoreDocument,
+    rankSearchRows,
     tokenizeSearch,
-} from "@lunora/do";
+} from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, decodeRows, queryAll, queryRun, serializeColumnValue } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, decodeRows, queryAll, queryRun, serializeColumnValue } from "./sql-exec";
 
 /** The staged `.withSearchIndex().search()` query a layout executes. */
 interface SearchStage {
@@ -122,31 +122,6 @@ const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
 const INSERT_CHUNK_ROWS = 50;
 
 /**
- * Create an index on a companion idempotently across engines. SQLite/Postgres
- * support `CREATE INDEX IF NOT EXISTS`; MySQL does not, so it creates
- * unconditionally and swallows the duplicate-key-name error a re-run raises.
- */
-const createCompanionIndex = async (exec: SqlCtxExec, dialect: SqlDialect, spec: { columns: SQL; name: string; table: string }): Promise<void> => {
-    if (dialect.name === "mysql") {
-        try {
-            await queryRun(exec, dialect, sql`CREATE INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`);
-        } catch (error) {
-            // ER_DUP_KEYNAME. Drivers disagree on which field carries it —
-            // mysql2 sets `errno`, others only the symbolic `code`.
-            const duplicate = error as { code?: unknown; errno?: unknown };
-
-            if (duplicate.errno !== 1061 && duplicate.code !== "ER_DUP_KEYNAME" && duplicate.code !== 1061) {
-                throw error;
-            }
-        }
-
-        return;
-    }
-
-    await queryRun(exec, dialect, sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`);
-};
-
-/**
  * The predicate one query term matches a companion token with: an exact
  * equality, except for the query's final term, which matches as a prefix so a
  * search behaves as-you-type. Tokens are `[\p{L}\p{N}]+` by construction, so
@@ -192,11 +167,21 @@ const runInvertedSearch = async (
     // and the per-term "matched this one" tests cannot drift apart.
     const predicates = tokens.map((token, index) => searchTermPredicate(token, index === lastIndex));
     const anyTerm = sql.join(predicates, sql` OR `);
+    // One `SUM(CASE …)` per term, for the match test *and* for the score.
+    //
+    // Summing the occurrence column once per row would count a companion row
+    // once no matter how many terms it satisfies — but `scoreDocument` walks the
+    // terms and counts the document's tokens afresh for each, so a token that
+    // satisfies two terms contributes twice. `"javascript java"` against a
+    // document holding `javascript` twice scores 4 there and would score 2 here.
+    // The two engines would return the same documents in a different order,
+    // which is exactly the divergence the shared scorer exists to prevent.
+    const perTerm = predicates.map((predicate) => sql`SUM(CASE WHEN ${predicate} THEN ${sql.identifier(FTS_COUNT_COLUMN)} ELSE 0 END)`);
     const everyTerm = sql.join(
-        predicates.map((predicate) => sql`SUM(CASE WHEN ${predicate} THEN 1 ELSE 0 END) > 0`),
+        perTerm.map((term) => sql`${term} > 0`),
         sql` AND `,
     );
-    const scored = sql`SELECT ${sql.identifier(FTS_ID_COLUMN)}, SUM(${sql.identifier(FTS_COUNT_COLUMN)}) AS ${sql.identifier("__score__")} FROM ${sql.identifier(companion)} WHERE ${anyTerm} GROUP BY ${sql.identifier(FTS_ID_COLUMN)} HAVING ${everyTerm}`;
+    const scored = sql`SELECT ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM ${sql.identifier(companion)} WHERE ${anyTerm} GROUP BY ${sql.identifier(FTS_ID_COLUMN)} HAVING ${everyTerm}`;
 
     const conditions: SQL[] = [];
 
@@ -247,39 +232,33 @@ const runFtsSearch = async (
         conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
     }
 
-    // The window is the scan cap, NOT the caller's limit — this is the subtle
-    // part. bm25 decides which rows we fetch and `scoreDocument` decides how
-    // they are ordered, so fetching only `limit` rows would let bm25 pick a
-    // different subset than our scorer's true top-N: a `.take(2)` and the first
-    // page of a `.paginate({ numItems: 2 })` would disagree with the portable
-    // layout even though a `.collect()` agrees. Fetch the whole capped window,
-    // re-rank it, and slice at the end.
-    const query = sql`SELECT m.*, f.${sql.identifier(FTS_TEXT_COLUMN)} FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank LIMIT ${sql.raw(String(MAX_SEARCH_SCAN))}`;
+    // `ftsCandidateWindow` decides how wide to fetch — never `limit` (bm25 would
+    // pick a different subset than our scorer's top-N) and never a bare cap
+    // (that makes the over-cap probe row unreachable).
+    const query = sql`SELECT m.*, f.${sql.identifier(FTS_TEXT_COLUMN)} FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank LIMIT ${sql.raw(String(ftsCandidateWindow(limit)))}`;
 
-    const analyzer = createSearchAnalyzer(search.definition.language);
-    const rows = await queryAll(exec, dialect, query);
-    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
+    return rankSearchRows(
+        await queryAll(exec, dialect, query),
+        (row) => {
+            const [document] = decodeRows(definition, [row]);
 
-    for (const row of rows) {
-        const [document] = decodeRows(definition, [row]);
+            if (!document) {
+                return undefined;
+            }
 
-        if (!document) {
-            continue;
-        }
+            const indexed = row[FTS_TEXT_COLUMN];
 
-        const indexed = row[FTS_TEXT_COLUMN];
-
-        scored.push({
-            creationTime: typeof document["_creationTime"] === "number" ? document["_creationTime"] : 0,
-            doc: document,
-            id: typeof document["_id"] === "string" ? document["_id"] : "",
-            score: scoreDocument(typeof indexed === "string" ? indexed : "", tokens, analyzer),
-        });
-    }
-
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
-
-    return scored.slice(0, limit).map((entry) => entry.doc);
+            return {
+                creationTime: typeof document["_creationTime"] === "number" ? document["_creationTime"] : 0,
+                doc: document,
+                id: typeof document["_id"] === "string" ? document["_id"] : "",
+                indexed: typeof indexed === "string" ? indexed : "",
+            };
+        },
+        tokens,
+        createSearchAnalyzer(search.definition.language),
+        limit,
+    );
 };
 
 /**
@@ -339,17 +318,19 @@ const invertedLayout: SearchLayout = {
         // Not unique: a concurrent cold-start backfill could briefly double a
         // row, which the delete-then-insert write repairs, whereas a unique
         // violation would fail the request outright.
-        await createCompanionIndex(exec, dialect, {
+        await createIndexIfNotExists(exec, dialect, {
             columns: sql`${invertedIndexColumn(dialect, FTS_TOKEN_COLUMN)}, ${invertedIndexColumn(dialect, FTS_ID_COLUMN)}`,
             name: `${companion}__btree`,
             table: companion,
+            unique: false,
         });
 
         // Every row write purges its old rows by id first.
-        await createCompanionIndex(exec, dialect, {
+        await createIndexIfNotExists(exec, dialect, {
             columns: invertedIndexColumn(dialect, FTS_ID_COLUMN),
             name: `${companion}__by_id`,
             table: companion,
+            unique: false,
         });
     },
     indexDocument: async (exec, dialect, companion, id, document, index) => {

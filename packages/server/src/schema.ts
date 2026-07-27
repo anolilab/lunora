@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/errors";
+import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "@lunora/search-core";
 import type { Validator } from "@lunora/values";
 import { isOrWrapsFromValidator, v } from "@lunora/values";
 
-import { isSearchLanguage, SEARCH_LANGUAGES } from "../../../shared/search-languages";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
 import type {
@@ -438,6 +438,16 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
 
             if (language !== undefined && !isSearchLanguage(language)) {
                 throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown language "${language}" (supported: ${SEARCH_LANGUAGES.join(", ")})`);
+            }
+
+            // Same reasoning, bigger blast radius: `strategy` selects the
+            // *physical* companion layout, so a typo does not degrade the search
+            // — it silently gives you a different storage engine than you asked
+            // for, with no error at any point.
+            const { strategy }: { strategy?: string } = options;
+
+            if (strategy !== undefined && !isSearchStrategy(strategy)) {
+                throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown strategy "${strategy}" (supported: ${SEARCH_STRATEGIES.join(", ")})`);
             }
 
             searchIndexes.push({

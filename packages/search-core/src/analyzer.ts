@@ -36,8 +36,8 @@
  * mechanism exists so it can land later and rebuild indexes automatically.
  */
 
-import type { SearchLanguage } from "../../../shared/search-languages";
-import { isSearchLanguage } from "../../../shared/search-languages";
+import type { SearchLanguage } from "./languages";
+import { isSearchLanguage } from "./languages";
 
 /**
  * English function words. Deliberately short — an aggressive list makes
@@ -98,7 +98,7 @@ const stopwordSet = (words: string): ReadonlySet<string> => new Set(foldText(wor
 
 /**
  * One list per declared language. Typed over the shared union rather than
- * `string`, so adding a language to `shared/search-languages.ts` without a list
+ * `string`, so adding a language to `languages.ts` without a list
  * here is a compile error instead of an index that silently stops dropping
  * function words.
  */
@@ -118,7 +118,21 @@ const STOPWORDS: Record<SearchLanguage, ReadonlySet<string>> = {
  * stemming change, so every existing index is detected as stale and rebuilt
  * rather than serving half-old analysis.
  */
-const ANALYZER_VERSION = 1;
+const ANALYZER_VERSION = 2;
+
+/**
+ * Longest token that reaches an index, in characters.
+ *
+ * The portable companion stores one token per row in a key column that is
+ * `VARCHAR(768)` on MySQL and btree-indexed on Postgres, so an unbroken
+ * alphanumeric run past those limits does not degrade the search — it fails the
+ * companion `INSERT`, which fails the whole mutation and tells the user their
+ * row cannot be saved, naming an internal column. A run this long is a hash, a
+ * base64 blob or a minified bundle, never a word, so dropping it costs nothing
+ * a search would have found. Applied to documents and queries alike, so the two
+ * sides agree about what is unindexable.
+ */
+const MAX_TOKEN_LENGTH = 256;
 
 /**
  * Analysis bound to one search index. `document` keeps repeats (occurrence
@@ -153,7 +167,7 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
     const stopwords = STOPWORDS[resolved];
 
     const split = (text: string): string[] => {
-        const tokens = foldText(text).match(/[\p{L}\p{N}]+/gu) ?? [];
+        const tokens = (foldText(text).match(/[\p{L}\p{N}]+/gu) ?? []).filter((token) => token.length <= MAX_TOKEN_LENGTH);
 
         return stopwords.size === 0 ? tokens : tokens.filter((token) => !stopwords.has(token));
     };
@@ -184,7 +198,5 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
     return analyzer;
 };
 
-export type { SearchLanguage } from "../../../shared/search-languages";
-export { SEARCH_LANGUAGES } from "../../../shared/search-languages";
 export type { SearchAnalyzer };
-export { createSearchAnalyzer };
+export { createSearchAnalyzer, MAX_TOKEN_LENGTH };

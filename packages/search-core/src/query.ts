@@ -19,10 +19,48 @@
 
 import { LunoraError } from "@lunora/errors";
 
-import type { QueryPage } from "./query-args";
-import { fromBase64, invalidCursor, toBase64 } from "./query-args";
-import type { SearchAnalyzer } from "./search-analyzer";
-import { splitSearchTokens } from "./search-text";
+import type { SearchAnalyzer } from "./analyzer";
+import { splitSearchTokens } from "./text";
+
+/**
+ * One page of search results, structurally identical to the runtime's generic
+ * `QueryPage`.
+ *
+ * Restated rather than imported because the direction of the dependency matters:
+ * the engines depend on this package, not the other way round. The two shapes
+ * are assignable, so a caller returning one where the other is expected still
+ * type-checks.
+ */
+interface SearchPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Record<string, unknown>[];
+}
+
+/** Base64 for cursor text. Kept local so this package stays free of engine imports. */
+const toBase64 = (text: string): string => {
+    const bytes = new TextEncoder().encode(text);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    return btoa(binary);
+};
+
+const fromBase64 = (encoded: string): string => {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
+
+    return new TextDecoder().decode(bytes);
+};
+
+/**
+ * Cursors arrive from the client, so any decode failure is a bad request rather
+ * than a server fault — a raw `TypeError` would surface as a 500.
+ */
+const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid cursor");
 
 /**
  * Most terms one `.search(field, query)` may carry, after de-duplication.
@@ -104,6 +142,82 @@ export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analy
     }
 
     return score;
+};
+
+/**
+ * One candidate row an FTS5 shadow returned, decoded far enough to rank it.
+ * `indexed` is the analyzed text the companion stored — what the scorer reads,
+ * not the raw column.
+ */
+export interface SearchCandidate {
+    creationTime: number;
+    doc: Record<string, unknown>;
+    id: string;
+    indexed: string;
+}
+
+/**
+ * How many rows an FTS5 candidate query must fetch to serve a read bounded by
+ * `limit`.
+ *
+ * Never `limit` itself. bm25 decides which rows come back and
+ * {@link scoreDocument} decides how they are ordered, so fetching only `limit`
+ * of them would let bm25 pick a different subset than our scorer's true top-N —
+ * a `.take(2)` would then disagree with the portable layout even though a
+ * `.collect()` agrees.
+ *
+ * And never a bare {@link MAX_SEARCH_SCAN} either, which is the subtler half:
+ * an unbounded read resolves to one row *past* the cap precisely so
+ * {@link assertSearchWithinCap} can tell "exactly the cap" from "more than the
+ * cap". Clamping the query to the cap makes that probe row unreachable and the
+ * guard dead, and the caller silently receives 1024 rows as though they were
+ * the whole result set — the one outcome the cap exists to prevent.
+ */
+export const ftsCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARCH_SCAN);
+
+/**
+ * Rank a fetched candidate window by the shared scorer and cut it to `limit`.
+ *
+ * Both engines run this identically — it *is* the cross-backend ordering
+ * contract, down to the `_creationTime DESC` then `id ASC` tiebreak — so it
+ * lives here rather than beside either of them. When each owned a copy, the
+ * parity gate existed to catch them drifting apart; one implementation is
+ * strictly better than a test that watches two.
+ *
+ * A candidate scoring zero is dropped rather than ranked last. FTS5 matched it
+ * through its own tokenizer over the analyzed text we stored, so a zero here
+ * means the two disagree about the document — and the portable layout, whose
+ * `HAVING` requires every term, would not have returned it either.
+ */
+export const rankSearchRows = <Row>(
+    rows: ReadonlyArray<Row>,
+    toCandidate: (row: Row) => SearchCandidate | undefined,
+    tokens: ReadonlyArray<string>,
+    analyzer: SearchAnalyzer,
+    limit: number,
+): Record<string, unknown>[] => {
+    const scored: { candidate: SearchCandidate; score: number }[] = [];
+
+    for (const row of rows) {
+        const candidate = toCandidate(row);
+
+        if (!candidate) {
+            continue;
+        }
+
+        const score = scoreDocument(candidate.indexed, tokens, analyzer);
+
+        if (score > 0) {
+            scored.push({ candidate, score });
+        }
+    }
+
+    scored.sort(
+        (left, right) =>
+            right.score - left.score || right.candidate.creationTime - left.candidate.creationTime || left.candidate.id.localeCompare(right.candidate.id),
+    );
+
+    return scored.slice(0, limit).map((entry) => entry.candidate.doc);
 };
 
 /**
@@ -291,7 +405,7 @@ export const planSearchPage = (options: { cursor?: null | string; endCursor?: nu
  * zero-length page is terminal: without that, `continueCursor` would echo the
  * incoming cursor unchanged and a client loop would never advance.
  */
-export const finishSearchPage = (window: ReadonlyArray<Record<string, unknown>>, plan: SearchPagePlan): QueryPage => {
+export const finishSearchPage = (window: ReadonlyArray<Record<string, unknown>>, plan: SearchPagePlan): SearchPage => {
     const end = plan.offset + plan.numItems;
     const hasMore = plan.numItems > 0 && window.length > end;
 
@@ -333,3 +447,5 @@ export const resolveSearchScan = (limit: number | undefined): number => {
 
     return requested;
 };
+
+export type { SearchPage };

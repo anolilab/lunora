@@ -6,8 +6,8 @@
         // Intentionally no `outDir`/`rootDir` (unlike sibling packages): `lint:types`
         // is `tsc --noEmit` and the real build is packem (driven by package.json
         // exports), so neither is load-bearing here. A set `rootDir` would raise
-        // TS6059 for the inlined `../../../shared/evict-oldest` import (a file
-        // outside this package, bundled in at build time). See shared/evict-oldest.ts.
+        // TS6059 for the inlined `../../../shared/document-path` import (a file
+        // outside this package, bundled in at build time).
     },
-    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
+    "include": ["src/**/*", "__tests__/**/*"]
 }

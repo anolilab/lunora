@@ -1,9 +1,9 @@
+// The declared analysis languages and storage strategies. Inlined by the
+// bundler from `shared/search` rather than depended on, so the schema builder
+// still stands up without the DO runtime — it just no longer restates the
+// unions that the engines validate against.
+import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
-
-// The declared analysis languages, shared with the engine that maps them onto
-// stopword lists. Inlined by the bundler rather than depended on — the schema
-// builder must stay usable without the DO runtime. See shared/search-languages.ts.
-import type { SearchLanguage } from "../../../shared/search-languages";
 
 // Cache the namespace proxies and the per-function reference objects so that
 // `api.foo.bar` returns the *same* object on every access. React hooks
@@ -133,9 +133,6 @@ interface IndexDefinition {
     name: string;
     unique?: boolean;
 }
-
-/** How a search index is stored and matched: portable everywhere, or the engine's own index. */
-type SearchStrategy = "native" | "portable";
 
 interface SearchIndexDefinition {
     /** Indexed text column; a dot-separated path (`"properties.name"`) reads a nested field. */
@@ -2137,7 +2134,6 @@ export type {
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
-    SearchStrategy,
     Secrets,
     SecretsStoreSecretLike,
     ShardMode,
@@ -2195,4 +2191,4 @@ export type {
     X402ProcedureConfig,
 };
 
-export { type SearchLanguage } from "../../../shared/search-languages";
+export type { SearchLanguage, SearchStrategy } from "@lunora/search-core";

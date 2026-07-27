@@ -14,7 +14,7 @@
  * already exists is the normal case, not a failure.
  */
 import type { Logger } from "./logger";
-import type { Spawner } from "./spawn";
+import type { Spawner, SpawnResult } from "./spawn";
 
 /** Metadata property types Vectorize can index. */
 type VectorMetadataType = "boolean" | "number" | "string";
@@ -77,6 +77,25 @@ interface VectorMetadataResult {
 }
 
 /**
+ * One `wrangler` invocation, with a spawn-level failure reported rather than
+ * thrown.
+ *
+ * The spawner rejects when the child process cannot start at all (a missing
+ * binary, a fork failure), and nothing between here and the command handler
+ * catches it — so without this the promise below would turn a *post-deploy*
+ * provisioning hiccup into a failed deploy: the worker is already live, the
+ * schema-baseline re-bless is skipped, and under `--format json` the caller
+ * parsing stdout gets nothing at all.
+ */
+const runOne = async (spawner: Spawner, descriptor: Parameters<Spawner>[0]): Promise<SpawnResult> => {
+    try {
+        return await spawner(descriptor);
+    } catch (error) {
+        return { code: 1, stderr: error instanceof Error ? error.message : String(error) };
+    }
+};
+
+/**
  * Create every declared metadata index, in order, tolerating the ones that
  * already exist. Never throws: a Vectorize index that hasn't been created yet
  * (or an unauthenticated shell) should degrade to a reported warning, not a
@@ -95,7 +114,7 @@ const ensureVectorMetadataIndexes = async (inputs: {
 
     for (const entry of entries) {
         // eslint-disable-next-line no-await-in-loop -- wrangler invocations are sequential by nature; parallel ones interleave their output
-        const result = await spawner({
+        const result = await runOne(spawner, {
             args: [...exec.args, ...createMetadataIndexArgs(entry)],
             // stderr, not stdout: wrangler reports the already-exists case as an
             // error there, and stdout has to stay clean for `--format json`.

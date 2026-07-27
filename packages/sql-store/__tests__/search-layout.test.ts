@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike, ValidatorLike } from "@lunora/do";
-import { MAX_INDEXED_TOKENS } from "@lunora/do";
+import { MAX_INDEXED_TOKENS } from "@lunora/search-core";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -228,7 +228,10 @@ describe("search layouts", () => {
             expect(fts5).not.toBe(inverted);
             // A companion built for one layout holds different columns than the
             // other, so writing into it would raise on a missing column.
-            expect([fts5, inverted]).toStrictEqual(["none-v1/fts5", "none-v1/inverted"]);
+            // Spelled out rather than derived: the profile is a stored format,
+            // so a change here should be a visible edit that says "every index
+            // built under the old rules now rebuilds", not a silent pass.
+            expect([fts5, inverted]).toStrictEqual(["none-v2/fts5", "none-v2/inverted"]);
         });
 
         it("separates two indexes that differ only in analysis", () => {

@@ -67,6 +67,7 @@
     "dependencies": {
         "@lunora/do": "1.0.0-alpha.51",
         "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/search-core": "workspace:*",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {

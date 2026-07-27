@@ -29,5 +29,23 @@ export const SEARCH_LANGUAGES = ["de", "en", "es", "fr", "it", "nl", "none", "pt
 /** A declared analysis language, derived from the list above. */
 export type SearchLanguage = (typeof SEARCH_LANGUAGES)[number];
 
+/**
+ * How a search index is stored. `"portable"` promises identical behaviour on
+ * every backend; `"native"` opts into the engine's own full-text index where it
+ * has one, trading that promise for its speed.
+ *
+ * Lives beside the languages for the same reason they do: it is declared in
+ * `@lunora/server`, acted on in the storage layer, and there is no dependency
+ * edge between them — so a third hand-maintained copy is how a typo turns into
+ * a silently different *physical layout*.
+ */
+export const SEARCH_STRATEGIES = ["native", "portable"] as const;
+
+/** A declared storage strategy, derived from the list above. */
+export type SearchStrategy = (typeof SEARCH_STRATEGIES)[number];
+
+/** Membership test over {@link SEARCH_STRATEGIES}, narrowing as it goes. */
+export const isSearchStrategy = (value: string): value is SearchStrategy => (SEARCH_STRATEGIES as ReadonlyArray<string>).includes(value);
+
 /** Membership test over {@link SEARCH_LANGUAGES}, narrowing as it goes. */
 export const isSearchLanguage = (value: string): value is SearchLanguage => (SEARCH_LANGUAGES as ReadonlyArray<string>).includes(value);

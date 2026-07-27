@@ -15,6 +15,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { analyzedSearchText, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 import { matchesStaticWhere } from "./aggregate-sql";
@@ -24,14 +25,12 @@ import type { AggregateIndexDefinitionLike } from "./aggregates";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
-import { readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
+import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue, tryRowToDocument } from "./do-sql";
 import { param } from "./drizzle";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
-import { createSearchAnalyzer } from "./search-analyzer";
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "./search-text";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
@@ -274,6 +273,12 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     if (!isFtsAvailable(sql)) {
         return;
     }
+
+    // The page backfill records its progress in the state table, and this is the
+    // entry point a host calls directly — so it cannot assume `runShardMigrations`
+    // already ran. "The documented remedy throws unless you happened to migrate
+    // first" is not a remedy; the sql-store twin provisions for the same reason.
+    migrateSearchState(sql);
 
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global" || !definition.searchIndexes) {

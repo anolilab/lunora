@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { createSearchAnalyzer, SEARCH_LANGUAGES } from "../src/search-analyzer";
-import { planSearchBackfillPass } from "../src/search-text";
+import { createSearchAnalyzer, MAX_TOKEN_LENGTH } from "../src/analyzer";
+import { planSearchBackfillPass } from "../src/backfill";
+import { SEARCH_LANGUAGES } from "../src/languages";
 
 /**
  * Analysis is the one part of search that is *stored*, so these assertions are
@@ -54,6 +55,32 @@ describe("search analyzer", () => {
             // Documented limitation rather than an accident: collapsing ß→ss
             // needs a case-folding table the analyzer deliberately doesn't ship.
             expect(createSearchAnalyzer("de").document("Straße")).toStrictEqual(["straße"]);
+        });
+    });
+
+    describe("token length", () => {
+        it("drops a token too long for the companion's key column", () => {
+            expect.assertions(2);
+
+            const analyzer = createSearchAnalyzer(undefined);
+            const long = "a".repeat(MAX_TOKEN_LENGTH + 1);
+
+            // Not a recall trade — a run this long is a hash or a base64 blob,
+            // never a word. Keeping it fails the companion INSERT on MySQL
+            // (`VARCHAR(768)`) and the btree insert on Postgres, which fails the
+            // user's whole mutation rather than degrading their search.
+            expect(analyzer.document(`hello ${long} world`)).toStrictEqual(["hello", "world"]);
+            // Dropped on both sides, so the two agree about what is unindexable
+            // instead of the query looking for something no document can hold.
+            expect(analyzer.query(long)).toStrictEqual([]);
+        });
+
+        it("keeps a token exactly at the limit", () => {
+            expect.assertions(1);
+
+            const token = "a".repeat(MAX_TOKEN_LENGTH);
+
+            expect(createSearchAnalyzer(undefined).document(token)).toStrictEqual([token]);
         });
     });
 
@@ -155,7 +182,7 @@ describe("search analyzer", () => {
  * owned a copy they disagreed about exactly the two cases below, so these lock
  * the decisions rather than either implementation.
  */
-describe("planSearchBackfillPass", () => {
+describe(planSearchBackfillPass, () => {
     it("starts a fresh index from the beginning without wiping anything", () => {
         expect.assertions(1);
 

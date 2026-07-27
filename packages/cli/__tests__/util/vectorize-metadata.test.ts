@@ -148,6 +148,33 @@ describe("ensureVectorMetadataIndexes", () => {
     });
 });
 
+describe("spawn failures", () => {
+    it("reports a spawner that rejects instead of failing an already-live deploy", async () => {
+        expect.assertions(3);
+
+        const { logger, warnings } = recordingLogger();
+
+        // The worker is published before this step runs, so a child process
+        // that cannot start at all must not become a failed deploy — that would
+        // skip the post-deploy migrations and, under `--format json`, leave a
+        // caller parsing stdout with nothing at all.
+        const results = await ensureVectorMetadataIndexes({
+            cwd: "/app",
+            entries: [
+                { index: "docs-body", property: "authorId", type: "string" },
+                { index: "docs-body", property: "published", type: "boolean" },
+            ],
+            exec: { args: ["wrangler"], command: "npx" },
+            logger,
+            spawner: () => Promise.reject(new Error("spawn npx ENOENT")),
+        });
+
+        expect(results.map((result) => result.status)).toStrictEqual(["failed", "failed"]);
+        expect(results[0]?.error).toContain("ENOENT");
+        expect(warnings).toHaveLength(2);
+    });
+});
+
 describe("stream handling", () => {
     it("reads the outcome from stderr, which is where wrangler reports it", async () => {
         expect.assertions(2);

@@ -209,41 +209,10 @@ export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefi
 export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export type { SearchAnalyzer, SearchLanguage } from "./search-analyzer";
-export { createSearchAnalyzer, SEARCH_LANGUAGES } from "./search-analyzer";
-export type { SearchBuilderLike, SearchPagePlan, SearchStageLike } from "./search-query";
-export {
-    assertSearchWithinCap,
-    buildFtsMatch,
-    createSearchBuilder,
-    encodeSearchCursor,
-    finishSearchPage,
-    MAX_SEARCH_FILTERS,
-    MAX_SEARCH_SCAN,
-    MAX_SEARCH_TERMS,
-    parseSearchCursor,
-    planSearchPage,
-    resolveSearchScan,
-    scoreDocument,
-    searchPageScan,
-    tokenizeSearch,
-} from "./search-query";
-export type { SearchBackfillPass, SearchBackfillState } from "./search-text";
-export {
-    analyzedSearchText,
-    countSearchTokens,
-    FTS_COUNT_COLUMN,
-    FTS_ID_COLUMN,
-    FTS_TEXT_COLUMN,
-    FTS_TOKEN_COLUMN,
-    ftsTableName,
-    MAX_INDEXED_TOKENS,
-    planSearchBackfillPass,
-    resolveSearchField,
-    searchTextUnchanged,
-    splitSearchTokens,
-    stringifySearchText,
-} from "./search-text";
+// The search core lives in `shared/search` now. It used to be re-exported from
+// here so `@lunora/sql-store` could reuse it, which turned two dozen internal
+// contracts into permanent public API of this package for no reason other than
+// cross-package reach; both engines inline it by relative path instead.
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";

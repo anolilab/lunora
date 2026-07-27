@@ -16,13 +16,13 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import type { SearchBackfillState } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only import for the structural surface threaded in — a value import
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
-import type { SearchBackfillState } from "./search-text";
 
 /** Reserved table holding one backfill-progress row per search companion. */
 const SEARCH_STATE_TABLE = "__lunora_search_state";
@@ -48,6 +48,9 @@ const migrateSearchState = (sql: SqlExec): void => {
     addProfileColumn();
 };
 
+/** The persisted `done` flag, however this engine's driver spells a boolean. */
+const isDone = (value: unknown): boolean => value === 1 || value === true || value === "1";
+
 /** Read a companion's progress. An unknown companion has done nothing yet. */
 const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfillState => {
     const rows = runDrizzle<{ cursor: null | string; done: number; profile: null | string }>(
@@ -61,7 +64,11 @@ const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfil
         return { cursor: undefined, done: false, profile: undefined };
     }
 
-    return { cursor: row.cursor ?? undefined, done: row.done === 1, profile: row.profile ?? undefined };
+    // Same tolerance as the sql-store twin: engines and drivers disagree about
+    // whether a boolean column comes back as 1, true or "1", and the two
+    // readers decoding the shared state row differently is how they start
+    // disagreeing about whether an index is finished.
+    return { cursor: row.cursor ?? undefined, done: isDone(row.done), profile: row.profile ?? undefined };
 };
 
 /** Record a page's outcome: how far it got, whether the table is done, and under which analysis. */

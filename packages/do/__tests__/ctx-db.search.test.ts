@@ -1,3 +1,4 @@
+import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
@@ -520,6 +521,42 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
                     .withSearchIndex("by_body", (q) => q.search("body", "hello"))
                     .collect(),
             ).resolves.toStrictEqual([]);
+        });
+    });
+
+    /**
+     * The cap's whole job is that a truncated result set is never handed back as
+     * if it were the whole one. An unbounded read asks the engine for one row
+     * past* the cap so it can tell "exactly the cap" from "more than the cap" —
+     * so any layout that clamps its own query to the cap makes that probe row
+     * unreachable and the guard dead, and 1024 rows come back looking complete.
+     */
+    describe("the over-cap probe", () => {
+        it("refuses an unbounded read whose match set exceeds the cap", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            for (let index = 0; index < MAX_SEARCH_SCAN + 60; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic ids require sequential inserts
+                await writer.insert("docs", { body: "needle", channel: "x", title: `t${String(index)}` });
+            }
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "needle"))
+                    .collect(),
+            ).rejects.toThrow(/more than 1024 documents match/u);
+
+            // A bounded read over the same corpus still answers, because the
+            // caller asked for a slice rather than the whole set.
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "needle"))
+                    .take(3),
+            ).resolves.toHaveLength(3);
         });
     });
 

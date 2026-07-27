@@ -30,6 +30,24 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { LunoraError } from "@lunora/errors";
+import {
+    analyzedSearchText,
+    assertSearchWithinCap,
+    buildFtsMatch,
+    createSearchAnalyzer,
+    createSearchBuilder,
+    finishSearchPage,
+    FTS_ID_COLUMN,
+    FTS_TEXT_COLUMN,
+    ftsCandidateWindow,
+    ftsTableName,
+    planSearchPage,
+    rankSearchRows,
+    resolveSearchScan,
+    scoreDocument,
+    searchPageScan,
+    tokenizeSearch,
+} from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
@@ -82,20 +100,6 @@ import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPred
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
-import { createSearchAnalyzer } from "./search-analyzer";
-import {
-    assertSearchWithinCap,
-    buildFtsMatch,
-    createSearchBuilder,
-    finishSearchPage,
-    MAX_SEARCH_SCAN,
-    planSearchPage,
-    resolveSearchScan,
-    scoreDocument,
-    searchPageScan,
-    tokenizeSearch,
-} from "./search-query";
-import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, resolveSearchField, stringifySearchText } from "./search-text";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -962,37 +966,33 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     // `_creationTime` ties with them on bulk-imported rows, and without a unique
     // terminal column the engine may order tied rows differently per execution —
     // which offset pagination would surface as a duplicated or skipped row.
-    // The window is the scan cap, NOT `limit`: bm25 decides which rows we fetch
-    // and `scoreDocument` decides how they are ordered, so fetching only
-    // `limit` rows would let bm25 pick a different subset than our scorer's
-    // true top-N — and a `.take(2)` would then disagree with the portable
-    // layout even though a `.collect()` agrees. Fetch the capped window,
-    // re-rank, slice at the end.
-    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, f.${dsql.identifier(FTS_TEXT_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank LIMIT ${dsql.raw(String(MAX_SEARCH_SCAN))}`;
+    // `ftsCandidateWindow` decides how wide to fetch — never `limit` (bm25 would
+    // pick a different subset than our scorer's top-N) and never a bare cap
+    // (that makes the over-cap probe row unreachable).
+    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, f.${dsql.identifier(FTS_TEXT_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank LIMIT ${dsql.raw(String(ftsCandidateWindow(limit)))}`;
 
-    const analyzer = createSearchAnalyzer(search.definition.language);
-    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
+    return rankSearchRows(
+        runDrizzle(sql, query).toArray(),
+        (row) => {
+            const record = tryRowToDocument(row);
 
-    for (const row of runDrizzle(sql, query)) {
-        const record = rowToDocument(row);
+            if (!record) {
+                return undefined;
+            }
 
-        if (!record) {
-            continue;
-        }
+            const indexed = row[FTS_TEXT_COLUMN];
 
-        const indexed = row[FTS_TEXT_COLUMN];
-
-        scored.push({
-            creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
-            doc: record,
-            id: typeof record["_id"] === "string" ? record["_id"] : "",
-            score: scoreDocument(typeof indexed === "string" ? indexed : "", tokens, analyzer),
-        });
-    }
-
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
-
-    return scored.slice(0, limit).map((entry) => entry.doc);
+            return {
+                creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
+                doc: record,
+                id: typeof record["_id"] === "string" ? record["_id"] : "",
+                indexed: typeof indexed === "string" ? indexed : "",
+            };
+        },
+        tokens,
+        createSearchAnalyzer(search.definition.language),
+        limit,
+    );
 };
 
 /**
@@ -1026,6 +1026,13 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
         query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
     }
 
+    // Bounded like every other search read. This path has no index to order by
+    // relevance, so the window is taken newest-first — deterministic, and the
+    // same order the tiebreak uses — rather than left to the engine. Past the
+    // cap the fallback is therefore approximate, which the FTS5 paths are not;
+    // it only runs on an engine without FTS5, which no Durable Object is.
+    query = dsql`${query} ORDER BY _creationTime DESC, id ASC LIMIT ${dsql.raw(String(ftsCandidateWindow(limit)))}`;
+
     const rows = runDrizzle(sql, query).toArray();
     const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
 
@@ -1039,7 +1046,12 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
             continue;
         }
 
-        const score = scoreDocument(stringifySearchText(resolveSearchField(record, search.field)), tokens, analyzer);
+        // The *analyzed* text, not the raw field: every other layout stores and
+        // scores a token stream capped at `MAX_INDEXED_TOKENS`, so scoring the
+        // raw value here would make this path find matches past the cap that
+        // the others cannot — a divergence in the one direction no parity gate
+        // covers, since this path only runs where FTS5 is absent.
+        const score = scoreDocument(analyzedSearchText(record, search.definition), tokens, analyzer);
 
         if (score > 0) {
             scored.push({

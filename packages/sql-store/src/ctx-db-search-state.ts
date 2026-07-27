@@ -13,7 +13,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
-import type { SearchBackfillState } from "@lunora/do";
+import type { SearchBackfillState } from "@lunora/search-core";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
@@ -48,6 +48,9 @@ const migrateSearchState = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
     await addProfileColumn();
 };
 
+/** The persisted `done` flag, however this engine's driver spells a boolean. */
+const isDone = (value: unknown): boolean => value === 1 || value === true || value === "1";
+
 /** Read a companion's progress. An unknown companion has done nothing yet. */
 const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<SearchBackfillState> => {
     const rows = await queryAll(
@@ -64,20 +67,27 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
 
     const { cursor, profile } = row;
 
-    // `done` arrives as 1/0 on SQLite and MySQL, and as a number or boolean
-    // depending on the Postgres driver — normalize rather than trusting one.
     return {
         cursor: typeof cursor === "string" ? cursor : undefined,
-        done: row["done"] === 1 || row["done"] === true || row["done"] === "1",
+        done: isDone(row["done"]),
         profile: typeof profile === "string" ? profile : undefined,
     };
 };
 
 /**
- * Record a page's outcome. Written as a delete-then-insert rather than an
- * engine-specific upsert: the three dialects spell `ON CONFLICT` three
- * different ways, and this row is written once per backfill page, never on a
- * hot path.
+ * Record a page's outcome.
+ *
+ * UPDATE-then-INSERT rather than DELETE-then-INSERT, because two cold starts
+ * can migrate the same binding concurrently. The delete-first shape left a
+ * window where the row did not exist — one pass would read "nothing recorded"
+ * and restart the walk — and, worse, both passes could reach the INSERT and one
+ * would raise a primary-key violation that escapes `ensureMigrated` and takes
+ * every read and write on the binding down, not just search.
+ *
+ * The row never vanishes here, and the loser of an INSERT race falls back to
+ * the UPDATE it should have done. Spelled with the portable three statements
+ * rather than an upsert because the three dialects spell `ON CONFLICT` three
+ * different ways, and this runs once per backfill page, never on a hot path.
  */
 const writeSearchBackfillState = async (
     exec: SqlCtxExec,
@@ -87,13 +97,36 @@ const writeSearchBackfillState = async (
     done: boolean,
     profile: string,
 ): Promise<void> => {
-    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`);
-    await queryRun(
+    // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
+    const cursorValue = cursor ?? null;
+    const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${done ? 1 : 0}, ${sql.identifier("profile")} = ${profile} WHERE ${sql.identifier("companion")} = ${companion}`;
+    const existing = await queryAll(
         exec,
         dialect,
-        // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
-        sql`INSERT INTO ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")}, ${sql.identifier("cursor")}, ${sql.identifier("done")}, ${sql.identifier("profile")}) VALUES (${companion}, ${cursor ?? null}, ${done ? 1 : 0}, ${profile})`,
+        sql`SELECT ${sql.identifier("companion")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
     );
+
+    if (existing.length > 0) {
+        await queryRun(exec, dialect, update);
+
+        return;
+    }
+
+    try {
+        await queryRun(
+            exec,
+            dialect,
+            sql`INSERT INTO ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")}, ${sql.identifier("cursor")}, ${sql.identifier("done")}, ${sql.identifier("profile")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile})`,
+        );
+    } catch (error) {
+        // A concurrent pass inserted the row between the probe and here. That
+        // is the race this exists for, not a failure — write what we meant to.
+        if (!dialect.isUniqueViolation(error)) {
+            throw error;
+        }
+
+        await queryRun(exec, dialect, update);
+    }
 };
 
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState };

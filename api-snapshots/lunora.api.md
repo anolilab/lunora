@@ -2001,22 +2001,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `FTS_COUNT_COLUMN` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FTS_ID_COLUMN` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FTS_TEXT_COLUMN` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FTS_TOKEN_COLUMN` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `FUNCTION_METRICS_BUCKETS_TABLE` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2166,22 +2150,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `MAIL_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `MAX_INDEXED_TOKENS` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `MAX_SEARCH_FILTERS` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `MAX_SEARCH_SCAN` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `MAX_SEARCH_TERMS` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2473,10 +2441,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `SEARCH_LANGUAGES` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `SESSION_DO_TTL_DEFAULT` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2501,39 +2465,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `SearchAnalyzer` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SearchBackfillPass` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SearchBackfillState` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SearchBuilderLike` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `SearchFilterBuilderLike` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `SearchIndexDefinitionLike` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SearchLanguage` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SearchPagePlan` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SearchStageLike` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2809,10 +2745,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `analyzedSearchText` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `applyCdcChanges` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2834,10 +2766,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `assertReadonly` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `assertSearchWithinCap` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2865,10 +2793,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `buildFtsMatch` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `buildSecurityAudit` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2893,10 +2817,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `countSearchTokens` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `coveringGeohashes` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2906,14 +2826,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `createMetrics` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `createSearchAnalyzer` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `createSearchBuilder` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2961,10 +2873,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `encodeSearchCursor` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `ensureAuthMetricsTables` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2993,15 +2901,7 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `finishSearchPage` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `foldAggregateTally` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ftsTableName` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3081,19 +2981,7 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `parseSearchCursor` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `planAggregateLookup` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `planSearchBackfillPass` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `planSearchPage` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3189,14 +3077,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `resolveSearchField` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `resolveSearchScan` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `resolveWith` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3222,18 +3102,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `runTriggers` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `scoreDocument` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `searchPageScan` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `searchTextUnchanged` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3273,10 +3141,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `splitSearchTokens` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `stableStringify` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3285,19 +3149,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `stringifySearchText` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `throwingScheduler` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `tokenizeSearch` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -6809,11 +6665,11 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SearchLanguage` (type)
 
-Re-exported from `@lunora/server` — signature tracked at its source.
+Re-exported from `@lunora/search-core` — signature tracked at its source.
 
 ### `SearchStrategy` (type)
 
-Re-exported from `@lunora/server` — signature tracked at its source.
+Re-exported from `@lunora/search-core` — signature tracked at its source.
 
 ### `Secrets` (interface)
 

@@ -18,8 +18,16 @@ interface Recorded {
     sql: string;
 }
 
+/**
+ * A row the MATCH query returns. `__text__` is the analyzed token stream the
+ * companion stored, and it is required rather than optional: the real query
+ * selects it and the shared scorer ranks on it, so a double that omitted it
+ * would score every row zero and quietly exercise a path production never
+ * takes.
+ */
 interface MatchRow {
     __doc__: string;
+    __text__: string;
     _creationTime: number;
     id: string;
 }
@@ -125,8 +133,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect.assertions(2);
 
         const { sql, statements } = createRecordingFts([
-            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
-            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), _creationTime: 2, id: "d2" },
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), __text__: "hello words", _creationTime: 2, id: "d2" },
         ]);
 
         runShardMigrations(sql, searchSchema);
@@ -152,7 +160,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
             },
         };
         const { sql, statements } = createRecordingFts([
-            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
         ]);
 
         runShardMigrations(sql, stagedSchema);
@@ -186,7 +194,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
     it("clears the FTS row on delete (no re-insert)", async () => {
         expect.assertions(2);
 
-        const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), _creationTime: 1, id: "d1" }]);
+        const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), __text__: "bye", _creationTime: 1, id: "d1" }]);
 
         runShardMigrations(sql, searchSchema);
 
@@ -208,8 +216,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect.assertions(3);
 
         const matchRows: MatchRow[] = [
-            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
-            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), _creationTime: 2, id: "d2" },
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), __text__: "hello words", _creationTime: 2, id: "d2" },
         ];
         const { sql, statements } = createRecordingFts(matchRows);
 

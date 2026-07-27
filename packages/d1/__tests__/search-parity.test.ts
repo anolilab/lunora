@@ -71,6 +71,11 @@ const CORPUS: Document[] = [
     { body: "café society", channel: "general", id: "k" },
     { body: "cafe society", channel: "general", id: "l" },
     { body: "Ünïcödé stress", channel: "general", id: "m" },
+    // n and o exist to separate two *scores* that a naive engine would tie.
+    // Both match `"javascript java"`; they only order correctly if a stored
+    // token that satisfies two query terms is counted once for each.
+    { body: "javascript javadoc javadoc javadoc", channel: "general", id: "n" },
+    { body: "javascript javascript javascript", channel: "general", id: "o" },
 ];
 
 /**
@@ -189,10 +194,16 @@ describe.skipIf(!FTS5_IN_BUILD)("search parity — sharded DO vs .global()", () 
         // "wor" prefix-matches "world" and "worldwide", but not "wonderful".
         { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "prefix on the final term", term: "hello wor" },
         // "java" prefix-matches the same token "javascript" already matched
-        // exactly — both terms are satisfied, and e must not be dropped.
-        { expectedIds: ["e"], name: "prefix shadowed by an earlier exact term", term: "javascript java" },
-        // f's whole word and e's prefix both count once; tiebreak orders them.
-        { expectedIds: ["f", "e"], name: "prefix that is also a whole word", term: "java" },
+        // exactly — both terms are satisfied, so none of these may be dropped.
+        // The *order* is the point. o holds `javascript` three times, so the
+        // exact term counts 3 and the prefix term counts those same three
+        // tokens again: 6. n scores 1 + 4 = 5, e scores 1 + 1 = 2. An engine
+        // that counted each stored row once no matter how many terms it
+        // satisfied would score o as 3 and n as 4 and invert the top two.
+        { expectedIds: ["o", "n", "e"], name: "prefix shadowed by an earlier exact term", term: "javascript java" },
+        // A bare prefix term: n and o rank on how many tokens extend it, then
+        // f's whole word and e's prefix tie at one and fall to the tiebreak.
+        { expectedIds: ["n", "o", "f", "e"], name: "prefix that is also a whole word", term: "java" },
         // The query side de-duplicates, so this is the single-term query.
         { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "repeated term", term: "hello hello" },
         { expectedIds: [], name: "term matching nothing", term: "nonexistent" },

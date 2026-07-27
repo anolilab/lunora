@@ -17,7 +17,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/do";
-import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/do";
+import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/search-core";
 import { sql } from "drizzle-orm";
 
 import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
@@ -150,6 +150,15 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
         if (recorded.profile !== undefined && recorded.profile !== profile) {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
             await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(companion)}`);
+
+            // Record the rebuild here, not only in the backfill. A `staged`
+            // index is skipped by the backfill entirely, so leaving the old
+            // profile recorded would re-enter this branch on *every* request:
+            // DDL per request under load, every write since the last one
+            // destroyed by the next drop, and an index that returns nothing
+            // until a host happens to re-run the out-of-band backfill.
+            // eslint-disable-next-line no-await-in-loop -- state writes run sequentially on the shared connection.
+            await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile);
         }
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
