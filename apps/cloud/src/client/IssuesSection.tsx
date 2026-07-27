@@ -1,4 +1,5 @@
-import { useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -7,8 +8,9 @@ import { CrossTabLink } from "./CrossTabLink";
 import type { OrgId } from "./types";
 
 interface IssuesSectionProps {
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
 }
 
 /**
@@ -16,8 +18,8 @@ interface IssuesSectionProps {
  * deployments (the hosted counterpart of the local Studio's Issues). Read-only
  * and members-only; gated behind the `logStreams` plan entitlement.
  */
-export const IssuesSection = ({ onOpenTab, organizationId }: IssuesSectionProps): ReactElement => {
-    const entitlements = useQuery(api.billing.entitlements, { organizationId });
+export const IssuesSection = ({ organizationId, preloaded }: IssuesSectionProps): ReactElement => {
+    const entitlements = usePreloadedQuery(preloaded);
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const issues = useQuery(api.issues.list, gated ? "skip" : { organizationId });
 
@@ -58,8 +60,8 @@ export const IssuesSection = ({ onOpenTab, organizationId }: IssuesSectionProps)
                                     </td>
                                     <td>{issue.status}</td>
                                     <td>
-                                        {issue.sampleTraceId && onOpenTab ? (
-                                            <CrossTabLink onOpenTab={onOpenTab} target="traces" traceId={issue.sampleTraceId}>
+                                        {issue.sampleTraceId ? (
+                                            <CrossTabLink target="traces" traceId={issue.sampleTraceId}>
                                                 View trace
                                             </CrossTabLink>
                                         ) : (

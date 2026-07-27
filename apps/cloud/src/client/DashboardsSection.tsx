@@ -1,11 +1,12 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import type { DashboardPanel } from "../telemetry/dashboards";
 import { api } from "../../lunora/_generated/api.js";
+import type { DashboardPanel } from "../telemetry/dashboards";
 import { DashboardBoard } from "./DashboardBoard";
-import type { SectionProps } from "./OrganizationDashboard";
+import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import { useMetricsSeries } from "./use-metrics-series";
 
@@ -21,8 +22,8 @@ import { useMetricsSeries } from "./use-metrics-series";
  * one selects it from the mutation's resolve (an event handler). Panel edits are
  * pure reducers (`DashboardBoard`) whose result is persisted via `update`.
  */
-export const DashboardsSection = ({ onOpenTab, organizationId }: SectionProps): ReactElement => {
-    const dashboards = useQuery(api.dashboards.list, { organizationId });
+export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.dashboards.list>>): ReactElement => {
+    const dashboards = usePreloadedQuery(preloaded);
     const { from, to } = useTimeRange();
     const { series } = useMetricsSeries(organizationId, from, to);
 
@@ -39,8 +40,8 @@ export const DashboardsSection = ({ onOpenTab, organizationId }: SectionProps): 
 
     const persistPanels = (id: string, panels: DashboardPanel[]): void => {
         setError(null);
-        void update.mutate({ id: id as never, organizationId, panels }).catch((caught: unknown) => {
-            setError(caught instanceof Error ? caught.message : "could not save panels");
+        void update.mutate({ id: id as never, organizationId, panels }).catch((error_: unknown) => {
+            setError(error_ instanceof Error ? error_.message : "could not save panels");
         });
     };
 
@@ -64,11 +65,11 @@ export const DashboardsSection = ({ onOpenTab, organizationId }: SectionProps): 
                         void create
                             .mutate({ name, organizationId })
                             .then((id) => {
-                                setSelectedId(id as unknown as string);
+                                setSelectedId(id);
                                 setName("");
                             })
-                            .catch((caught: unknown) => {
-                                setError(caught instanceof Error ? caught.message : "could not create dashboard");
+                            .catch((error_: unknown) => {
+                                setError(error_ instanceof Error ? error_.message : "could not create dashboard");
                             });
                     }}
                 >
@@ -94,7 +95,7 @@ export const DashboardsSection = ({ onOpenTab, organizationId }: SectionProps): 
 
             {dashboards === undefined ? <p className="muted">Loading…</p> : null}
 
-            {dashboards !== undefined && dashboards.length === 0 ? (
+            {dashboards?.length === 0 ? (
                 <section className="card">
                     <p className="muted">No dashboards yet — create one above, then add panels to it.</p>
                 </section>
@@ -107,7 +108,9 @@ export const DashboardsSection = ({ onOpenTab, organizationId }: SectionProps): 
                             <button
                                 className={board._id === selected?._id ? "dash-list-item active" : "dash-list-item"}
                                 key={board._id}
-                                onClick={() => setSelectedId(board._id)}
+                                onClick={() => {
+                                    setSelectedId(board._id);
+                                }}
                                 type="button"
                             >
                                 <span className="row-title">{board.name}</span>
@@ -122,14 +125,16 @@ export const DashboardsSection = ({ onOpenTab, organizationId }: SectionProps): 
                         <DashboardBoard
                             metricNames={metricNames}
                             name={selected.name}
-                            onOpenTab={onOpenTab}
+
                             onRemoveDashboard={() => {
                                 setError(null);
-                                void remove.mutate({ id: selected._id, organizationId }).catch((caught: unknown) => {
-                                    setError(caught instanceof Error ? caught.message : "could not delete dashboard");
+                                void remove.mutate({ id: selected._id, organizationId }).catch((error_: unknown) => {
+                                    setError(error_ instanceof Error ? error_.message : "could not delete dashboard");
                                 });
                             }}
-                            onUpdatePanels={(panels) => persistPanels(selected._id, panels)}
+                            onUpdatePanels={(panels) => {
+                                persistPanels(selected._id, panels);
+                            }}
                             panels={selected.panels}
                             series={series}
                         />

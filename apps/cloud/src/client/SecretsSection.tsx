@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,8 @@ import type { OrgId, ProjectId } from "./types";
 
 interface SecretsSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
 }
 
 /**
@@ -17,8 +20,8 @@ interface SecretsSectionProps {
  * the values are decrypted only at deploy time. Pick a project, then manage its
  * secrets.
  */
-export const SecretsSection = ({ organizationId }: SecretsSectionProps): ReactElement => {
-    const projects = useQuery(api.projects.listByOrg, { organizationId });
+export const SecretsSection = ({ organizationId, preloaded }: SecretsSectionProps): ReactElement => {
+    const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const secrets = useQuery(api.secrets.list, projectId ? { organizationId, projectId } : "skip");
     const removeSecret = useMutation(api.secrets.remove);

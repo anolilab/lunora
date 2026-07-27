@@ -1,12 +1,15 @@
-import { useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
-import { api } from "../../lunora/_generated/api.js";
+import type { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import type { OrgId } from "./types";
 
 interface ActivitySectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.audit_log.list>>;
 }
 
 /**
@@ -15,8 +18,8 @@ interface ActivitySectionProps {
  * this is the read view over them. Tenant request and console logs stream
  * separately via Cloudflare Tail/Logpush and the per-deployment admin RPC.
  */
-export const ActivitySection = ({ organizationId }: ActivitySectionProps): ReactElement => {
-    const entries = useQuery(api.audit_log.list, { organizationId });
+export const ActivitySection = ({ preloaded }: ActivitySectionProps): ReactElement => {
+    const entries = usePreloadedQuery(preloaded);
 
     return (
         <section className="card">

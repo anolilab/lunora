@@ -1,21 +1,22 @@
-import { useLunora, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
-import { buildTraceTree } from "../telemetry/trace-tree";
 import { api } from "../../lunora/_generated/api.js";
+import { buildTraceTree } from "../telemetry/trace-tree";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatMs } from "./format";
-import { SpanDetail, TraceWaterfall } from "./TraceDetail";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
+import { SpanDetail, TraceWaterfall } from "./TraceDetail";
 import type { DeploymentId, OrgId, ProjectId } from "./types";
 
 interface TracesSectionProps {
     /** Deep-link: when set (e.g. from an Issue or a log line), open this trace's waterfall. */
     focusTraceId?: string;
-    /** Deep-link out to another tab (e.g. this trace's logs). */
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
 }
 
 /**
@@ -28,10 +29,10 @@ interface TracesSectionProps {
  * indented by its depth under `parentSpanId` — a true span waterfall, not a
  * log-gap timeline. Both queries are live.
  */
-export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: TracesSectionProps): ReactElement => {
+export const TracesSection = ({ focusTraceId, organizationId, preloaded }: TracesSectionProps): ReactElement => {
     const client = useLunora();
     const { from, to } = useTimeRange();
-    const projects = useQuery(api.projects.listByOrg, { organizationId });
+    const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [deploymentId, setDeploymentId] = useState<DeploymentId | "">("");
@@ -55,7 +56,7 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
     // D1 has no spans for this trace (loaded, empty) → try the columnar archive
     // (an action — the R2-SQL read is a `fetch`). Fails open to `[]`, so the
     // waterfall just stays empty when the archive isn't configured.
-    const d1Empty = traceId !== "" && spans !== undefined && spans.length === 0;
+    const d1Empty = traceId !== "" && spans?.length === 0;
 
     useEffect(() => {
         if (!d1Empty) {
@@ -95,9 +96,15 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
         setLoadingOlder(true);
         client
             .action(api.traces.listArchived, { from, organizationId, to })
-            .then((rows) => setOlderArchive({ key: archiveKey, traces: rows }))
-            .catch(() => setOlderArchive({ key: archiveKey, traces: [] }))
-            .finally(() => setLoadingOlder(false));
+            .then((rows) => {
+                setOlderArchive({ key: archiveKey, traces: rows });
+            })
+            .catch(() => {
+                setOlderArchive({ key: archiveKey, traces: [] });
+            })
+            .finally(() => {
+                setLoadingOlder(false);
+            });
     };
 
     // Only honor the archive fetch that belongs to the trace currently open (a
@@ -173,7 +180,13 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
             {deploymentId ? (
                 <section className="card">
                     <label className="trace-filter">
-                        <input checked={errorOnly} onChange={(event) => setErrorOnly(event.target.checked)} type="checkbox" />
+                        <input
+                            checked={errorOnly}
+                            onChange={(event) => {
+                                setErrorOnly(event.target.checked);
+                            }}
+                            type="checkbox"
+                        />
                         Errors only
                     </label>
                     <table className="table">
@@ -258,12 +271,16 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                             ) : null}
                         </div>
                         <div className="trace-detail-actions">
-                            {onOpenTab ? (
-                                <CrossTabLink onOpenTab={onOpenTab} target="logs" traceId={traceId}>
-                                    View logs
-                                </CrossTabLink>
-                            ) : null}
-                            <button className="trace-close" onClick={() => setTraceId("")} type="button">
+                            <CrossTabLink target="logs" traceId={traceId}>
+                                View logs
+                            </CrossTabLink>
+                            <button
+                                className="trace-close"
+                                onClick={() => {
+                                    setTraceId("");
+                                }}
+                                type="button"
+                            >
                                 Close
                             </button>
                         </div>
@@ -275,12 +292,21 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                     ) : null}
 
                     <TraceWaterfall
-                        onSelect={(spanId) => setSelectedSpanId(spanId === selectedSpanId ? "" : spanId)}
+                        onSelect={(spanId) => {
+                            setSelectedSpanId(spanId === selectedSpanId ? "" : spanId);
+                        }}
                         rows={waterfall}
                         selectedSpanId={selectedSpanId}
                     />
 
-                    {selectedSpan ? <SpanDetail onClose={() => setSelectedSpanId("")} span={selectedSpan} /> : null}
+                    {selectedSpan ? (
+                        <SpanDetail
+                            onClose={() => {
+                                setSelectedSpanId("");
+                            }}
+                            span={selectedSpan}
+                        />
+                    ) : null}
                 </section>
             ) : null}
         </div>
