@@ -247,6 +247,40 @@ you writing sync glue:
    the cached reads and the queued writes rather than replaying them under the
    new identity.
 
+## Write ordering
+
+Lunora does not funnel `client.mutation` calls through a single ordered queue.
+Writes are concurrent, and the optimistic model above reconciles them by **commit
+cursor** rather than by a strict per-client sequence number — which buys the same
+gapless, no-double-count rebasing without making every write wait for the one
+before it.
+
+Three of the four ways to issue a write are ordered anyway:
+
+| How you write                                    | Ordered? | Why                                                                                                                                                              |
+| ------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `await mutation(A)`, then `await mutation(B)`    | Yes      | B isn't sent until A resolves.                                                                                                                                   |
+| Queued offline, replayed on reconnect            | Yes      | The outbox is FIFO and the flush sends its chunks sequentially, preserving submission order across the whole replay.                                             |
+| [`@lunora/db`](/docs/packages/db) mutators       | Yes      | Each write carries a monotonic `mutationId`; the DO applies it only when it equals `watermark + 1`, halts the batch on a gap, and the client resends from there. |
+| `mutation(A); mutation(B);` — online, un-awaited | **No**   | Two independent requests. The DO applies them in _arrival_ order, which can differ from call order.                                                              |
+
+Only the last row is unordered, and it only bites when those two writes are
+**causally dependent** — B assumes A has already committed. If that's your case,
+take whichever of these fits:
+
+- **Await the first.** `await mutation(A)` before issuing B. The simplest answer,
+  and the right one when B genuinely can't start until A lands.
+- **Make it one mutation.** Move both effects into a single server-side handler.
+  They then commit in one serialized transaction, which is strictly stronger than
+  ordering two calls: it's atomic, so a failure rolls back both instead of leaving
+  A applied and B rejected.
+- **Use [`@lunora/db`](/docs/packages/db) mutators.** The collection layer's outbox
+  is strictly ordered already, so a chain of fire-and-forget writes applies in call
+  order without you awaiting anything.
+
+An opt-in `{ ordered: true }` mode for plain mutations is deliberately not shipped
+— see [Design boundaries](/docs/non-goals#also-deliberately-absent).
+
 ## Surfacing rejected writes
 
 A queued write that the server ultimately rejects (a coded conflict, a validation
