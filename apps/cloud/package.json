@@ -5,9 +5,6 @@
     "license": "PolyForm-Noncommercial-1.0.0",
     "type": "module",
     "sideEffects": false,
-    "engines": {
-        "node": "^22.14.0 || >=24.10.0"
-    },
     "scripts": {
         "build": "vite build",
         "codegen": "node node_modules/@lunora/cli/dist/bin.mjs codegen",
@@ -16,6 +13,7 @@
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "node node_modules/@lunora/cli/dist/bin.mjs codegen && tsc --noEmit",
+        "seed": "node scripts/seed.ts",
         "test": "vitest run"
     },
     "dependencies": {
@@ -58,5 +56,8 @@
         "vite": "catalog:vite",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.14.0 || >=24.10.0"
     }
 }
