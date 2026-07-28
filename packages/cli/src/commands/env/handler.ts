@@ -13,6 +13,7 @@ import {
     parseDevVariableEntries,
     requiredSecrets,
     resolveDeployDriver,
+    resolveProjectTarget,
 } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
@@ -320,7 +321,9 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     const descriptors: SpawnDescriptor[] = [];
 
     for (const entry of map.values()) {
-        const secretCommand = resolveDeployDriver().toolchain?.secretPut({
+        // The toolchain is the target's, not always wrangler's — resolving from the
+        // project keeps a non-default target from shelling out to the wrong CLI.
+        const secretCommand = resolveDeployDriver(resolveProjectTarget(cwd)).toolchain?.secretPut({
             environment: options.prod === true ? "production" : undefined,
             key: entry.key,
             temporary: options.temporary,

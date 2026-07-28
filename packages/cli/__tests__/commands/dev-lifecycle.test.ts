@@ -299,7 +299,7 @@ describe("lunora dev lifecycle", () => {
         it("forwards --target to the daemon", async () => {
             expect.assertions(2);
 
-            let args: string[] | undefined;
+            let args: ReadonlyArray<string> | undefined;
 
             await startBackground({
                 cwd: workdir,
@@ -325,7 +325,7 @@ describe("lunora dev lifecycle", () => {
         it("omits --target when none was given", async () => {
             expect.assertions(1);
 
-            let args: string[] | undefined;
+            let args: ReadonlyArray<string> | undefined;
 
             await startBackground({
                 cwd: workdir,
