@@ -1,6 +1,8 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 
+import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
+
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the
  * `LunoraClient` already provides, so an AI agent can introspect a deployment
@@ -9,25 +11,6 @@ import { LunoraError } from "@lunora/errors";
  * Definitions and dispatch live here — separate from the server wiring — so the
  * behaviour is unit-testable against a mock client without driving a transport.
  */
-
-/** A JSON-Schema object describing a tool's arguments, per the MCP spec. */
-interface ToolInputSchema {
-    properties: Record<string, unknown>;
-    required?: ReadonlyArray<string>;
-    type: "object";
-}
-
-interface ToolDefinition {
-    description: string;
-    inputSchema: ToolInputSchema;
-    name: string;
-}
-
-/** The MCP `CallToolResult` shape this server returns. */
-interface ToolResult {
-    content: { text: string; type: "text" }[];
-    isError?: boolean;
-}
 
 const RUN_INPUT_SCHEMA: ToolInputSchema = {
     properties: {
@@ -49,25 +32,32 @@ const FUNCTION_PATH_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+/** Introspection and queries touch no state; every call goes to the deployment. */
+const READ_ONLY_ANNOTATIONS = { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true } as const;
+
 /** The read-only tool surface: introspection + query. Always exposed. */
 const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "List deployment functions" },
         description: "List the deployment's public functions (queries, mutations, actions) with their kinds.",
         inputSchema: NO_INPUT_SCHEMA,
         name: "lunora_list_functions",
     },
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "List global tables" },
         description: "List the deployment's .global() tables and their column shapes.",
         inputSchema: NO_INPUT_SCHEMA,
         name: "lunora_list_tables",
     },
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Describe a function's arguments" },
         description:
             "Return a function's argument JSON Schema and kind, so a caller can construct a valid arguments object. Call lunora_list_functions first to discover available function paths.",
         inputSchema: FUNCTION_PATH_INPUT_SCHEMA,
         name: "lunora_get_function_schema",
     },
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Run a query" },
         description: "Run a query and return its result. Read-only.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_query",
@@ -77,11 +67,21 @@ const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
 /** The write tool surface (mutations + actions). Exposed ONLY when writes are enabled. */
 const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
+        // Not idempotent and not read-only: this is the distinction the whole
+        // `allowWrites` gate exists for, now legible to a client's UI.
+        annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false, title: "Run a mutation (writes data)" },
         description: "Run a mutation and return its result. Writes data — use with care.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_mutation",
     },
     {
+        annotations: {
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+            readOnlyHint: false,
+            title: "Run an action (may call external services)",
+        },
         description: "Run an action and return its result. May call external services.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_action",
@@ -362,5 +362,6 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
     }
 };
 
-export type { ToolDefinition, ToolInputSchema, ToolResult };
 export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
+
+export { type ToolDefinition, type ToolInputSchema, type ToolResult } from "./tool-types";

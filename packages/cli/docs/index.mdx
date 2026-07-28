@@ -23,6 +23,13 @@ lunora registry <add|list|view|build>   # component registry
 lunora rules <install|check>            # install the AI agent skills into .agents/skills/
 
 # Develop
+lunora mcp install [client…]            # wire Lunora's MCP servers into your editor
+            [--list] [--print] [--force]
+            [--docs-only] [--local-only]
+            [--global | --project]
+lunora mcp uninstall [client…]          # remove them again
+lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawns
+            [--no-docs] [--url u] [--token t]
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
             [--no-studio] [--no-codegen]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
@@ -481,6 +488,58 @@ lunora rules install --overwrite  # reinstall, replacing local edits
 lunora rules check                # report which skills are present
 lunora rules check --strict       # exit non-zero when missing (CI gate)
 ```
+
+### `lunora mcp`
+
+Connects AI editors to Lunora over the
+[Model Context Protocol](https://modelcontextprotocol.io). Where `lunora rules`
+teaches an agent how Lunora works, this gives it live tools: documentation
+search, dev-server status and logs, and typed access to your app's functions.
+
+```bash
+lunora mcp install                      # every MCP client already configured here
+lunora mcp install claude-code cursor   # or name them
+lunora mcp install --list               # supported clients and their config files
+lunora mcp install --print              # show the config without writing it
+lunora mcp install --force              # replace entries that already exist
+lunora mcp install --docs-only          # skip this project's local server
+```
+
+`install` writes two servers, and they go to different places by default:
+**`lunora-docs`**, the hosted documentation server at `https://lunora.sh/mcp`,
+is the same URL in every project, so it lands in the client's **machine-wide**
+config; **`lunora`**, which runs `lunora mcp serve` for this app, only means
+anything inside the project, so it lands in the **project** config. Pass
+`--global` or `--project` to force both one way. Where a client only has one of
+the two (Zed has no project config, VS Code no global one), it falls back rather
+than skipping the client.
+
+`lunora mcp uninstall` removes both again, from both scopes and every client by
+default — it touches only the two entries we wrote, leaving the rest of the file
+and its comments alone. It knows each client's own
+config file, top-level key, and entry shape, so you don't have to remember that
+VS Code says `servers` where Cursor says `mcpServers`:
+
+| Client           | Config file                                       |
+| ---------------- | ------------------------------------------------- |
+| `claude-code`    | `.mcp.json`                                       |
+| `cursor`         | `.cursor/mcp.json`                                |
+| `vscode`         | `.vscode/mcp.json`                                |
+| `gemini`         | `.gemini/settings.json`                           |
+| `claude-desktop` | the OS application-data directory                 |
+| `windsurf`       | `~/.codeium/windsurf/mcp_config.json`             |
+| `codex`          | `~/.codex/config.toml` (snippet printed to paste) |
+
+Existing entries are left alone unless you pass `--force`, comments in a JSONC
+config survive the edit, and a file that doesn't parse is reported rather than
+overwritten.
+
+`lunora mcp serve` is the stdio server those entries spawn — you rarely run it
+by hand. It takes no required configuration: the dev server's URL comes from
+`.lunora/dev.json` and the admin token from `.dev.vars`, both re-read per tool
+call, so starting `lunora dev` after your editor is already open just works. It
+exposes the documentation tools, `lunora_dev_status` / `lunora_dev_logs`, and the
+read-only deployment tools; `--allow-writes` adds the mutation and action tools.
 
 ### `lunora analyze`
 

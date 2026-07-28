@@ -32,7 +32,7 @@ describe("lunora docs", () => {
         const result = await runDocsCommand({ logger: silentLogger(), opener });
 
         expect(result.code).toBe(0);
-        expect(openedUrls).toEqual(["https://lunora.anolilab.dev/docs"]);
+        expect(openedUrls).toEqual(["https://lunora.sh/docs"]);
     });
 
     it("appends the section path", async () => {
@@ -42,7 +42,7 @@ describe("lunora docs", () => {
 
         await runDocsCommand({ logger: silentLogger(), opener, section: "addons/studio" });
 
-        expect(openedUrls).toEqual(["https://lunora.anolilab.dev/docs/addons/studio"]);
+        expect(openedUrls).toEqual(["https://lunora.sh/docs/addons/studio"]);
     });
 
     it("normalises leading + trailing slashes", async () => {
@@ -52,7 +52,7 @@ describe("lunora docs", () => {
 
         await runDocsCommand({ logger: silentLogger(), opener, section: "/migrating/from-convex/" });
 
-        expect(openedUrls).toEqual(["https://lunora.anolilab.dev/docs/migrating/from-convex"]);
+        expect(openedUrls).toEqual(["https://lunora.sh/docs/migrating/from-convex"]);
     });
 
     it("reports opener failures", async () => {
