@@ -500,26 +500,32 @@ button.link.danger {
 }
 
 /* ⌘K command palette (GAPS.md ring 3) */
-.palette-overlay {
-    align-items: flex-start;
-    background: rgba(0, 0, 0, 0.45);
-    display: flex;
-    inset: 0;
-    justify-content: center;
-    padding-top: 14vh;
-    position: fixed;
-    z-index: 60;
+/*
+ * The palette is a native <dialog> in the top layer, so it needs no overlay
+ * element, no z-index and no fixed positioning — the browser handles stacking and
+ * renders the scrim via ::backdrop. The dialog box itself is transparent and only
+ * positions the panel; the panel keeps the visible chrome.
+ */
+.palette {
+    background: transparent;
+    border: none;
+    margin: 14vh auto auto;
+    max-width: 520px;
+    padding: 0;
+    width: 92%;
 }
 
-.palette {
+.palette::backdrop {
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.palette-panel {
     background: #16181d;
     border: 1px solid rgba(127, 127, 127, 0.25);
     border-radius: 10px;
     box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
     color: #e6e8ec;
-    max-width: 520px;
     overflow: hidden;
-    width: 92%;
 }
 
 .palette-input {

@@ -208,6 +208,14 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
                                         setSelectedSpanId("");
                                         setTraceId(trace.traceId === traceId ? "" : trace.traceId);
                                     }}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                            event.preventDefault();
+                                            setSelectedSpanId("");
+                                            setTraceId(trace.traceId === traceId ? "" : trace.traceId);
+                                        }
+                                    }}
+                                    tabIndex={0}
                                 >
                                     <td className="trace-id">
                                         {trace.traceId.slice(0, 12)}

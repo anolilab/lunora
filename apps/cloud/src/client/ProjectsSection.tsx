@@ -98,8 +98,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: SectionProps<Retu
                 <h3>New project</h3>
                 <form
                     className="form-grid"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
 
                         void (async () => {

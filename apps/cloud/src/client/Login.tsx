@@ -34,8 +34,7 @@ export const Login = ({ onSignedIn }: LoginProps = {}): ReactElement => {
         <div className="auth-shell">
             <form
                 className="card auth-card"
-                onSubmit={(event) => {
-                    event.preventDefault();
+                action={() => {
                     setError(null);
                     setPending(true);
 
