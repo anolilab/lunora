@@ -25,6 +25,24 @@
  * Re-running is safe. Every step checks for what it would create first, because
  * none of the underlying mutations dedupe: `cells:register` inserts blindly, so
  * an unconditional seed would grow a fresh cell on every run.
+ *
+ * What it creates: a dev user, a fleet cell, an organization, a project, a
+ * production deployment, a deploy key, and — where the app lets it — a verified
+ * custom domain plus telemetry (logs, metric series, traces, errors) for the
+ * observability views.
+ *
+ * Three stages currently report a skip instead of data, and none is a seed bug:
+ *  - **domain** needs the `customDomains` entitlement, which resolves from a synced
+ *    billing subscription; there is no non-webhook path to one locally.
+ *  - **deployment activation** and **telemetry** are both blocked by the same
+ *    upstream defect — optional columns on `.global()` (D1) tables come back as SQL
+ *    NULL, and the app compares them against `undefined`. See the notes in
+ *    `driveToLive` and `main`.
+ *  - **builds** need a claimed GitHub installation, recorded only by the
+ *    signature-verified webhook. See `seedTelemetry`.
+ *
+ * Each is a deliberate, reported skip rather than a hard failure, so the seed still
+ * leaves the app usable and starts producing more data as those are fixed.
  */
 
 /* eslint-disable no-console -- a terminal script: its progress report to stdout is the deliverable, not a stray debug statement. */
@@ -46,6 +64,12 @@ const ORG_NAME = "Acme Dev";
 const ORG_SLUG = "acme-dev";
 const PROJECT_NAME = "Web";
 const PROJECT_SLUG = "web";
+const SCRIPT_NAME = "acme-dev-web";
+const DOMAIN_HOSTNAME = "web.acme-dev.test";
+const DEPLOY_KEY_NAME = "dev-seed";
+
+/** A trace id is 32 hex chars and a span id 16 — the W3C widths the UI parses. */
+const hex = (length: number, seed: number): string => Array.from({ length }, (_, index) => ((seed * 31 + index * 17 + 7) % 16).toString(16)).join("");
 
 /**
  * `KEY=value` for the one key the seed needs out of `.dev.vars`. Deliberately not
@@ -215,20 +239,296 @@ const ensureOrganization = async (cookie: string, cellId: string): Promise<strin
     return organizationId;
 };
 
-/** Ensure that organization has a project, so the dashboard renders something. */
-const ensureProject = async (cookie: string, organizationId: string): Promise<void> => {
-    const existing = await rpc<{ page: { slug: string }[] } | { slug: string }[]>(cookie, "projects:listByOrg", { organizationId });
+/** Ensure that organization has a project, returning its id. */
+const ensureProject = async (cookie: string, organizationId: string): Promise<string> => {
+    const existing = await rpc<{ _id: string; slug: string }[] | { page: { _id: string; slug: string }[] }>(cookie, "projects:listByOrg", { organizationId });
     const projects = Array.isArray(existing) ? existing : existing.page;
+    const found = projects.find((project) => project.slug === PROJECT_SLUG);
 
-    if (projects.some((project) => project.slug === PROJECT_SLUG)) {
+    if (found !== undefined) {
         console.info(`  project     ${PROJECT_SLUG} (exists)`);
+
+        return found._id;
+    }
+
+    // `githubRepo` is set so the project is shaped like a real one in the UI. It does
+    // NOT enable build seeding — see the note on `builds` in `seedTelemetry`.
+    const projectId = await rpc<string>(cookie, "projects:create", {
+        framework: "vite",
+        githubRepo: "acme-dev/web",
+        name: PROJECT_NAME,
+        organizationId,
+        slug: PROJECT_SLUG,
+    });
+
+    console.info(`  project     ${PROJECT_SLUG} (created)`);
+
+    return projectId;
+};
+
+/**
+ * Walk a deployment from `queued` to live.
+ *
+ * `create` leaves it `queued`, and `activate` accepts only `live` or `verifying` — a
+ * real deploy gets there through the provisioner. Stepping through the same statuses
+ * rather than jumping to the end gives the row a plausible history for the UI.
+ */
+const driveToLive = async (cookie: string, id: string): Promise<boolean> => {
+    try {
+        await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "provisioning" });
+        await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "building" });
+        await rpc<unknown>(cookie, "deployments:updateStatus", { bundleHash: hex(16, 3), id, status: "verifying", url: `https://${DOMAIN_HOSTNAME}` });
+        await rpc<unknown>(cookie, "deployments:activate", { id });
+
+        return true;
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        // Known upstream defect, not a seed bug: `deployments` is `.global()`, so its
+        // rows live in D1, and D1 returns SQL NULL for every unset optional column
+        // (`bundleHash`, `url`, `alias`, …). `updateStatus` re-validates the merged
+        // document on patch, and `v.optional(v.string())` admits `undefined` but not
+        // `null` — so the patch is rejected with "Expected string, received null"
+        // before it writes. That makes the whole deploy lifecycle unreachable, for CI
+        // as much as for this script. Reported separately; the seed leaves the
+        // deployment `queued` rather than failing outright, so every later stage
+        // (deploy key, telemetry) still seeds.
+        if (message.includes("VALIDATION_ERROR")) {
+            console.info(`  deployment  (left queued — updateStatus rejects D1 NULLs on patch; see the note in driveToLive)`);
+
+            return false;
+        }
+
+        throw error;
+    }
+};
+
+/**
+ * Ensure the project has a **live** production deployment, returning its id.
+ *
+ * "Exists" is not enough to skip: a run that died partway (or any deployment left
+ * mid-lifecycle) leaves a `queued` row, and treating that as done would permanently
+ * strand the seed with a project whose dashboard shows no current deployment. So an
+ * existing-but-not-live deployment is driven the rest of the way instead.
+ */
+const ensureDeployment = async (cookie: string, organizationId: string, projectId: string): Promise<string> => {
+    const existing = await rpc<{ _id: string; status: string }[]>(cookie, "deployments:listByProject", { organizationId, projectId });
+    const found = existing.at(0);
+
+    if (found !== undefined) {
+        if (found.status === "live") {
+            console.info(`  deployment  ${SCRIPT_NAME} (exists, live)`);
+
+            return found._id;
+        }
+
+        if (await driveToLive(cookie, found._id)) {
+            console.info(`  deployment  ${SCRIPT_NAME} (resumed from ${found.status} → live)`);
+        }
+
+        return found._id;
+    }
+
+    const created = await rpc<{ deploymentId: string; scriptName: string; version: number }>(cookie, "deployments:create", {
+        branch: "main",
+        kind: "production",
+        organizationId,
+        projectId,
+        runtimeVersion: "1.0.0-alpha.121",
+        scriptName: SCRIPT_NAME,
+    });
+
+    const live = await driveToLive(cookie, created.deploymentId);
+
+    console.info(`  deployment  ${SCRIPT_NAME} v${String(created.version)} (created${live ? ", live" : ""})`);
+
+    return created.deploymentId;
+};
+
+/**
+ * Ensure the project has a verified custom domain, so the Domains tab is populated.
+ *
+ * **Best-effort, and skipped rather than fatal.** `domains:add` requires the
+ * `customDomains` entitlement, and entitlements resolve from the org's *synced
+ * subscription* rows — written only by the billing provider's signature-verified
+ * webhook — not from the nominal `organizations.plan` column the seed sets. There is
+ * no non-webhook path to an active subscription, so on a local dev worker with no
+ * billing provider this legitimately cannot succeed. Seeding it would mean forging a
+ * provider webhook or writing subscription rows behind the app's back, both of which
+ * abandon the "seed through real surfaces" rule that makes this script trustworthy.
+ * A FORBIDDEN here is therefore expected, reported, and non-fatal — and the step
+ * starts working by itself the day an org has a real subscription.
+ */
+const ensureDomain = async (cookie: string, organizationId: string, projectId: string): Promise<void> => {
+    const existing = await rpc<{ _id: string }[]>(cookie, "domains:list", { organizationId, projectId });
+
+    if (existing.length > 0) {
+        console.info(`  domain      ${DOMAIN_HOSTNAME} (exists)`);
 
         return;
     }
 
-    await rpc<string>(cookie, "projects:create", { framework: "vite", name: PROJECT_NAME, organizationId, slug: PROJECT_SLUG });
+    let added: { id: string; txtName: string; txtToken: string };
 
-    console.info(`  project     ${PROJECT_SLUG} (created)`);
+    try {
+        added = await rpc<{ id: string; txtName: string; txtToken: string }>(cookie, "domains:add", { hostname: DOMAIN_HOSTNAME, organizationId, projectId });
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (message.includes("FORBIDDEN")) {
+            console.info(`  domain      (skipped — needs the customDomains entitlement, which comes from a synced billing subscription)`);
+
+            return;
+        }
+
+        throw error;
+    }
+
+    // Verification normally waits on a DNS TXT record and a Cloudflare custom-hostname
+    // callback. Neither exists locally, so mark it verified directly — otherwise the
+    // domain sits "pending" forever and the tab shows nothing useful.
+    await rpc<unknown>(cookie, "domains:markVerified", { id: added.id, organizationId, verified: true });
+
+    console.info(`  domain      ${DOMAIN_HOSTNAME} (created, verified)`);
+};
+
+/**
+ * Get a usable deploy key, or `undefined` when telemetry is already seeded.
+ *
+ * `deploy_keys:issue` returns the plaintext key **once** — only its hash is stored, so
+ * a later `list` can never recover it. The obvious shortcut is to treat "a key named
+ * {@link DEPLOY_KEY_NAME} exists" as "telemetry was seeded", but that is wrong in the
+ * case that actually happens: issuing succeeds and the *ingest* then fails, leaving a
+ * key with no telemetry behind it and every later run reporting a contented
+ * "(exists)" while the observability views stay empty forever.
+ *
+ * So the real telemetry is the marker. Logs are checked first; only if none exist does
+ * this need a key, and a stale unusable one is revoked and replaced rather than
+ * accumulating a new key per run.
+ */
+const ensureDeployKey = async (cookie: string, organizationId: string, projectId: string): Promise<string | undefined> => {
+    const logs = await rpc<{ page?: unknown[] } | unknown[]>(cookie, "logs:list", { limit: 1, organizationId, scriptName: SCRIPT_NAME });
+    const seeded = Array.isArray(logs) ? logs.length > 0 : (logs.page?.length ?? 0) > 0;
+
+    if (seeded) {
+        console.info(`  deploy key  ${DEPLOY_KEY_NAME} (exists)`);
+
+        return undefined;
+    }
+
+    const existing = await rpc<{ _id: string; name: string }[]>(cookie, "deploy_keys:list", { organizationId });
+    const stale = existing.find((key) => key.name === DEPLOY_KEY_NAME);
+
+    if (stale !== undefined) {
+        // Best-effort tidy-up, not a precondition. `revoke` patches the key row and so
+        // trips the same D1-NULL-vs-`undefined` defect as `updateStatus` (here on the
+        // `capability` union). Issuing the replacement is what actually matters, so a
+        // failure to revoke the old one must not abort the seed; the worst case is a
+        // spare unusable key, and that stops happening once the defect is fixed.
+        try {
+            await rpc<unknown>(cookie, "deploy_keys:revoke", { id: stale._id, organizationId });
+        } catch {
+            // Intentionally ignored — see above.
+        }
+    }
+
+    const issued = await rpc<{ id: string; key: string }>(cookie, "deploy_keys:issue", {
+        capability: "ingest",
+        name: DEPLOY_KEY_NAME,
+        organizationId,
+        projectId,
+        type: "production",
+    });
+
+    console.info(`  deploy key  ${DEPLOY_KEY_NAME} (${stale === undefined ? "issued" : "reissued"})`);
+
+    return issued.key;
+};
+
+/**
+ * Fill the observability views: logs, metric series, traces, and a couple of errors.
+ *
+ * All three sinks are deploy-key authorized, which is why this runs last — it needs
+ * the key {@link ensureDeployKey} just issued. Timestamps are spread backwards over
+ * the last few hours so the charts have a shape rather than one spike at "now".
+ *
+ * **Builds are deliberately not seeded.** `builds:recordPush` requires an
+ * `installationId` matching a GitHub installation the org has *claimed*, and
+ * installations are only recorded by `internal.github_installations.record` from the
+ * signature-verified GitHub webhook. Faking that means either forging a webhook
+ * signature or writing rows behind the app's back — both of which defeat the point of
+ * seeding through real surfaces. The Builds tab therefore stays empty.
+ */
+const seedTelemetry = async (cookie: string, organizationId: string, deploymentId: string, deployKey: string): Promise<void> => {
+    const now = Date.now();
+    const hour = 3_600_000;
+
+    const levels = ["info", "info", "warn", "info", "error", "debug"] as const;
+    const paths = ["messages:list", "messages:send", "auth:session", "projects:listByOrg"];
+
+    await rpc<unknown>(cookie, "logs:ingest", {
+        deployKey,
+        lines: Array.from({ length: 24 }, (_, index) => {
+            const level = levels[index % levels.length] ?? "info";
+
+            return {
+                createdAt: now - index * 7 * 60_000,
+                fields: { durationMs: 4 + ((index * 13) % 180), region: index % 3 === 0 ? "weur" : "enam" },
+                functionPath: paths[index % paths.length],
+                level,
+                message: level === "error" ? `unhandled rejection in ${paths[index % paths.length]}` : `handled request ${String(index + 1)}`,
+                traceId: hex(32, index),
+            };
+        }),
+        organizationId,
+        scriptName: SCRIPT_NAME,
+    });
+
+    // Two series over 24 hourly buckets, so the metric charts have a real curve.
+    await rpc<unknown>(cookie, "metrics:ingest", {
+        deploymentId,
+        deployKey,
+        organizationId,
+        points: Array.from({ length: 24 }, (_, index) => index).flatMap((index) => {
+            const at = now - (23 - index) * hour;
+
+            return [
+                { at, kind: "counter", name: "requests", serviceName: SCRIPT_NAME, value: 120 + ((index * 37) % 90) },
+                { at, kind: "gauge", name: "p95_latency_ms", serviceName: SCRIPT_NAME, value: 42 + ((index * 11) % 65) },
+            ];
+        }),
+    });
+
+    // Traces (observations) plus the error events that feed Issues/Incidents.
+    await rpc<unknown>(cookie, "telemetry:ingest", {
+        deploymentId,
+        deployKey,
+        events: [
+            { functionPath: "messages:send", kind: "error", message: "TypeError: cannot read property 'id' of undefined", ts: now - 18 * 60_000 },
+            { functionPath: "messages:send", kind: "error", message: "TypeError: cannot read property 'id' of undefined", ts: now - 6 * 60_000 },
+        ],
+        observations: Array.from({ length: 6 }, (_, index) => {
+            const startedAt = now - (index + 1) * 9 * 60_000;
+            const durationMs = 12 + ((index * 23) % 140);
+
+            return {
+                attributes: { "http.method": index % 2 === 0 ? "GET" : "POST" },
+                durationMs,
+                endedAt: startedAt + durationMs,
+                functionPath: paths[index % paths.length],
+                kind: "worker",
+                level: index === 4 ? "error" : "info",
+                name: paths[index % paths.length] ?? "request",
+                serviceName: SCRIPT_NAME,
+                spanId: hex(16, index + 1),
+                startedAt,
+                traceId: hex(32, index),
+            };
+        }),
+        organizationId,
+    });
+
+    console.info(`  telemetry   24 logs, 48 metric points, 6 spans, 2 errors (ingested)`);
 };
 
 const main = async (): Promise<void> => {
@@ -240,8 +540,35 @@ const main = async (): Promise<void> => {
 
     const cellId = await ensureCell(cookie);
     const organizationId = await ensureOrganization(cookie, cellId);
+    const projectId = await ensureProject(cookie, organizationId);
+    const deploymentId = await ensureDeployment(cookie, organizationId, projectId);
 
-    await ensureProject(cookie, organizationId);
+    await ensureDomain(cookie, organizationId, projectId);
+
+    const deployKey = await ensureDeployKey(cookie, organizationId, projectId);
+
+    if (deployKey === undefined) {
+        console.info(`  telemetry   (exists)`);
+    } else {
+        try {
+            await seedTelemetry(cookie, organizationId, deploymentId, deployKey);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            // Same upstream defect as `driveToLive`, in a second place: `authz.ts`
+            // rejects a key when `row.revokedAt !== undefined`, but `deployKeys` is
+            // `.global()` and D1 stores an unset column as NULL — so a perfectly valid,
+            // never-revoked key reads as revoked and every deploy-key authorized path
+            // (CI deploys and all telemetry ingest, not just this seed) answers
+            // FORBIDDEN. Reported separately; skipping keeps the rest of the seed
+            // usable instead of failing the whole run on a bug it cannot fix.
+            if (message.includes("FORBIDDEN")) {
+                console.info(`  telemetry   (skipped — deploy-key auth rejects D1 NULL revokedAt; see the note in main)`);
+            } else {
+                throw error;
+            }
+        }
+    }
 
     console.info(`\ndone — sign in at ${BASE_URL}/login with ${DEV_EMAIL} / ${DEV_PASSWORD}`);
 };
