@@ -11,6 +11,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
+import { resolveAfterSignIn } from "./redirect-to";
 import { createStore } from "./store";
 import type { FormController } from "./types";
 import { required } from "./validators";
@@ -70,7 +71,7 @@ const createBackupCodeSignInController = (context: ControllerContext, options: {
         submit: async (values, context_) => {
             assertOk(await context_.authClient.twoFactor.verifyBackupCode({ code: values.code.trim(), trustDevice: options.trustDevice }));
 
-            return { redirectTo: context_.redirects.afterSignIn };
+            return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
         },
     });
 

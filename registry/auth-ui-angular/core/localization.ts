@@ -120,6 +120,7 @@ interface Localization {
     roleLabel: string;
     saveChanges: string;
     sendNewCode: string;
+    sessionNotFresh: string;
     sessions: string;
     sessionsEmpty: string;
     signIn: string;
@@ -268,6 +269,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     roleLabel: "Role",
     saveChanges: "Save changes",
     sendNewCode: "Use a different email",
+    sessionNotFresh: "For your security, sign in again before making this change.",
     sessions: "Active sessions",
     sessionsEmpty: "No other active sessions.",
     signIn: "Sign in",

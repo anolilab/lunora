@@ -35,12 +35,25 @@ const assertOk = <T>(response: AuthResponse<T>): AuthResponse<T> => {
 };
 
 /**
+ * Codes better-auth answers with when the session is too old for a sensitive
+ * operation (changing an email or password, revoking sessions, deleting an
+ * account). Its own message — "session is not fresh" — describes the mechanism,
+ * not what the user should do, so this is one of the few worth rewording: the
+ * action did not fail, it needs a re-authentication first.
+ */
+const NOT_FRESH_CODES = new Set(["SESSION_NOT_FRESH", "SESSION_TOO_OLD"]);
+
+/**
  * Map a thrown value to a display string. better-auth already returns
  * human-readable messages ("Invalid email or password"), so those pass through;
  * `LunoraError`s use their message; anything else falls back to `fallback`.
  */
 const mapAuthError = (error: unknown, localization: Localization, fallback: string): string => {
     if (error instanceof AuthActionError) {
+        if (error.code !== undefined && NOT_FRESH_CODES.has(error.code)) {
+            return localization.sessionNotFresh;
+        }
+
         return error.message.trim() === "" ? fallback : error.message;
     }
 

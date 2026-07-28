@@ -57,6 +57,7 @@
         { "from": "core/passkeys.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/passkeys.ts" },
         { "from": "core/phone-number.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/phone-number.ts" },
         { "from": "core/profile.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/profile.ts" },
+        { "from": "core/redirect-to.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/redirect-to.ts" },
         { "from": "core/reset-password.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/reset-password.ts" },
         { "from": "core/session-actions.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/session-actions.ts" },
         { "from": "core/session.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/session.ts" },

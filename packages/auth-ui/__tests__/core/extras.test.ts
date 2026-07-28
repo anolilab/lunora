@@ -142,3 +142,39 @@ describe("prefill vs the user", () => {
         expect(untouched.getState().fields.name.value).toBe("from-the-server");
     });
 });
+
+describe("redirectTo", () => {
+    it("accepts a same-origin path", async () => {
+        expect.assertions(2);
+
+        const { isSafeRedirect } = await import("../../src/core");
+
+        expect(isSafeRedirect("/accept-invitation?invitationId=1")).toBe(true);
+        expect(isSafeRedirect("/settings")).toBe(true);
+    });
+
+    it("rejects anything that could leave the origin", async () => {
+        expect.assertions(6);
+
+        const { isSafeRedirect } = await import("../../src/core");
+
+        // An unvalidated `redirectTo` is an open redirect: a phishing link sends
+        // the victim through the real sign-in and hands them to the attacker.
+        expect(isSafeRedirect("https://evil.example")).toBe(false);
+        // Protocol-relative — a browser reads `//host` as a host, not a path.
+        expect(isSafeRedirect("//evil.example")).toBe(false);
+        expect(isSafeRedirect(String.raw`/\evil.example`)).toBe(false);
+        // eslint-disable-next-line no-script-url -- asserting that this exact string is rejected.
+        expect(isSafeRedirect("javascript:alert(1)")).toBe(false);
+        expect(isSafeRedirect("settings")).toBe(false);
+        expect(isSafeRedirect("")).toBe(false);
+    });
+
+    it("rejects a path carrying a control character", async () => {
+        expect.assertions(1);
+
+        const { isSafeRedirect } = await import("../../src/core");
+
+        expect(isSafeRedirect("/ok\nSet-Cookie: x=1")).toBe(false);
+    });
+});

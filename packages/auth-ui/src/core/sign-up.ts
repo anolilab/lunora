@@ -2,6 +2,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
+import { resolveAfterSignIn } from "./redirect-to";
 import type { FormController } from "./types";
 import { email as validateEmail, password as validatePassword, required } from "./validators";
 
@@ -26,7 +27,7 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
                 }),
             );
 
-            return { redirectTo: context_.redirects.afterSignIn };
+            return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
         },
     });
 

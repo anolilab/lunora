@@ -84,6 +84,7 @@ export {
 } from "./phone-number";
 export type { ProfileField, ProfileOptions } from "./profile";
 export { createProfileController } from "./profile";
+export { isSafeRedirect, readRedirectTo, resolveAfterSignIn } from "./redirect-to";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
 export { createResetPasswordController } from "./reset-password";
 export type { SessionActions, SessionController, SessionState } from "./session";
