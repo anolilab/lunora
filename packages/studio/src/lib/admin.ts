@@ -63,6 +63,7 @@ export const ADMIN_FUNCTIONS = {
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
+    getQueryInsights: "__lunora_admin__:getQueryInsights",
     getQueueMessages: "__lunora_admin__:getQueueMessages",
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
@@ -1305,6 +1306,41 @@ export interface SqlConsoleResult {
     rowCount: number;
     rows: Record<string, unknown>[];
     truncated: boolean;
+}
+
+/** The ranges the query-insights selector offers. */
+export type QueryInsightRange = "1h" | "1m" | "5m" | "15m";
+
+/** One statement's activity within the selected range. Mirrors `@lunora/do`'s `QueryInsightEntry`. */
+export interface QueryInsightEntry {
+    avgDurationMs: number;
+    execCount: number;
+    normalizedSql: string;
+    /** Interpolated from a fixed latency histogram — accurate to its bucket's width, not exact. */
+    p50DurationMs: number;
+    p95DurationMs: number;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+
+/** One point on the throughput/latency charts. */
+export interface QueryInsightBucket {
+    avgDurationMs: number;
+    bucketMs: number;
+    execCount: number;
+}
+
+/**
+ * Payload of a `getQueryInsights` admin call. `capped` reports that
+ * the tracked-statement cap was hit, so the view can say "showing N of a capped
+ * set" instead of implying it shows everything.
+ */
+export interface QueryInsightsResult {
+    buckets: QueryInsightBucket[];
+    capped: boolean;
+    entries: QueryInsightEntry[];
+    trackedStatements: number;
 }
 
 /**

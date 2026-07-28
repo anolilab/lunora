@@ -1,7 +1,7 @@
 /**
  * Admin read resolvers for the schema-version ledger and the SQL linter.
  *
- * A lookup table rather than three more arms on `ShardDO.readAdminOp`'s
+ * A lookup table rather than more arms on `ShardDO.readAdminOp`'s
  * if-chain: these are pure functions of `(sql, args)` — none of them touches
  * `this` — so expressing them as class methods would mean three more
  * `class-methods-use-this` suppressions in a file that already carries dozens,
@@ -11,6 +11,7 @@
  */
 
 import type { SqlExec } from "./ctx-db";
+import { readQueryInsights } from "./query-metrics";
 import { readSchemaHistory, readSchemaVersion } from "./schema-history";
 import { lintReadonlySql } from "./sql-console";
 
@@ -26,6 +27,17 @@ type AdminReadResolver = (sql: SqlExec, args: Record<string, unknown>, wildcard:
 /** Read a string argument, defaulting to empty rather than throwing on a bad payload. */
 const stringArgument = (args: Record<string, unknown>, name: string): string => (typeof args[name] === "string" ? args[name] : "");
 
+/** The ranges the Studio's query-insights selector offers, in milliseconds. */
+const INSIGHT_RANGES: Readonly<Record<string, number>> = {
+    "1h": 60 * 60 * 1000,
+    "1m": 60 * 1000,
+    "5m": 5 * 60 * 1000,
+    "15m": 15 * 60 * 1000,
+};
+
+/** Resolve a range token to milliseconds, defaulting to 15m for anything unrecognised. */
+const rangeMsOf = (args: Record<string, unknown>): number => INSIGHT_RANGES[stringArgument(args, "range")] ?? INSIGHT_RANGES["15m"] ?? 900_000;
+
 /**
  * Resolvers keyed by the BARE function name (the part after
  * `__lunora_admin__:`). Every one of these carries the wildcard table
@@ -40,6 +52,15 @@ const SCHEMA_HISTORY_READS: Readonly<Record<string, AdminReadResolver>> = {
      */
     lintSql: (sql, args, wildcard) => {
         return { result: lintReadonlySql(sql, stringArgument(args, "sql")), tables: new Set([wildcard]) };
+    },
+
+    /**
+     * Per-statement activity within the selected range, plus a combined
+     * throughput/latency series. Reads the time-bucketed table rather than the
+     * lifetime counters, so it answers "what is hot now".
+     */
+    getQueryInsights: (sql, args, wildcard) => {
+        return { result: readQueryInsights(sql, rangeMsOf(args)), tables: new Set([wildcard]) };
     },
 
     /** Every recorded schema version, newest first, WITHOUT the snapshot payloads. */
@@ -75,5 +96,5 @@ const resolveSchemaHistoryRead = (
     return SCHEMA_HISTORY_READS[functionPath.slice(prefix.length)]?.(sql, args, wildcard);
 };
 
-export { resolveSchemaHistoryRead, SCHEMA_HISTORY_READS };
+export { INSIGHT_RANGES, resolveSchemaHistoryRead, SCHEMA_HISTORY_READS };
 export type { AdminReadOutcome, AdminReadResolver };

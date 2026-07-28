@@ -3,7 +3,7 @@
 - **Category**: feat/obs (competitive parity — Prisma Studio Query Insights)
 - **Priority**: P2
 - **Effort**: M · **Risk**: LOW
-- **Status**: TODO
+- **Status**: DONE (Phases 1–4 shipped)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: turn the existing lifetime slow-query leaderboard into a time-ranged
   view — throughput and latency over 1m/5m/15m/1h, p95 alongside the mean, and a
@@ -52,55 +52,55 @@ statements instead of functions.
 
 ## Phase 1 — Time buckets
 
-- [ ] Reserved `__lunora_metrics_queries_buckets`: `(sqlHash, bucketMs)` primary
+- [x] Reserved `__lunora_metrics_queries_buckets`: `(sqlHash, bucketMs)` primary
       key, columns `execCount`, `totalDurationMs`, `rowsRead`, `rowsWritten`.
       Keyed by a hash of the normalized SQL (not the text) to keep the composite
       key small; the text stays in the existing table, joined on read.
-- [ ] `recordQueryMetric` writes both rows in the same pass — one extra
+- [x] `recordQueryMetric` writes both rows in the same pass — one extra
       `INSERT … ON CONFLICT DO UPDATE`, matching the hot-path shape
       `function-metrics.ts` already accepts.
-- [ ] Bucket width: reuse the per-function window so both series line up on one
+- [x] Bucket width: reuse the per-function window so both series line up on one
       time axis. Verify the concrete value in `function-metrics.ts` before
       picking — do not introduce a second, differently-sized window.
-- [ ] Bounded retention: prune buckets older than the longest supported range
+- [x] Bounded retention: prune buckets older than the longest supported range
       (1h) plus a margin, on the same sweep that already maintains the table.
       **Cardinality is the real risk here** — bucket rows are
       statements × windows, so the prune is load-bearing, not hygiene.
 
 ## Phase 2 — Percentiles without storing samples
 
-- [ ] Fixed logarithmic latency histogram per `(sqlHash, bucketMs)` — a small
+- [x] Fixed logarithmic latency histogram per `(sqlHash, bucketMs)` — a small
       bounded set of counter columns (e.g. ≤1ms, ≤2, ≤5, ≤10, … ≤5s, >5s).
       p50/p95 are interpolated from bucket boundaries on read.
-- [ ] Explicitly **not** storing per-execution samples: unbounded growth on the
+- [x] Explicitly **not** storing per-execution samples: unbounded growth on the
       hot path, for a precision nobody needs at this altitude. The histogram's
       accuracy limit (bucket-boundary interpolation) is documented in the read
       path so the number is not over-trusted.
 
 ## Phase 3 — Read path
 
-- [ ] `__lunora_admin__:getQueryInsights` taking `{ range: "1m"|"5m"|"15m"|"1h",
+- [x] `__lunora_admin__:getQueryInsights` taking `{ range: "1m"|"5m"|"15m"|"1h",
 sort, limit }` → per-statement rows (execCount, rows, mean, p50, p95) plus a
       bucketed series for the chart. Separate from `getMetrics` — the snapshot RPC
       should not grow a time-series payload it mostly does not need.
-- [ ] Report the cap honestly: return `{ trackedStatements, capped: boolean }`
+- [x] Report the cap honestly: return `{ trackedStatements, capped: boolean }`
       so the UI can say "showing N of a capped set" instead of implying totality.
-- [ ] Best-effort like every other reserved-table read: an unmigrated shard
+- [x] Best-effort like every other reserved-table read: an unmigrated shard
       returns an empty feed, never an error.
 
 ## Phase 4 — The view
 
-- [ ] Promote the "Query insights" tab in `features/reports/metrics-panel.tsx`
+- [x] Promote the "Query insights" tab in `features/reports/metrics-panel.tsx`
       into a range-selector view: throughput chart + latency chart (`recharts`,
       already a dependency) above the existing sortable table.
-- [ ] p95 column beside the mean; sort by any column; range in URL state so a
+- [x] p95 column beside the mean; sort by any column; range in URL state so a
       view is shareable (see plan 205 Phase 5).
-- [ ] Live tail: subscribe the way the other panels do (`useAdminQuery` with
+- [x] Live tail: subscribe the way the other panels do (`useAdminQuery` with
       `live: true`) rather than polling.
-- [ ] Exclude Studio's own admin RPC traffic from the numbers, or label it —
+- [x] Exclude Studio's own admin RPC traffic from the numbers, or label it —
       Prisma's traffic-exclusion rule. An operator investigating a hot statement
       must not be looking at the tool's own reads.
-- [ ] Deep-link a statement to the advisor's index recommendation where one
+- [x] Deep-link a statement to the advisor's index recommendation where one
       applies (`features/advisors/apply-index-button.tsx` already exists).
 
 ## Exit criteria
@@ -114,6 +114,24 @@ sort, limit }` → per-statement rows (execCount, rows, mean, p50, p95) plus a
   (many distinct statements) — asserted by a test, not assumed.
 - No measurable regression on the DO SQL hot path from the second upsert
   (`packages/do/__bench__` has the precedent for measuring this).
+
+## Implementation notes
+
+- Bucket width is the SAME 60s window `function-metrics.ts` uses, so the two
+  series chart on one axis without resampling.
+- Percentiles come from a fixed logarithmic histogram (11 edges + overflow),
+  interpolated on read. Accuracy is a bucket's width, not exact — documented at
+  `readQueryInsights` so the number is not over-trusted. A test pins that a
+  90/10 fast/slow split puts p50 low and p95 high; note that at exactly 95/5 the
+  nearest-rank p95 IS the fast bucket, which is correct, not a bug.
+- The bucket table is keyed by an 8-char FNV hash of the normalised statement,
+  not its text: it holds one row per statement per window, so the text lives once
+  in the lifetime table and is joined back on read.
+- Retention prune runs on the minute boundary rather than per statement, so the
+  hot path pays a `DELETE` roughly 1/1000th of the time. It is load-bearing, not
+  hygiene — rows are statements × windows.
+- The cap is reported (`capped`, `trackedStatements`) and surfaced as a badge, so
+  the view never implies totality when statements past the cap are being dropped.
 
 ## Non-goals
 

@@ -75,6 +75,7 @@ const ADMIN_FUNCTIONS = {
     getLogs: "__lunora_admin__:getLogs",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
+    getQueryInsights: "__lunora_admin__:getQueryInsights",
     getQueueMessages: "__lunora_admin__:getQueueMessages",
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",

@@ -20,7 +20,7 @@ import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
-import { QueryInsights } from "./query-insights";
+import { QueryInsightsRange } from "./query-insights-range";
 import { Sparkline } from "./sparkline";
 
 interface MetricsPanelProps {
@@ -350,7 +350,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {/* Query Insights tab — rendered only when present and selected. */}
-            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
+            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsightsRange shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && metrics !== null && (
                 <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">
