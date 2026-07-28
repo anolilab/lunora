@@ -7,6 +7,7 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import appCss from "../client/styles.css?url";
+import themeCss from "../client/theme.css?url";
 
 interface RouterContext {
     queryClient: QueryClient;
@@ -39,7 +40,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     component: RootComponent,
     head: () => {
         return {
-            links: [{ href: appCss, rel: "stylesheet" }],
+            links: [
+                { href: themeCss, rel: "stylesheet" },
+                { href: appCss, rel: "stylesheet" },
+            ],
             meta: [{ charSet: "utf8" }, { content: "width=device-width, initial-scale=1", name: "viewport" }, { title: "Lunora Cloud" }],
         };
     },

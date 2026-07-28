@@ -1,0 +1,306 @@
+/**
+ * Lunora Cloud studio styling — "Luna + Aurora" design system on Tailwind CSS v4.
+ *
+ * RECOVERED from the 2026-07-12..16 design session, which was never committed.
+ * Loaded alongside the legacy `styles.css` during the port: this file supplies the
+ * Tailwind engine, the Geist faces and the Aurora tokens, while `styles.css` keeps
+ * the not-yet-ported screens rendering. It goes away as the last screen moves over.
+ *
+ * Vercel/Zeitwork-grade minimal control plane: Geist typography, a cool
+ * blue-violet monochrome canvas, a single aurora-violet accent, SHARP corners on
+ * chrome, hairline borders, no shadows. Both modes ship — dark is the default
+ * (the `.dark` class on <html>, forced in __root); the top-bar toggle swaps to
+ * the Ivory light theme.
+ *
+ * The design is expressed as Tailwind utilities in the component JSX. This file
+ * wires Tailwind + the canonical tokens (marketing/design-tokens/tokens.css,
+ * which supplies the `@theme` colors/radius/fonts backing the utilities), styles
+ * the base HTML elements (form controls, headings), and keeps a few genuinely
+ * complex, single-use components as classes (command palette, usage meters/chart,
+ * log viewer, data tables).
+ */
+
+@import "tailwindcss";
+/* Self-hosted Geist (variable weight axis only — no italics needed). */
+@import "@fontsource-variable/geist/wght.css";
+@import "@fontsource-variable/geist-mono/wght.css";
+/* Canonical color + theme tokens (both modes; :root = day, .dark = night). */
+@import "../../../../marketing/design-tokens/tokens.css";
+/* shadcn/ui: overlay/animation utilities + the `.dark`-variant selector its
+   components use. The theme itself comes from the tokens above, not from
+   `shadcn init` (whose neutral OKLCH block would override the Aurora palette). */
+@import "tw-animate-css";
+/* React Flow structural styles for the project bindings graph (custom-themed nodes). */
+@import "@xyflow/react/dist/base.css";
+@custom-variant dark (&:is(.dark *));
+
+/* Scan the studio's TSX for the utility classes it uses. */
+@source "../";
+
+/* The tokens name the families "Geist Sans"/"Geist Mono"; the self-hosted
+   Fontsource variable faces register as "Geist Variable"/"Geist Mono Variable",
+   so re-point the font-* theme keys at the loaded families. */
+@theme {
+    --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+    /* Instrument corners (Braun / Teenage Engineering): structural chrome — cards,
+       panels, buttons, inputs, selects — is SHARP. Only dense data (badges, chips,
+       menu items, kbd) keeps a hairline 2–3px radius. This overrides the shared
+       0.5rem token scale for the control plane only; marketing keeps its own. */
+    --radius-sm: 2px;
+    --radius-md: 3px;
+    --radius-lg: 0px;
+    --radius-xl: 0px;
+    --radius-2xl: 0px;
+}
+
+@layer base {
+    *,
+    ::before,
+    ::after {
+        @apply border-border;
+    }
+
+    html {
+        color-scheme: light;
+    }
+
+    html.dark {
+        color-scheme: dark;
+    }
+
+    body {
+        @apply bg-background text-foreground font-sans text-[14px] leading-[1.5] antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    ::selection {
+        background: color-mix(in oklab, var(--aurora-violet) 30%, transparent);
+    }
+
+    :focus-visible {
+        @apply outline-2 outline-offset-2 outline-ring;
+    }
+
+    /* Headings. h2/h3 sit at the top of a card, so they carry the gap to content. */
+    h1,
+    h2,
+    h3 {
+        @apply font-medium tracking-[-0.01em];
+    }
+
+    h1 {
+        @apply m-0 text-[28px] tracking-[-0.02em];
+    }
+
+    h2 {
+        @apply mt-0 mb-4 text-[20px];
+    }
+
+    h3 {
+        @apply mt-0 mb-4 text-[16px];
+    }
+
+    a {
+        @apply text-foreground no-underline;
+    }
+
+    /* Form controls (bare in the JSX; the design system styles them here). */
+    label {
+        @apply grid gap-1.5 font-mono text-[11px] tracking-[0.07em] text-muted-foreground uppercase;
+    }
+
+    /* Form controls + data tables are shadcn components now (Input/Select/Table);
+       only the bare `<label>` above stays styled here for the instrument look. */
+}
+
+/* Small radius reserved for dense data (meter tracks). */
+:root {
+    --r-chip: 4px;
+}
+
+/* ── Usage meters (included-vs-used quota bars) ───── */
+.meter {
+    margin: 12px 0;
+}
+
+.meter-head {
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    color: var(--muted-foreground);
+}
+
+.meter-track {
+    background: var(--secondary);
+    border-radius: var(--r-chip);
+    height: 6px;
+    overflow: hidden;
+}
+
+.meter-fill {
+    border-radius: var(--r-chip);
+    height: 100%;
+    transition: width 240ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.meter-ok {
+    background: var(--success);
+}
+
+.meter-warn {
+    background: var(--warning);
+}
+
+.meter-over {
+    background: var(--destructive);
+}
+
+.meter-note {
+    color: var(--destructive);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    margin: 6px 0 0;
+}
+
+.meter-note.warn {
+    color: var(--warning);
+}
+
+/* Zero-dep usage bar chart. */
+.usage-chart {
+    margin: 20px 0;
+}
+
+.usage-chart svg {
+    display: block;
+    height: 96px;
+    width: 100%;
+}
+
+.usage-chart rect {
+    fill: var(--aurora-violet);
+}
+
+.usage-chart-legend {
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    justify-content: space-between;
+    margin-top: 8px;
+    color: var(--muted-foreground);
+}
+
+/* ── Log viewer (builds + runtime logs) ───────────── */
+.log-view {
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    max-height: 480px;
+    overflow: auto;
+    padding: 14px 16px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-line.error {
+    color: var(--destructive);
+}
+
+.log-line.warn {
+    color: var(--warning);
+}
+
+/* ── ⌘K command palette ───────────────────────────── */
+.palette-overlay {
+    align-items: flex-start;
+    background: color-mix(in oklab, var(--background) 60%, transparent);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding-top: 14vh;
+    position: fixed;
+    z-index: 60;
+    backdrop-filter: blur(4px);
+}
+
+.palette {
+    background: var(--popover);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    color: var(--popover-foreground);
+    max-width: 560px;
+    overflow: hidden;
+    width: 92%;
+}
+
+.palette-item {
+    border-radius: 8px;
+}
+
+.palette-input {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: inherit;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    outline: none;
+    padding: 16px;
+    width: 100%;
+}
+
+.palette-list {
+    list-style: none;
+    margin: 0;
+    max-height: 340px;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.palette-item {
+    align-items: baseline;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    font-size: 14px;
+    gap: 12px;
+    padding: 9px 12px;
+    text-align: left;
+    width: 100%;
+}
+
+.palette-item .muted {
+    font-size: 12px;
+    min-width: 56px;
+}
+
+.palette-item.selected {
+    background: var(--accent);
+    box-shadow: inset 2px 0 0 var(--aurora-violet);
+}
+
+.palette-empty {
+    padding: 14px;
+    color: var(--muted-foreground);
+}
+
+.palette-hint {
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    padding: 10px 16px;
+    color: var(--muted-foreground);
+}
