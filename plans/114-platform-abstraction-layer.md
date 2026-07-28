@@ -244,6 +244,45 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
   (`pokeStart/Part/End` framing, per-socket cursor resume), attachment
   round-trip across simulated recycle, RLS identity under live subscription
   (the `cb632cd7` regression), scheduler at-least-once + dead-letter.
+- **Split across two suites, and the split is forced rather than chosen.**
+  `@lunora/platform/conformance` asserts what a HOST provides; the engine-level
+  legs need `createShardCtxDb`/`relay-hub`, which live in `@lunora/shard-engine`,
+  and `@lunora/platform` is zero-dependency by contract — importing the engine
+  from there would invert the dependency and cycle. So the engine legs ship as
+  `@lunora/shard-engine/conformance`, and a host is proven only when it passes
+  both.
+- **Status.** OCC-409 ✅ (plus the trigger-recursion ceiling, which is a
+  _different_ `ConflictKind` and must stay distinct). Shape-poke ordering +
+  per-socket cursor resume ✅. RLS identity under live subscription ✅ — pinned
+  at the relay tier's uniformity gate, where the failure mode is a cohort
+  multicast computed under the anonymous identity reaching an identity-scoped
+  subscriber. All ten legs run against **both** hosts: the platform reference
+  host (`packages/shard-engine/__tests__/engine-conformance.test.ts`) and real
+  workerd through `createShardPlatform`
+  (`packages/do/__tests__/workerd/engine-conformance.workerd.test.ts`).
+- **Scheduler at-least-once + dead-letter** ✅, after growing the contract. It
+  was initially unassertable: `SchedulerHost` was `{schedule, cancel, cron?}` —
+  enqueue and cancel only, so at-least-once was promised in the module
+  docstring and stated nowhere a test could reach. It now carries an optional
+  `list` (pending jobs as `ScheduledJobStatus`, which is where `attempts`
+  lives) and `deadLetter` (`list` + `requeue`). These describe RPCs
+  `SchedulerDO` already serves — `/list`, `/dead`, `POST /dead/retry` — so the
+  contract has a real Cloudflare implementation behind it and not only a
+  reference one; `Scheduler` gained `dead`/`deadRetry` to expose them.
+- The legs assert the invariants any host must uphold **however** it implements
+  retries: a pending job reports `attempts: 0`; the pending and dead-letter
+  listings are disjoint in both directions (park and requeue); requeue restores
+  a fresh budget; requeue of an unparked id is `false`. Plus the two
+  enqueue-side ones: `cancel` answers truthfully on a second call, and two
+  identical schedules get independently cancellable ids (a host keying jobs by
+  payload silently drops the survivor — a caller that enqueued twice and
+  cancelled once is owed one delivery).
+- `ConformanceHost.simulateDeadLetter` drives the transition, following
+  `simulateRecycle`'s convention. **The retry _policy_ is deliberately not in
+  the contract** — how many failures and what backoff before parking is host
+  policy, and only the observable outcome is contract-level. Extracting
+  `SchedulerDO`'s policy host-neutrally (§7 open question 2) remains open and is
+  now an optimization rather than a prerequisite.
 - Reference host: the existing in-memory `lunoraTest` harness (it _is_ the
   spec's executable form today).
 - CI: run against (a) in-memory reference, (b) workerd/miniflare (gated,

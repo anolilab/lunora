@@ -173,8 +173,6 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
         describe("SocketHost", () => {
             it("accepts a socket and can send/close", async () => {
-                expect.assertions(3);
-
                 const host = await createHost();
                 const handle = host.socket.accept(rawSocket(host), { user: "ada" });
 
@@ -182,6 +180,14 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                 handle.send("hello");
                 expect(host.socket.getSockets().map((socket) => socket.id)).toContain(handle.id);
+
+                // "Did not throw" is not delivery. A host that silently dropped
+                // every frame would pass the rest of this leg while breaking
+                // every subscription on it, so where the frames are observable
+                // at all, assert they arrived.
+                if (host.readFrames !== undefined) {
+                    expect(host.readFrames(handle)).toStrictEqual(["hello"]);
+                }
 
                 // How soon a closed socket leaves `getSockets()` is host-defined
                 // (the reference host is lazy; workerd drops it on the close
@@ -388,6 +394,182 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const cancelled = await host.scheduler.cancel(job.id);
 
                 expect(cancelled).toBe(true);
+
+                host.cleanup?.();
+            });
+
+            it("reports a second cancel of the same job as false", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+
+                if (host.scheduler === undefined) {
+                    expect(host.scheduler).toBeUndefined();
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const job = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
+
+                expect(await host.scheduler.cancel(job.id)).toBe(true);
+
+                // `cancel` is documented to answer "was there something to
+                // cancel". A host that returned `true` unconditionally would let
+                // a caller believe it had stopped a job that is still pending —
+                // and a retry layer reading that answer would stop retrying a
+                // delivery that never happened.
+                expect(await host.scheduler.cancel(job.id)).toBe(false);
+
+                host.cleanup?.();
+            });
+
+            it("gives two identical schedules independently cancellable ids", async () => {
+                expect.assertions(3);
+
+                const host = await createHost();
+
+                if (host.scheduler === undefined) {
+                    expect(host.scheduler).toBeUndefined();
+                    expect(true).toBe(true);
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const first = await host.scheduler.schedule("tasks/remind", { user: "ada" }, { delayMs: 10_000 });
+                const second = await host.scheduler.schedule("tasks/remind", { user: "ada" }, { delayMs: 10_000 });
+
+                expect(second.id).not.toBe(first.id);
+
+                // Same function, same args, two jobs — so cancelling one must
+                // leave the other pending. A host that keyed jobs by payload
+                // would silently drop the survivor: the caller enqueued twice,
+                // cancelled once, and is owed one delivery.
+                expect(await host.scheduler.cancel(first.id)).toBe(true);
+                expect(await host.scheduler.cancel(second.id)).toBe(true);
+
+                host.cleanup?.();
+            });
+
+            it("lists a pending job with a zero attempt count", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+
+                if (host.scheduler?.list === undefined) {
+                    expect(host.scheduler?.list).toBeUndefined();
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const job = await host.scheduler.schedule("tasks/remind", { user: "ada" }, { delayMs: 10_000 });
+                const jobs = await host.scheduler.list();
+                const pending = jobs.find((entry) => entry.id === job.id);
+
+                expect(pending?.functionPath).toBe("tasks/remind");
+
+                // Zero, not absent. `attempts` is what makes at-least-once
+                // observable at all — a host that always reports 0 is either not
+                // retrying or not counting, and a caller cannot tell a job
+                // waiting between retries from one never dispatched.
+                expect(pending?.attempts).toBe(0);
+
+                host.cleanup?.();
+            });
+
+            it("keeps the pending and dead-letter listings disjoint", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+
+                if (host.scheduler?.list === undefined || host.scheduler.deadLetter === undefined || host.simulateDeadLetter === undefined) {
+                    expect(host.simulateDeadLetter).toBeUndefined();
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const job = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
+
+                await host.simulateDeadLetter(job.id);
+
+                const pending = await host.scheduler.list();
+                const parked = await host.scheduler.deadLetter.list();
+
+                // A parked job is no longer on its way. Reporting it in both
+                // shows a permanently-failed job as still scheduled — the
+                // operator sees a queue that will drain and it never does.
+                expect(pending.some((entry) => entry.id === job.id)).toBe(false);
+                expect(parked.some((entry) => entry.id === job.id)).toBe(true);
+
+                host.cleanup?.();
+            });
+
+            it("returns a requeued job to the pending set with a fresh budget", async () => {
+                expect.assertions(4);
+
+                const host = await createHost();
+
+                if (host.scheduler?.list === undefined || host.scheduler.deadLetter === undefined || host.simulateDeadLetter === undefined) {
+                    expect(host.simulateDeadLetter).toBeUndefined();
+                    expect(true).toBe(true);
+                    expect(true).toBe(true);
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const job = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
+
+                await host.simulateDeadLetter(job.id);
+
+                expect(await host.scheduler.deadLetter.requeue(job.id)).toBe(true);
+
+                const jobs = await host.scheduler.list();
+                const pending = jobs.find((entry) => entry.id === job.id);
+
+                expect(pending).toBeDefined();
+
+                // A fresh budget is the whole point: returning it with its
+                // exhausted count parks it again on the next failure without
+                // ever retrying, so the requeue would look successful and change
+                // nothing.
+                expect(pending?.attempts).toBe(0);
+
+                // And it must LEAVE the dead-letter listing. Restoring it to
+                // pending while keeping the parked copy breaks the same
+                // disjointness the leg above pins — recovered once, listed
+                // forever, and recoverable again into a second live job.
+                const stillParked = await host.scheduler.deadLetter.list();
+
+                expect(stillParked.some((entry) => entry.id === job.id)).toBe(false);
+
+                host.cleanup?.();
+            });
+
+            it("reports a requeue of an unparked job as false", async () => {
+                expect.assertions(1);
+
+                const host = await createHost();
+
+                if (host.scheduler?.deadLetter === undefined) {
+                    expect(host.scheduler?.deadLetter).toBeUndefined();
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                // Not parked, never existed — either way there is nothing to
+                // resurrect, and a host answering `true` tells an operator it
+                // recovered a job it did not.
+                expect(await host.scheduler.deadLetter.requeue("job-does-not-exist")).toBe(false);
 
                 host.cleanup?.();
             });

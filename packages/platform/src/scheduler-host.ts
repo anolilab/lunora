@@ -44,6 +44,22 @@ export interface ScheduledJob {
 }
 
 /**
+ * A scheduled job as the host currently sees it — {@link ScheduledJob} plus the
+ * delivery state that only the host knows.
+ *
+ * `attempts` is what makes at-least-once observable rather than merely
+ * promised: a job that failed to deliver and is waiting to be retried is still
+ * pending, with a higher count. A host reporting `0` forever is either not
+ * retrying or not counting, and both are worth knowing.
+ */
+export interface ScheduledJobStatus extends ScheduledJob {
+    /** Delivery attempts made so far. `0` for a job that has not been dispatched yet. */
+    attempts: number;
+    /** The function path the job dispatches to. */
+    functionPath: string;
+}
+
+/**
  * The scheduler host contract. One instance per scheduler namespace.
  */
 export interface SchedulerHost {
@@ -67,6 +83,38 @@ export interface SchedulerHost {
      * back to the target's declarative configuration.
      */
     cron?: (cron: string, functionPath: string, args?: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * List jobs that exhausted their retry budget and were parked instead of
+     * dropped, plus return one to the pending set.
+     *
+     * **Optional, and its absence is a real statement:** a host without it
+     * cannot promise at-least-once, only at-most-once. Once retries are
+     * exhausted the job either survives somewhere an operator can find it, or
+     * it is gone — and "gone" is indistinguishable from "delivered" to every
+     * caller. Guarantee 1 in this module's header is exactly what this member
+     * makes checkable.
+     *
+     * `list` MUST be disjoint from {@link SchedulerHost.list}: a parked job is
+     * no longer scheduled, and a host reporting it in both shows a permanently
+     * failed job as still on its way.
+     *
+     * `requeue` returns `false` for an id that is not parked, and on `true`
+     * returns the job to the pending set with a fresh attempt budget.
+     */
+    deadLetter?: {
+        list: () => Promise<ScheduledJobStatus[]>;
+        requeue: (id: string) => Promise<boolean>;
+    };
+
+    /**
+     * List the jobs currently pending — scheduled and not yet delivered,
+     * including those waiting between retries.
+     *
+     * Optional: a fire-and-forget host with no queryable queue omits it, and
+     * the suite reports the gap rather than asserting against a stub.
+     */
+    list?: () => Promise<ScheduledJobStatus[]>;
 
     /**
      * Schedule a function call for later execution. The `functionPath` and

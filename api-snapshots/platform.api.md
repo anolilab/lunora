@@ -467,12 +467,26 @@ interface ScheduledJob {
 }
 ```
 
+### `ScheduledJobStatus` (interface)
+
+```ts
+interface ScheduledJobStatus extends ScheduledJob {
+    attempts: number;
+    functionPath: string;
+}
+```
+
 ### `SchedulerHost` (interface)
 
 ```ts
 interface SchedulerHost {
     cancel: (id: string) => Promise<boolean>;
     cron?: (cron: string, functionPath: string, args?: Record<string, unknown>) => Promise<void>;
+    deadLetter?: {
+        list: () => Promise<ScheduledJobStatus[]>;
+        requeue: (id: string) => Promise<boolean>;
+    };
+    list?: () => Promise<ScheduledJobStatus[]>;
     schedule: (functionPath: string, args: Record<string, unknown>, options?: ScheduleOptions) => Promise<ScheduledJob>;
 }
 ```
@@ -739,9 +753,11 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     directory: ShardDirectory;
     kv?: ShardKvStore;
+    readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
     shard: ShardHost;
+    simulateDeadLetter?: (id: string) => Promise<boolean>;
     simulateRecycle?: () => void;
     socket: SocketHost;
 }
@@ -795,9 +811,11 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     directory: ShardDirectory;
     kv?: ShardKvStore;
+    readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
     shard: ShardHost;
+    simulateDeadLetter?: (id: string) => Promise<boolean>;
     simulateRecycle?: () => void;
     socket: SocketHost;
 }

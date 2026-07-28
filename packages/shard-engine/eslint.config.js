@@ -100,6 +100,18 @@ export default createConfig(
             "vitest/prefer-strict-equal": "off",
         },
     },
+    // The engine conformance run registers every `it` dynamically through
+    // defineEngineContractSuite's injection; sonarjs cannot see through that and
+    // reports the file as empty at position 0:1, which no inline disable reaches.
+    // Same exemption, same reason, as @lunora/platform's conformance test.
+    {
+        files: ["**/__tests__/engine-conformance.test.ts"],
+        rules: {
+            "sonarjs/no-empty-test-file": "off",
+            // Same injection: the suite call at describe-scope IS the hook.
+            "vitest/require-hook": "off",
+        },
+    },
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {

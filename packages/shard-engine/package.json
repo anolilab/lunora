@@ -38,6 +38,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./conformance": {
+            "types": "./dist/conformance/index.d.ts",
+            "import": "./dist/conformance/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

@@ -98,7 +98,26 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         return body.record ?? null;
     };
 
-    return { cancel, get, list, runAfter, runAt };
+    // The DO's `/dead` returns the records parked by `recordRetry()` after their
+    // retry budget was exhausted. They are deliberately absent from `/list` (the
+    // park deletes the `id:` header), so this is the only view of a job that
+    // failed permanently rather than being silently dropped.
+    const dead = async (): Promise<ScheduleRecord[]> => {
+        const body = await getDO<{ records?: ScheduleRecord[] }>(options, "/dead");
+
+        return Array.isArray(body.records) ? body.records : [];
+    };
+
+    // `POST /dead/retry` resurrects a parked record with a fresh attempt budget.
+    // A miss answers `{ retried: false }` rather than erroring, so a racing
+    // double-recover is a no-op rather than a failure.
+    const deadRetry = async (id: string): Promise<boolean> => {
+        const { retried } = await callDO<{ retried?: boolean }>(options, "/dead/retry", { id });
+
+        return retried === true;
+    };
+
+    return { cancel, dead, deadRetry, get, list, runAfter, runAt };
 };
 
 export default createScheduler;

@@ -2,6 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type {
+    ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
     ShardAsyncSqlExec,
@@ -49,6 +50,17 @@ interface ConformanceHost {
     kv?: ShardKvStore;
 
     /**
+     * Read back the frames a socket has been sent, oldest first.
+     *
+     * Optional, because not every host can observe its own outbound traffic —
+     * but a host that omits it cannot be asserted against for any *delivery*
+     * guarantee, only for "send did not throw". Since delivery is most of what
+     * the engine does (pokes, deltas, whispers), a host without this is only
+     * partially proven, and the suites say so rather than skipping quietly.
+     */
+    readFrames?: (socket: SocketHandle) => string[];
+
+    /**
      * Re-create a runtime socket from its durable state. Optional: only hosts
      * that can be driven through a recycle from inside a test implement it
      * (see {@link ConformanceHost.simulateRecycle}).
@@ -64,6 +76,21 @@ interface ConformanceHost {
     scheduler?: SchedulerHost;
     /** The shard execution slot under test. */
     shard: ShardHost;
+
+    /**
+     * Drive a pending job to its dead-letter state — however this host gets
+     * there — so the suite can assert what a parked job looks like without
+     * waiting out a real retry budget.
+     *
+     * Optional, and the same shape as {@link ConformanceHost.simulateRecycle}:
+     * a host that cannot force the transition from inside a test omits it and
+     * the suite reports the gap. It exists because the observable *invariants*
+     * of dead-lettering — disjoint listings, requeue semantics — are
+     * contract-level, while how many failures it takes to get there is host
+     * policy the contract deliberately does not fix.
+     * @returns `true` if the job was pending and is now parked.
+     */
+    simulateDeadLetter?: (id: string) => Promise<boolean>;
 
     /**
      * Drop runtime socket state while keeping durable state, so the suite can
@@ -316,7 +343,11 @@ const createReferenceHost = (): ReferenceHost => {
             deserializeAttachment: () => socket.attachment,
             id: socket.id,
             send: (data) => {
-                socket.received.push(extractArrayBuffer(data));
+                // Keep text as text. `received` has always been typed
+                // `(string | ArrayBuffer)[]`, but encoding unconditionally made
+                // the string arm unreachable — which went unnoticed for as long
+                // as nothing read the buffer back. `readFrames` reads it now.
+                socket.received.push(typeof data === "string" ? data : extractArrayBuffer(data));
             },
             serializeAttachment: (value) => {
                 socket.attachment = value;
@@ -425,15 +456,33 @@ const createReferenceHost = (): ReferenceHost => {
         },
     };
 
-    const scheduledJobs = new Map<
-        string,
-        {
-            args: Record<string, unknown>;
-            functionPath: string;
-            options: ScheduleOptions;
-            timer: ReturnType<typeof setTimeout>;
-        }
-    >();
+    type ReferenceJob = {
+        args: Record<string, unknown>;
+        attempts: number;
+        functionPath: string;
+        options: ScheduleOptions;
+        scheduledFor: number;
+        timer: ReturnType<typeof setTimeout> | undefined;
+    };
+
+    const scheduledJobs = new Map<string, ReferenceJob>();
+
+    /**
+     * Jobs that exhausted their retry budget. Held in a separate map, never in
+     * both — the contract requires the two listings to be disjoint, so modelling
+     * them as one map with a flag would make the invariant a convention rather
+     * than a fact.
+     */
+    const deadJobs = new Map<string, ReferenceJob>();
+
+    const toStatus = (id: string, job: ReferenceJob): ScheduledJobStatus => {
+        return {
+            attempts: job.attempts,
+            functionPath: job.functionPath,
+            id,
+            scheduledFor: job.scheduledFor,
+        };
+    };
 
     const scheduler: SchedulerHost = {
         cancel: async (id) => {
@@ -452,6 +501,25 @@ const createReferenceHost = (): ReferenceHost => {
             // Reference host does not support cron execution; cron is tested by
             // asserting the contract shape, not by running timers.
         },
+        deadLetter: {
+            list: async () => [...deadJobs].map(([id, job]) => toStatus(id, job)),
+            requeue: async (id) => {
+                const job = deadJobs.get(id);
+
+                if (job === undefined) {
+                    return false;
+                }
+
+                deadJobs.delete(id);
+                // A fresh budget is the point of a requeue: returning it with
+                // its exhausted count parks it again on the next failure without
+                // ever retrying.
+                scheduledJobs.set(id, { ...job, attempts: 0, timer: undefined });
+
+                return true;
+            },
+        },
+        list: async () => [...scheduledJobs].map(([id, job]) => toStatus(id, job)),
         schedule: async (functionPath, args, options) => {
             const id = nextJobId();
             let scheduledFor: number;
@@ -467,7 +535,7 @@ const createReferenceHost = (): ReferenceHost => {
                 scheduledJobs.delete(id);
             }, delay);
 
-            scheduledJobs.set(id, { args, functionPath, options: options ?? {}, timer });
+            scheduledJobs.set(id, { args, attempts: 0, functionPath, options: options ?? {}, scheduledFor, timer });
 
             return { id, scheduledFor };
         },
@@ -494,6 +562,10 @@ const createReferenceHost = (): ReferenceHost => {
         },
         directory,
         kv,
+        // Text frames only: every Lunora wire frame is JSON, and returning
+        // binary as a lossy string would let a corrupted frame read as a
+        // delivered one.
+        readFrames: (handle: SocketHandle) => (runtimeSockets.get(handle.id)?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
         restoreSocket: (id: string, attachment: unknown) => {
             const socketState: ReferenceSocket = {
                 attachment,
@@ -510,6 +582,19 @@ const createReferenceHost = (): ReferenceHost => {
             return createHandle(socketState);
         },
         scheduler,
+        simulateDeadLetter: async (id: string) => {
+            const job = scheduledJobs.get(id);
+
+            if (job === undefined) {
+                return false;
+            }
+
+            clearTimeout(job.timer);
+            scheduledJobs.delete(id);
+            deadJobs.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, timer: undefined });
+
+            return true;
+        },
         shard,
         simulateRecycle: () => {
             runtimeSockets.clear();
