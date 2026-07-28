@@ -1,16 +1,24 @@
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery } from "@lunora/react";
-import { createFileRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
+import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import { cn } from "@/lib/utils";
+
 import { api } from "../../lunora/_generated/api.js";
-import { CommandPalette } from "../client/CommandPalette";
-import { TABS } from "../client/tabs";
+import type { OrgId } from "../client/types";
+import { DashboardLayout } from "../client/DashboardLayout";
+import { OrgSwitcher } from "../client/OrgSwitcher";
+import { TAB_GROUPS, TABS } from "../client/tabs";
 import { TimeRangeProvider } from "../client/TimeRangeProvider";
 import type { PaletteCommand } from "../client/use-command-palette";
-import { useCommandPalette } from "../client/use-command-palette";
 import { preload } from "../ssr/loader";
+
+/** Strip a trailing slash before reading the active segment off the pathname. */
+const TRAILING_SLASH = /\/$/;
 
 /**
  * The suspension/deletion fields off an organization row.
@@ -64,12 +72,15 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
 
 const OrganizationLayout = (): ReactElement => {
     const { organizationId } = Route.useParams();
+    const { session } = Route.useRouteContext();
     const { organizations } = Route.useLoaderData();
     const organizationList = usePreloadedQuery(organizations);
     const navigate = useNavigate();
-    const palette = useCommandPalette();
+    const pathname = useLocation({ select: (location) => location.pathname });
 
     const org = organizationList.find((candidate) => candidate._id === organizationId);
+    const activeSegment = pathname.replace(TRAILING_SLASH, "").split("/").pop();
+    const activeTab = TABS.find((entry) => entry.id === activeSegment);
 
     const paletteCommands: PaletteCommand[] = useMemo(
         () => [
@@ -96,35 +107,51 @@ const OrganizationLayout = (): ReactElement => {
     );
 
     return (
-        <div className="stack">
-            <div className="breadcrumb">
-                <Link className="link" to="/">
-                    ← Organizations
-                </Link>
-                <h2>{org ? org.name : "Organization"}</h2>
-                {org ? <span className="badge">{org.plan}</span> : null}
-            </div>
+        <DashboardLayout
+            commands={paletteCommands}
+            eyebrow={activeTab?.group}
+            sidebarHeader={<OrgSwitcher organizations={organizationList} orgId={organizationId as OrgId} />}
+            sidebarNav={TAB_GROUPS.map((group) => (
+                <SidebarGroup key={group}>
+                    <SidebarGroupLabel className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">{group}</SidebarGroupLabel>
+                    <SidebarGroupContent>
+                        <SidebarMenu>
+                            {TABS.filter((entry) => entry.group === group).map((entry) => {
+                                const isActive = activeSegment === entry.id;
 
+                                return (
+                                    <SidebarMenuItem key={entry.id}>
+                                        <SidebarMenuButton
+                                            // Inactive nav is muted (colour-as-hierarchy); the active tab keeps
+                                            // full contrast and gets a single aurora-violet edge accent — the
+                                            // one expressive colour moment in the chrome.
+                                            className={cn(
+                                                !isActive && "text-muted-foreground",
+                                                isActive &&
+                                                    "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[var(--aurora-violet)]",
+                                            )}
+                                            isActive={isActive}
+                                            render={<Link params={{ organizationId }} to={entry.to} />}
+                                            tooltip={entry.label}
+                                        >
+                                            <HugeiconsIcon icon={entry.icon} strokeWidth={2} />
+                                            <span>{entry.label}</span>
+                                        </SidebarMenuButton>
+                                    </SidebarMenuItem>
+                                );
+                            })}
+                        </SidebarMenu>
+                    </SidebarGroupContent>
+                </SidebarGroup>
+            ))}
+            title={activeTab?.label ?? "Dashboard"}
+            userEmail={session.user.email}
+        >
             {org ? <OrgBanners org={org} /> : null}
-
-            <CommandPalette commands={paletteCommands} onClose={palette.close} open={palette.open} />
-
-            <nav className="tabs">
-                {TABS.map((entry) => (
-                    // `activeProps` is the router's own active-match test. Deriving it
-                    // from `location.pathname` needed a `useRouterState` subscription
-                    // plus string surgery whose `?? "projects"` fallback could never
-                    // fire — `"/orgs/x/".split("/").pop()` is `""`, not `undefined`.
-                    <Link activeProps={{ className: "active" }} className="tab" key={entry.id} params={{ organizationId }} to={entry.to}>
-                        {entry.label}
-                    </Link>
-                ))}
-            </nav>
-
             <TimeRangeProvider>
                 <Outlet />
             </TimeRangeProvider>
-        </div>
+        </DashboardLayout>
     );
 };
 
