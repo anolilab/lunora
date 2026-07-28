@@ -404,8 +404,11 @@ export const SUPERSEDED_RETENTION = 3;
  */
 export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const { now } = context;
-    const { page } = await context.db.deployments.findMany({});
-    const superseded = (page as unknown as DeploymentRow[]).filter((deployment) => deployment.status === "superseded");
+    // Filter in the QUERY, not after it. `findMany({})` returns one 1000-row page, so
+    // filtering afterwards meant live/failed/destroyed rows could fill the page and
+    // starve the superseded ones this prune exists to collect.
+    const { page } = await context.db.deployments.findMany({ where: { status: "superseded" } });
+    const superseded = page as unknown as DeploymentRow[];
 
     const byProjectKind = new Map<string, DeploymentRow[]>();
 
