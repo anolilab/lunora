@@ -1,11 +1,14 @@
-import { createAuthClient } from "better-auth/react";
-
 /**
- * Shared better-auth React client for the hosted studio. Points at the
- * control-plane Worker's `/api/auth/*` routes via the relative basePath, so the
- * SPA and the Worker only need to share an origin (same dev server in dev, same
- * Cloudflare account in prod).
+ * Shared better-auth React client for the hosted studio.
+ *
+ * Re-exported from the copy-in auth-UI client rather than constructed here, so the
+ * app has exactly ONE client. `createAuthClient` returns a stateful proxy that owns
+ * session state and its subscriptions; building a second instance for the auth
+ * screens would give the sign-in card and the dashboard separate views of the same
+ * session, so a sign-in or sign-out could land in one and not the other.
+ *
+ * `lunora/auth-ui/client.ts` is the seam that decides which better-auth plugins the
+ * app has (and tells the cards, which cannot introspect the proxy). This file stays
+ * as the import path the rest of `src/client` already uses.
  */
-export const authClient = createAuthClient({
-    basePath: "/api/auth",
-});
+export { authClient } from "../../lunora/auth-ui/client";

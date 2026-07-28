@@ -1,48 +1,87 @@
-import type { ReactElement } from "react";
-import { useState } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { createContext, use, useCallback, useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-import { authClient } from "./auth-client";
-import { COLUMN_LABEL, Field, FormError } from "./section-ui";
+import { authClient } from "../../lunora/auth-ui/client";
+import type { AuthClient } from "../../lunora/auth-ui/core";
+import { AuthUIProvider, SignInCard, SignUpCard } from "../../lunora/auth-ui/react";
+import { COLUMN_LABEL } from "./section-ui";
 
 /**
- * Email/password sign-in + sign-up for the hosted studio. Posts at the
- * `/api/auth/*` routes mounted by `@lunora/auth` (better-auth). The HttpOnly
- * session cookie is set by the response — there's no token to plumb back into
- * client state.
+ * Sign-in / sign-up for the hosted studio.
  *
- * Navigation is the caller's business: the `/login` route passes `onSignedIn`,
- * which fires once the cookie has landed so the router can send the visitor on to
- * whatever they were trying to reach. (Before routing, `authClient.useSession()`
- * in the old `App.tsx` re-rendered into the authenticated view instead.)
+ * The FORM is the copy-in auth UI (`lunora/auth-ui`, added with
+ * `lunora add auth-ui`) rather than hand-rolled markup: it already implements what
+ * this app would otherwise rewrite by hand — validation, mapped error messages,
+ * pending state, social buttons, and the magic-link / email-OTP / 2FA cards that
+ * light up once their server item is installed and toggled in `client.ts`.
  *
- * Layout: this is the one screen outside the dashboard shell, so it is composed
- * rather than boxed — a deliberately asymmetric split with the wordmark floating
- * on the background (never boxed, per the container strategy) and the form pinned
- * to a narrow right-hand column behind a single hairline. Three layers: the
- * wordmark is primary at display size, the form is secondary, and the mode
- * switch, eyebrow, footer and error line are tertiary in mono caps. The screen's
- * one moment of surprise is the aurora ribbon on "Cloud" plus the single
- * atmospheric violet glow behind it — the whole budget spent in one place.
+ * The LAYOUT stays ours, because this renders outside the dashboard shell and is
+ * the app's first impression: an asymmetric split with the wordmark floating
+ * unboxed on the left and the card behind a single hairline on the right. The
+ * atmospheric glow and the aurora ribbon on "Cloud" are the whole surprise budget
+ * for this view.
+ *
+ * There is exactly one `authClient` in the app — `src/client/auth-client.ts`
+ * re-exports this same instance — so the card and the dashboard can never hold
+ * divergent views of the session.
+ *
+ * Navigation stays the caller's business: the `/login` route passes `onSignedIn`,
+ * which it uses to do a FULL load to its validated redirect target, guaranteeing
+ * the new cookie is on the SSR request. The cards navigate through the provider's
+ * `nav` bridge, so every post-auth navigation is routed back into `onSignedIn`
+ * rather than the card deciding for itself.
  */
 interface LoginProps {
     /** Called after a successful sign-in / sign-up, once the session cookie is set. */
     onSignedIn?: () => void;
 }
 
+/** Sentinel hrefs for the cards' "switch mode" footer links — see {@link ModeLink}. */
+const SIGN_UP_HREF = "#sign-up";
+const SIGN_IN_HREF = "#sign-in";
+
+/**
+ * Lets {@link ModeLink} reach the screen's mode setter.
+ *
+ * A context rather than a closure because the provider takes a `Link` COMPONENT,
+ * and defining that component inside `Login` would both re-create its identity on
+ * every render (remounting the footer link) and break
+ * `react-x/no-nested-component-definitions`.
+ */
+const ModeContext = createContext<((mode: "signin" | "signup") => void) | null>(null);
+
+/**
+ * The cards link to standalone `/sign-up` and `/sign-in` routes; this app has
+ * neither — it toggles one screen. Intercepting the two sentinel hrefs keeps the
+ * cards' own footer affordance working without inventing routes for it.
+ */
+const ModeLink = ({ children, className, href }: { children: ReactNode; className?: string; href: string }): ReactElement => {
+    const setMode = use(ModeContext);
+
+    return (
+        <button
+            className={cn(className, "cursor-pointer bg-transparent underline underline-offset-4")}
+            onClick={() => {
+                setMode?.(href === SIGN_UP_HREF ? "signup" : "signin");
+            }}
+            type="button"
+        >
+            {children}
+        </button>
+    );
+};
+
 export const Login = ({ onSignedIn }: LoginProps = {}): ReactElement => {
     const [mode, setMode] = useState<"signin" | "signup">("signin");
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [name, setName] = useState("");
-    const [error, setError] = useState<null | string>(null);
-    const [pending, setPending] = useState(false);
 
-    const modeLabel = mode === "signin" ? "Sign in" : "Create account";
-    const submitLabel = pending ? "…" : modeLabel;
+    // Every post-auth navigation the cards attempt funnels into `onSignedIn`: the
+    // route owns where to go (it validated the `?redirect=` target) and how to get
+    // there (a full load, so the cookie reaches the server render).
+    const handleNavigate = useCallback(() => {
+        onSignedIn?.();
+    }, [onSignedIn]);
 
     return (
         <main className="bg-background text-foreground grid min-h-svh grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
@@ -64,98 +103,26 @@ export const Login = ({ onSignedIn }: LoginProps = {}): ReactElement => {
                 <p className={cn(COLUMN_LABEL, "text-muted-foreground relative")}>Workers · Durable Objects · D1</p>
             </section>
 
-            <section className="border-border flex flex-col justify-center border-t px-8 py-12 lg:border-t-0 lg:border-l lg:px-12">
-                <form
-                    action={() => {
-                        setError(null);
-                        setPending(true);
-
-                        // Promise combinators instead of try/finally so React
-                        // Compiler can memoize the component (it can't lower
-                        // try-with-finally yet).
-                        const submit = async (): Promise<void> => {
-                            const result =
-                                mode === "signin"
-                                    ? await authClient.signIn.email({ email, password })
-                                    : await authClient.signUp.email({ email, name: name || email, password });
-
-                            if (result.error) {
-                                setError(result.error.message ?? `${mode} failed`);
-
-                                return;
-                            }
-
-                            onSignedIn?.();
-                        };
-
-                        void submit()
-                            .catch((error_: unknown) => {
-                                setError(error_ instanceof Error ? error_.message : "unknown error");
-                            })
-                            .finally(() => {
-                                setPending(false);
-                            });
-                    }}
-                    className="grid w-full max-w-sm gap-5"
-                >
-                    <div className="grid gap-1">
-                        <p className={cn(COLUMN_LABEL, "text-muted-foreground")}>{modeLabel}</p>
-                        <h2 className="m-0 text-xl font-medium">{mode === "signin" ? "Sign in to your control plane" : "Create your account"}</h2>
+            <section className="flex items-center border-t px-8 py-12 lg:border-t-0 lg:border-l lg:px-10">
+                <ModeContext value={setMode}>
+                    <div className="mx-auto w-full max-w-sm">
+                        <AuthUIProvider
+                            // `createAuthClient` returns a dynamic-path PROXY: every method
+                            // resolves at runtime, but the static type carries only the core
+                            // surface, so it structurally "lacks" the plugin methods. The
+                            // registry documents this in `client.ts` — it is why
+                            // `registerAuthClientPlugins` has to be told which flows exist
+                            // rather than the cards introspecting the client. Which flows are
+                            // real is decided by `AUTH_PLUGINS`, now matched to the server.
+                            authClient={authClient as unknown as AuthClient}
+                            Link={ModeLink}
+                            nav={{ navigate: handleNavigate, replace: handleNavigate }}
+                            redirects={{ afterSignIn: "/" }}
+                        >
+                            {mode === "signin" ? <SignInCard signUpHref={SIGN_UP_HREF} /> : <SignUpCard signInHref={SIGN_IN_HREF} />}
+                        </AuthUIProvider>
                     </div>
-                    {mode === "signup" ? (
-                        <Field htmlFor="login-name" label="Name">
-                            <Input
-                                id="login-name"
-                                onChange={(event) => {
-                                    setName(event.target.value);
-                                }}
-                                value={name}
-                            />
-                        </Field>
-                    ) : null}
-                    <Field htmlFor="login-email" label="Email">
-                        <Input
-                            autoComplete="email"
-                            className="font-mono"
-                            id="login-email"
-                            onChange={(event) => {
-                                setEmail(event.target.value);
-                            }}
-                            required
-                            type="email"
-                            value={email}
-                        />
-                    </Field>
-                    <Field htmlFor="login-password" label="Password">
-                        <Input
-                            autoComplete={mode === "signin" ? "current-password" : "new-password"}
-                            className="font-mono"
-                            id="login-password"
-                            minLength={8}
-                            onChange={(event) => {
-                                setPassword(event.target.value);
-                            }}
-                            required
-                            type="password"
-                            value={password}
-                        />
-                    </Field>
-                    <Button className="w-full" disabled={pending} type="submit">
-                        {submitLabel}
-                    </Button>
-                    <Button
-                        className={cn(COLUMN_LABEL, "text-muted-foreground hover:text-foreground h-auto justify-self-start p-0 no-underline")}
-                        onClick={() => {
-                            setMode(mode === "signin" ? "signup" : "signin");
-                            setError(null);
-                        }}
-                        type="button"
-                        variant="link"
-                    >
-                        {mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}
-                    </Button>
-                    <FormError message={error} />
-                </form>
+                </ModeContext>
             </section>
         </main>
     );

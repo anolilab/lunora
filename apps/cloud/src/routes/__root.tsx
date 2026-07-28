@@ -6,6 +6,7 @@ import { createRootRouteWithContext, HeadContent, Link, Outlet, Scripts } from "
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import authUiCss from "../../lunora/auth-ui/styles.css?url";
 import appCss from "../client/styles.css?url";
 import themeCss from "../client/theme.css?url";
 
@@ -43,6 +44,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
             links: [
                 { href: themeCss, rel: "stylesheet" },
                 { href: appCss, rel: "stylesheet" },
+                // The copy-in auth UI ships plain CSS that reads the same design
+                // tokens via `var(--token, fallback)`, so it inherits Night/Ivory
+                // without Tailwind. Loaded after the theme so the tokens exist.
+                { href: authUiCss, rel: "stylesheet" },
             ],
             meta: [{ charSet: "utf8" }, { content: "width=device-width, initial-scale=1", name: "viewport" }, { title: "Lunora Cloud" }],
         };

@@ -76,6 +76,54 @@ export const loadSession = createServerFn({ method: "GET" }).handler(async (): P
 });
 
 /**
+ * The organization ids the signed-in caller is actually a member of.
+ *
+ * Used to gate `/orgs/$organizationId` before its tabs load. Every tab query runs
+ * `assertMember`, so a URL naming an org the caller does not belong to — a stale
+ * bookmark, a deep link from a wiped dev database, someone else's id — makes the
+ * FIRST tab query throw `FORBIDDEN: not a member of this organization` and drops
+ * the visitor on an error boundary with no way back. Resolving membership up front
+ * lets the route bounce them home instead.
+ *
+ * Reads `organizations:list`, which is already membership-scoped server-side, so
+ * this leaks nothing the caller could not fetch itself.
+ */
+export const loadMyOrganizationIds = createServerFn({ method: "GET" }).handler(async (): Promise<string[]> => {
+    const { createServerClient } = await import("@lunora/client/ssr");
+    const { getRequest, getRequestUrl } = await import("@tanstack/react-start/server");
+    const { api } = await import("../../lunora/_generated/api.js");
+
+    const cookie = getRequest().headers.get("cookie") ?? "";
+    const { origin } = getRequestUrl();
+    const client = createServerClient({
+        fetch: (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+            const headers = new Headers(init?.headers);
+
+            if (cookie !== "") {
+                headers.set("cookie", cookie);
+            }
+
+            // Same reason as `preloadOnServer`: `enforceOrigin` rejects a cookie-bearing
+            // unsafe-method request that names no origin.
+            headers.set("origin", origin);
+
+            return fetch(input, { ...init, headers });
+        },
+        url: origin,
+    });
+
+    try {
+        const organizations = await client.query(api.organizations.list, {});
+
+        return organizations.map((organization) => organization._id);
+    } catch {
+        // An unauthenticated or failed lookup resolves to "no memberships"; the
+        // session gate in `_authed` has already handled the anonymous case.
+        return [];
+    }
+});
+
+/**
  * Session-gate a route: resolve the user or bounce to `/login`, carrying the whole
  * attempted location (path *and* search) so sign-in can return them to the exact
  * deep link. Called from `beforeLoad`, so on the initial request the gate is
