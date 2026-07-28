@@ -1206,6 +1206,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        target: options.target,
         temporary: options.temporary === true,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     });

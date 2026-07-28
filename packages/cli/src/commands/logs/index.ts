@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { TARGET_OPTION } from "../../util/deploy-target";
+
 /**
  * `lunora logs [worker]` — stream live logs from a deployed Lunora Worker by
  * wrapping `wrangler tail`, OR (with `--durable`) read the persisted `ctx.log`
@@ -18,6 +20,7 @@ const logsCommand: Command = {
     name: "logs",
     options: [
         { description: "Cloudflare environment name", name: "env", type: String },
+        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Substring filter on log messages", name: "search", type: String },
         { description: "Filter by invocation status: ok, error, or canceled", name: "status", type: String },
@@ -67,6 +70,7 @@ export type LogsOptions = CreateOptions<{
     since: string | undefined;
     status: string | undefined;
     table: string | undefined;
+    target: string | undefined;
     temporary: boolean | undefined;
     "trace-id": string | undefined;
     until: string | undefined;

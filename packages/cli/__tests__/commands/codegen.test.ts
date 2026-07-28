@@ -61,6 +61,51 @@ describe("lunora codegen", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
+    describe("deploy target", () => {
+        it("emits the default surface with no target given", () => {
+            expect.assertions(2);
+
+            const result = runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            // The default path must stay byte-identical for existing projects,
+            // so an absent target produces no diagnostics at all.
+            expect(result.error).toBeUndefined();
+            expect(existsSync(join(workdir, "lunora", "_generated", "server.ts"))).toBe(true);
+        });
+
+        it("refuses an unregistered --target instead of emitting an un-gated surface", () => {
+            expect.assertions(2);
+
+            const result = runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "aws" });
+
+            // Codegen resolves no driver of its own, so without the explicit
+            // validation this would emit the full Cloudflare surface for a
+            // target that does not exist, warn, and exit 0 — the silent
+            // fallback the driver registry exists to prevent.
+            expect(result.error).toMatch(/unknown deploy target "aws"/);
+            expect(result.outputDirectory).toBe("");
+        });
+
+        it("refuses an unregistered target from lunora.json", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target: "clouflare" }), "utf8");
+
+            // A typo in the committed config must fail the same way as a typo on
+            // the command line — the config path is where it would otherwise go
+            // unnoticed for longest.
+            expect(runCodegenCommand({ cwd: workdir, logger: silentLogger() }).error).toMatch(/unknown deploy target "clouflare"/);
+        });
+
+        it("lets --target override lunora.json", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target: "aws" }), "utf8");
+
+            expect(runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "cloudflare" }).error).toBeUndefined();
+        });
+    });
+
     describe("lunora codegen", () => {
         it("writes the three generated files", () => {
             expect.assertions(3);

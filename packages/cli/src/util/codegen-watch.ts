@@ -20,9 +20,9 @@ const DEFAULT_DEBOUNCE_MS = 100;
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
 /** Run codegen once, logging success or surfacing a parse/emit error without throwing. */
-const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
+const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string, target?: string): void => {
     try {
-        runCodegen({ apiSpec, lunoraDirectory, projectRoot });
+        runCodegen({ apiSpec, lunoraDirectory, projectRoot, target });
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
     } catch (error: unknown) {
@@ -42,7 +42,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     const { apiSpec } = options;
 
-    runOnce(options.projectRoot, lunoraDirectory, apiSpec, options.logger, "startup");
+    runOnce(options.projectRoot, lunoraDirectory, apiSpec, options.logger, "startup", options.target);
 
     let timer: NodeJS.Timeout | undefined;
     let watcher: FSWatcher | undefined;
@@ -74,7 +74,16 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 clearTimeout(timer);
             }
 
-            timer = setTimeout(runOnce, debounceMs, options.projectRoot, lunoraDirectory, apiSpec, options.logger, `change: ${filename ?? "?"}`);
+            timer = setTimeout(
+                runOnce,
+                debounceMs,
+                options.projectRoot,
+                lunoraDirectory,
+                apiSpec,
+                options.logger,
+                `change: ${filename ?? "?"}`,
+                options.target,
+            );
         });
     } catch (error: unknown) {
         options.logger.warn(
@@ -114,6 +123,8 @@ export interface CodegenWatcherOptions {
     lunoraDirectory?: string;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Defaults to `"cloudflare"`. */
+    target?: string;
 }
 
 export interface CodegenWatcherHandle {

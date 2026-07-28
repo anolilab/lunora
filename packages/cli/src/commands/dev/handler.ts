@@ -43,6 +43,7 @@ import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveTargetOrThrow } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import { findAvailablePort } from "../../util/free-port";
 import type { Logger } from "../../util/logger";
@@ -120,6 +121,8 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     /** Disable the embedded studio server. */
     studio?: boolean;
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Defaults to `"cloudflare"`. */
+    target?: string;
     /** `wrangler dev` port. */
     workerPort?: number;
 }
@@ -934,7 +937,14 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         if (plan.codegenEnabled) {
-            handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
+            handles.codegen = (options.startCodegen ?? startCodegenWatch)({
+                apiSpec: options.apiSpec,
+                logger,
+                projectRoot: cwd,
+                // `dev` must emit the same surface `deploy` will ship, or a
+                // feature works locally and vanishes in production.
+                target: resolveTargetOrThrow(cwd, options.target),
+            });
         }
 
         handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
@@ -1034,6 +1044,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         port: options.port,
         remote,
         studio: options.studio === false ? false : undefined,
+        target: options.target,
         workerPort: options.workerPort,
     });
 });

@@ -13,6 +13,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenFailure } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveTargetOrThrow } from "../../util/deploy-target";
 import type { Logger } from "../../util/logger";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -105,13 +106,17 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
  */
 const runPrepareCommand = async (options: PrepareCommandOptions): Promise<PrepareCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    // Resolved ONCE and reused for both codegen and binding provisioning. Two
+    // resolutions could disagree — emitting a surface for one target while
+    // provisioning another's bindings — and nothing downstream would notice.
+    const target = resolveTargetOrThrow(cwd, options.target);
 
     options.logger.info("running codegen");
 
     let codegen: CodegenResult;
 
     try {
-        codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd });
+        codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd, target });
         options.logger.success("codegen complete");
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -147,7 +152,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         };
     }
 
-    await provisionBindings(cwd, options.logger, codegen.cronTriggers, options.target);
+    await provisionBindings(cwd, options.logger, codegen.cronTriggers, target);
 
     const validation = validateWrangler({ projectRoot: cwd });
 
@@ -182,6 +187,7 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         logger,
+        target: options.target,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     }),
 );

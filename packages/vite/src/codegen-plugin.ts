@@ -138,7 +138,7 @@ const reconcileWranglerExtras = (
  * behaviour.
  */
 const runCodegenSafely = (
-    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
+    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir" | "target">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
     overlay?: OverlayCallbacks,
     project?: Project,
@@ -157,6 +157,7 @@ const runCodegenSafely = (
             lunoraDirectory: options.schemaDir,
             project,
             projectRoot: options.projectRoot,
+            target: options.target,
             wranglerVariables: collectWranglerSecretVariables(options.projectRoot),
         });
 

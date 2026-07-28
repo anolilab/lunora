@@ -17,6 +17,7 @@ const RESOLVED = (projectRoot: string) => {
         overlay: false as const,
         projectRoot,
         schemaDir: "lunora",
+        target: "cloudflare",
         studio: true,
         validateWrangler: false,
     };

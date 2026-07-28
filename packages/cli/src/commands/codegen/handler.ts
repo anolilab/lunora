@@ -5,6 +5,7 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveTargetOrThrow } from "../../util/deploy-target";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { CodegenOptions } from "./index";
@@ -19,6 +20,8 @@ interface CodegenCommandOptions {
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
     logger: Logger;
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Defaults to `"cloudflare"`. */
+    target?: string;
 }
 
 interface CodegenCommandResult {
@@ -44,7 +47,29 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         return { advisories: [], cronTriggers: [], error: formatError, outputDirectory: "" };
     }
 
-    const result = runCodegen({ apiSpec: options.apiSpec, projectRoot, wranglerVariables: collectWranglerSecretVariables(projectRoot) });
+    let target: string;
+
+    try {
+        // Resolved through the shared helper so a `lunora.json` target applies
+        // without the flag, and the emitted surface matches what `deploy` will
+        // ship it to. Validated here because codegen resolves no driver of its
+        // own — an unregistered name would otherwise emit the full Cloudflare
+        // surface un-gated and exit 0.
+        target = resolveTargetOrThrow(projectRoot, options.target);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        options.logger.error(message);
+
+        return { advisories: [], cronTriggers: [], error: message, outputDirectory: "" };
+    }
+
+    const result = runCodegen({
+        apiSpec: options.apiSpec,
+        projectRoot,
+        target,
+        wranglerVariables: collectWranglerSecretVariables(projectRoot),
+    });
     const commandResult: CodegenCommandResult = {
         advisories: result.advisories.map((advisory) => {
             return {
@@ -101,7 +126,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
 
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({ cwd, logger, options }) => {
-    const result = runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, format: options.format, logger });
+    const result = runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, format: options.format, logger, target: options.target });
 
     return { code: result.error === undefined ? 0 : 1 };
 });

@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
+import { resolveProjectTarget } from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -64,6 +65,8 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         cloudflareOption = input.cloudflare;
     }
 
+    const projectRoot = input.projectRoot ?? process.cwd();
+
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
         apiSpec: input.apiSpec ?? "openapi",
@@ -71,8 +74,12 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         studio: input.studio ?? true,
         generatedDir: input.generatedDir ?? `${schemaDirectory}/_generated`,
         overlay: resolveOverlayOption(input.overlay),
-        projectRoot: input.projectRoot ?? process.cwd(),
+        projectRoot,
         schemaDir: schemaDirectory,
+        // Same resolution order as the CLI — explicit option, then
+        // `lunora.json`, then the default — so a project that sets `target`
+        // once gets it in `vite build` and `lunora deploy` alike.
+        target: resolveProjectTarget(projectRoot, input.target),
         validateWrangler: input.validateWrangler ?? true,
     };
 };

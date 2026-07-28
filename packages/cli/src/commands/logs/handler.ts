@@ -130,6 +130,7 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
         logger,
         search: options.search,
         status: options.status,
+        target: options.target,
         temporary: options.temporary === true,
         worker: argument[0],
     });

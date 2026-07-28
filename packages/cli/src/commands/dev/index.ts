@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const devCommand: Command = {
     argument: {
@@ -30,6 +31,7 @@ const devCommand: Command = {
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        TARGET_OPTION,
         { description: "Studio server port (default 6173)", name: "port", type: Number },
         { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
         {
@@ -58,5 +60,6 @@ export type DevOptions = CreateOptions<{
     port: number | undefined;
     remote: boolean | undefined;
     studio: boolean | undefined;
+    target: string | undefined;
     "worker-port": number | undefined;
 }>;

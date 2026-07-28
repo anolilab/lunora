@@ -36,6 +36,7 @@ const baseOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): Reso
         overlay: false,
         projectRoot: "/workspace/app",
         schemaDir: "lunora",
+        target: "cloudflare",
         studio: true,
         validateWrangler: true,
         ...overrides,
