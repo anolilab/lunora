@@ -444,10 +444,11 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
  * before the row hits SQL.
  *
  * Skips fields the validator doesn't declare a `parse` for (the structural
- * fakes used in DO/D1 unit tests omit it) and skips fields absent from the
- * document. The shape is iterated, not the document, so unknown fields pass
- * through untouched — they're part of the JSON-blob shape but not part of the
- * schema's declared columns.
+ * fakes used in DO/D1 unit tests omit it), fields absent from the document, and
+ * a `null` on an optional field (which means "no value" — see below). The shape
+ * is iterated, not the document, so unknown fields pass through untouched —
+ * they're part of the JSON-blob shape but not part of the schema's declared
+ * columns.
  *
  * Lives here (alongside `applyOnDelete`) rather than in each backend's
  * `ctx-db.ts` so DO + D1 share one implementation instead of two drift-prone
@@ -461,6 +462,19 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
         }
 
         if (typeof validator.parse !== "function") {
+            continue;
+        }
+
+        // `null` on an OPTIONAL field means "no value", and is skipped exactly like
+        // an absent field. Both backends produce it without the caller asking:
+        // `onDelete: "set null"` patches the FK to null by design, and a `.global()`
+        // read returns SQL NULL for every column that was never set, which then rides
+        // along in the merged document on the next patch. `v.optional(x)` admits
+        // `undefined` but rejects `null`, so validating it would reject a document the
+        // store itself produced — a patch of one field failing because of a *different*
+        // column nobody touched. Required fields are unaffected: a null there is still
+        // a genuine violation and still throws.
+        if (document[field] === null && validator.kind === "optional") {
             continue;
         }
 

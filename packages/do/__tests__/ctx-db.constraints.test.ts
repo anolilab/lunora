@@ -341,5 +341,72 @@ describe("ctx-db constraints", () => {
 
             await expect(writer.replace("o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
         });
+
+        /**
+         * A `null` on an OPTIONAL column means "no value" and must not be validated.
+         * Both backends produce one without the caller asking: `onDelete: "set null"`
+         * patches the FK to null by design, and a `.global()` read returns SQL NULL for
+         * every never-set column, which then rides along in the merged document on the
+         * next patch. A real `v.optional(x)` parser rejects null, so validating it made
+         * a patch of one field fail because of a different column nobody touched.
+         */
+        const setupNullable = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    notes: {
+                        indexes: [],
+                        shape: {
+                            // Mirrors `v.optional(v.string())`: kind "optional", and a parser
+                            // that admits `undefined` but rejects `null`.
+                            note: {
+                                _meta: { column: { notNull: false } },
+                                kind: "optional",
+                                parse(value) {
+                                    if (value !== undefined && typeof value !== "string") {
+                                        throw new Error("Expected string, received null");
+                                    }
+
+                                    return value;
+                                },
+                            },
+                            title: checked("string", (v) => typeof v === "string", "title must be a string"),
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+        };
+
+        it("patch tolerates a null on an optional column it did not touch", async () => {
+            expect.assertions(2);
+
+            const writer = setupNullable();
+
+            await writer.insert("notes", { _id: "n1", title: "first" }, { allowExplicitId: true });
+            // Put the column into the state `onDelete: "set null"` and a D1 read produce.
+            await writer.patch("n1", { note: null });
+
+            // The patch below touches only `title`; before the fix the untouched `note`
+            // rode along in the merged document and failed validation.
+            await writer.patch("n1", { title: "second" });
+
+            await expect(writer.get("n1")).resolves.toMatchObject({ title: "second" });
+            await expect(writer.count("notes")).resolves.toBe(1);
+        });
+
+        it("still rejects a null on a required column", async () => {
+            expect.assertions(1);
+
+            const writer = setupNullable();
+
+            await writer.insert("notes", { _id: "n2", title: "ok" }, { allowExplicitId: true });
+
+            // `title` is required, so a null there is a genuine violation and must throw
+            // — the skip above is scoped to optional columns only.
+            await expect(writer.patch("n2", { title: null })).rejects.toThrow(/title must be a string/u);
+        });
     });
 });

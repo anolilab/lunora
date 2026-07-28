@@ -26,23 +26,19 @@
  * none of the underlying mutations dedupe: `cells:register` inserts blindly, so
  * an unconditional seed would grow a fresh cell on every run.
  *
- * What it creates: a dev user, a fleet cell, an organization, a project, a
- * production deployment, a deploy key, and — where the app lets it — a verified
- * custom domain plus telemetry (logs, metric series, traces, errors) for the
- * observability views.
+ * What it creates: a dev user, a fleet cell, an organization, a project, a live
+ * production deployment, a deploy key, and telemetry (logs, metric series, traces,
+ * errors) so the observability views render real data.
  *
- * Three stages still report a skip instead of data, and none is a seed bug:
+ * Two stages report a skip instead of data, and neither is a seed bug:
  *  - **domain** needs the `customDomains` entitlement, which resolves from a synced
- *    billing subscription; there is no non-webhook path to one locally.
- *  - **deployment activation** is blocked upstream: `updateStatus` re-validates the
- *    merged document on patch, and an unset optional column on a `.global()` (D1)
- *    table reads back as SQL NULL, which `v.optional(...)` rejects. See
- *    `driveToLive`.
+ *    billing subscription; only the provider's signature-verified webhook writes
+ *    those, so there is no honest local path to one.
  *  - **builds** need a claimed GitHub installation, recorded only by the
  *    signature-verified webhook. See `seedTelemetry`.
  *
- * Each is a deliberate, reported skip rather than a hard failure, so the seed still
- * leaves the app usable and starts producing more data as those are fixed.
+ * Both are deliberate, reported skips rather than hard failures, so the seed still
+ * leaves the app usable and starts producing more data if those become reachable.
  */
 
 /* eslint-disable no-console -- a terminal script: its progress report to stdout is the deliverable, not a stray debug statement. */
@@ -67,9 +63,6 @@ const PROJECT_SLUG = "web";
 const SCRIPT_NAME = "acme-dev-web";
 const DOMAIN_HOSTNAME = "web.acme-dev.test";
 const DEPLOY_KEY_NAME = "dev-seed";
-
-/** Appended when the lifecycle could not run; see {@link driveToLive}. */
-const BLOCKED_SUFFIX = ", not activated — updateStatus rejects D1 NULLs on patch";
 
 /** A trace id is 32 hex chars and a span id 16 — the W3C widths the UI parses. */
 const hex = (length: number, seed: number): string => Array.from({ length }, (_, index) => ((seed * 31 + index * 17 + 7) % 16).toString(16)).join("");
@@ -276,32 +269,11 @@ const ensureProject = async (cookie: string, organizationId: string): Promise<st
  * real deploy gets there through the provisioner. Stepping through the same statuses
  * rather than jumping to the end gives the row a plausible history for the UI.
  */
-const driveToLive = async (cookie: string, id: string): Promise<boolean> => {
-    try {
-        await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "provisioning" });
-        await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "building" });
-        await rpc<unknown>(cookie, "deployments:updateStatus", { bundleHash: hex(16, 3), id, status: "verifying", url: `https://${DOMAIN_HOSTNAME}` });
-        await rpc<unknown>(cookie, "deployments:activate", { id });
-
-        return true;
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        // Known upstream defect, not a seed bug: `deployments` is `.global()`, so its
-        // rows live in D1, and D1 returns SQL NULL for every unset optional column
-        // (`bundleHash`, `url`, `alias`, …). `updateStatus` re-validates the merged
-        // document on patch, and `v.optional(v.string())` admits `undefined` but not
-        // `null` — so the patch is rejected with "Expected string, received null"
-        // before it writes. That makes the whole deploy lifecycle unreachable, for CI
-        // as much as for this script. Reported separately; the seed leaves the
-        // deployment `queued` rather than failing outright, so every later stage
-        // (deploy key, telemetry) still seeds.
-        if (message.includes("VALIDATION_ERROR")) {
-            return false;
-        }
-
-        throw error;
-    }
+const driveToLive = async (cookie: string, id: string): Promise<void> => {
+    await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "provisioning" });
+    await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "building" });
+    await rpc<unknown>(cookie, "deployments:updateStatus", { bundleHash: hex(16, 3), id, status: "verifying", url: `https://${DOMAIN_HOSTNAME}` });
+    await rpc<unknown>(cookie, "deployments:activate", { id });
 };
 
 /**
@@ -310,22 +282,29 @@ const driveToLive = async (cookie: string, id: string): Promise<boolean> => {
  * "Exists" is not enough to skip: a run that died partway (or any deployment left
  * mid-lifecycle) leaves a `queued` row, and treating that as done would permanently
  * strand the seed with a project whose dashboard shows no current deployment. So an
- * existing-but-not-live deployment is driven the rest of the way instead.
+ * existing-but-unfinished deployment is driven the rest of the way instead.
+ *
+ * "Finished" is `verifying` or `live`, not `live` alone. `deployments:activate` marks
+ * a deployment current by pointing the *project* at it (`activeDeploymentId`) and
+ * superseding its siblings — it does not touch the deployment's own `status`, which
+ * only `rollback` sets to `live`. So the row this seed activates stays `verifying`,
+ * and testing for `live` alone would re-drive the lifecycle on every single run.
+ * `projects:listByOrg` does not project `activeDeploymentId`, so the status pair is
+ * the closest honest signal available from a public query.
  */
 const ensureDeployment = async (cookie: string, organizationId: string, projectId: string): Promise<string> => {
     const existing = await rpc<{ _id: string; status: string }[]>(cookie, "deployments:listByProject", { organizationId, projectId });
     const found = existing.at(0);
 
     if (found !== undefined) {
-        if (found.status === "live") {
-            console.info(`  deployment  ${SCRIPT_NAME} (exists, live)`);
+        if (found.status === "live" || found.status === "verifying") {
+            console.info(`  deployment  ${SCRIPT_NAME} (exists, ${found.status})`);
 
             return found._id;
         }
 
-        const resumed = await driveToLive(cookie, found._id);
-
-        console.info(`  deployment  ${SCRIPT_NAME} ${resumed ? `(resumed from ${found.status} → live)` : `(${found.status}${BLOCKED_SUFFIX})`}`);
+        await driveToLive(cookie, found._id);
+        console.info(`  deployment  ${SCRIPT_NAME} (resumed from ${found.status})`);
 
         return found._id;
     }
@@ -339,9 +318,9 @@ const ensureDeployment = async (cookie: string, organizationId: string, projectI
         scriptName: SCRIPT_NAME,
     });
 
-    const live = await driveToLive(cookie, created.deploymentId);
+    await driveToLive(cookie, created.deploymentId);
 
-    console.info(`  deployment  ${SCRIPT_NAME} v${String(created.version)} (created${live ? ", live" : BLOCKED_SUFFIX})`);
+    console.info(`  deployment  ${SCRIPT_NAME} v${String(created.version)} (created, live)`);
 
     return created.deploymentId;
 };
@@ -551,24 +530,7 @@ const main = async (): Promise<void> => {
     if (deployKey === undefined) {
         console.info(`  telemetry   (exists)`);
     } else {
-        try {
-            await seedTelemetry(cookie, organizationId, deploymentId, deployKey);
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-
-            // Same upstream defect as `driveToLive`, in a second place: `authz.ts`
-            // rejects a key when `row.revokedAt !== undefined`, but `deployKeys` is
-            // `.global()` and D1 stores an unset column as NULL — so a perfectly valid,
-            // never-revoked key reads as revoked and every deploy-key authorized path
-            // (CI deploys and all telemetry ingest, not just this seed) answers
-            // FORBIDDEN. Reported separately; skipping keeps the rest of the seed
-            // usable instead of failing the whole run on a bug it cannot fix.
-            if (message.includes("FORBIDDEN")) {
-                console.info(`  telemetry   (skipped — deploy-key auth rejects D1 NULL revokedAt; see the note in main)`);
-            } else {
-                throw error;
-            }
-        }
+        await seedTelemetry(cookie, organizationId, deploymentId, deployKey);
     }
 
     console.info(`\ndone — sign in at ${BASE_URL}/login with ${DEV_EMAIL} / ${DEV_PASSWORD}`);
