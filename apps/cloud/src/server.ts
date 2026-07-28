@@ -612,7 +612,7 @@ const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> 
  * `organizations`/`members` model — the better-auth `organization` plugin is
  * deliberately omitted to avoid two parallel org models.
  */
-const authOptions = (env: Env): LunoraAuthOptions => {
+const authOptions = (env: Env, requestOrigin?: string): LunoraAuthOptions => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
@@ -623,7 +623,12 @@ const authOptions = (env: Env): LunoraAuthOptions => {
     const mailer = (): ReturnType<typeof createMailerFromEnv> => createMailerFromEnv(env as unknown as Record<string, unknown>);
 
     return {
-        baseURL: env.AUTH_URL,
+        // Falls back to the origin of the request that built this isolate's auth
+        // instance. Without a baseURL better-auth derives the origin per request and
+        // warns that callbacks/redirects may misbehave; in dev nothing can hardcode
+        // it, because Vite moves to 5175+ whenever the port is taken. An explicit
+        // `AUTH_URL` still wins, which is what production sets.
+        baseURL: env.AUTH_URL ?? requestOrigin,
         emailAndPassword: {
             enabled: true,
             // Mail the reset link; in dev it's captured into the studio Mail tab.
@@ -687,8 +692,10 @@ export default {
         if (!auth) {
             // Runtime auth instance uses the SQL adapter; a throwaway instance on
             // the raw D1 drives the one-time schema migration (better-auth Kysely).
-            auth = createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
-            await ensureMigrated(createAuth({ ...authOptions(env), database: env.DB as never }));
+            const requestOrigin = new URL(request.url).origin;
+
+            auth = createAuth({ ...authOptions(env, requestOrigin), database: lunoraD1Adapter(env.DB as never) });
+            await ensureMigrated(createAuth({ ...authOptions(env, requestOrigin), database: env.DB as never }));
         }
 
         worker ??= buildWorker(env);
