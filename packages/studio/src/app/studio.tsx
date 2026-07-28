@@ -12,7 +12,7 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
+import { createContext, lazy, Suspense, use, useCallback, useEffect, useMemo, useState } from "react";
 
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
@@ -44,6 +44,7 @@ import { Skeleton } from "../components/ui/skeleton";
 // so it — and its heavy deps (`@xyflow/react`, `recharts`, the SQL editor, the
 // data grid) — loads in its own on-demand `chunk-*.js`, not in Home's first load.
 import { HomePanel } from "../features/home/home-panel";
+import { OperationConsole } from "../features/logs/operation-console";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
@@ -810,6 +811,30 @@ const StudioLayout = (): ReactElement => {
     const current = tabFromPathname(pathname);
     const fullHeight = FULL_HEIGHT_TABS.has(current);
 
+    // The operation console (plan 204): a dockable tape of every admin RPC this
+    // studio issued. Toggled with ⌘/Ctrl+` — recording is always on regardless,
+    // because a tape you have to arm before the bug is a tape that misses it.
+    const [consoleOpen, setConsoleOpen] = useState<boolean>(false);
+
+    const closeConsole = useCallback((): void => {
+        setConsoleOpen(false);
+    }, []);
+
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent): void => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "`") {
+                event.preventDefault();
+                setConsoleOpen((open) => !open);
+            }
+        };
+
+        globalThis.addEventListener("keydown", onKeyDown);
+
+        return () => {
+            globalThis.removeEventListener("keydown", onKeyDown);
+        };
+    }, []);
+
     // Which optional package-backed pages this deployment enables. Defaults to
     // everything-shown until the RPC settles, so the nav never flickers a page in
     // then out — it only ever drops a page once the worker reports it disabled.
@@ -1056,6 +1081,9 @@ const StudioLayout = (): ReactElement => {
                             </Suspense>
                         </ErrorBoundary>
                     </div>
+                    {/* The operation console docks under whatever panel is open — it is a
+                        companion to the current page, not a destination of its own. */}
+                    {consoleOpen && <OperationConsole onClose={closeConsole} />}
                 </div>
             </SidebarInset>
         </SidebarProvider>

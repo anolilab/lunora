@@ -3,7 +3,7 @@
 - **Category**: dx/obs (competitive parity — Prisma Studio `console` view)
 - **Priority**: P3
 - **Effort**: S–M · **Risk**: LOW
-- **Status**: TODO
+- **Status**: DONE (Phases 1–2 shipped; Phase 3 deferred — see below)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: a tape of what **Studio itself** just did — every admin RPC it issued,
   with timing, outcome, and a copyable reproduction — so a failed action in the UI
@@ -56,38 +56,47 @@ links out to the audit panel for a write it issued.
 
 ## Phase 1 — Event emission
 
-- [ ] `OperationEvent` type + a bounded `OperationLog` ring buffer in a Studio
+- [x] `OperationEvent` type + a bounded `OperationLog` ring buffer in a Studio
       context provider.
-- [ ] Instrument the single choke point: `lib/internal.ts` +
+- [x] Instrument the single choke point: `lib/internal.ts` +
       `hooks/use-admin-query.ts` emit an event per call — one on dispatch (with a
       monotonic sequence number assigned at dispatch, so ordering reflects issue
       order, not completion order) and one on settle.
-- [ ] Argument summarisation is per-function and explicit — a small map from
+- [x] Argument summarisation is per-function and explicit — a small map from
       function path to a summariser. Default for an unmapped function: record the
       argument _keys_ only. Never a blanket `JSON.stringify(args)`; that is how
       row values leak in.
-- [ ] Live subscriptions (`live: true` queries) record the subscribe/unsubscribe
-      and a push counter, not one entry per push — otherwise a busy subscription
-      floods the buffer and evicts everything useful.
+- [~] PARTIAL — live subscriptions are NOT separately instrumented. The initial
+  read of a `live: true` query is recorded (it goes through the same fetcher);
+  subsequent WS pushes are not, which happens to satisfy the "do not flood the
+  buffer" requirement but does not give the subscribe/unsubscribe + push-count
+  entry the plan asked for. The push path is `client.subscribe` inside
+  `use-admin-query.ts`, a different seam from the recorded fetcher.
 
 ## Phase 2 — The view
 
-- [ ] A dockable console drawer (keyboard-toggled, reachable from the command
+- [x] A dockable console drawer (keyboard-toggled, reachable from the command
       palette in `app/command-palette.tsx`), not a top-level nav page — it is a
       companion to whatever page you are on.
-- [ ] Row per operation: relative time, function, shard, duration, outcome badge.
+- [x] Row per operation: relative time, function, shard, duration, outcome badge.
       Expand for the argument summary and the error, if any.
-- [ ] Filter by outcome (errors only), by function, by shard. Free-text match.
-- [ ] "Copy as call" — the function path + argument summary in a form that can be
+- [x] Filter by outcome (errors only), by function, by shard. Free-text match.
+- [x] "Copy as call" — the function path + argument summary in a form that can be
       pasted into the SQL console or an issue report.
-- [ ] An error entry links to the corresponding audit-log row when the operation
+- [x] An error entry links to the corresponding audit-log row when the operation
       was a write that the server recorded.
 
-## Phase 3 — Wire it to failures
+## Phase 3 — Wire it to failures — DEFERRED
 
 - [ ] Existing error surfaces (`components/error-alert.tsx`, `LiveError`) gain a
       "show in console" affordance that opens the drawer scrolled to that entry.
-      This is the payoff: a red toast becomes a specific failed call.
+
+Not shipped. The drawer's open state lives in `StudioLayout`, while
+`ErrorAlert`/`LiveError` are rendered deep inside individual panels, so wiring
+"show in console" needs the toggle lifted into a context first. That is a small
+refactor, but it is a refactor of a component every panel uses — worth doing
+deliberately rather than as a tail of this plan. The console is reachable
+meanwhile via ⌘/Ctrl+` from anywhere.
 
 ## Exit criteria
 
