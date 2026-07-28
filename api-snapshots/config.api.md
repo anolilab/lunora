@@ -66,6 +66,9 @@ interface AddOptionalColumnEdit {
 
 ```ts
 interface AddTableEdit {
+    readonly global?: {
+        readonly backend?: GlobalBackend;
+    };
     readonly kind: "addTable";
     readonly table: string;
 }

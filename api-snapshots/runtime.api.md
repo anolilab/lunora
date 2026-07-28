@@ -718,9 +718,7 @@ interface FunctionDescriptor {
 ```ts
 interface FunctionRegistryEntry {
     args?: unknown;
-    expose?: {
-        readonly rest?: boolean;
-    };
+    expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
     visibility?: "internal" | "public";
     x402?: {
@@ -2163,6 +2161,12 @@ const analyticsEngineSink: (options: AnalyticsEngineSinkOptions) => Observabilit
 const applyJurisdiction: (namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction) => ShardNamespaceLike;
 ```
 
+### `applyRestCache` (const)
+
+```ts
+const applyRestCache: (response: Response, policy: RestCachePolicy | undefined, request: Request) => Response;
+```
+
 ### `argsFromQuery` (const)
 
 ```ts
@@ -2403,6 +2407,12 @@ const r2Sink: (config: {
 const readShardKey: (url: URL, request: Request) => string | undefined;
 ```
 
+### `requestCarriesCredentials` (const)
+
+```ts
+const requestCarriesCredentials: (request: Request, policy: RestCachePolicy) => boolean;
+```
+
 ### `resolveLogArchiveFromEnv` (const)
 
 ```ts
@@ -2425,6 +2435,12 @@ const resolveSecurity: (security: SecurityOptions | undefined, env?: Record<stri
 
 ```ts
 const resolveShard: (namespace: ShardNamespaceLike, shardKey: string) => ResolvedShard;
+```
+
+### `restCacheHeaders` (const)
+
+```ts
+const restCacheHeaders: (policy: RestCachePolicy, request: Request, status: number) => Record<string, string> | undefined;
 ```
 
 ### `restSurfaceFromRegistry` (const)

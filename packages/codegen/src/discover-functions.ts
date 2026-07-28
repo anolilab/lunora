@@ -6,6 +6,7 @@ import type {
     CallExpression,
     FunctionExpression,
     Identifier,
+    ObjectLiteralExpression,
     Project,
     SourceFile,
     Symbol as TsSymbol,
@@ -14,7 +15,7 @@ import type {
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import type { FunctionIR, ValidatorIR } from "./ir";
+import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "./ir";
 import { isServerSurfaceModule } from "./module-specifiers";
 import { parseObjectShape } from "./parse-validator";
 import sanitizeNamespace from "./paths";
@@ -81,7 +82,7 @@ const LIFECYCLE_FACTORIES: Record<string, "connect" | "disconnect"> = {
 interface DiscoveredFunction {
     args: Record<string, ValidatorIR>;
     /** Set when the builder chain includes `.expose({ rest: true })` (plan 167). */
-    expose?: { rest?: boolean };
+    expose?: { cache?: ExposeCacheIR; rest?: boolean };
     kind: string;
     lifecycle?: "connect" | "disconnect";
     returnType: string;
@@ -202,14 +203,101 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
     return INTERNAL_FACTORIES[rootName] ? "internal" : undefined;
 };
 
+/** Read a property off an object literal as a string literal, or `undefined` when absent / not statically readable. */
+const stringProperty = (literal: ObjectLiteralExpression, name: string): string | undefined => {
+    const property = literal.getProperty(name);
+
+    if (property === undefined || !Node.isPropertyAssignment(property)) {
+        return undefined;
+    }
+
+    const initializer = property.getInitializer();
+
+    return initializer !== undefined && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
+};
+
+/** Read a property off an object literal as a numeric literal, or `undefined` when absent / not statically readable. */
+const numberProperty = (literal: ObjectLiteralExpression, name: string): number | undefined => {
+    const property = literal.getProperty(name);
+
+    if (property === undefined || !Node.isPropertyAssignment(property)) {
+        return undefined;
+    }
+
+    const initializer = property.getInitializer();
+
+    return initializer !== undefined && Node.isNumericLiteral(initializer) ? initializer.getLiteralValue() : undefined;
+};
+
+/**
+ * Read the `cache: { … }` sub-object of an `.expose(...)` argument into
+ * {@link ExposeCacheIR}. Only literal fields are recorded — a computed `maxAge`
+ * is simply omitted, so the emitted spec under-documents rather than states
+ * something the runtime won't do. Returns `undefined` when there is no readable
+ * `cache` object at all.
+ */
+const cacheFromExposeLiteral = (literal: ObjectLiteralExpression): ExposeCacheIR | undefined => {
+    const property = literal.getProperty("cache");
+
+    if (property === undefined || !Node.isPropertyAssignment(property)) {
+        return undefined;
+    }
+
+    const initializer = property.getInitializer();
+
+    if (initializer === undefined || !Node.isObjectLiteralExpression(initializer)) {
+        return undefined;
+    }
+
+    const scope = stringProperty(initializer, "scope");
+    const maxAge = numberProperty(initializer, "maxAge");
+    const staleWhileRevalidate = numberProperty(initializer, "staleWhileRevalidate");
+    const tag = stringProperty(initializer, "tag");
+    const vary = stringProperty(initializer, "vary");
+
+    const read: ExposeCacheIR = {
+        ...(maxAge === undefined ? {} : { maxAge }),
+        ...(scope === "private" || scope === "public" ? { scope } : {}),
+        ...(staleWhileRevalidate === undefined ? {} : { staleWhileRevalidate }),
+        ...(tag === undefined ? {} : { tag }),
+        ...(vary === undefined ? {} : { vary }),
+    };
+
+    // Nothing readable (every field computed) is reported as absent rather than as
+    // an empty object, so a consumer can't mistake "unreadable" for "declared".
+    return Object.keys(read).length === 0 ? undefined : read;
+};
+
+/**
+ * Read the argument of a located `.expose(...)` call into the IR tag. An
+ * unreadable argument (not an object literal, or a computed `rest`) yields `{}` —
+ * "exposed, details unknown" — which is the safe default: the function is still
+ * treated as tagged, just without a `rest === true` that would publish it.
+ */
+const exposeFromArgument = (argument: Node | undefined): { cache?: ExposeCacheIR; rest?: boolean } => {
+    if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
+        return {};
+    }
+
+    const cache = cacheFromExposeLiteral(argument);
+    const restProperty = argument.getProperty("rest");
+
+    if (restProperty !== undefined && Node.isPropertyAssignment(restProperty)) {
+        return { ...(cache === undefined ? {} : { cache }), rest: restProperty.getInitializer()?.getText() === "true" };
+    }
+
+    return cache === undefined ? {} : { cache };
+};
+
 /**
  * Walk a builder-terminal chain (`c.input(...).expose({ rest: true }).query(...)`)
- * leftward looking for a `.expose({ ... })` modifier, and read its `rest` flag
- * from the object-literal argument. Returns `{ rest }` when found, else
- * `undefined` (RPC-only — the default). Mirrors {@link resolveBuilderRootKind}'s
- * chain descent so it works under degraded types (no `@lunora/server` install).
+ * leftward looking for a `.expose({ ... })` modifier, and read its `rest` flag and
+ * optional `cache` block from the object-literal argument. Returns the tag when
+ * found, else `undefined` (RPC-only — the default). Mirrors
+ * {@link resolveBuilderRootKind}'s chain descent so it works under degraded types
+ * (no `@lunora/server` install).
  */
-const exposeFromBuilderChain = (receiver: Node): { rest?: boolean } | undefined => {
+const exposeFromBuilderChain = (receiver: Node): { cache?: ExposeCacheIR; rest?: boolean } | undefined => {
     let current: Node = receiver;
 
     while (Node.isCallExpression(current)) {
@@ -220,22 +308,7 @@ const exposeFromBuilderChain = (receiver: Node): { rest?: boolean } | undefined 
         }
 
         if (inner.getName() === "expose") {
-            const argument = current.getArguments()[0];
-
-            if (argument !== undefined && Node.isObjectLiteralExpression(argument)) {
-                const restProperty = argument.getProperty("rest");
-
-                if (restProperty !== undefined && Node.isPropertyAssignment(restProperty)) {
-                    const initializer = restProperty.getInitializer();
-                    const rest = initializer?.getText() === "true";
-
-                    return { rest };
-                }
-            }
-
-            // `.expose(...)` present but its arg isn't a readable `{ rest: … }`
-            // literal — treat as exposed-unknown (`rest` absent), a safe default.
-            return {};
+            return exposeFromArgument(current.getArguments()[0]);
         }
 
         current = inner.getExpression();
