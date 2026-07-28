@@ -41,20 +41,27 @@ export const teardownPorts = (database: ControlPlaneDb, destroy: TeardownPorts["
         // Aliases that still have a live/superseded/etc (non-destroyed) deployment.
         const aliveAliases = new Set<string>();
 
+        // `!= null`, not `!== undefined`: `deployments` is `.global()`, so these rows
+        // come from D1, which returns SQL NULL — never `undefined` — for an unset
+        // optional column. The three checks below all read optional columns, and all
+        // three invert if they test for `undefined`: the sweep silently selects
+        // nothing (leaking every dispatch script, tenant D1 and R2 bucket forever),
+        // and `deleteResources` flips to `true` for an alias-less row, which is the
+        // one case this function exists to prevent.
         for (const row of rows) {
-            if (row.status !== "destroyed" && row.alias !== undefined) {
+            if (row.status !== "destroyed" && row.alias != null) {
                 aliveAliases.add(row.alias);
             }
         }
 
         return rows
-            .filter((row) => row.status === "destroyed" && row.teardownAt === undefined)
+            .filter((row) => row.status === "destroyed" && row.teardownAt == null)
             .map((row) => {
                 const alias = row.alias ?? row.scriptName;
 
                 return {
                     alias,
-                    deleteResources: row.alias === undefined ? false : !aliveAliases.has(alias),
+                    deleteResources: row.alias == null ? false : !aliveAliases.has(alias),
                     dispatchNamespace: `lunora-${row.kind}`,
                     id: row._id,
                     scriptName: row.scriptName,

@@ -23,7 +23,7 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 
 ## Layout
 
-```
+```text
 lunora/
   schema.ts          control-plane data model (cells, organizations, members,
                      projects, deployments, deployKeys, auditLog, invitations,
@@ -239,8 +239,14 @@ the charts have a shape rather than one spike at "now".
 Overridable via the environment: `LUNORA_SEED_URL` (default
 `http://localhost:5174` — set this when Vite falls back to 5175+ because the port
 was taken), `LUNORA_SEED_EMAIL`, `LUNORA_SEED_PASSWORD`. The
-`LUNORA_ADMIN_TOKEN` for cell registration is read from `.dev.vars` unless set in
-the environment.
+`LUNORA_ADMIN_TOKEN` for cell registration is resolved by `@lunora/config` — the
+environment first, then `.dev.vars`.
+
+**It refuses to run against a non-loopback host.** Everything here is destructive
+against a real control plane and is authorized with whatever credentials you have:
+it creates an account with a published password, sends your `LUNORA_ADMIN_TOKEN`
+to the target, force-activates the project's newest deployment, and revokes any
+`dev-seed` key. Set `LUNORA_SEED_ALLOW_REMOTE=1` to override, deliberately.
 
 **Re-running is safe.** Every stage looks for what it would create first, because
 none of the underlying mutations dedupe — `cells:register` inserts blindly, so an
