@@ -7,7 +7,7 @@ import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -40,7 +40,7 @@ interface SubscriptionRow {
  * only. Returns the redirect URL the studio sends the browser to.
  */
 export const checkout = action
-    .use(dbRateLimit("billing"))
+    .use(rateLimit("billing"))
     .input({
         cancelUrl: boundedString(LIMITS.url),
         organizationId: v.id("organizations"),
@@ -63,7 +63,7 @@ export const checkout = action
 
 /** Open the provider billing portal for the org (owners/admins only). */
 export const portal = action
-    .use(dbRateLimit("billing"))
+    .use(rateLimit("billing"))
     .input({
         organizationId: v.id("organizations"),
         returnUrl: boundedString(LIMITS.url),
@@ -121,7 +121,7 @@ export const subscription = query
  * verification + store write happen where `ctx.payments` exists.
  */
 export const processWebhook = action
-    .use(dbRateLimit("webhook"))
+    .use(rateLimit("webhook"))
     .input({
         body: boundedString(LIMITS.webhookBody),
         signature: boundedString(LIMITS.signature),
