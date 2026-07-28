@@ -37,10 +37,13 @@ interface DiscoveredOrganization {
 /** The payload `GET {basePath}/ui-config` returns (see `@lunora/auth`'s `uiConfig`). */
 interface DiscoveredConfig {
     emailAndPassword: boolean;
-    organization: DiscoveredOrganization;
-    plugins: ReadonlyArray<string>;
+    /** Absent when the server chose not to disclose it — see `uiConfig`'s `expose`. */
+    organization?: DiscoveredOrganization;
+    /** Absent when not disclosed; that is *not* the same as "no plugins". */
+    plugins?: ReadonlyArray<string>;
     signUp: boolean;
-    socialProviders: ReadonlyArray<string>;
+    /** Absent when not disclosed. */
+    socialProviders?: ReadonlyArray<string>;
 }
 
 type DiscoveryStatus = "loading" | "ready" | "unavailable";
@@ -93,8 +96,16 @@ const isConfig = (value: unknown): value is DiscoveredConfig => {
 
     const candidate = value as Partial<DiscoveredConfig>;
 
-    return Array.isArray(candidate.plugins) && Array.isArray(candidate.socialProviders);
+    /*
+     * `signUp` is the shape marker, not `plugins`: a deployment may withhold the
+     * plugin list, and requiring it here would make a legitimate answer look
+     * like an unrelated endpoint. It is a boolean the payload always carries.
+     */
+    return typeof candidate.signUp === "boolean" && typeof candidate.emailAndPassword === "boolean";
 };
+
+/** The body as it arrives: every field optional, because an older `uiConfig()` may predate one. */
+type DiscoveredPayload = Partial<Omit<DiscoveredConfig, "organization">> & { organization?: Partial<DiscoveredOrganization> };
 
 /**
  * Normalize the parsed body.
@@ -104,18 +115,23 @@ const isConfig = (value: unknown): value is DiscoveredConfig => {
  * Typing it as the full `DiscoveredConfig` would make every default below look
  * dead to the compiler while still being reachable at runtime.
  */
-const normalize = (raw: Partial<DiscoveredConfig> & Pick<DiscoveredConfig, "plugins" | "socialProviders">): DiscoveredConfig => {
+const normalize = (raw: DiscoveredPayload): DiscoveredConfig => {
     return {
         emailAndPassword: raw.emailAndPassword ?? true,
-        organization: {
-            allowUserToCreate: raw.organization?.allowUserToCreate ?? true,
-            enabled: raw.organization?.enabled ?? false,
-            invitationLimit: raw.organization?.invitationLimit,
-            limit: raw.organization?.limit,
-            membershipLimit: raw.organization?.membershipLimit,
-            roles: raw.organization?.roles ?? false,
-            teams: raw.organization?.teams ?? false,
-        },
+        // An undisclosed field stays undefined so the resolver can tell it apart
+        // from a disclosed-but-empty one and fall back to the client's own answer.
+        organization:
+            raw.organization === undefined
+                ? undefined
+                : {
+                      allowUserToCreate: raw.organization.allowUserToCreate ?? true,
+                      enabled: raw.organization.enabled ?? false,
+                      invitationLimit: raw.organization.invitationLimit,
+                      limit: raw.organization.limit,
+                      membershipLimit: raw.organization.membershipLimit,
+                      roles: raw.organization.roles ?? false,
+                      teams: raw.organization.teams ?? false,
+                  },
         plugins: raw.plugins,
         signUp: raw.signUp ?? true,
         socialProviders: raw.socialProviders,

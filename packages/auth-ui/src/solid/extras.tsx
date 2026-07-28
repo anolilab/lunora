@@ -94,7 +94,14 @@ const Captcha = (props: CaptchaProps): JSX.Element => {
                     onCleanup(renderCaptcha(host, { onError: context.onError, provider: props.provider, siteKey: key() }));
                 });
 
-                return <div class="lunora-auth-captcha" ref={host} />;
+                return (
+                    <div
+                        class="lunora-auth-captcha"
+                        ref={(element) => {
+                            host = element;
+                        }}
+                    />
+                );
             }}
         </Show>
     );
@@ -124,7 +131,7 @@ const OneTap = (): JSX.Element => {
 
 /**
  * Upload an organization's logo. Renders only when the app configured an
- * `avatar.upload` handler — without one, `<OrganizationSettingsCard>`'s logo URL
+ * `avatar.upload` handler — without one, `&lt;OrganizationSettingsCard>`'s logo URL
  * field is the fallback.
  */
 interface OrganizationLogoCardProps {

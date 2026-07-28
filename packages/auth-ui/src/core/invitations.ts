@@ -10,6 +10,7 @@
  * user has an account, or "accept" is a leap of faith. Accepting still requires
  * a session, so the controller redirects to sign-in and comes back.
  */
+import { currentPath } from "./browser-location";
 import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
@@ -39,13 +40,6 @@ interface AcceptInvitationOptions {
     /** The invitation id from the link (`?invitationId=…`). */
     invitationId?: string;
 }
-
-/** The current URL path + query, or "/" off the browser (SSR has nowhere to return to). */
-const currentPath = (): string => {
-    const { location } = globalThis as { location?: { pathname?: string; search?: string } };
-
-    return location === undefined ? "/" : `${location.pathname ?? "/"}${location.search ?? ""}`;
-};
 
 const createAcceptInvitationController = (context: ControllerContext, options: AcceptInvitationOptions = {}): AcceptInvitationController => {
     const store = createStore<AcceptInvitationState>({ loading: true, status: "idle" });

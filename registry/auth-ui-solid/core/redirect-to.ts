@@ -58,7 +58,7 @@ const readRedirectTo = (parameter = "redirectTo"): string | undefined => {
 
     const value = new URLSearchParams(search).get(parameter);
 
-    return value === null || !isSafeRedirect(value) ? undefined : value;
+    return value === null || !isSafeRedirect(value) ? undefined : value.trim();
 };
 
 /**
@@ -67,4 +67,26 @@ const readRedirectTo = (parameter = "redirectTo"): string | undefined => {
  */
 const resolveAfterSignIn = (fallback: string): string => readRedirectTo() ?? fallback;
 
-export { isSafeRedirect, readRedirectTo, resolveAfterSignIn };
+/**
+ * Carry `redirectTo` onto an intermediate step's URL.
+ *
+ * Sign-in can hand off to a second factor before it finishes, and that hop is a
+ * fresh page: whatever the original link asked for lives in *this* page's query
+ * string and is gone once we navigate. Without this the invitation bounce —
+ * the reason this module exists — works for users without 2FA and silently
+ * fails for users with it.
+ */
+const withRedirectTo = (path: string): string => {
+    const target = readRedirectTo();
+
+    if (target === undefined) {
+        return path;
+    }
+
+    // Preserve any query string the app already configured on the step's route.
+    const separator = path.includes("?") ? "&" : "?";
+
+    return `${path}${separator}redirectTo=${encodeURIComponent(target)}`;
+};
+
+export { isSafeRedirect, readRedirectTo, resolveAfterSignIn, withRedirectTo };

@@ -2,6 +2,7 @@
 
 import type { ReactElement } from "react";
 
+import { queryParameter } from "../core/browser-location";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createAuthorizedAppsController, createConsentController, scopeLabels } from "../core/oauth-provider";
 import { AuthCard, FormBanner, Skeleton } from "./primitives";
@@ -24,8 +25,7 @@ interface ConsentCardProps {
 const ConsentCard = ({ consentId }: ConsentCardProps = {}): ReactElement | null => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
-    const resolved = consentId ?? (search === undefined ? undefined : (new URLSearchParams(search).get("consent_id") ?? undefined));
+    const resolved = consentId ?? queryParameter("consent_id");
     const enabled = isFlowEnabled(context, "oauthProvider", "ConsentCard");
     const [state, actions] = useController((context_) => createConsentController(context_, { autoLoad: enabled, consentId: resolved }), [resolved, enabled]);
 

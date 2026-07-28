@@ -2,7 +2,7 @@
  * Angular provider for the auth UI. `provideAuthUI(config)` returns the
  * environment providers that expose the resolved {@link ControllerContext}
  * (plus an optional client-side navigation hook for internal links) through the
- * {@link AUTH_UI_CONTEXT} injection token. Mirrors React's `<AuthUIProvider>`:
+ * {@link AUTH_UI_CONTEXT} injection token. Mirrors React's `&lt;AuthUIProvider>`:
  * one base component set serves every meta-framework — pass your router into
  * `nav`/`link` and the cards navigate through it.
  */
@@ -25,8 +25,8 @@ import { discoverAuthConfig } from "../core/discovery";
 interface AuthUIAngularConfig extends Omit<AuthUIConfig, "nav"> {
     /**
      * Client-side navigation for internal auth links (router `navigate`, etc.).
-     * When set, {@link AuthLinkComponent} intercepts the click and calls this
-     * instead of a full page load; when omitted the link is a plain `<a href>`.
+     * When set, `AuthLinkComponent` intercepts the click and calls this
+     * instead of a full page load; when omitted the link is a plain `&lt;a href>`.
      */
     link?: (href: string) => void;
     /** Router bridge for programmatic redirects; defaults to {@link defaultNav}. */
@@ -85,6 +85,7 @@ const provideAuthUI = (config: AuthUIAngularConfig): EnvironmentProviders =>
                     authClient: config.authClient,
                     avatar: config.avatar,
                     basePath: config.basePath,
+                    forgotPassword: config.forgotPassword,
                     localization: config.localization,
                     nav: {
                         navigate: (to: string) => {
@@ -100,6 +101,7 @@ const provideAuthUI = (config: AuthUIAngularConfig): EnvironmentProviders =>
                     onSessionChange: () => {
                         config.onSessionChange?.();
                     },
+                    organization: config.organization,
                     password: config.password,
                     plugins: config.plugins,
                     redirects: config.redirects,
@@ -145,7 +147,7 @@ const provideAuthUI = (config: AuthUIAngularConfig): EnvironmentProviders =>
  *
  * This is the handle cards should hold: reading it inside a template or a
  * `computed` re-evaluates when server discovery lands, and passing it to
- * {@link controllerSignal} is what lets the bridge rebuild the controller for
+ * `controllerSignal` is what lets the bridge rebuild the controller for
  * the new context.
  */
 const injectAuthUIContext = (): Signal<ControllerContext> => {

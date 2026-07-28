@@ -1,5 +1,5 @@
 import type { JSX } from "solid-js";
-import { For, Show, createSignal, createUniqueId } from "solid-js";
+import { createSignal, createUniqueId, For, Show } from "solid-js";
 
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS, slugify } from "../core/labels";
@@ -320,4 +320,4 @@ const OrganizationSettingsCard = (props: OrganizationSettingsCardProps = {}): JS
 };
 
 export type { OrganizationSettingsCardProps };
-export { MembersCard, OrganizationSettingsCard, OrganizationsCard };
+export { MembersCard, OrganizationsCard, OrganizationSettingsCard };

@@ -95,7 +95,14 @@ const createThemeModeController = (options: ThemeModeOptions = {}): ThemeModeCon
         store.update({ mode, resolved });
     };
 
-    apply(initial);
+    /*
+     * Deliberately NOT applied here. Constructing a controller — which happens
+     * merely by mounting an appearance card — must not reach out and rewrite a
+     * global document attribute: an app with its own theming would be flipped to
+     * the OS preference with no user action. The DOM is written on `setMode`,
+     * and `state.resolved` reports what the mode means so a view can render the
+     * current selection without anything having been changed.
+     */
 
     return {
         actions: {

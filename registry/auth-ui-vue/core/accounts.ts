@@ -39,6 +39,21 @@ type AccountsController = Controller<ResourceState<AuthAccount>, AccountsActions
 const linkedProviderIds = (accounts: ReadonlyArray<AuthAccount>): ReadonlyArray<string> =>
     accounts.map((account) => account.providerId).filter((id): id is string => id !== undefined && !NON_SOCIAL_PROVIDERS.has(id));
 
+/**
+ * The providers still available to link: `social` minus what is already
+ * attached.
+ *
+ * Derived here rather than in each view. Every port needs the same complement,
+ * and computing it five times meant five chances to forget the
+ * {@link NON_SOCIAL_PROVIDERS} filter — which every port had already forgotten,
+ * harmlessly today only because `credential` never appears in `social`.
+ */
+const linkableProviders = (accounts: ReadonlyArray<AuthAccount>, social: ReadonlyArray<string>): ReadonlyArray<string> => {
+    const linked = new Set(linkedProviderIds(accounts));
+
+    return social.filter((provider) => !linked.has(provider));
+};
+
 const createAccountsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): AccountsController => {
     const resource = createResourceController<AuthAccount>(context, async (context_) => assertOk(await context_.authClient.listAccounts()).data ?? [], options);
 
@@ -68,4 +83,4 @@ const createAccountsController = (context: ControllerContext, options: { autoLoa
 };
 
 export type { AccountsActions, AccountsController };
-export { createAccountsController, linkedProviderIds, NON_SOCIAL_PROVIDERS };
+export { createAccountsController, linkableProviders, linkedProviderIds, NON_SOCIAL_PROVIDERS };

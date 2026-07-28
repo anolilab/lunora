@@ -11,18 +11,21 @@ export default createConfig(
             "**/dist/**",
             "**/node_modules/**",
             "**/coverage/**",
-            // Non-React ports are copy-only templates in framework dialects this
-            // flat config (React/TS-tuned) can't lint; Prettier still formats them.
+            /*
+             * Vue and Svelte only. Their SFCs need `vue-eslint-parser` /
+             * `svelte-eslint-parser`, which this repo does not ship — so they
+             * are formatted by Prettier and type-checked by `vue-tsc` /
+             * `svelte-check`, but genuinely unlinted.
+             *
+             * Solid and Angular are *not* here: they are plain TS/TSX and were
+             * only ever ignored by being lumped in with the SFC dialects. They
+             * are linted below, each against the program that actually contains
+             * them, with the rules that fight their idioms scoped off.
+             */
             "src/vue/**",
             "src/svelte/**",
-            "src/solid/**",
-            "src/angular/**",
-            // …and their tests, which are outside the tsconfig program for the
-            // same reason (see tsconfig.json's `exclude`), so the type-aware
-            // rules here have no program to resolve them against.
             "__tests__/vue/**",
             "__tests__/svelte/**",
-            "__tests__/solid/**",
             "**/*.md/**",
             "**/vitest.config.ts",
             "**/wrangler.jsonc",
@@ -50,6 +53,62 @@ export default createConfig(
             // `void expr;` is the intended "explicitly ignore this promise" marker.
             "no-void": ["error", { allowAsStatement: true }],
             "sonarjs/void-use": "off",
+        },
+    },
+    /*
+     * Solid lives in its own TypeScript program (`tsconfig.solid.json`) because
+     * a program holds one `jsx`/`jsxImportSource` pair and React's is in the
+     * main one. Type-aware rules need to be pointed at it explicitly or every
+     * file reports "not found by the project service".
+     */
+    {
+        files: ["src/solid/**/*.{ts,tsx}", "__tests__/solid/**/*.{ts,tsx}"],
+        languageOptions: { parserOptions: { project: "./tsconfig.solid.json", tsconfigRootDir: import.meta.dirname } },
+        rules: {
+            // Solid compiles JSX too, but none of React's hook/component rules apply.
+            "react-hooks/exhaustive-deps": "off",
+            "react-hooks/rules-of-hooks": "off",
+            "react/no-unknown-property": "off",
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "react-perf/jsx-no-new-object-as-prop": "off",
+            /*
+             * This one is not merely inapplicable, it is backwards: destructuring
+             * a Solid component's props reads them once and severs reactivity.
+             * The port deliberately never does it.
+             */
+            "react/destructuring-assignment": "off",
+            // Solid spells it `for`, not `htmlFor`, so the a11y rule can't see the association.
+            "jsx-a11y/label-has-associated-control": "off",
+            // `solid-js` is a devDependency for the same reason `@angular/core` is.
+            "import/no-extraneous-dependencies": "off",
+            // Solid's context API is its own; these rules describe React 19's.
+            "react-x/no-context-provider": "off",
+            "react-x/no-use-context": "off",
+            "react/jsx-no-constructed-context-values": "off",
+            // Solid has no Fast Refresh component/constant split.
+            "react-refresh/only-export-components": "off",
+        },
+    },
+    /*
+     * Angular's class-based components conflict with rules written for plain
+     * modules — not with the intent behind them. Each is off for a reason, and
+     * everything else (unused vars, floating promises, unsafe `any`, import
+     * hygiene) still applies, which is the point of linting these at all.
+     */
+    {
+        files: ["src/angular/**/*.ts", "__tests__/angular/**/*.ts"],
+        rules: {
+            // The ports group related standalone components per file, mirroring
+            // the React file they are a port of. Splitting them to satisfy this
+            // would make the five ports diverge in shape for no benefit.
+            "max-classes-per-file": "off",
+            // `@angular/core` is a devDependency on purpose: this package is
+            // never installed: the port is copied into a project that has Angular.
+            "import/no-extraneous-dependencies": "off",
+            // Angular's own convention is `protected` template members and
+            // decorator-adjacent ordering; this rule predates both.
+            "@typescript-eslint/explicit-member-accessibility": "off",
+            "@typescript-eslint/member-ordering": "off",
         },
     },
     // Scoped allowances for the copy-in React templates.
@@ -90,6 +149,10 @@ export default createConfig(
             "vitest/prefer-describe-function-title": "off",
             "vitest/prefer-expect-assertions": "off",
             "vitest/require-mock-type-parameters": "off",
+            // Solid's testing-library has no `getByRole` for a detached render,
+            // so container queries are the supported way to assert on markup.
+            "testing-library/no-container": "off",
+            "testing-library/no-node-access": "off",
         },
     },
 );

@@ -57,6 +57,10 @@ interface AuthUIProviderProps {
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
     /** Password rules, mirrored from your server's `emailAndPassword` config. */
+    /** Which password-reset transport the app uses. */
+    forgotPassword?: AuthUIConfig["forgotPassword"];
+    /** Organization UI options. */
+    organization?: AuthUIConfig["organization"];
     password?: PasswordPolicy;
     plugins?: PluginFlags;
     redirects?: RedirectConfig;
@@ -122,6 +126,8 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
                 nav: handlers.nav,
                 onError: handlers.onError,
                 onSessionChange: handlers.onSessionChange,
+                forgotPassword: config.forgotPassword,
+                organization: config.organization,
                 password: config.password,
                 plugins: config.plugins,
                 redirects: config.redirects,

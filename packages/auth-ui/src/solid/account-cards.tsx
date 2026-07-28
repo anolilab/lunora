@@ -97,13 +97,16 @@ const LinkedAccountsCard = (): JSX.Element => {
 
 /**
  * Avatar upload. Rendered only when the app configured an `avatar.upload`
- * handler — without one there is nowhere to put the bytes, and `<ProfileCard>`'s
+ * handler — without one there is nowhere to put the bytes, and `&lt;ProfileCard>`'s
  * URL field is the honest fallback.
  */
 const AvatarCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = createController(createAvatarUploadController);
+    // A callback ref, like the other Solid components here: the shorthand's
+    // assignment is compiler-generated and invisible to static analysis, which
+    // then reads the variable as never assigned.
     let input: HTMLInputElement | undefined;
 
     if (context.avatar.upload === undefined) {
@@ -113,9 +116,12 @@ const AvatarCard = (): JSX.Element => {
     const onPick = (event: Event & { currentTarget: HTMLInputElement }): void => {
         const file = event.currentTarget.files?.[0];
 
-        // Clear the input so re-picking the same file after a failure still
-        // fires `change` — browsers suppress it when the value is unchanged.
-        event.currentTarget.value = "";
+        // Cleared through the ref rather than the event's target, so the
+        // handler doesn't mutate its own argument. Re-picking the same file
+        // after a failure still fires `change`, which it otherwise would not.
+        if (input) {
+            input.value = "";
+        }
 
         if (file) {
             void actions.upload(file);
@@ -128,7 +134,15 @@ const AvatarCard = (): JSX.Element => {
             <div class="lunora-auth-avatar-row">
                 <UserAvatar size={64} user={{ image: state.imageUrl }} />
                 <div class="lunora-auth-avatar-row__actions">
-                    <input accept={ACCEPT_ATTRIBUTE} class="lunora-auth-visually-hidden" onChange={onPick} ref={input} type="file" />
+                    <input
+                        accept={ACCEPT_ATTRIBUTE}
+                        class="lunora-auth-visually-hidden"
+                        onChange={onPick}
+                        ref={(element) => {
+                            input = element;
+                        }}
+                        type="file"
+                    />
                     <button
                         class="lunora-auth-button"
                         disabled={state.status === "submitting"}

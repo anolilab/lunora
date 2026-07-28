@@ -25,7 +25,7 @@ export { Captcha, ErrorToaster, OneTap, OrganizationLogoCard } from "./extras";
 export type { ConsentCardProps } from "./oauth-provider";
 export { AuthorizedAppsCard, ConsentCard } from "./oauth-provider";
 export type { OrganizationSettingsCardProps } from "./organization";
-export { MembersCard, OrganizationSettingsCard, OrganizationsCard } from "./organization";
+export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./organization";
 export type { DeviceAuthorizationCardProps } from "./plugin-cards";
 export { AdminUsersCard, BackupCodesCard, DeviceAuthorizationCard, MultiSessionCard, TeamsCard } from "./plugin-cards";
 export type { AuthCardProps, FieldProps } from "./primitives";

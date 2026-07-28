@@ -106,7 +106,9 @@ describe("solid theme", () => {
         const { container } = renderCard(
             () => <SignInCard />,
             bareClient().client,
-            (defaults) => ({ ...defaults, primary: "rebeccapurple" }),
+            (defaults) => {
+                return { ...defaults, primary: "rebeccapurple" };
+            },
         );
         const card = container.querySelector(".lunora-auth-card") as HTMLElement;
 

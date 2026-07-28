@@ -30,7 +30,9 @@
         localization,
         nav,
         onError,
+        forgotPassword,
         onSessionChange,
+        organization,
         password,
         plugins,
         redirects,
@@ -95,6 +97,8 @@
             onSessionChange: (): void => {
                 onSessionChange?.();
             },
+            forgotPassword,
+            organization,
             password,
             plugins,
             redirects,

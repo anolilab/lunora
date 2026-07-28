@@ -68,21 +68,29 @@ interface UiConfigOrganization {
 interface UiConfigPayload {
     /** Whether email + password sign-in is enabled. */
     emailAndPassword: boolean;
-    organization: UiConfigOrganization;
-    /** Enabled better-auth plugin ids, sorted. */
-    plugins: string[];
+    /** Absent when `expose.organization` is false — see {@link UiConfigOptions.expose}. */
+    organization?: UiConfigOrganization;
+    /** Enabled better-auth plugin ids, sorted. Absent when not disclosed. */
+    plugins?: string[];
     /** Whether self-serve sign-up is open. */
     signUp: boolean;
-    /** Configured social/OAuth provider ids, sorted. */
-    socialProviders: string[];
+    /** Configured social/OAuth provider ids, sorted. Absent when not disclosed. */
+    socialProviders?: string[];
 }
 
 /** Options for {@link uiConfig}. */
 interface UiConfigOptions {
     /**
-     * Drop fields from the payload. Everything is published by default; set a
+     * Omit fields from the payload. Everything is published by default; set a
      * key to `false` for a deployment that would rather not enumerate, say, its
      * plugin set to anonymous callers.
+     *
+     * The field is **omitted, not emptied**. An empty `plugins: []` is
+     * indistinguishable from "this deployment runs no plugins", and the client
+     * ANDs the server's answer with its own registration — so emptying it would
+     * silently switch off every gated card instead of merely withholding the
+     * list. Absent means "not disclosed", and the client falls back to what
+     * `client.ts` registered.
      */
     expose?: {
         organization?: boolean;
@@ -166,11 +174,14 @@ const deriveUiConfig = (options: ResolvedAuthOptions, pluginOptions: UiConfigOpt
         emailAndPassword,
         // `disableSignUp` only means anything when the password provider is on;
         // an OAuth-only deployment has no sign-up form to gate.
-        organization: expose.organization === false ? { allowUserToCreate: true, enabled: false, roles: false, teams: false } : organization,
-        plugins: expose.plugins === false ? [] : sorted(ids),
         signUp: emailAndPassword && options.emailAndPassword?.disableSignUp !== true,
-        socialProviders:
-            expose.socialProviders === false ? [] : sorted(new Set([...Object.keys(options.socialProviders ?? {}), ...(pluginOptions.extraProviders ?? [])])),
+        // Each of these is spread in only when disclosed, so an undisclosed
+        // field is genuinely absent from the JSON rather than present-and-empty.
+        ...(expose.organization === false ? {} : { organization }),
+        ...(expose.plugins === false ? {} : { plugins: sorted(ids) }),
+        ...(expose.socialProviders === false
+            ? {}
+            : { socialProviders: sorted(new Set([...Object.keys(options.socialProviders ?? {}), ...(pluginOptions.extraProviders ?? [])])) }),
     };
 };
 

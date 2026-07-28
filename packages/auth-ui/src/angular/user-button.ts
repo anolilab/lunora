@@ -85,11 +85,18 @@ class UserViewComponent {
 
 let menuIdCounter = 0;
 
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    menuIdCounter += 1;
+
+    return `${prefix}${String(menuIdCounter)}`;
+};
+
 /**
  * The avatar menu: who is signed in, plus sign-out and whatever the app hangs
  * off it.
  *
- * It is a disclosure rather than a `<menu>` because its contents are app-defined
+ * It is a disclosure rather than a `&lt;menu>` because its contents are app-defined
  * — links, an organization switcher, a theme row — and forcing those into menu
  * item semantics would mislabel them. Escape and outside-click close it, and
  * focus returns to the trigger, which is the part hand-rolled dropdowns usually
@@ -150,7 +157,7 @@ class UserButtonComponent {
     readonly hideWhenSignedOut = input(false);
 
     // Per-instance id: two buttons on one page must not collide.
-    protected readonly menuId = `lunora-auth-userbutton-${(menuIdCounter += 1)}`;
+    protected readonly menuId = nextId("lunora-auth-userbutton-");
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSessionController, { context: this.context });

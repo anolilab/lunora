@@ -220,14 +220,14 @@ interface ControllerContext {
 const DEFAULT_AVATAR_MAX_SIZE = 2 * 1024 * 1024;
 
 /** Turn the server's plugin-id list into flow flags. Ids the UI has no card for are ignored. */
-const flagsFromDiscovery = (discovered: DiscoveredConfig): Partial<Record<keyof PluginFlags, boolean>> => {
+const flagsFromDiscovery = (plugins: ReadonlyArray<string>): Partial<Record<keyof PluginFlags, boolean>> => {
     const flags: Partial<Record<keyof PluginFlags, boolean>> = {};
 
     for (const flow of FLOW_NAMES) {
         flags[flow] = false;
     }
 
-    for (const id of discovered.plugins) {
+    for (const id of plugins) {
         const flow = PLUGIN_ID_TO_FLOW[id] as keyof PluginFlags | undefined;
 
         if (flow !== undefined) {
@@ -250,7 +250,10 @@ const flagsFromDiscovery = (discovered: DiscoveredConfig): Partial<Record<keyof 
  */
 const resolvePlugins = (authClient: AnyAuthClient, plugins?: PluginFlags, discovered?: DiscoveredConfig): Required<PluginFlags> => {
     const registered = derivePluginFlags(authClient);
-    const fromServer = discovered ? flagsFromDiscovery(discovered) : undefined;
+    // Only when the server actually disclosed a plugin list. Withholding it must
+    // read as "no opinion" and defer to the registration, not as "none enabled".
+    const disclosedPlugins = discovered?.plugins;
+    const fromServer = disclosedPlugins === undefined ? undefined : flagsFromDiscovery(disclosedPlugins);
     const resolved = {} as Required<PluginFlags>;
 
     for (const flow of FLOW_NAMES) {
@@ -328,13 +331,13 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         onError: config.onError,
         onSessionChange: config.onSessionChange,
         organization: {
-            allowUserToCreate: discovered?.organization.allowUserToCreate ?? true,
-            invitationLimit: discovered?.organization.invitationLimit,
-            limit: discovered?.organization.limit,
-            membershipLimit: discovered?.organization.membershipLimit,
-            roles: discovered?.organization.roles ?? false,
+            allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,
+            invitationLimit: discovered?.organization?.invitationLimit,
+            limit: discovered?.organization?.limit,
+            membershipLimit: discovered?.organization?.membershipLimit,
+            roles: discovered?.organization?.roles ?? false,
             showSlug: config.organization?.showSlug ?? true,
-            teams: discovered?.organization.teams ?? false,
+            teams: discovered?.organization?.teams ?? false,
         },
         password: config.password ?? {},
         plugins: resolvePlugins(config.authClient, config.plugins, discovered),

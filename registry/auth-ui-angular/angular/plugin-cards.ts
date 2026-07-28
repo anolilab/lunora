@@ -28,7 +28,7 @@ import { UserViewComponent } from "./user-button";
 /**
  * The accounts signed in on *this device*, with switch and sign-out-just-this.
  *
- * Not `<lunora-sessions-card>`, which lists this account's sessions across every
+ * Not `&lt;lunora-sessions-card>`, which lists this account's sessions across every
  * device. The two are a keystroke apart in better-auth's API and mean opposite
  * things.
  */
@@ -349,6 +349,8 @@ class TeamsCardComponent {
 
         void this.actions.create(name).then(() => {
             this.name.set("");
+
+            return true;
         });
     }
 
@@ -413,6 +415,8 @@ class BackupCodesCardComponent {
     protected submit(): void {
         void this.actions.submit().then(() => {
             this.codes.set(this.handle.getCodes());
+
+            return true;
         });
     }
 }

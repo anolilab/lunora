@@ -225,3 +225,50 @@ describe("discoverAuthConfig", () => {
         expect(handle.getState().status).toBe("unavailable");
     });
 });
+
+describe("undisclosed fields", () => {
+    it("falls back to the client's registration when the server withholds its plugin list", () => {
+        expect.assertions(2);
+
+        const client = stub();
+
+        registerAuthClientPlugins(client, { magicLink: true, organization: true });
+
+        // `expose: { plugins: false }` omits the key. Reading that as "no
+        // plugins" would AND every flow to false and silently switch off every
+        // gated card — a privacy option must not be a UI kill switch.
+        const context = contextFor(client, { emailAndPassword: true, signUp: true });
+
+        expect(context.plugins.magicLink).toBe(true);
+        expect(context.plugins.organization).toBe(true);
+    });
+
+    it("keeps an app's social buttons when the provider list is withheld", () => {
+        expect.assertions(1);
+
+        const context = resolveContext(
+            { authClient: stub(), nav: { navigate: vi.fn(), replace: vi.fn() }, social: ["github"] },
+            { emailAndPassword: true, signUp: true },
+        );
+
+        expect(context.social).toStrictEqual(["github"]);
+    });
+
+    it("still accepts a payload that discloses nothing optional", async () => {
+        expect.assertions(1);
+
+        // `signUp`/`emailAndPassword` are the shape markers, so a fully
+        // withheld payload is still recognised rather than treated as a
+        // stray endpoint answering JSON.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(() => Promise.resolve({ json: () => Promise.resolve({ emailAndPassword: true, signUp: false }), ok: true })),
+        );
+
+        const handle = discoverAuthConfig("/api/auth");
+
+        await settled(handle);
+
+        expect(handle.getState().status).toBe("ready");
+    });
+});

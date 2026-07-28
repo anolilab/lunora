@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { createAdminUsersController } from "../core/admin-users";
 import { createBackupCodesController } from "../core/backup-codes";
+import { queryParameter } from "../core/browser-location";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS } from "../core/labels";
@@ -181,8 +182,7 @@ interface DeviceAuthorizationCardProps {
 const DeviceAuthorizationCard = ({ userCode }: DeviceAuthorizationCardProps = {}): ReactElement | null => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
-    const resolved = userCode ?? (search === undefined ? undefined : (new URLSearchParams(search).get("user_code") ?? undefined));
+    const resolved = userCode ?? queryParameter("user_code");
     const enabled = isFlowEnabled(context, "deviceAuthorization", "DeviceAuthorizationCard");
     const [state, actions] = useController((context_) => createDeviceAuthorizationController(context_, { userCode: resolved }), [resolved]);
 

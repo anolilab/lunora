@@ -156,7 +156,7 @@ class OneTapComponent {
 
 /**
  * Upload an organization's logo. Renders only when the app configured an
- * `avatar.upload` handler — without one, `<lunora-organization-settings-card>`'s
+ * `avatar.upload` handler — without one, `&lt;lunora-organization-settings-card>`'s
  * logo URL field is the fallback.
  */
 @Component({
@@ -230,12 +230,14 @@ class OrganizationLogoCardComponent implements OnInit {
     }
 
     protected pick(event: Event): void {
-        const input = event.target as HTMLInputElement;
-        const file = input.files?.[0];
+        // Named `picker`, not `input`: Angular's own `input()` signal helper is
+        // imported in this file and shadowing it here reads as a bug.
+        const picker = event.target as HTMLInputElement;
+        const file = picker.files?.[0];
 
-        // Clear the input so re-picking the same file after a failure still
-        // fires `change` — browsers suppress it when the value is unchanged.
-        input.value = "";
+        // Clear it so re-picking the same file after a failure still fires
+        // `change` — browsers suppress it when the value is unchanged.
+        picker.value = "";
 
         if (file) {
             void this.actions.upload(file);

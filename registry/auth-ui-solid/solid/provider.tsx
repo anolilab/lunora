@@ -8,7 +8,7 @@ import { defaultNav } from "../core/default-nav";
 import type { DiscoveredConfig } from "../core/discovery";
 import { discoverAuthConfig } from "../core/discovery";
 
-/** A framework `Link` component for internal navigation (Solid Router `A`, plain `<a>`, …). */
+/** A framework `Link` component for internal navigation (Solid Router `A`, plain `&lt;a>`, …). */
 type AuthUILink = Component<{ children: JSX.Element; class?: string; href: string }>;
 
 /** The Solid context also carries an optional framework `Link` for internal navigation. */
@@ -24,7 +24,7 @@ interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
 
     /**
      * Framework `Link` component for internal links (Solid Router `A`, …). Falls
-     * back to a plain `<a>` when omitted.
+     * back to a plain `&lt;a>` when omitted.
      */
     Link?: AuthUILink;
     /** Router bridge; defaults to a `location`-based fallback. */
@@ -41,7 +41,7 @@ interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
  * card. Configure the provider at mount, as you would a router.
  *
  * The one exception is server discovery, which by definition answers *after*
- * mount. Its answer produces a **new** context object, and the keyed `<Show>`
+ * mount. Its answer produces a **new** context object, and the keyed `&lt;Show>`
  * below re-creates the tree on that new identity. That is load-bearing rather
  * than incidental: every card resolves its gate once in its body
  * (`const enabled = isFlowEnabled(context, …)`) and passes the answer to its
@@ -119,10 +119,12 @@ const AuthUIProvider = (props: AuthUIProviderProps): JSX.Element => {
                 authClient: props.authClient,
                 avatar: { maxSize: props.avatar?.maxSize, upload: props.avatar?.upload === undefined ? undefined : handlers.upload },
                 basePath: props.basePath,
+                forgotPassword: props.forgotPassword,
                 localization: props.localization,
                 nav: handlers.nav,
                 onError: handlers.onError,
                 onSessionChange: handlers.onSessionChange,
+                organization: props.organization,
                 password: props.password,
                 plugins: props.plugins,
                 redirects: props.redirects,

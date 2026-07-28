@@ -7,23 +7,23 @@ import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import type { ChangeEmailField } from "../core/change-email";
-import type { ChangePasswordField } from "../core/change-password";
-import type { DeleteAccountField } from "../core/delete-account";
-import type { ProfileField } from "../core/profile";
-import type { SessionsActions } from "../core/sessions";
-import type { AuthSession, FormActions, FormState } from "../core/types";
-import type { ResourceState } from "../core/create-resource-controller";
 import { createChangeEmailController } from "../core/change-email";
+import type { ChangePasswordField } from "../core/change-password";
 import { createChangePasswordController } from "../core/change-password";
+import type { ResourceState } from "../core/create-resource-controller";
+import type { DeleteAccountField } from "../core/delete-account";
 import { createDeleteAccountController } from "../core/delete-account";
 import { isFlowEnabled } from "../core/flow-gate";
 import { passkeyLabel, sessionLabel } from "../core/labels";
 import { createPasskeysController } from "../core/passkeys";
+import type { ProfileField } from "../core/profile";
 import { createProfileController } from "../core/profile";
 import { signOut } from "../core/session-actions";
+import type { SessionsActions } from "../core/sessions";
 import { createSessionsController } from "../core/sessions";
+import type { AuthSession, FormActions, FormState } from "../core/types";
 import { controllerSignal } from "./controller-signal";
-import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent, serializeThemeVariables } from "./primitives";
+import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, serializeThemeVariables, SubmitButtonComponent } from "./primitives";
 import { injectAuthUIContext } from "./provider";
 
 @Component({
@@ -279,6 +279,8 @@ class PasskeysCardComponent {
     protected add(): void {
         void this.actions.add(this.name()).then(() => {
             this.name.set("");
+
+            return true;
         });
     }
 

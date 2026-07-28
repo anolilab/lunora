@@ -8,8 +8,8 @@
 import type { Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, computed } from "@angular/core";
 
-import type { TwoFactorSetupActions, TwoFactorSetupState } from "../core/two-factor-setup";
 import { isFlowEnabled } from "../core/flow-gate";
+import type { TwoFactorSetupActions, TwoFactorSetupState } from "../core/two-factor-setup";
 import { createTwoFactorSetupController } from "../core/two-factor-setup";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";

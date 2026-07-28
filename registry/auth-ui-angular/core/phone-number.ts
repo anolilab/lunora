@@ -9,7 +9,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { resolveAfterSignIn, withRedirectTo } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FlowStatus, FormController } from "./types";
 import { password as passwordValidator, required } from "./validators";
@@ -28,7 +28,7 @@ const createPhoneSignInController = (context: ControllerContext): FormController
             const response = assertOk(await context_.authClient.signIn.phoneNumber({ password: values.password, phoneNumber: values.phoneNumber.trim() }));
 
             if (response.data?.twoFactorRedirect) {
-                return { redirectTo: context_.redirects.twoFactor };
+                return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
             }
 
             return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };

@@ -1,5 +1,3 @@
-let organizationFieldId = 0;
-
 /**
  * Organization cards, mirroring the React `organization.tsx` 1:1: an
  * organizations list with a create form (name + auto-slug), and a members list
@@ -10,18 +8,27 @@ import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import type { ResourceState } from "../core/create-resource-controller";
-import type { MembersActions, MembersState } from "../core/members";
-import type { OrganizationsActions } from "../core/organization-list";
-import type { OrganizationSettingsField } from "../core/organization-settings";
-import type { AuthOrganization, FormActions, FormState } from "../core/types";
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS, slugify } from "../core/labels";
+import type { MembersActions, MembersState } from "../core/members";
 import { createMembersController } from "../core/members";
+import type { OrganizationsActions } from "../core/organization-list";
 import { createOrganizationsController } from "../core/organization-list";
+import type { OrganizationSettingsField } from "../core/organization-settings";
 import { createOrganizationSettingsController } from "../core/organization-settings";
+import type { AuthOrganization, FormActions, FormState } from "../core/types";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
 import { injectAuthUIContext } from "./provider";
+
+let organizationFieldId = 0;
+
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    organizationFieldId += 1;
+
+    return `${prefix}${String(organizationFieldId)}`;
+};
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -78,7 +85,7 @@ import { injectAuthUIContext } from "./provider";
 })
 class OrganizationsCardComponent {
     // Per-instance ids: two cards on one page must not collide.
-    protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
+    protected readonly uid = nextId("lunora-auth-");
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "OrganizationsCard"));
     protected readonly t = this.context().localization;
@@ -183,7 +190,7 @@ class OrganizationsCardComponent {
 })
 class MembersCardComponent {
     // Per-instance ids: two cards on one page must not collide.
-    protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
+    protected readonly uid = nextId("lunora-auth-");
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "MembersCard"));
     protected readonly t = this.context().localization;
@@ -274,4 +281,4 @@ class OrganizationSettingsCardComponent implements OnInit {
     }
 }
 
-export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent };
+export { MembersCardComponent, OrganizationsCardComponent, OrganizationSettingsCardComponent };

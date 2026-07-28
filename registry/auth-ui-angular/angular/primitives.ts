@@ -13,10 +13,11 @@ import type { FieldState } from "../core/types";
 import type { AvailabilityStatus } from "../core/username-availability";
 import { injectAuthUI, injectAuthUILink } from "./provider";
 
-/** `{ "--border": "red" }` → `--border:red`, or null when unthemed. */
+/** `{ "--border": "red" }` → `--border:red`, or undefined when unthemed. */
 const serializeThemeVariables = (variables: Readonly<Record<string, string>>): string | null => {
     const entries = Object.entries(variables);
 
+    // eslint-disable-next-line unicorn/no-null -- Angular removes an attribute binding on `null`; `undefined` leaves it in place.
     return entries.length === 0 ? null : entries.map(([property, value]) => `${property}:${value}`).join(";");
 };
 
@@ -59,6 +60,13 @@ class AuthCardComponent {
 
 let fieldIdCounter = 0;
 
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    fieldIdCounter += 1;
+
+    return `${prefix}${String(fieldIdCounter)}`;
+};
+
 /** A labelled text input wired to a core {@link FieldState}. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -88,7 +96,7 @@ let fieldIdCounter = 0;
 })
 class AuthFieldComponent {
     readonly autoComplete = input<string>();
-    readonly blurred = output<void>();
+    readonly blurred = output();
     readonly changed = output<string>();
     readonly field = input.required<FieldState>();
     readonly label = input.required<string>();
@@ -96,7 +104,7 @@ class AuthFieldComponent {
     readonly placeholder = input<string>();
     readonly type = input<"email" | "password" | "text">("text");
 
-    protected readonly id = `lunora-auth-field-${(fieldIdCounter += 1)}`;
+    protected readonly id = nextId("lunora-auth-field-");
     protected readonly errorId = `${this.id}-error`;
     protected readonly showError = computed(() => this.field().touched && this.field().error !== undefined);
 }
@@ -142,7 +150,7 @@ class FormBannerComponent {
  * server discovery on, is whatever `socialProviders` the deployment configured.
  *
  * The provider's brand mark is left to CSS: each button carries a
- * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
+ * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
  * set with a stylesheet rule and this package ships no SVG payload for a list of
  * providers it can't know in advance.
  */
@@ -218,7 +226,7 @@ class AuthDividerComponent {
     readonly label = input("or");
 }
 
-/** Internal link using the provider's `link` hook when present, else a plain `<a>`. */
+/** Internal link using the provider's `link` hook when present, else a plain `&lt;a>`. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-link",

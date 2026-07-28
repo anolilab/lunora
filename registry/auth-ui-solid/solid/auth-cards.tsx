@@ -16,6 +16,23 @@ import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, PasswordStrength, S
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 
+/** Guest sign-in, when the `anonymous` plugin is on. */
+const AnonymousButton = (): JSX.Element => {
+    const context = useAuthUI();
+
+    return (
+        <button
+            class="lunora-auth-button lunora-auth-button--secondary"
+            onClick={() => {
+                void signInAnonymously(context);
+            }}
+            type="button"
+        >
+            {context.localization.anonymousSignIn}
+        </button>
+    );
+};
+
 /** Stop the browser's native submit and run the controller action (async or not). */
 const onSubmit =
     (action: () => unknown) =>
@@ -91,23 +108,6 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
                 </form>
             </Show>
         </AuthCard>
-    );
-};
-
-/** "Continue as guest", when the `anonymous` plugin is on. */
-const AnonymousButton = (): JSX.Element => {
-    const context = useAuthUI();
-
-    return (
-        <button
-            class="lunora-auth-button lunora-auth-button--secondary"
-            onClick={() => {
-                void signInAnonymously(context);
-            }}
-            type="button"
-        >
-            {context.localization.anonymousSignIn}
-        </button>
     );
 };
 

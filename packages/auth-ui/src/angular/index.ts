@@ -23,7 +23,7 @@ export * from "../core";
  * // a route component
  * import { SignInCardComponent } from "./lunora/auth-ui/angular";
  *
- * @Component({ imports: [SignInCardComponent], template: `<lunora-sign-in-card />` })
+ * `@Component`({ imports: [SignInCardComponent], template: `&lt;lunora-sign-in-card />` })
  * export class SignInPage {}
  * ```
  */
@@ -43,7 +43,7 @@ export type { ControllerSignalOptions, ControllerSignalResult } from "./controll
 export { controllerSignal } from "./controller-signal";
 export { CaptchaComponent, ErrorToasterComponent, OneTapComponent, OrganizationLogoCardComponent } from "./extras";
 export { AuthorizedAppsCardComponent, ConsentCardComponent } from "./oauth-provider";
-export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent } from "./organization";
+export { MembersCardComponent, OrganizationsCardComponent, OrganizationSettingsCardComponent } from "./organization";
 export {
     AdminUsersCardComponent,
     BackupCodesCardComponent,

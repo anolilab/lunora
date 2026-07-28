@@ -4,7 +4,7 @@
  * only place flow logic lives.
  */
 export type { AccountsActions, AccountsController } from "./accounts";
-export { createAccountsController, linkedProviderIds, NON_SOCIAL_PROVIDERS } from "./accounts";
+export { createAccountsController, linkableProviders, linkedProviderIds, NON_SOCIAL_PROVIDERS } from "./accounts";
 export type { ActiveMemberActions, ActiveMemberController, ActiveMemberState } from "./active-member";
 export { createActiveMemberController } from "./active-member";
 export type { AdminUsersActions, AdminUsersController, AdminUsersOptions, AdminUsersState } from "./admin-users";
@@ -91,7 +91,7 @@ export {
 export { lockedPrefill, PREFILLABLE, readFieldPrefill } from "./prefill";
 export type { ProfileField, ProfileOptions } from "./profile";
 export { createProfileController } from "./profile";
-export { isSafeRedirect, readRedirectTo, resolveAfterSignIn } from "./redirect-to";
+export { isSafeRedirect, readRedirectTo, resolveAfterSignIn, withRedirectTo } from "./redirect-to";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
 export { createResetPasswordController } from "./reset-password";
 export type { ResetPasswordOtpField } from "./reset-password-otp";

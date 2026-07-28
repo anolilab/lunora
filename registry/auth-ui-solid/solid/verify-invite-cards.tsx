@@ -60,7 +60,7 @@ const VerifyEmailCard = (props: VerifyEmailCardProps = {}): JSX.Element => {
     );
 };
 
-/** "Send me another link" — the companion to {@link VerifyEmailCard}. */
+/** Request a fresh verification link — the companion to `VerifyEmailCard`. */
 const ResendVerificationCard = (): JSX.Element => {
     const { localization: t } = useAuthUI();
     const [state, actions] = createController(createResendVerificationController);

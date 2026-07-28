@@ -128,7 +128,7 @@ const FormBanner = (props: FormBannerProps): JSX.Element => (
     </Show>
 );
 
-/** Internal link using the provider's framework `Link` when present, else `<a>`. */
+/** Internal link using the provider's framework `Link` when present, else `&lt;a>`. */
 interface AuthLinkProps {
     children: JSX.Element;
     href: string;
@@ -157,7 +157,7 @@ const AuthLink = (props: AuthLinkProps): JSX.Element => {
  * server discovery on, is whatever `socialProviders` the deployment configured.
  *
  * The provider's brand mark is left to CSS: each button carries a
- * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
+ * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
  * set with a stylesheet rule and this package ships no SVG payload for a list of
  * providers it can't know in advance.
  */

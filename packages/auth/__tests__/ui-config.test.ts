@@ -58,19 +58,27 @@ describe("deriveUiConfig", () => {
     it("reports the organization plugin", () => {
         expect.assertions(1);
 
-        expect(deriveUiConfig(options({ plugins: [{ id: "organization" }] })).organization.enabled).toBe(true);
+        expect(deriveUiConfig(options({ plugins: [{ id: "organization" }] })).organization?.enabled).toBe(true);
     });
 
-    it("withholds fields an app opted out of exposing", () => {
-        expect.assertions(3);
+    it("omits an undisclosed field entirely rather than emptying it", () => {
+        expect.assertions(4);
 
         const payload = deriveUiConfig(options({ plugins: [{ id: "organization" }], socialProviders: { github: {} } }), {
             expose: { organization: false, plugins: false, socialProviders: false },
         });
 
-        expect(payload.plugins).toStrictEqual([]);
-        expect(payload.socialProviders).toStrictEqual([]);
-        expect(payload.organization.enabled).toBe(false);
+        /*
+         * `plugins: []` would be indistinguishable from "runs no plugins", and
+         * the client ANDs the server's answer with its own registration — so an
+         * emptied list silently switches off every gated card instead of merely
+         * withholding the list. Absent means "not disclosed".
+         */
+        expect("plugins" in payload).toBe(false);
+        expect("socialProviders" in payload).toBe(false);
+        expect("organization" in payload).toBe(false);
+        // Non-optional facts are still reported.
+        expect(payload.emailAndPassword).toBe(true);
     });
 
     it("never leaks a secret, session policy, or rate-limit policy", () => {

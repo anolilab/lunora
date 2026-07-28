@@ -268,12 +268,18 @@ const UsernameAvailability = ({ status }: { status: AvailabilityStatus }): React
         return null;
     }
 
-    const messages: Record<string, string> = { available: t.usernameAvailable, checking: t.usernameChecking, taken: t.usernameTaken };
-    const message = messages[status] ?? t.usernameAvailable;
+    // Keyed on the narrowed status, so the compiler proves exhaustiveness. A
+    // `?? available` fallback here would guess the one answer that tells the
+    // user to proceed.
+    const messages: Record<Exclude<AvailabilityStatus, "idle" | "unknown">, string> = {
+        available: t.usernameAvailable,
+        checking: t.usernameChecking,
+        taken: t.usernameTaken,
+    };
 
     return (
         <p className={`lunora-auth-availability lunora-auth-availability--${status}`} role="status">
-            {message}
+            {messages[status]}
         </p>
     );
 };

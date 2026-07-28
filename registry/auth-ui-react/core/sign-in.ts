@@ -9,7 +9,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { resolveAfterSignIn, withRedirectTo } from "./redirect-to";
 import type { FormController } from "./types";
 import { email as validateEmail, required } from "./validators";
 
@@ -34,7 +34,7 @@ const createSignInController = (context: ControllerContext): FormController<Sign
             );
 
             if (response.data?.twoFactorRedirect === true) {
-                return { redirectTo: context_.redirects.twoFactor };
+                return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
             }
 
             return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };

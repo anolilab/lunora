@@ -96,6 +96,7 @@ class LinkedAccountsCardComponent {
     /** Delegates to the shared helper — Angular templates can only call members. */
     protected readonly providerLabel = providerLabel;
 
+    // eslint-disable-next-line class-methods-use-this -- a pure predicate the template calls; a field would allocate one closure per instance.
     protected isNonSocial(providerId: string): boolean {
         return NON_SOCIAL_PROVIDERS.has(providerId);
     }
@@ -112,7 +113,7 @@ class LinkedAccountsCardComponent {
 /**
  * Avatar upload. Rendered only when the app configured an `avatar.upload`
  * handler — without one there is nowhere to put the bytes, and
- * `<lunora-profile-card>`'s URL field is the honest fallback.
+ * `&lt;lunora-profile-card>`'s URL field is the honest fallback.
  */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,

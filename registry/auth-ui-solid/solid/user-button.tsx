@@ -38,7 +38,7 @@ const UserAvatar = (props: UserAvatarProps): JSX.Element => {
     const style = (): JSX.CSSProperties => {
         const size = props.size ?? 32;
 
-        return { height: `${size}px`, width: `${size}px` };
+        return { height: `${String(size)}px`, width: `${String(size)}px` };
     };
 
     const source = (): string | undefined => {
@@ -95,7 +95,7 @@ const UserView = (props: UserViewProps): JSX.Element => (
  * The avatar menu: who is signed in, plus sign-out and whatever the app hangs
  * off it.
  *
- * It is a disclosure rather than a `<menu>` because its contents are app-defined
+ * It is a disclosure rather than a `&lt;menu>` because its contents are app-defined
  * — links, an organization switcher, a theme row — and forcing those into menu
  * item semantics would mislabel them. Escape and outside-click close it, and
  * focus returns to the trigger, which is the part hand-rolled dropdowns usually
@@ -189,7 +189,9 @@ const UserButton = (props: UserButtonProps): JSX.Element => {
                             onClick={() => {
                                 setOpen((value) => !value);
                             }}
-                            ref={trigger}
+                            ref={(element) => {
+                                trigger = element;
+                            }}
                             type="button"
                         >
                             <UserAvatar user={user()} />
