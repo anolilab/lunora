@@ -573,8 +573,8 @@ export interface IndexNamesByTable {
     tenantLogs: "by_trace" | "by_script_time";
     observations: "by_org_deployment_started" | "by_org_session" | "by_org_started" | "by_trace";
     githubInstallations: "by_org" | "by_installation";
-    builds: "by_project_commit";
-    buildLogs: "by_build";
+    builds: "by_org" | "by_project_commit";
+    buildLogs: "by_org" | "by_build";
     domains: "by_project" | "by_hostname";
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
