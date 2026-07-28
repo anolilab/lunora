@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -48,7 +48,7 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * as-is (`reused: true`) instead of queuing a rebuild.
  */
 export const recordPush = mutation
-    .use(dbRateLimit("machine"))
+    .use(rateLimit("machine"))
     .input({
         branch: boundedString(LIMITS.gitRef),
         commitSha: boundedString(LIMITS.id),

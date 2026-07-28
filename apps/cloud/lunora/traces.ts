@@ -7,7 +7,7 @@ import { foldObservationTraces } from "../src/telemetry/trace-tree";
 import type { Id } from "./_generated/dataModel.js";
 import { action, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -135,7 +135,7 @@ export const list = query
  * with the hot {@link list} rollups (deduping by `traceId`, hot wins). Members only.
  */
 export const listArchived = action
-    .use(dbRateLimit("archive"))
+    .use(rateLimit("archive"))
     .input({
         from: v.number(),
         limit: v.optional(v.number()),
@@ -223,7 +223,7 @@ export const get = query
  * returns spans.
  */
 export const getArchived = action
-    .use(dbRateLimit("archive"))
+    .use(rateLimit("archive"))
     .input({
         organizationId: v.id("organizations"),
         traceId: boundedString(LIMITS.id),
