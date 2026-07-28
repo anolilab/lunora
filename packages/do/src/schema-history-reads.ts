@@ -10,6 +10,7 @@
  * these resolvers next to the storage helpers they wrap.
  */
 
+import { readBackRelationCounts } from "./back-relations";
 import type { SqlExec } from "./ctx-db";
 import { readQueryInsights } from "./query-metrics";
 import { readSchemaHistory, readSchemaVersion } from "./schema-history";
@@ -52,6 +53,17 @@ const SCHEMA_HISTORY_READS: Readonly<Record<string, AdminReadResolver>> = {
      */
     lintSql: (sql, args, wildcard) => {
         return { result: lintReadonlySql(sql, stringArgument(args, "sql")), tables: new Set([wildcard]) };
+    },
+
+    /**
+     * Per-row reverse-relation counts for the loaded page — one grouped query
+     * per relation, never one per row.
+     */
+    backRelationCounts: (sql, args, wildcard) => {
+        const ids = Array.isArray(args.ids) ? (args.ids as string[]) : [];
+        const relations = Array.isArray(args.relations) ? (args.relations as { column: string; table: string }[]) : [];
+
+        return { result: readBackRelationCounts(sql, { ids, relations }), tables: new Set([wildcard]) };
     },
 
     /**

@@ -185,6 +185,28 @@ const pinnedOffsets = (columns: ReadonlyArray<{ getSize: () => number; id: strin
 const cellHighlight = (highlight: string | undefined, mask: MaskView, column: string): string | undefined =>
     mask.enabled && mask.columns.has(column) ? undefined : highlight;
 
+/** Namespace prefix keeping reverse-relation column ids from ever colliding with a real column. */
+const BACK_RELATION_PREFIX = "__back__:";
+
+/** Column id for a reverse-relation column. */
+const backRelationColumnId = (relation: { column: string; table: string }): string => `${BACK_RELATION_PREFIX}${relation.table}.${relation.column}`;
+
+/**
+ * One reverse-relation cell: how many rows of the child table point at this row.
+ *
+ * An absent entry means zero — the server omits childless parents rather than
+ * shipping a row per one, so the payload does not grow with the page. A dash
+ * rather than "0" while counts are still loading, so an empty relation reads
+ * differently from an unanswered one.
+ */
+const BackRelationCell = ({ counts, rowId: id }: { counts: Readonly<Record<string, number>> | undefined; rowId: string }): ReactElement => {
+    if (counts === undefined) {
+        return <span className="text-muted-foreground/50">—</span>;
+    }
+
+    return <span className="tabular-nums">{counts[id] ?? 0}</span>;
+};
+
 /** A loaded row keyed by column name. */
 type TableRow = Record<string, unknown>;
 
@@ -763,6 +785,7 @@ const DataBrowserTableView = ({
     onEdit,
     onInspect,
     highlight,
+    backRelationCounts,
     onTogglePin,
     pinnedColumns,
     refs,
@@ -775,6 +798,8 @@ const DataBrowserTableView = ({
     viewportWidth,
     virtualRows,
 }: {
+    /** Reverse-relation counts, keyed `table.column` → parent id → count. */
+    backRelationCounts: Readonly<Record<string, Readonly<Record<string, number>>>>;
     edit: GridEdit;
     editable: boolean;
     /** Active row-search term, highlighted inside matching cells. */
@@ -920,7 +945,11 @@ const DataBrowserTableView = ({
                             key={cell.id}
                             style={offset === undefined ? sizedCellStyle(cell.column.getSize()) : pinnedDataCellStyle(cell.column.getSize(), offset)}
                         >
-                            <EditableCell cell={cell} edit={edit} highlight={highlight} mask={mask} refs={refs} />
+                            {cell.column.id.startsWith(BACK_RELATION_PREFIX) ? (
+                                <BackRelationCell counts={backRelationCounts[cell.column.id.slice(BACK_RELATION_PREFIX.length)]} rowId={key} />
+                            ) : (
+                                <EditableCell cell={cell} edit={edit} highlight={highlight} mask={mask} refs={refs} />
+                            )}
                         </td>
                     );
                 })}
@@ -1020,7 +1049,12 @@ interface DataBrowserTableModel {
  * Column order (drag-to-reorder) and sizing (drag-to-resize) are managed
  * internally by TanStack; the `sorting` state stays owned by the caller.
  */
-const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSortingChange: OnChangeFn<SortingState>): DataBrowserTableModel => {
+const useDataBrowserTable = (
+    page: TablePage | null,
+    sorting: SortingState,
+    onSortingChange: OnChangeFn<SortingState>,
+    backRelations: ReadonlyArray<{ column: string; table: string }> = [],
+): DataBrowserTableModel => {
     const columns = page?.columns;
     const rows = page?.rows;
     const references = page?.refs;
@@ -1037,14 +1071,28 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         // No `cell` renderer: every body cell is rendered by EditableCell (see
         // renderRow), which owns the foreign-key/value/edit branching. The column
         // def only needs the accessor (for sorting), the header, and the id.
-        return columns.map((column) => {
+        const defs: ColumnDef<TableRow>[] = columns.map((column) => {
             return {
                 accessorFn: (row: TableRow) => row[column],
                 header: references?.[column] === undefined ? column : `${column} →`,
                 id: column,
             };
         });
-    }, [columns, references]);
+
+        // Reverse relations render as extra, read-only columns after the real
+        // ones. `← table` mirrors the `column →` marker a forward FK already
+        // carries, so the direction of an edge is readable at a glance.
+        for (const relation of backRelations) {
+            defs.push({
+                accessorFn: () => undefined,
+                enableSorting: false,
+                header: `← ${relation.table}`,
+                id: backRelationColumnId(relation),
+            });
+        }
+
+        return defs;
+    }, [backRelations, columns, references]);
 
     // `data` MUST keep a stable reference across renders: react-table resets its
     // internal state (column sizing, row selection, …) whenever `data` changes

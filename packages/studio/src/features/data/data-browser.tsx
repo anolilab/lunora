@@ -5,13 +5,15 @@ import { useCallback, useMemo, useState } from "react";
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
-import type { FilterClause, TableInfo } from "../../lib/admin";
+import type { ColumnMeta, FilterClause, TableInfo, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions } from "../../lib/internal";
 import { maskColumnsForTable, maskRows, mergeSensitiveColumns } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
+import { backRelationKey, backRelationsFor } from "./back-relations";
 import type { TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import DataFacets from "./data-facets";
@@ -22,6 +24,7 @@ import DataQueryBar from "./data-query-bar";
 import { GenerateRowsDialog } from "./generate-rows-dialog";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
+import { useBackRelations } from "./hooks/use-back-relations";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { useGenerateRows } from "./hooks/use-generate-rows";
 import useMaskPolicies from "./hooks/use-mask-policies";
@@ -33,6 +36,12 @@ import { TableListSidebar } from "./table-list-sidebar";
 
 /** Browser-local store for per-table pinned columns. */
 const PINNED_COLUMNS_KEY = "lunora-studio-pinned-columns";
+
+/** Browser-local store for per-table enabled reverse-relation columns. */
+const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
+
+/** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
+const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
 interface DataBrowserProps {
     /**
@@ -280,6 +289,23 @@ export const DataBrowser = ({
     schemaSwitch,
     tableParam,
 }: DataBrowserProps): ReactElement => {
+    // Reverse relations ("← messages") are opt-in per table: resolving them is
+    // proportional to relations × page size, and most sessions never look at
+    // them. The EDGES are derived from schema metadata the studio can fetch once;
+    // only the COUNTS need a per-page round trip.
+    const schemaQuery = useAdminQuery<TablesColumnsResult>(ADMIN_FUNCTIONS.describeTables, {}, { shardKey: initialShardKey ?? "" });
+    const columnsByTable = schemaQuery.data?.columnsByTable ?? EMPTY_COLUMNS_BY_TABLE;
+    const [backRelationsOn, setBackRelationsOn] = usePersistedValue<Record<string, string[]>>(BACK_RELATIONS_KEY, {});
+
+    const resolveBackRelations = useCallback(
+        (table: string) => {
+            const enabled = new Set(backRelationsOn[table]);
+
+            return backRelationsFor(table, columnsByTable).filter((relation) => enabled.has(backRelationKey(relation)));
+        },
+        [backRelationsOn, columnsByTable],
+    );
+
     const {
         addRow,
         bulkDelete,
@@ -337,7 +363,49 @@ export const DataBrowser = ({
         total,
         viewMode,
         writeError,
-    } = useDataBrowser({ initialFilters, initialOrderBy, initialSearch, initialShardKey, onSelectTable, onViewChange, pageSize: initialPageSize, tableParam });
+    } = useDataBrowser({
+        initialFilters,
+        initialOrderBy,
+        initialSearch,
+        initialShardKey,
+        onSelectTable,
+        onViewChange,
+        pageSize: initialPageSize,
+        resolveBackRelations,
+        tableParam,
+    });
+
+    // Available reverse edges for the open table, and the counts for the loaded
+    // page. Only the switched-on edges are resolved; the rest cost nothing.
+    const availableBackRelations = useMemo(
+        () => (selectedTable === null ? [] : backRelationsFor(selectedTable, columnsByTable)),
+        [columnsByTable, selectedTable],
+    );
+    const enabledBackRelations = useMemo(() => new Set(backRelationsOn[selectedTable ?? ""]), [backRelationsOn, selectedTable]);
+    const pageIds = useMemo(
+        () =>
+            (page?.rows ?? [])
+                .map((row) => {
+                    const id = row._id ?? row.id;
+
+                    return typeof id === "string" ? id : "";
+                })
+                .filter((id) => id !== ""),
+        [page],
+    );
+    const backRelationCounts = useBackRelations(enabledBackRelations, availableBackRelations, pageIds, shardKey);
+
+    const onToggleBackRelation = useCallback(
+        (key: string): void => {
+            setBackRelationsOn((current) => {
+                const forTable = selectedTable ?? "";
+                const existing: string[] = current[forTable] ?? [];
+
+                return { ...current, [forTable]: existing.includes(key) ? existing.filter((entry) => entry !== key) : [...existing, key] };
+            });
+        },
+        [selectedTable, setBackRelationsOn],
+    );
 
     // Pinned columns, per table, persisted on this browser. Per table because a
     // pin is a statement about THAT table's shape ("keep the email visible"),
@@ -563,10 +631,13 @@ export const DataBrowser = ({
 
                             {viewMode === "table" && page.rows.length > 0 && (
                                 <GridActionsBar
+                                    backRelations={availableBackRelations}
                                     columns={page.columns}
                                     editable={editable}
+                                    enabledBackRelations={enabledBackRelations}
                                     name={selectedTable ?? "export"}
                                     onBulkDelete={onBulkDeleteSelected}
+                                    onToggleBackRelation={onToggleBackRelation}
                                     onToggleTranspose={onToggleTranspose}
                                     rows={page.rows}
                                     table={table.table}
@@ -624,6 +695,7 @@ export const DataBrowser = ({
 
                         {viewMode === "table" && page.rows.length > 0 && !transposed && (
                             <DataBrowserTableView
+                                backRelationCounts={backRelationCounts}
                                 edit={edit}
                                 editable={editable}
                                 highlight={filter}

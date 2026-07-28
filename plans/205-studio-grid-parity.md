@@ -3,7 +3,7 @@
 - **Category**: dx/perf (competitive parity — Prisma Studio `table` view)
 - **Priority**: P2
 - **Effort**: M–L · **Risk**: LOW
-- **Status**: DONE (Phases 1–3, 5 shipped; Phase 4 deferred — see below)
+- **Status**: DONE (all phases shipped)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: close the remaining data-browser gaps vs Prisma Studio — user column
   pinning, search-match highlighting, typed search predicates, column
@@ -71,18 +71,32 @@ Prisma's corresponding specs: `Architecture/table-query-controls.md`,
       × M-row grid and assert a bounded number of mounted cells. Without an
       assertion this regresses the first time someone adds a cell feature.
 
-## Phase 4 — Back-relation columns — DEFERRED
+## Phase 4 — Back-relation columns
 
-- [ ] Surface reverse relations as virtual columns (count, or a peek at related
-      rows), opt-in per table from the columns menu.
+- [x] Reverse relations render as opt-in virtual columns showing the child count,
+      toggled per table from the columns menu's "Related" group.
+- [x] Off by default. Resolving them costs `relations × page size`, and most
+      sessions never open them — so only the switched-on edges are requested.
 
-Not shipped. Unlike the other phases this is not a grid concern at all: a reverse
-relation needs a per-row aggregate the read path does not currently produce
-(`readTablePage` returns one table's rows), so it means a new server-side
-resolve — which is `@lunora/do`'s cross-shard relation fan-out territory, not a
-column-rendering change. Doing it inside a grid-parity pass would have bolted a
-query feature onto a rendering feature. It stands alone cleanly and is the right
-size for its own plan.
+The deferral note this replaces was half right: it IS a query-path change, not a
+rendering one. But the split turned out cleaner than expected —
+
+- **Finding the edges needs no server at all.** `describeTables` already returns
+  every table's columns with their `ref` target, so "who points at me" is a scan
+  of data the Studio can fetch once (`features/data/back-relations.ts`, pure and
+  unit-tested). Only the COUNTS need the database.
+- **The counts are one grouped query per relation**, never one per row —
+  `GROUP BY :fk … WHERE :fk IN (ids)`, the same shape `relations.ts` uses for the
+  forward fan-out, and for the same N+1 reason. A 50-row page with two relations
+  is 2 queries, not 100.
+- The FK resolves through the same physical-vs-`__doc__` path the filter builder
+  uses, so a doc-stored foreign key works identically and the JSON path is bound.
+- An unresolvable edge (a table dropped since the page loaded) is SKIPPED, not
+  thrown: the Studio derives these from metadata that can legitimately lag the
+  live database, and one optional column must not fail the page.
+- Childless parents are omitted rather than returned as zero, so the payload does
+  not grow with the page; the client renders `0` for an absent id and `—` while
+  counts are still loading, so "no children" reads differently from "not asked yet".
 
 ## Phase 5 — Finish URL state
 

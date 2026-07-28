@@ -205,12 +205,14 @@ const useDataBrowser = ({
     onSelectTable,
     onViewChange,
     pageSize: initialPageSize,
+    resolveBackRelations,
     tableParam,
 }: {
     /** Structured filters to hydrate from a shared link / saved query. */
     initialFilters: FilterClause[] | undefined;
     /** Sort to hydrate from a shared link / saved query. */
     initialOrderBy: DataView["orderBy"];
+
     /** Substring search to hydrate from a shared link / saved query. */
     initialSearch: string | undefined;
     initialShardKey: string | undefined;
@@ -229,7 +231,15 @@ const useDataBrowser = ({
      * descriptor), never a half-typed shard key.
      */
     onViewChange: ((view: Pick<DataView, "filters" | "orderBy" | "search" | "shard">) => void) | undefined;
+
     pageSize: number;
+
+    /**
+     * Reverse relations switched on for a given table, rendered as extra columns.
+     * A callback rather than a resolved list because the caller cannot know the
+     * active table until this hook returns it.
+     */
+    resolveBackRelations?: (table: string) => ReadonlyArray<{ column: string; table: string }>;
     /** The table named in the URL — drives the selection so browser back/forward works. */
     tableParam: string | undefined;
 }): DataBrowserModel => {
@@ -713,7 +723,13 @@ const useDataBrowser = ({
     // Headless table model + virtualizer for the loaded page. The page-local
     // `sorting` state stays here (table switches reset it via `setSorting`); the
     // hook owns only the derived react-table/virtualizer wiring.
-    const table = useDataBrowserTable(page, sorting, changeSorting);
+    // Reverse relations are derived from schema metadata (see `back-relations.ts`)
+    // and passed in as extra column defs; only the ones switched on are resolved.
+    const activeBackRelations = useMemo(
+        () => (selectedTable === null ? [] : (resolveBackRelations?.(selectedTable) ?? [])),
+        [resolveBackRelations, selectedTable],
+    );
+    const table = useDataBrowserTable(page, sorting, changeSorting, activeBackRelations);
 
     // The currently-displayed view, for the "Copy link" / "Save query" affordances.
     // Derived from the live state (not the `loaded` descriptor) so it reflects the

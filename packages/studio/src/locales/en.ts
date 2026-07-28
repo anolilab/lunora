@@ -503,6 +503,7 @@ const MESSAGE_IDS = [
     "SQL query",
     "SQL problems",
     "Operation console",
+    "Related",
     "p50",
     "p95",
     "showing a capped set",

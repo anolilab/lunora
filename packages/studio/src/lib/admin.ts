@@ -33,6 +33,7 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  */
 export const ADMIN_FUNCTIONS = {
     assignIssue: "__lunora_admin__:assignIssue",
+    backRelationCounts: "__lunora_admin__:backRelationCounts",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
     clearQueueMessages: "__lunora_admin__:clearQueueMessages",
     clearTable: "__lunora_admin__:clearTable",
@@ -1306,6 +1307,22 @@ export interface SqlConsoleResult {
     rowCount: number;
     rows: Record<string, unknown>[];
     truncated: boolean;
+}
+
+/** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
+export interface BackRelation {
+    column: string;
+    table: string;
+}
+
+/** Counts for one reverse edge, keyed by parent id. An absent id has no children. */
+export interface BackRelationCounts extends BackRelation {
+    counts: Record<string, number>;
+}
+
+/** Payload of a `backRelationCounts` admin call. */
+export interface BackRelationCountsResult {
+    relations: BackRelationCounts[];
 }
 
 /** The ranges the query-insights selector offers. */

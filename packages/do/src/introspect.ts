@@ -50,6 +50,7 @@ const FLAGS_FUNCTION_PREFIX = "__lunora_flags__:";
 const ADMIN_FUNCTIONS = {
     applyCdc: "__lunora_admin__:applyCdc",
     assignIssue: "__lunora_admin__:assignIssue",
+    backRelationCounts: "__lunora_admin__:backRelationCounts",
     cdcSync: "__lunora_admin__:cdcSync",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
     clearQueueMessages: "__lunora_admin__:clearQueueMessages",

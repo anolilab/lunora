@@ -17,6 +17,7 @@ const unitTestFiles = [
     "__tests__/features/advisors/derive-runtime-advisories.test.ts",
     "__tests__/features/api/openapi/json-highlight.test.ts",
     "__tests__/features/containers/fold-container-instances.test.ts",
+    "__tests__/features/data/back-relations.test.ts",
     "__tests__/features/data/column-window.test.ts",
     "__tests__/features/data/highlight-segments.test.ts",
     "__tests__/features/database/schema-diff-model.test.ts",
