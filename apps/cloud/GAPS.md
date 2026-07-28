@@ -19,6 +19,53 @@ needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision,
 
 ---
 
+## Status pass — 2026-07-29
+
+A re-verification of every non-✅ item against the code (not against this
+document, which had drifted). Findings:
+
+**Closed since the 2026-07-21 pass:**
+
+- **A3 build dispatcher — now has a production caller.** `crons.ts` runs
+  `internal.builds.dispatch` on the existing every-minute trigger, and the
+  `execute`/`fetchSource` ports fail closed through `unconfigured()`. The
+  earlier reason for leaving it unwired (claiming builds with no executor burns
+  them) no longer applies. What remains is purely 🌐: a GitHub App (id +
+  private key) and a build-container binding.
+- **B2 tail-consumer wiring.** `src/deploy/handler.ts` passes `tailConsumers`
+  into the provisioner spec; `src/cloudflare/api.ts` renders it as
+  `tail_consumers` on upload. The section header still claimed this was 🌐.
+- **Ring 3 backlog #3, #4, #6, #8** — log viewer, design-system pass,
+  time-range picker, and MCP surface all shipped. See the restored list.
+
+**Confirmed still open (code-tractable, no infra needed):**
+
+| Item                             | Blocker                                                     |
+| -------------------------------- | ----------------------------------------------------------- |
+| D2 `lunora eject` CLI subcommand | Core exists (`src/cli/eject.ts`); no `lunora eject` command |
+| R3#2 deployment health charts    | Needs `outcome` on the AE data point first                  |
+| R3#5 onboarding checklist        | Not started                                                 |
+| R3#7 deploy-key roll UX          | Not started                                                 |
+| R3#9 integrations hub            | Not started                                                 |
+
+`D2` is the notable one: the packaging core is written and tested, but nothing
+in `packages/cli` invokes it, so the no-lock-in exit hatch is unreachable by a
+user. That is a small wiring job, not a build.
+
+**Confirmed still 🧩 (logic exists, no caller):** `applyCreditPurchase`
+(`src/billing/creem-credits.ts`) — unchanged, and genuinely gated on live Creem
+credit-pack product ids.
+
+**Unchanged 🌐 set:** A3 execution, A4 App registration, B1 cert issuance,
+D1 backups/PITR (still the highest-risk item on this page), E1 platform
+self-observability, E3 staging cell, F SSO/SCIM, R2-SQL span read-back,
+cross-tab trace→logs / error-span→Issue links.
+
+**Unchanged 🧭 set:** D4 DR posture, E2 dispatcher canary, E4 fat-vs-thin probe
+run, F frontend-hosting scope, SOC 2 / DPA.
+
+---
+
 ## Wiring pass — 2026-07-21
 
 A review found the deploy pipeline could not produce a bootable tenant and that
@@ -56,6 +103,10 @@ unit tests, verified by codegen + tsc + vitest):
   tarball). Claiming builds with no executor would only burn them, so it is not
   yet wired into `scheduled()`. This is the one gap whose blocker is genuinely
   infra, not code.
+  **Superseded 2026-07-29 (see the status pass below):** the cron caller now
+  exists — `internal.builds.dispatch` on the existing every-minute trigger — and
+  both ports fail closed via `unconfigured()`, so an unconfigured platform no
+  longer burns builds. The 🌐 blocker narrowed to supplying the two ports.
 
 ---
 
@@ -152,7 +203,7 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
 - Dispatcher: hostname → `domains` → project → active deployment (A1 pointer),
   with the same cached lookup pattern as the plan resolver.
 
-### B2. Tenant runtime logs — full log management (✅ code shipped, 🌐 tail-consumer wiring)
+### B2. Tenant runtime logs — full log management (✅ shipped incl. tail-consumer wiring; 🌐 live end-to-end run)
 
 **Shipped this pass — the framework now emits structured, trace-correlated logs
 (`shared/log-event.ts`, `@lunora/do`'s `emitLogEvent`), so the whole log path was
@@ -180,10 +231,12 @@ upgraded to consume them:**
   its timeline — every line in the trace, ordered, with the offset from the trace
   start (reusing `logs.list` filtered to the `traceId`).
 
-**Still 🌐 (needs live infra):** the provisioner setting
+**Still 🌐 (needs live infra):** ~~the provisioner setting
 `tail_consumers: [{ service: "lunora-log-tail" }]` on each tenant script (or the
-namespace) at deploy time, and an end-to-end run against a live dispatch
-namespace. D1 is fine at launch volume; the ingest seam still lets us re-point to
+namespace) at deploy time~~ — **shipped**: `src/deploy/handler.ts` passes
+`tailConsumers` into the provisioner spec, which `src/cloudflare/api.ts` renders
+as `tail_consumers` on the script upload. What remains is an
+end-to-end run against a live dispatch namespace. D1 is fine at launch volume; the ingest seam still lets us re-point to
 Analytics Engine / R2 later without touching consumers. Correlating an
 `error`/`fatal` log line to the OTLP-derived Issue by `traceId` (the telemetry
 path doesn't carry `traceId` yet) is the natural follow-up. The Traces tab is a
@@ -462,16 +515,30 @@ layers compose: Cloudflare Notifications + Health Checks cover the infrastructur
 floor (is the Worker up, is it erroring at the edge), while these app-semantic
 rules run on top (is _this function_ over its error/latency/cost budget). This
 also gives an independent out-of-band path — an alert about the platform doesn't
-depend on the platform's own telemetry pipeline being healthy. 2. **Deployment health charts on the project page** — request volume / error
-rate per deployment (needs status-code capture in the dispatcher metering
-first: add `outcome` blob to the AE data point). 3. **Log viewer upgrade** — severity chips, filter bar, virtualized list,
-log↔deployment correlation links. 4. **Design-system pass** — dark-first token palette, severity color ramp,
-consistent empty states with actionable copy (Maple's DESIGN.md rigor is
-the bar, not the source). 5. **Onboarding checklist** — first-run "create project → issue key → first
-deploy → see it live" checklist on the dashboard, replacing bare empty
-tabs. 6. **Time-range picker** — shared presets (1h/24h/7d/30d) across usage/logs
-once the data streams carry enough resolution. 7. **Deploy-key roll UX** — one-click roll (issue+revoke atomically) in the
-keys tab. 8. **MCP surface** — expose the control plane to agents (list projects,
-deployments, logs, trigger rollback) via `@lunora/mcp`; strong
-differentiator and cheap given the framework ships an MCP package. 9. **Integrations hub** — OAuth connect cards (GitHub App install, Creem
-portal) instead of bare settings fields.
+depend on the platform's own telemetry pipeline being healthy.
+
+#### Backlog items 2–9 — status as of 2026-07-29
+
+(This list had collapsed into a single paragraph through successive edits; it is
+restored here with each item's verified status.)
+
+2. **Deployment health charts on the project page** (🔨 open) — request volume /
+   error rate per deployment. Still blocked on its own stated prerequisite:
+   status-code capture in the dispatcher metering (`outcome` blob on the AE data
+   point). Verified absent from `src/metering/`.
+3. **Log viewer upgrade** (✅ shipped) — severity chips, filter bar, and
+   log↔trace correlation landed with B2's full log-management pass.
+4. **Design-system pass** (✅ shipped) — the aurora redesign covered the token
+   palette, severity ramp, and empty states across every screen.
+5. **Onboarding checklist** (🔨 open) — first-run "create project → issue key →
+   first deploy → see it live" checklist. No component exists in `src/client/`.
+6. **Time-range picker** (✅ shipped) — `src/client/TimeRangeProvider.tsx` +
+   `time-range.ts` provide the shared presets.
+7. **Deploy-key roll UX** (🔨 open) — one-click atomic issue+revoke in the keys
+   tab. Not present in `DeployKeys*.tsx`.
+8. **MCP surface** (✅ shipped) — `src/mcp/tools.ts` exposes the control plane
+   over `/v1/mcp`, with per-route `RouteSpec.mcp` opt-in and a hard deny-list
+   for `tokens`/`auth`/`mcp`.
+9. **Integrations hub** (🔨 open) — OAuth connect cards for the GitHub App
+   install and the Creem portal, replacing bare settings fields. Nothing in
+   `src/client/`.
