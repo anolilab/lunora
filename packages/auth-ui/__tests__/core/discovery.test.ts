@@ -35,7 +35,7 @@ const settled = async (handle: { getState: () => { status: string } }): Promise<
     });
 };
 
-// eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
+// One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetAuthConfigDiscovery();
     vi.restoreAllMocks();

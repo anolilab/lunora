@@ -62,7 +62,7 @@ const useController = <TState, TActions>(
      * keeps one identity across a rebuild; the core actions are closures rather
      * than methods, so there is no `this` to preserve.
      */
-    const actions = new Proxy({} as TActions & object, {
+    const actions = new Proxy({} as object & TActions, {
         get: (_target, key) => Reflect.get(controller.actions as object, key) as unknown,
     }) as TActions;
 

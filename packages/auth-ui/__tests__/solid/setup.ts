@@ -5,7 +5,6 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@solidjs/testing-library";
 import { afterEach } from "vitest";
 
-// eslint-disable-next-line vitest/require-top-level-describe -- setup file; the cleanup hook is intentionally top-level.
 afterEach(() => {
     cleanup();
 });

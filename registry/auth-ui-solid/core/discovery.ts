@@ -83,6 +83,11 @@ const PLUGIN_ID_TO_FLOW: Readonly<Record<string, string>> = {
 /**
  * One in-flight request per endpoint, shared by every provider on the page.
  *
+ * A *failed* lookup is evicted rather than cached: a single offline moment or a
+ * 500 would otherwise pin `unavailable` for the life of the page, leaving every
+ * card on the weaker client-only gating until a full reload. A later provider
+ * mount retries; a successful answer stays cached, because it cannot change.
+ *
  * Module-level rather than per-provider so mounting `&lt;SignInCard>` and
  * `&lt;UserButton>` under two providers doesn't fetch twice. Keyed by the resolved
  * URL, so an app talking to two deployments still gets two answers.
@@ -161,6 +166,7 @@ const discoverAuthConfig = (basePath: string): DiscoveryHandle => {
     const fetcher = (globalThis as { fetch?: typeof fetch }).fetch;
 
     if (typeof fetcher !== "function") {
+        handles.delete(url);
         store.update({ status: "unavailable" });
 
         return handle;
@@ -186,10 +192,17 @@ const discoverAuthConfig = (basePath: string): DiscoveryHandle => {
     }
 
     if (requestUrl === undefined) {
+        handles.delete(url);
         store.update({ status: "unavailable" });
 
         return handle;
     }
+
+    /** Report failure and drop the cache entry, so a later mount can retry. */
+    const unavailable = (): void => {
+        handles.delete(url);
+        store.update({ status: "unavailable" });
+    };
 
     void (async () => {
         try {
@@ -199,18 +212,24 @@ const discoverAuthConfig = (basePath: string): DiscoveryHandle => {
             const response = await fetcher(requestUrl, { credentials: "include", headers: { accept: "application/json" } });
 
             if (!response.ok) {
-                store.update({ status: "unavailable" });
+                unavailable();
 
                 return;
             }
 
             const body: unknown = await response.json();
 
-            store.update(isConfig(body) ? { config: normalize(body), status: "ready" } : { status: "unavailable" });
+            if (isConfig(body)) {
+                store.update({ config: normalize(body), status: "ready" });
+
+                return;
+            }
+
+            unavailable();
         } catch {
             // Offline, CORS, a non-JSON body from a catch-all route — all the same
             // answer. The gate falls back to the client's own registration.
-            store.update({ status: "unavailable" });
+            unavailable();
         }
     })();
 

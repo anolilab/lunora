@@ -104,7 +104,9 @@ describe("svelte theme", () => {
                 authClient: bareClient().client,
                 card: "sign-in",
                 nav: fakeNav(),
-                theme: (defaults: ThemeTokens) => ({ ...defaults, primary: "rebeccapurple" }),
+                theme: (defaults: ThemeTokens) => {
+                    return { ...defaults, primary: "rebeccapurple" };
+                },
             },
         });
 

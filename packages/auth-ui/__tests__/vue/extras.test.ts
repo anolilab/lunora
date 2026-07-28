@@ -61,6 +61,7 @@ describe("vue extras", () => {
         const promptSpy = vi.spyOn(oneTapModule, "promptOneTap").mockResolvedValue(undefined);
         const fake = pluginClient();
 
+        // eslint-disable-next-line vitest/unbound-method, @typescript-eslint/unbound-method -- `render` from @testing-library/vue is a free function, not a method needing `this`.
         const { container, unmount } = render(
             defineComponent({
                 render: () =>

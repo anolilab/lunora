@@ -7,7 +7,7 @@ import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, SignUp
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
-// eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
+// One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetToasts();
 });

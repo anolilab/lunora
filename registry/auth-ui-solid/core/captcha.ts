@@ -18,7 +18,7 @@
  * export const authClient = createLunoraAuthClient(createAuthClient, {
  *     fetchOptions: {
  *         onRequest: (context) => {
- *             for (const [key, value] of Object.entries(captchaHeaders())) {
+ *             for (const [key, value] of Object.entries(captchaHeaders(context.url?.toString()))) {
  *                 context.headers.set(key, value);
  *             }
  *         },
@@ -37,6 +37,20 @@ type CaptchaProvider = "captchafox" | "cloudflare-turnstile" | "google-recaptcha
 /** The header better-auth's captcha plugin reads. */
 const CAPTCHA_HEADER = "x-captcha-response";
 
+/**
+ * The routes better-auth's `captcha` plugin guards by default.
+ *
+ * The token must only be attached to these. `fetchOptions.onRequest` runs for
+ * every* auth call, and `captchaHeaders()` consumes on read — so without this
+ * filter a background `getSession` (a session refetch on focus, a `&lt;UserButton>`
+ * elsewhere in the shell) spends the token on a route that ignores it, and the
+ * sign-in the user then clicks arrives with no header at all.
+ *
+ * Mirrors the plugin's own `defaultEndpoints`. If you passed `endpoints` to
+ * `captcha()`, pass the same list to {@link captchaHeaders}.
+ */
+const CAPTCHA_ENDPOINTS: ReadonlyArray<string> = ["/sign-up/email", "/sign-in/email", "/request-password-reset"];
+
 /** Script URL and the global each provider exposes, keyed by provider id. */
 const PROVIDERS: Readonly<Record<CaptchaProvider, { global: string; script: string }>> = {
     captchafox: { global: "CaptchaFox", script: "https://cdn.captchafox.com/api.js?render=explicit" },
@@ -53,7 +67,14 @@ const store = createStore<{ token?: string }>({});
  * Empty when there is no token — an app without a captcha, or a request made
  * before the user solved it, then simply sends nothing and the server decides.
  */
-const captchaHeaders = (): Record<string, string> => {
+const captchaHeaders = (path?: string, endpoints: ReadonlyArray<string> = CAPTCHA_ENDPOINTS): Record<string, string> => {
+    // A path the plugin does not guard must not consume the token — see the
+    // note on CAPTCHA_ENDPOINTS. Called without a path (a caller attaching it
+    // deliberately to one request) it still works.
+    if (path !== undefined && !endpoints.some((endpoint) => path.endsWith(endpoint))) {
+        return {};
+    }
+
     const { token } = store.get();
 
     if (token === undefined || token === "") {
@@ -158,6 +179,8 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
     const provider = PROVIDERS[options.provider];
     let widgetId: unknown;
     let disposed = false;
+    /** Whether the token currently in the store came from this widget. */
+    let owned = false;
 
     void loadScript(provider.script)
         .then(() => {
@@ -173,11 +196,13 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 
             widgetId = api.render(element, {
                 callback: (token: string) => {
+                    owned = true;
                     setCaptchaToken(token);
                 },
                 // A token expires long before a slow user finishes a form; drop
                 // it rather than send one the provider will reject.
                 "expired-callback": () => {
+                    owned = false;
                     setCaptchaToken(undefined);
                 },
                 sitekey: options.siteKey,
@@ -191,7 +216,13 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 
     return () => {
         disposed = true;
-        setCaptchaToken(undefined);
+
+        // Only clear a token this widget produced. A sign-in / sign-up tab pair
+        // mounts two widgets, and unmounting one must not wipe the other's
+        // freshly solved answer.
+        if (owned) {
+            setCaptchaToken(undefined);
+        }
 
         const api = (globalThis as unknown as Record<string, CaptchaGlobal | undefined>)[provider.global];
 
@@ -200,4 +231,4 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 };
 
 export type { CaptchaProvider, RenderCaptchaOptions };
-export { CAPTCHA_HEADER, captchaHeaders, PROVIDERS, renderCaptcha, setCaptchaToken };
+export { CAPTCHA_ENDPOINTS, CAPTCHA_HEADER, captchaHeaders, PROVIDERS, renderCaptcha, setCaptchaToken };

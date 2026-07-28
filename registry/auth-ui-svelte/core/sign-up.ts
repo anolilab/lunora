@@ -13,11 +13,38 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
     createFormController<SignUpField>(context, {
         fallbackError: (localization) => localization.signUpFailed,
         fields: {
-            // Seeded from `?email=` when a link supplied one — an invitee should
-            // not have to retype the address they were invited as.
-            email: { initial: readFieldPrefill("email") ?? "", validate: (value, _values, localization) => validateEmail(value, localization) },
-            name: { initial: readFieldPrefill("name") ?? "", validate: (value, _values, localization) => required(value, localization.nameRequired) },
+            email: { validate: (value, _values, localization) => validateEmail(value, localization) },
+            name: { validate: (value, _values, localization) => required(value, localization.nameRequired) },
             password: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
+        },
+        /*
+         * Seeded from `?email=` / `?name=` when a link supplied them — an
+         * invitee should not have to retype the address they were invited as.
+         *
+         * Through `prefill` rather than each field's `initial`, because
+         * `initial` is read when the controller is constructed: under SSR that
+         * happens on the server, where there is no URL, so the server would
+         * render an empty field and the client a filled one — a hydration
+         * mismatch on the sign-up screen. `prefill` runs after mount on the
+         * client only, and the `edited` guard means a user who has already
+         * started typing is never overwritten.
+         */
+        prefill: () => {
+            const seeded: Partial<Record<SignUpField, string>> = {};
+            const email = readFieldPrefill("email");
+            const name = readFieldPrefill("name");
+
+            // Only keys that are actually present: returning `""` for an absent
+            // parameter would blank a field the user had already filled in.
+            if (email !== undefined) {
+                seeded.email = email;
+            }
+
+            if (name !== undefined) {
+                seeded.name = name;
+            }
+
+            return Promise.resolve(seeded);
         },
         sessionChanging: true,
         submit: async (values, context_) => {

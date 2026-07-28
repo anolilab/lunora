@@ -9,7 +9,7 @@ const stub = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClien
 const contextFor = (authClient: AuthClient, plugins?: PluginFlags): ControllerContext =>
     resolveContext({ authClient, nav: { navigate: vi.fn(), replace: vi.fn() }, plugins });
 
-// eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
+// One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetFlowWarnings();
     vi.restoreAllMocks();

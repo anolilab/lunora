@@ -76,6 +76,15 @@ const readStored = (): ThemeMode | undefined => {
 };
 
 const createThemeModeController = (options: ThemeModeOptions = {}): ThemeModeController => {
+    /*
+     * `readStored()` returns undefined off the browser, so a server render
+     * resolves `"system"` and the client resolves whatever was saved. That is a
+     * genuine hydration difference — in *which radio reads as selected*, and
+     * nothing more: nothing is written to the DOM here (see `apply`, which only
+     * runs from `setMode`), so no theme is applied and no user-visible flash
+     * occurs. An SSR app that wants the two renders identical passes
+     * `persist: false` and drives the mode itself.
+     */
     const initial = (options.persist === false ? undefined : readStored()) ?? "system";
     const store = createStore<ThemeModeState>({ mode: initial, resolved: initial === "system" ? systemPrefers() : initial });
 

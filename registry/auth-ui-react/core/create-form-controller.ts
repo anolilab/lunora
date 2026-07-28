@@ -173,22 +173,6 @@ const createFormController = <TField extends string>(context: ControllerContext,
         }
     };
 
-    const reset = (): void => {
-        edited.clear();
-        store.set(initialState());
-    };
-
-    /**
-     * Re-run `prefill` and seed the fields in one transition.
-     *
-     * A resolved prefill never overwrites a field the user has already typed
-     * into, and never seeds at all once a submit is in flight or has done. Both
-     * guards exist because `prefill` is a network read racing a human: a slow
-     * `getSession` that lands after someone typed — or after they *saved* —
-     * would otherwise silently restore the old value over their edit, which
-     * reads as "the save didn't work". The race widens with anything else on the
-     * page that also reads the session, so it is not a theoretical one.
-     */
     const load = async (): Promise<void> => {
         if (!options.prefill) {
             return;
@@ -222,6 +206,29 @@ const createFormController = <TField extends string>(context: ControllerContext,
             store.set({ ...state(), loading: false });
         }
     };
+
+    const reset = (): void => {
+        edited.clear();
+        store.set(initialState());
+
+        // `initialState()` restores `loading: true` for a prefilled form, so
+        // without re-running the load the form spins forever.
+        if (options.prefill) {
+            void load();
+        }
+    };
+
+    /**
+     * Re-run `prefill` and seed the fields in one transition.
+     *
+     * A resolved prefill never overwrites a field the user has already typed
+     * into, and never seeds at all once a submit is in flight or has done. Both
+     * guards exist because `prefill` is a network read racing a human: a slow
+     * `getSession` that lands after someone typed — or after they *saved* —
+     * would otherwise silently restore the old value over their edit, which
+     * reads as "the save didn't work". The race widens with anything else on the
+     * page that also reads the session, so it is not a theoretical one.
+     */
 
     if (options.prefill) {
         void load();

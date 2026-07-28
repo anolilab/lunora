@@ -1,4 +1,9 @@
 import { createConfig } from "@anolilab/eslint-config";
+import svelteParser from "svelte-eslint-parser";
+import sveltePlugin from "eslint-plugin-svelte";
+import typescriptParser from "@typescript-eslint/parser";
+import vueParser from "vue-eslint-parser";
+import vuePlugin from "eslint-plugin-vue";
 
 // Self-contained flat config for @lunora/auth-ui — the source-of-truth for the
 // copy-in auth screens. Built on @anolilab/eslint-config; mirrors packages/react.
@@ -12,20 +17,10 @@ export default createConfig(
             "**/node_modules/**",
             "**/coverage/**",
             /*
-             * Vue and Svelte only. Their SFCs need `vue-eslint-parser` /
-             * `svelte-eslint-parser`, which this repo does not ship — so they
-             * are formatted by Prettier and type-checked by `vue-tsc` /
-             * `svelte-check`, but genuinely unlinted.
-             *
-             * Solid and Angular are *not* here: they are plain TS/TSX and were
-             * only ever ignored by being lumped in with the SFC dialects. They
-             * are linted below, each against the program that actually contains
-             * them, with the rules that fight their idioms scoped off.
+             * Nothing framework-shaped is ignored any more. The SFC dialects get
+             * their own parser blocks below; Solid and Angular are plain TS/TSX
+             * and were only ever ignored by being lumped in with them.
              */
-            "src/vue/**",
-            "src/svelte/**",
-            "__tests__/vue/**",
-            "__tests__/svelte/**",
             "**/*.md/**",
             "**/vitest.config.ts",
             "**/wrangler.jsonc",
@@ -111,6 +106,77 @@ export default createConfig(
             "@typescript-eslint/member-ordering": "off",
         },
     },
+    /*
+     * The plain TypeScript that lives beside the SFCs (`use-controller.ts`,
+     * `provider.ts`, …) is in `tsconfig.vue.json`'s program, not the main one,
+     * so type-aware rules have to be pointed at it or every file reports "not
+     * found in any of the provided project(s)".
+     */
+    {
+        files: ["src/vue/**/*.{ts,vue}", "__tests__/vue/**/*.{ts,vue}"],
+        languageOptions: { parserOptions: { project: "./tsconfig.vue.json", tsconfigRootDir: import.meta.dirname } },
+        // `vue` is a devDependency for the same reason `@angular/core` is: this
+        // package is never installed — the port is copied into a Vue project.
+        rules: { "import/no-extraneous-dependencies": "off" },
+    },
+    {
+        files: ["src/svelte/**/*.{ts,svelte}", "__tests__/svelte/**/*.{ts,svelte}"],
+        languageOptions: { parserOptions: { project: "./tsconfig.svelte.json", tsconfigRootDir: import.meta.dirname } },
+        rules: {
+            // Same as Vue: `svelte` is the consumer's dependency, not ours.
+            "import/no-extraneous-dependencies": "off",
+            // The svelte parser has no DOM lib, so DOM-only types read as undefined globals.
+            "no-undef": "off",
+            // The id counters increment a module-level variable; the "unused"
+            // assignment is the whole point (see the Angular ports' `nextId`).
+            "no-useless-assignment": "off",
+        },
+    },
+    /*
+     * Vue SFCs. `vue-eslint-parser` owns the file and delegates `<script>` to the
+     * TypeScript parser; the base config's rules would otherwise see a template
+     * they cannot parse.
+     *
+     * Type-aware rules are deliberately not enabled here: they need the SFC in a
+     * TypeScript program, which only `vue-tsc` provides — and `vue-tsc` already
+     * runs in `lint:types`. This block is for the correctness rules a type-aware
+     * pass would not catch anyway (unused refs, template mistakes, a11y).
+     */
+    // The plugin's own flat configs, which carry the `.vue` processor as well as
+    // the parser — without the processor `vue/comment-directive` has nothing to
+    // pair template comments with and reports every one of them.
+    ...vuePlugin.configs["flat/essential"].map((entry) => ({ ...entry, files: ["src/vue/**/*.vue", "__tests__/vue/**/*.vue"] })),
+    {
+        files: ["src/vue/**/*.vue", "__tests__/vue/**/*.vue"],
+        languageOptions: {
+            parser: vueParser,
+            parserOptions: { ecmaVersion: "latest", parser: typescriptParser, project: null, sourceType: "module" },
+        },
+        rules: {
+            // The ports are one component per file named for the component, so the
+            // multi-word rule only ever fires on the filename convention itself.
+            "vue/multi-word-component-names": "off",
+        },
+    },
+    /*
+     * Svelte components. Same reasoning as Vue: the parser makes the file
+     * readable, `svelte-check` keeps owning the types.
+     */
+    ...sveltePlugin.configs["flat/recommended"].map((entry) => ({ ...entry, files: ["src/svelte/**/*.svelte", "__tests__/svelte/**/*.svelte"] })),
+    {
+        files: ["src/svelte/**/*.svelte", "__tests__/svelte/**/*.svelte"],
+        languageOptions: {
+            parser: svelteParser,
+            parserOptions: { ecmaVersion: "latest", parser: typescriptParser, project: null, sourceType: "module" },
+        },
+        rules: {
+            // Prettier (with prettier-plugin-svelte) owns formatting.
+            "svelte/html-quotes": "off",
+            "svelte/indent": "off",
+            "svelte/max-attributes-per-line": "off",
+            "svelte/mustache-spacing": "off",
+        },
+    },
     // Scoped allowances for the copy-in React templates.
     {
         files: ["**/*.tsx", "src/react/**/*.ts"],
@@ -153,6 +219,18 @@ export default createConfig(
             // so container queries are the supported way to assert on markup.
             "testing-library/no-container": "off",
             "testing-library/no-node-access": "off",
+            /*
+             * This rule encodes React's `fireEvent`, which is synchronous. Vue's
+             * and Svelte's return a promise that flushes the framework's update
+             * queue — awaiting them is required, not redundant, and dropping the
+             * `await` would assert against the pre-update DOM.
+             */
+            "testing-library/no-await-sync-events": "off",
+            // A cross-suite teardown hook at the top level is deliberate; the
+            // core tests already carry a per-file disable for it.
+            "vitest/require-top-level-describe": "off",
+            // Namespace imports are how a test spies on a module's exports.
+            "import/no-namespace": "off",
         },
     },
 );

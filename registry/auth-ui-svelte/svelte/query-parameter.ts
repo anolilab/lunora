@@ -3,8 +3,8 @@
  *
  * The React port keeps this beside the two cards that use it, because they share
  * a file. Svelte is one component per file, so the three cards that pick a token
- * out of the URL — `<VerifyEmailCard>`, `<AcceptInvitationCard>` and
- * `<DeviceAuthorizationCard>` — share it from here rather than carrying three
+ * out of the URL — `&lt;VerifyEmailCard>`, `&lt;AcceptInvitationCard>` and
+ * `&lt;DeviceAuthorizationCard>` — share it from here rather than carrying three
  * copies.
  */
 const queryParameter = (name: string): string | undefined => {

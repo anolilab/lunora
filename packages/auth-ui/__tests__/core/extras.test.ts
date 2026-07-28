@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CAPTCHA_HEADER, captchaHeaders, dismissToast, getToasts, pushToast, resetToasts, setCaptchaToken, subscribeToasts } from "../../src/core";
 
-// eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
+// One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetToasts();
     setCaptchaToken(undefined);

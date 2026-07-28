@@ -35,6 +35,6 @@ onMounted(prompt);
 watch(enabled, prompt);
 </script>
 
-<template>
-    <!-- Deliberately empty: Google owns the prompt's UI. -->
-</template>
+<!-- Renders nothing on purpose: Google owns the prompt's UI. A comment-only
+     template is not a valid Vue root, so this is an explicit empty fragment. -->
+<template><span v-if="false" /></template>

@@ -116,7 +116,9 @@ describe("vue theme", () => {
                         {
                             authClient: bareClient().client,
                             nav: fakeNav(),
-                            theme: (defaults: ThemeTokens) => ({ ...defaults, primary: "rebeccapurple" }),
+                            theme: (defaults: ThemeTokens) => {
+                                return { ...defaults, primary: "rebeccapurple" };
+                            },
                         },
                         { default: () => h(SignInCard) },
                     ),

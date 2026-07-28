@@ -97,6 +97,6 @@ describe("authClient conformance", () => {
     it.each(EXPECTED.map(([name, actual, expected]) => [name, actual, expected]))("%s still declares every route we call", (_name, actual, expected) => {
         expect.assertions(1);
 
-        expect((expected).filter((path) => !(actual).includes(path))).toStrictEqual([]);
+        expect(expected.filter((path) => !actual.includes(path))).toStrictEqual([]);
     });
 });

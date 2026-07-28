@@ -2,13 +2,13 @@ import type { App, Component, InjectionKey, ShallowRef } from "vue";
 import { inject, provide, shallowRef } from "vue";
 
 import type { AuthUIConfig, AvatarConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig, ViewPaths } from "../core/config";
+import { DEFAULT_BASE_PATH, resolveContext } from "../core/config";
+import { defaultNav } from "../core/default-nav";
 import type { DiscoveredConfig } from "../core/discovery";
+import { discoverAuthConfig } from "../core/discovery";
 import type { Localization } from "../core/localization";
 import type { PasswordPolicy } from "../core/password-policy";
 import type { AnyAuthClient } from "../core/types";
-import { DEFAULT_BASE_PATH, resolveContext } from "../core/config";
-import { defaultNav } from "../core/default-nav";
-import { discoverAuthConfig } from "../core/discovery";
 
 /**
  * The Vue context carries the resolved core {@link ControllerContext} plus an
@@ -27,7 +27,7 @@ interface AuthUIVueContext {
 /**
  * Injection key carrying the resolved auth-UI context down the component tree.
  * Exported so advanced consumers can inject it by hand; most apps use
- * {@link createAuthUI} (plugin) or {@link AuthUIProvider} / {@link provideAuthUI}.
+ * {@link createAuthUI} (plugin) or `AuthUIProvider` / {@link provideAuthUI}.
  */
 const AUTH_UI_INJECTION_KEY: InjectionKey<AuthUIVueContext> = Symbol("lunora.auth-ui");
 
@@ -46,9 +46,13 @@ interface AuthUIProviderProps {
      */
     discover?: boolean;
 
+    /** Password rules, mirrored from your server's `emailAndPassword` config. */
+    /** Which password-reset transport the app uses. */
+    forgotPassword?: AuthUIConfig["forgotPassword"];
+
     /**
      * Framework `Link` component for internal links (`NuxtLink`, `RouterLink`,
-     * …). Falls back to a plain `<a>` when omitted.
+     * …). Falls back to a plain `&lt;a>` when omitted.
      */
     Link?: Component;
     localization?: Partial<Localization>;
@@ -56,9 +60,6 @@ interface AuthUIProviderProps {
     nav?: NavAdapter;
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
-    /** Password rules, mirrored from your server's `emailAndPassword` config. */
-    /** Which password-reset transport the app uses. */
-    forgotPassword?: AuthUIConfig["forgotPassword"];
     /** Organization UI options. */
     organization?: AuthUIConfig["organization"];
     password?: PasswordPolicy;
@@ -68,7 +69,7 @@ interface AuthUIProviderProps {
     social?: ReadonlyArray<string>;
     /** Retint the cards from config; see `core/theme.ts`. */
     theme?: AuthUIConfig["theme"];
-    /** URL segments `<AuthView>` maps to cards; see `core/config.ts`. */
+    /** URL segments `&lt;AuthView>` maps to cards; see `core/config.ts`. */
     viewPaths?: ViewPaths;
 }
 
@@ -122,11 +123,11 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
                 // function itself is reached through the stable wrapper.
                 avatar: { maxSize: config.avatar?.maxSize, upload: config.avatar?.upload === undefined ? undefined : handlers.upload },
                 basePath: config.basePath,
+                forgotPassword: config.forgotPassword,
                 localization: config.localization,
                 nav: handlers.nav,
                 onError: handlers.onError,
                 onSessionChange: handlers.onSessionChange,
-                forgotPassword: config.forgotPassword,
                 organization: config.organization,
                 password: config.password,
                 plugins: config.plugins,
@@ -193,12 +194,12 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
  * auth-UI context every card resolves through {@link useAuthUI}. Mirrors the
  * React `AuthUIProvider` at the app root.
  *
- * Interchangeable with {@link AuthUIProvider}: both publish the same context
+ * Interchangeable with `AuthUIProvider`: both publish the same context
  * ref, and the things discovery can change — a card's `v-if` gate, a controller's
  * `autoLoad`, the social provider list — are read *through* that ref, so they
  * re-evaluate when the server answers. Neither form needs a component boundary
  * to make that happen. Choose between them on scope: this one is app-wide,
- * `<AuthUIProvider>` scopes the context to a subtree.
+ * `&lt;AuthUIProvider>` scopes the context to a subtree.
  */
 const createAuthUI = (config: AuthUIProviderProps): { install: (app: App) => void } => {
     const context = buildContext(config);
@@ -214,7 +215,7 @@ const createAuthUI = (config: AuthUIProviderProps): { install: (app: App) => voi
  * Composition-API form: call inside a parent component's `setup()` to provide
  * the context to its subtree. The counterpart to `app.use(createAuthUI(config))`
  * when you'd rather scope the context to a subtree than the whole app. Backs the
- * `<AuthUIProvider>` SFC. Must run synchronously inside `setup()`.
+ * `&lt;AuthUIProvider>` SFC. Must run synchronously inside `setup()`.
  */
 const provideAuthUI = (config: AuthUIProviderProps): ShallowRef<ControllerContext> => {
     const context = buildContext(config);
@@ -227,7 +228,7 @@ const provideAuthUI = (config: AuthUIProviderProps): ShallowRef<ControllerContex
 /**
  * The context ref from the nearest provider — use this whenever what you read
  * has to *follow* the one identity change discovery makes: the plugin flags,
- * `credentials`, `social`, `organization`. Bound in `<script setup>` the template
+ * `credentials`, `social`, `organization`. Bound in `&lt;script setup>` the template
  * unwraps it on every read, so `v-if="context.plugins.passkey"` is reactive
  * without further ceremony; in script, wrap the read in a `computed`.
  *
