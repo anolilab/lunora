@@ -1,9 +1,8 @@
-import { dbRateLimit } from "@lunora/ratelimit";
-
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 interface AuditRow {
     _id: Id<"auditLog">;
@@ -20,11 +19,11 @@ interface AuditRow {
  * did what.
  */
 export const record = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
-        action: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        action: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
-        target: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        target: v.optional(boundedString(LIMITS.token)),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"auditLog">> => {
         // Restricted to owner/admin: the `action`/`target` are free-form, so a plain

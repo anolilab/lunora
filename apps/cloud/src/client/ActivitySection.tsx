@@ -1,16 +1,12 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import type { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
-import type { OrgId } from "./types";
 
-interface ActivitySectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.audit_log.list>>;
-}
+import type { SectionProps } from "./tabs";
+import { formatDateTime } from "./format";
 
 /**
  * Activity tab (§3). The org's audit log: who did what, newest first. Every
@@ -18,7 +14,7 @@ interface ActivitySectionProps {
  * this is the read view over them. Tenant request and console logs stream
  * separately via Cloudflare Tail/Logpush and the per-deployment admin RPC.
  */
-export const ActivitySection = ({ preloaded }: ActivitySectionProps): ReactElement => {
+export const ActivitySection = ({ preloaded }: SectionProps<ReturnOf<typeof api.audit_log.list>>): ReactElement => {
     const entries = usePreloadedQuery(preloaded);
 
     return (
@@ -39,7 +35,7 @@ export const ActivitySection = ({ preloaded }: ActivitySectionProps): ReactEleme
                         <tbody>
                             {rows.map((entry) => (
                                 <tr key={entry._id}>
-                                    <td className="muted">{new Date(entry.createdAt).toLocaleString()}</td>
+                                    <td className="muted">{formatDateTime(entry.createdAt)}</td>
                                     <td>{entry.actorUserId}</td>
                                     <td>
                                         <span className="badge">{entry.action}</span>

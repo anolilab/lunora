@@ -1,9 +1,8 @@
-import { dbRateLimit } from "@lunora/ratelimit";
-
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Tenant secrets (CLOUD-PLAN.md §7). Values are AES-256-GCM encrypted at the
@@ -27,13 +26,13 @@ interface SecretRow {
 
 /** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
 export const store = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
-        ciphertext: v.string().check((value) => value.length <= 8192, { message: "must be at most 8_192 characters", schema: { maxLength: 8192 } }),
+        ciphertext: boundedString(LIMITS.secret),
         // Deployment kind this secret applies to; defaults to "all" (shared).
         environment: v.optional(v.union(v.literal("all"), v.literal("production"), v.literal("preview"), v.literal("dev"))),
-        iv: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        iv: boundedString(LIMITS.id),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
     })
@@ -92,7 +91,7 @@ export const list = query
  */
 export const listEncrypted = query
     .input({
-        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        deployKey: v.optional(boundedString(LIMITS.token)),
         // Deployment kind being provisioned; kind-specific secrets override
         // same-named "all" (shared) rows. Defaults to production.
         environment: v.optional(v.union(v.literal("production"), v.literal("preview"), v.literal("dev"))),
@@ -127,7 +126,7 @@ export const listEncrypted = query
 
 /** Delete a secret (owner/admin). */
 export const remove = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("secrets"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);

@@ -1,10 +1,10 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 interface OrganizationRow {
     _id: Id<"organizations">;
@@ -47,29 +47,27 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
  * we read through the facade and match in memory — org volume is tiny, and the
  * `by_slug` unique index still enforces correctness on insert.
  */
-export const getBySlug = query
-    .input({ slug: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }) })
-    .query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
-        const { userId } = context.auth;
+export const getBySlug = query.input({ slug: boundedString(LIMITS.id) }).query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
+    const { userId } = context.auth;
 
-        if (!userId) {
-            return null;
-        }
+    if (!userId) {
+        return null;
+    }
 
-        const { page } = await context.db.organizations.findMany();
-        const organization = (page as unknown as OrganizationRow[]).find((row) => row.slug === slug) ?? null;
+    const { page } = await context.db.organizations.findMany();
+    const organization = (page as unknown as OrganizationRow[]).find((row) => row.slug === slug) ?? null;
 
-        if (!organization) {
-            return null;
-        }
+    if (!organization) {
+        return null;
+    }
 
-        // Only reveal the org to its own members. A non-member (or signed-out caller)
-        // gets `null` — identical to not-found — so this can neither leak cross-tenant
-        // org metadata nor act as a slug-enumeration oracle.
-        const { page: membership } = await context.db.members.findMany({ where: { organizationId: organization._id, userId } });
+    // Only reveal the org to its own members. A non-member (or signed-out caller)
+    // gets `null` — identical to not-found — so this can neither leak cross-tenant
+    // org metadata nor act as a slug-enumeration oracle.
+    const { page: membership } = await context.db.members.findMany({ where: { organizationId: organization._id, userId } });
 
-        return membership.length > 0 ? organization : null;
-    });
+    return membership.length > 0 ? organization : null;
+});
 
 /**
  * Create an organization on a given cell, seed its creator as `owner`, and
@@ -85,16 +83,16 @@ export const getBySlug = query
  * `members.add` and `invitations.accept`.
  */
 export const create = mutation
-    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
+    .use(dbRateLimit("provision"))
     .input({
         // Explicit cell placement; omit to let `jurisdiction` (or the default
         // pool) pick an active cell (GAPS.md F data-residency).
         cellId: v.optional(v.id("cells")),
         // "eu" | "fedramp" — restricts placement to cells in that jurisdiction.
-        jurisdiction: v.optional(v.string().check((value) => value.length <= 32, { message: "must be at most 32 characters", schema: { maxLength: 32 } })),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        jurisdiction: v.optional(boundedString(LIMITS.tag)),
+        name: boundedString(LIMITS.name),
         plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"))),
-        slug: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        slug: boundedString(LIMITS.id),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"organizations">> => {
         const userId = assertSignedIn(context.auth.userId);
@@ -147,9 +145,9 @@ export const create = mutation
 
 /** Rename an organization (owner only). The slug is immutable (it's the URL identity). */
 export const rename = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<void> => {
@@ -169,7 +167,7 @@ export const DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * {@link cancelDeletion}.
  */
 export const requestDeletion = mutation
-    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
+    .use(dbRateLimit("sensitive"))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
@@ -181,7 +179,7 @@ export const requestDeletion = mutation
 
 /** Cancel a pending deletion request (owner only). */
 export const cancelDeletion = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);

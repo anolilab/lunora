@@ -1,16 +1,12 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { includedUsageFor } from "../billing/overage";
-import type { OrgId } from "./types";
 
-interface UsageSectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.usage.summary>>;
-}
+import type { SectionProps } from "./tabs";
+import { formatDate, formatNumber } from "./format";
 
 /** Epoch ms for the first instant of the current UTC month. */
 /** Start of the current UTC billing month — shared with the `usage` route loader so SSR and client agree on the period. */
@@ -19,8 +15,6 @@ export const monthStart = (): number => {
 
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 };
-
-const formatNumber = (value: number): string => value.toLocaleString();
 
 const formatBytes = (bytes: number): string => {
     const units = ["B", "KB", "MB", "GB", "TB"];
@@ -88,9 +82,9 @@ const UsageBars = ({ series }: { series: { day: number; requests: number }[] }):
                 })}
             </svg>
             <div className="usage-chart-legend muted">
-                <span>{new Date(series[0]?.day ?? 0).toLocaleDateString()}</span>
+                <span>{formatDate(series[0]?.day ?? 0)}</span>
                 <span>requests / day</span>
-                <span>{new Date(series.at(-1)?.day ?? 0).toLocaleDateString()}</span>
+                <span>{formatDate(series.at(-1)?.day ?? 0)}</span>
             </div>
         </div>
     );
@@ -100,7 +94,7 @@ const UsageBars = ({ series }: { series: { day: number; requests: number }[] }):
  * Usage tab: plan-quota meters (included vs used, GAPS.md ring 3), the
  * period's daily request volume, and the raw totals — all live.
  */
-export const UsageSection = ({ organizationId, preloaded }: UsageSectionProps): ReactElement => {
+export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.usage.summary>>): ReactElement => {
     // A primitive `number` that's stable within the month, so recomputing it per
     // render is fine — the query key dedupes on its value, not its reference.
     const periodStart = monthStart();

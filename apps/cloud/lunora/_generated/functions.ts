@@ -595,23 +595,23 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     alerts: {
-        createRule: (args: { channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: string; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
+        createRule: (args: { channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
         deleteRule: (args: { id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime" }[]>;
-        markDelivered: (args: { deployKey: string; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
+        markDelivered: (args: { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
         rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime"; threshold: number; windowMinutes?: number }[]>;
         setRuleEnabled: (args: { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
     };
     audit_log: {
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"auditLog">; action: string; actorUserId: string; createdAt: number; organizationId: Id<"organizations">; target?: string }[]>;
-        record: (args: { action: string; organizationId: Id<"organizations">; target?: string }) => Promise<Id<"auditLog">>;
+        record: (args: { action: unknown; organizationId: Id<"organizations">; target?: unknown }) => Promise<Id<"auditLog">>;
     };
     billing: {
-        checkout: (args: { cancelUrl: string; organizationId: Id<"organizations">; priceId: string; successUrl: string }) => Promise<{ url: string; }>;
+        checkout: (args: { cancelUrl: unknown; organizationId: Id<"organizations">; priceId: unknown; successUrl: unknown }) => Promise<{ url: string; }>;
         enforceDunning: (args?: {}) => Promise<{ graced: number; recovered: number; suspended: number; }>;
         entitlements: (args: { organizationId: Id<"organizations"> }) => Promise<{ features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
-        portal: (args: { organizationId: Id<"organizations">; returnUrl: string }) => Promise<{ url: string; }>;
-        processWebhook: (args: { body: string; signature: string }) => Promise<{ applied: boolean; status: number; }>;
+        portal: (args: { organizationId: Id<"organizations">; returnUrl: unknown }) => Promise<{ url: string; }>;
+        processWebhook: (args: { body: unknown; signature: unknown }) => Promise<{ applied: boolean; status: number; }>;
         subscription: (args: { organizationId: Id<"organizations"> }) => Promise<{ cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
     };
     builds: {
@@ -622,46 +622,46 @@ export interface Caller {
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "pending" | "building" | "successful" | "failed" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: (args: { branch: string; commitSha: string; installationId: number; repository: string }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
+        recordPush: (args: { branch: unknown; commitSha: unknown; installationId: number; repository: unknown }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
         register: (args: { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }) => Promise<Id<"cells">>;
     };
     dashboards: {
-        create: (args: { name: string; organizationId: Id<"organizations">; panels?: Array<unknown> }) => Promise<Id<"dashboards">>;
+        create: (args: { name: unknown; organizationId: Id<"organizations">; panels?: Array<unknown> }) => Promise<Id<"dashboards">>;
         get: (args: { id: Id<"dashboards">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }[]>;
         remove: (args: { id: Id<"dashboards">; organizationId: Id<"organizations"> }) => Promise<Id<"dashboards">>;
-        update: (args: { id: Id<"dashboards">; name?: string; organizationId: Id<"organizations">; panels?: Array<unknown> }) => Promise<Id<"dashboards">>;
+        update: (args: { id: Id<"dashboards">; name?: unknown; organizationId: Id<"organizations">; panels?: Array<unknown> }) => Promise<Id<"dashboards">>;
     };
     deploy_keys: {
-        ingestKeyCipher: (args: { deployKey: string; organizationId: Id<"organizations"> }) => Promise<null | { ciphertext: string; iv: string }>;
-        issue: (args: { capability?: "deploy" | "ingest"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
+        ingestKeyCipher: (args: { deployKey: unknown; organizationId: Id<"organizations"> }) => Promise<null | { ciphertext: string; iv: string }>;
+        issue: (args: { capability?: "deploy" | "ingest"; name: unknown; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "ingest" | "deploy"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
-        recordIngestKey: (args: { deployKey: string; encryptedSecret: { ciphertext: string; iv: string }; hashedKey: string; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
+        recordIngestKey: (args: { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
         revoke: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<void>;
-        verify: (args: { key: string }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
+        verify: (args: { key: unknown }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
     deployments: {
-        activate: (args: { deployKey?: string; id: Id<"deployments"> }) => Promise<void>;
+        activate: (args: { deployKey?: unknown; id: Id<"deployments"> }) => Promise<void>;
         adminTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
-        create: (args: { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: string; scriptName: string }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
+        create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "failed" | "destroyed" | "live" | "provisioning" | "queued" | "superseded" | "verifying"; updatedAt: number; url?: string; version?: number }[]>;
-        planForScript: (args: { scriptName: string }) => Promise<{ plan: string; }>;
+        planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
-        rollback: (args: { deployKey?: string; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
-        routeForAlias: (args: { alias: string }) => Promise<{ scriptName: string; } | null>;
-        updateStatus: (args: { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: string }) => Promise<void>;
+        rollback: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
+        routeForAlias: (args: { alias: unknown }) => Promise<{ scriptName: string; } | null>;
+        updateStatus: (args: { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }) => Promise<void>;
     };
     domains: {
-        add: (args: { hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
+        add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
         get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
-        markVerified: (args: { customHostnameId?: string; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
+        markVerified: (args: { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
-        routeForHostname: (args: { hostname: string }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
+        routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
     fanout: {
         tick: (args?: {}) => Promise<{ ok: true; }>;
@@ -679,8 +679,8 @@ export interface Caller {
         triage: (args: { id: Id<"incidents">; organizationId: Id<"organizations"> }) => Promise<{ summary: string; }>;
     };
     invitations: {
-        accept: (args: { token: string }) => Promise<{ organizationId: Id<"organizations">; }>;
-        invite: (args: { email: string; organizationId: Id<"organizations"> }) => Promise<{ id: Id<"invitations">; token: string; }>;
+        accept: (args: { token: unknown }) => Promise<{ organizationId: Id<"organizations">; }>;
+        invite: (args: { email: unknown; organizationId: Id<"organizations"> }) => Promise<{ id: Id<"invitations">; token: string; }>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ organizationId: Id<"organizations">; email: string; createdAt: number; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
         revoke: (args: { id: Id<"invitations">; organizationId: Id<"organizations"> }) => Promise<void>;
     };
@@ -689,59 +689,59 @@ export interface Caller {
         setStatus: (args: { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }) => Promise<Id<"issues">>;
     };
     logs: {
-        ingest: (args: { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
-        ingestInternal: (args: { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
-        list: (args: { afterCreatedAt?: number; from?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; to?: number; traceId?: string }) => Promise<{ createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "log" | "trace" | "info" | "error" | "debug" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
-        orgForScript: (args: { scriptName: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
+        ingest: (args: { deployKey: unknown; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: unknown }) => Promise<{ ingested: number; }>;
+        ingestInternal: (args: { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: unknown }) => Promise<{ ingested: number; }>;
+        list: (args: { afterCreatedAt?: number; from?: number; functionPath?: unknown; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: unknown; search?: unknown; to?: number; traceId?: unknown }) => Promise<{ createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "log" | "trace" | "info" | "error" | "debug" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
+        orgForScript: (args: { scriptName: unknown }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         prune: (args?: {}) => Promise<{ pruned: number; }>;
     };
     members: {
-        add: (args: { organizationId: Id<"organizations">; userId: string }) => Promise<Id<"members">>;
+        add: (args: { organizationId: Id<"organizations">; userId: unknown }) => Promise<Id<"members">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: (args: { id: Id<"members">; organizationId: Id<"organizations"> }) => Promise<void>;
         setRole: (args: { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }) => Promise<void>;
     };
     metrics: {
-        ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<unknown> }) => Promise<{ ingested: number; }>;
+        ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<unknown> }) => Promise<{ ingested: number; }>;
         list: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
         prune: (args?: {}) => Promise<{ pruned: number; }>;
         series: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     organizations: {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
-        create: (args: { cellId?: Id<"cells">; jurisdiction?: string; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }) => Promise<Id<"organizations">>;
-        getBySlug: (args: { slug: string }) => Promise<null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
+        create: (args: { cellId?: Id<"cells">; jurisdiction?: unknown; name: unknown; plan?: "free" | "pro" | "enterprise"; slug: unknown }) => Promise<Id<"organizations">>;
+        getBySlug: (args: { slug: unknown }) => Promise<null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
         linkCreditsAccount: (args: { creditsAccountId: string; organizationId: Id<"organizations"> }) => Promise<void>;
         list: (args?: {}) => Promise<{ _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
         purgeDeleted: (args?: {}) => Promise<{ purged: number; }>;
-        rename: (args: { name: string; organizationId: Id<"organizations"> }) => Promise<void>;
+        rename: (args: { name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         requestDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
     };
     projects: {
-        byGithubRepo: (args: { repository: string }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
-        create: (args: { framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }) => Promise<Id<"projects">>;
+        byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
+        create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
         listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }[]>;
-        rename: (args: { id: Id<"projects">; name: string; organizationId: Id<"organizations"> }) => Promise<void>;
+        rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
     };
     secrets: {
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
-        listEncrypted: (args: { deployKey?: string; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string; name: string; }[]>;
+        listEncrypted: (args: { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string; name: string; }[]>;
         remove: (args: { id: Id<"secrets">; organizationId: Id<"organizations"> }) => Promise<void>;
-        store: (args: { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
+        store: (args: { ciphertext: unknown; environment?: "all" | "production" | "preview" | "dev"; iv: unknown; name: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
     sessions: {
-        get: (args: { organizationId: Id<"organizations">; sessionId: string }) => Promise<{ completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; level: "info" | "error"; model?: string; name: string; promptTokens?: number; spanId: string; startedAt: number; traceId: string }[]>;
+        get: (args: { organizationId: Id<"organizations">; sessionId: unknown }) => Promise<{ completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; level: "info" | "error"; model?: string; name: string; promptTokens?: number; spanId: string; startedAt: number; traceId: string }[]>;
         list: (args: { limit?: number; organizationId: Id<"organizations"> }) => Promise<{ completionTokens: number; errorCount: number; firstSeen: number; lastSeen: number; models: string[]; promptTokens: number; sessionId: string; totalTokens: number; turnCount: number }[]>;
     };
     telemetry: {
-        ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
-        orgForDeployKey: (args: { deployKey: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
+        ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+        orgForDeployKey: (args: { deployKey: unknown }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
     };
     traces: {
-        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
-        getArchived: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
-        list: (args: { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
+        get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        getArchived: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        list: (args: { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: unknown; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
         listArchived: (args: { from: number; limit?: number; organizationId: Id<"organizations">; to: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
@@ -751,7 +751,7 @@ export interface Caller {
     };
     usage: {
         enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; }>;
-        ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
+        ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         overageWatermark: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ debitedCredits: number; }>;
         record: (args: { deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         recordOverageDebit: (args: { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }) => Promise<void>;

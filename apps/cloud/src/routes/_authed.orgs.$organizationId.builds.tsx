@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { BuildsSection } from "../client/BuildsSection";
 import type { OrgId } from "../client/types";
-import { preload } from "../ssr/loader";
+import { sectionLoader } from "./-section-loader";
 
 const BuildsSectionRoute = (): ReactElement => {
     const { organizationId } = Route.useParams();
@@ -13,16 +13,8 @@ const BuildsSectionRoute = (): ReactElement => {
     return <BuildsSection organizationId={organizationId as OrgId} preloaded={preloaded} />;
 };
 
-/**
- * `builds` tab. The section's primary query is resolved on the edge as the
- * signed-in user, so the table is in the first byte; `usePreloadedQuery` inside
- * the section takes it live over the WebSocket once mounted.
- */
+/** `builds` tab — see `-section-loader.ts` for how its data is server-rendered. */
 export const Route = createFileRoute("/_authed/orgs/$organizationId/builds")({
     component: BuildsSectionRoute,
-    loader: async ({ params }) => {
-        return {
-            preloaded: await preload(api.projects.listByOrg, { organizationId: params.organizationId as OrgId }),
-        };
-    },
+    loader: sectionLoader(api.projects.listByOrg),
 });

@@ -1,10 +1,9 @@
-import { dbRateLimit } from "@lunora/ratelimit";
-
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 interface ProjectRow {
     _id: Id<"projects">;
@@ -29,7 +28,7 @@ export const listByOrg = query
 
 /** Resolve a project by its connected GitHub repository (`owner/name`). */
 export const byGithubRepo = query
-    .input({ repository: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
+    .input({ repository: boundedString(LIMITS.token) })
     .query(async ({ ctx: context, args: { repository } }): Promise<null | { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
         const project = (page as unknown as ProjectRow[])[0];
@@ -44,13 +43,13 @@ export const byGithubRepo = query
  * `plan` column — see `lunora/entitlements.ts`).
  */
 export const create = mutation
-    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
+    .use(dbRateLimit("provision"))
     .input({
-        framework: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
-        githubRepo: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        framework: v.optional(boundedString(LIMITS.id)),
+        githubRepo: v.optional(boundedString(LIMITS.token)),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
-        slug: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        slug: boundedString(LIMITS.id),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"projects">> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
@@ -71,10 +70,10 @@ export const create = mutation
 
 /** Rename a project (owner/admin). The slug (and its URL alias) is immutable. */
 export const rename = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
         id: v.id("projects"),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { id, name, organizationId } }): Promise<void> => {

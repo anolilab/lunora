@@ -1,4 +1,3 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret } from "../src/deploy/keys";
@@ -6,7 +5,8 @@ import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Custom domains (GAPS.md B1). A hostname is added (minting a TXT verification
@@ -39,13 +39,13 @@ const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
 
 /** Add a hostname to a project (owner/admin) and mint its TXT verification token. */
 export const add = mutation
-    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
+    .use(dbRateLimit("provision"))
     .input({
-        hostname: v.string().check((value) => value.length <= 253, { message: "must be at most 253 characters", schema: { maxLength: 253 } }),
+        hostname: boundedString(LIMITS.hostname),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         redirectStatusCode: v.optional(v.number()),
-        redirectTo: v.optional(v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } })),
+        redirectTo: v.optional(boundedString(LIMITS.url)),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
@@ -104,7 +104,7 @@ export const list = query
 
 /** Remove a domain (owner/admin). */
 export const remove = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("domains"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
@@ -129,9 +129,9 @@ export const remove = mutation
  * hostname id once the 🌐 provisioning path creates it.
  */
 export const markVerified = mutation
-    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
+    .use(dbRateLimit("machine"))
     .input({
-        customHostnameId: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        customHostnameId: v.optional(boundedString(LIMITS.id)),
         id: v.id("domains"),
         organizationId: v.id("organizations"),
         verified: v.boolean(),
@@ -154,7 +154,7 @@ export const markVerified = mutation
  * through a bearer-gated control-plane endpoint. Unverified rows never route.
  */
 export const routeForHostname = query
-    .input({ hostname: v.string().check((value) => value.length <= 253, { message: "must be at most 253 characters", schema: { maxLength: 253 } }) })
+    .input({ hostname: boundedString(LIMITS.hostname) })
     .query(async ({ ctx: context, args: { hostname } }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string }> => {
         const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase() } });
         const domain = (page as unknown as DomainRow[])[0];

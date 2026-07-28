@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { useMutation, usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
@@ -6,13 +6,8 @@ import { useState } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import { DeploymentsSection } from "./DeploymentsSection";
-import type { OrgId, ProjectId } from "./types";
-
-interface ProjectsSectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
-}
+import type { ProjectId } from "./types";
+import type { SectionProps } from "./tabs";
 
 /** Derive a url-safe slug from a free-text name (shared shape with org slugs). */
 const slugify = (value: string): string => {
@@ -42,7 +37,7 @@ const slugify = (value: string): string => {
  * Projects tab: the org's projects (live), an inline create form, and — when a
  * project is selected — its {@link DeploymentsSection}.
  */
-export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionProps): ReactElement => {
+export const ProjectsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const projects = usePreloadedQuery(preloaded);
     const createProject = useMutation(api.projects.create);
 

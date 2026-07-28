@@ -1,18 +1,13 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
-import { formatMs } from "./format";
+import { formatMs, formatTime } from "./format";
 import type { OrgId } from "./types";
-
-interface SessionsSectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.sessions.list>>;
-}
+import type { SectionProps } from "./tabs";
 
 /** One turn as `sessions.get` returns it. */
 interface SessionTurn {
@@ -89,7 +84,7 @@ const SessionTurns = ({ organizationId, sessionId }: { organizationId: OrgId; se
  * pattern. Both queries are live. Empty until the framework emits
  * `gen_ai.conversation.id` (no session id → no session grouping).
  */
-export const SessionsSection = ({ organizationId, preloaded }: SessionsSectionProps): ReactElement => {
+export const SessionsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.sessions.list>>): ReactElement => {
     const sessions = usePreloadedQuery(preloaded);
     const [sessionId, setSessionId] = useState("");
 
@@ -139,7 +134,7 @@ export const SessionsSection = ({ organizationId, preloaded }: SessionsSectionPr
                                             <span className="log-badge log-badge-info">ok</span>
                                         )}
                                     </td>
-                                    <td className="muted">{new Date(session.lastSeen).toLocaleTimeString()}</td>
+                                    <td className="muted">{formatTime(session.lastSeen)}</td>
                                 </tr>
                             ))}
                         </tbody>

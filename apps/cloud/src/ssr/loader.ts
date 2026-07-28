@@ -76,16 +76,19 @@ export const loadSession = createServerFn({ method: "GET" }).handler(async (): P
 });
 
 /**
- * Session-gate a route: resolve the user or bounce to `/login`, carrying the
- * attempted path so sign-in can return there. Called from `beforeLoad`, so on the
- * initial request the gate is enforced before the first byte rather than as a
- * post-hydration flash.
+ * Session-gate a route: resolve the user or bounce to `/login`, carrying the whole
+ * attempted location (path *and* search) so sign-in can return them to the exact
+ * deep link. Called from `beforeLoad`, so on the initial request the gate is
+ * enforced before the first byte rather than as a post-hydration flash.
  */
-export const requireSession = async (pathname: string): Promise<StudioSession> => {
+export const requireSession = async (target: string): Promise<StudioSession> => {
     const session = await loadSession();
 
     if (!session) {
-        throw redirect({ search: pathname === "/" ? undefined : { redirect: pathname }, to: "/login" });
+        // `target` is the full `pathname + search` the visitor asked for, so a deep
+        // link survives the round trip through sign-in. `/login` re-validates it to a
+        // same-origin path before using it, so passing it through here is safe.
+        throw redirect({ search: target === "/" ? undefined : { redirect: target }, to: "/login" });
     }
 
     return session;
@@ -98,26 +101,72 @@ export const requireSession = async (pathname: string): Promise<StudioSession> =
  * A `FunctionReference` is just `{ __lunoraRef: "path" }`, so only the path and
  * args cross the server-function boundary — which is what lets the same call work
  * from an SSR render and from a client navigation.
+ *
+ * SECURITY — the `functionPath` is caller-supplied, and a server function is a
+ * publicly reachable endpoint, so this is a generic "run a Lunora function as me"
+ * proxy unless it is constrained. Two things constrain it:
+ *
+ * 1. **`kind` is checked against the generated registry.** The `/_lunora/rpc`
+ *    envelope carries only `{ args, functionPath, shardKey }` — no operation kind —
+ *    so the RPC layer cannot tell a query call from a mutation call and would
+ *    happily execute `organizations:requestDeletion` if that path were passed to
+ *    `preloadQuery`. Rejecting anything whose registered `kind` is not `"query"`
+ *    is what stops this from being a confused-deputy that mutates on read.
+ * 2. **`POST`, not `GET`.** A `GET` server function is reachable cross-site by a
+ *    bare `&lt;img>`/navigation carrying the victim's cookies; a state-changing
+ *    confused deputy behind `GET` is trivially CSRF-able. Preloading is logically
+ *    a read, but the transport must not be the thing standing between an attacker
+ *    and a write. `createCsrfMiddleware` in `src/start.ts` enforces same-origin on
+ *    top of this.
+ *
+ * Note this grants no privilege the browser lacks — it forwards the caller's own
+ * cookies, so RLS and the shard-authorization gate apply exactly as they do to a
+ * direct `/_lunora/rpc` call. The gate is about not widening the *verb*.
  */
-const preloadOnServer = createServerFn({ method: "GET" })
+const preloadOnServer = createServerFn({ method: "POST" })
     .validator((input: { args: Record<string, unknown>; functionPath: string }) => input)
     .handler(async ({ data }): Promise<string> => {
         const { createServerClient, preloadQuery } = await import("@lunora/client/ssr");
         const { getRequest, getRequestUrl } = await import("@tanstack/react-start/server");
+        const { LUNORA_FUNCTIONS } = await import("../../lunora/_generated/functions.js");
+
+        const registered = LUNORA_FUNCTIONS[data.functionPath];
+
+        if (registered?.kind !== "query") {
+            throw new Error(`preload: "${data.functionPath}" is not a query`);
+        }
 
         const cookie = getRequest().headers.get("cookie") ?? "";
+        const { origin } = getRequestUrl();
         const client = createServerClient({
-            // Forward the caller's cookies so the RPC runs as the signed-in user.
             fetch: (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
                 const headers = new Headers(init?.headers);
 
+                // Forward the caller's cookies so the RPC runs as the signed-in user.
                 if (cookie !== "") {
                     headers.set("cookie", cookie);
                 }
 
+                // And declare the origin, which is genuinely this worker's own.
+                //
+                // Without it every preload is rejected 403 before routing. The
+                // runtime's `enforceOrigin` guard (CSRF, on by default) blocks any
+                // unsafe-method request that carries a cookie but names no
+                // `Origin`/`Referer` — and `LunoraClient` sends only
+                // `content-type` on its `POST /_lunora/rpc`. So a cookie-forwarded
+                // preload trips the guard on every route loader: the loaders throw,
+                // and every authenticated page renders the error boundary while
+                // `/login` (a GET, hence CSRF-exempt) still works. That asymmetry is
+                // why a smoke test of `/` alone does not catch it.
+                //
+                // Safe to assert only because `functionPath` is now gated to
+                // registered queries above — the guard is no longer the thing
+                // standing between a caller and an arbitrary mutation.
+                headers.set("origin", origin);
+
                 return fetch(input, { ...init, headers });
             },
-            url: getRequestUrl().origin,
+            url: origin,
         });
 
         // Serialized rather than returned as an object: a server function's return
