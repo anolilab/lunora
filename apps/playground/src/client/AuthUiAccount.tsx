@@ -1,6 +1,15 @@
 import "@lunora/auth-ui/styles.css";
 
-import { AuthUIProvider, ChangePasswordCard, DeleteAccountCard, ProfileCard, SessionsCard, SignOutButton } from "@lunora/auth-ui/react";
+import {
+    AuthUIProvider,
+    ChangePasswordCard,
+    DeleteAccountCard,
+    ErrorToaster,
+    ProfileCard,
+    SessionsCard,
+    SignOutButton,
+    UserButton,
+} from "@lunora/auth-ui/react";
 import type { CSSProperties, ReactElement } from "react";
 
 import { authClient } from "./auth-client.js";
@@ -26,6 +35,11 @@ export const AuthUiAccount = (): ReactElement => (
         }}
     >
         <div style={STACK_STYLE}>
+            {/* The avatar menu, which is the one new component with real browser
+                behaviour to verify — a disclosure with Escape and outside-click
+                handling that jsdom exercises but a real browser can disagree
+                with. Everything below it is a form. */}
+            <UserButton />
             {/* No `defaultName` on purpose: the controller prefills from the
                 session itself. Passing a live session value here would make it a
                 controller dependency and reset the card on every refresh. */}
@@ -34,6 +48,8 @@ export const AuthUiAccount = (): ReactElement => (
             <SessionsCard />
             <DeleteAccountCard />
             <SignOutButton />
+            {/* Mounted so a failure with no card to land in is still visible. */}
+            <ErrorToaster />
         </div>
     </AuthUIProvider>
 );
