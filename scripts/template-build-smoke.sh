@@ -18,6 +18,17 @@
 #   0  — all results were PASS or XFAIL
 #   1  — at least one FAIL or XPASS
 #
+# PREREQUISITE: build production artifacts first.
+#
+#   pnpm run build:packages:prod
+#
+# This script packs whatever is sitting in each package's `dist/`, and the plain
+# `build` target is a packem *development* build that keeps `react/jsx-dev-runtime`.
+# Pack that and the Next template's production prerender dies with
+# `TypeError: (0, p.jsxDEV) is not a function` — a failure that says nothing about
+# the template, because users install the production build. See
+# `scripts/check-dist-production.js`, which guards the same thing at release.
+#
 # Usage:
 #   pnpm run test:templates                 # full matrix
 #   ./scripts/template-build-smoke.sh       # same
@@ -42,6 +53,13 @@ set -euo pipefail
 # `astro build` in its build script — the @lunora/astro integration, unlike the
 # Vite plugin, does not run codegen itself.)
 export ASTRO_TELEMETRY_DISABLED=1
+
+# The Next template's `app/providers.tsx` throws when NEXT_PUBLIC_LUNORA_URL is
+# unset in a production build — deliberately, so a deployed bundle can never
+# point at whatever localhost the developer happened to have. `next build`
+# prerenders every route, so that throw aborts the build. Supply the value the
+# two-worker split expects; harmless for every other template, which ignores it.
+export NEXT_PUBLIC_LUNORA_URL="http://localhost:8787"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH="$(mktemp -d -t lunora-tmpl-XXXXXX)"
@@ -80,7 +98,23 @@ ONLY_TEMPLATE="${1:-}"
 # (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Lunora
 # is standardized on Vite 8 — see the official CF react-router starter which
 # pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
-XFAIL_BUILD=()
+#
+# Both entries are template bugs that predate the auth-ui payload — a control run
+# with the `lunora add auth-ui` step disabled fails identically. They are listed
+# rather than fixed here so this matrix can become a required check without
+# blocking every PR on work tracked elsewhere. Delete an entry with its fix; the
+# XPASS branch fails the run if one starts passing, so the list cannot rot.
+#
+#   analog        — `Could not resolve entry module "index.html"`, 0 modules
+#                   transformed. https://github.com/anolilab/lunora/issues/220
+#   react-router  — `Could not determine server runtime`; the Cloudflare template
+#                   needs a custom entry.server, not @react-router/node.
+#                   https://github.com/anolilab/lunora/issues/221
+#   astro         — `Missing field \`moduleType\`` out of @cloudflare/vite-plugin;
+#                   Astro drags Vite 7 while the repo is on Vite 8, the same
+#                   major mismatch that removed the templates mentioned above.
+#                   https://github.com/anolilab/lunora/issues/222
+XFAIL_BUILD=("analog" "astro" "react-router")
 
 # ---------------------------------------------------------------------------
 # Templates excluded from this worker-toolchain smoke matrix.

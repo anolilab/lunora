@@ -189,8 +189,13 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            - "name": "Build packages"
-              "run": "pnpm run build:packages"
+            # `build:packages:prod`, not `build:packages`. The matrix packs
+            # `dist/` into tarballs, and the plain `build` target is a packem
+            # *development* build that keeps `react/jsx-dev-runtime` — a Next
+            # production prerender then dies with `jsxDEV is not a function`.
+            # Users install the production build, so that is what to test.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
 
             - "name": "Run the template scaffold matrix"
               "run": "pnpm run test:templates"

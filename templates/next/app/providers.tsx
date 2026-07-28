@@ -23,11 +23,16 @@ import { useState } from "react";
  * value would otherwise point every visitor's browser at their own machine, so
  * it fails loudly instead.
  */
-const lunoraUrl = process.env.NEXT_PUBLIC_LUNORA_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8787" : undefined);
+const configuredUrl = process.env.NEXT_PUBLIC_LUNORA_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8787" : undefined);
 
-if (!lunoraUrl) {
+if (!configuredUrl) {
     throw new Error("NEXT_PUBLIC_LUNORA_URL must be set — it is inlined into the client bundle at build time.");
 }
+
+// Re-bound with an explicit type rather than relying on the throw above to narrow
+// it: the only read is inside a `useState` initializer, and control-flow
+// narrowing does not reach into a closure body.
+const lunoraUrl: string = configuredUrl;
 
 export function Providers({ children }: { children: ReactNode }) {
     const [client] = useState(() => new LunoraClient({ url: lunoraUrl }));
