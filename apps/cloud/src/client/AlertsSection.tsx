@@ -1,17 +1,12 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { useMutation, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
-import type { OrgId } from "./types";
 
-interface AlertsSectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
-}
+import type { SectionProps } from "./tabs";
 
 /** Every alert-rule target — count-crossing + app-semantic / budget metric windows. */
 type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
@@ -48,7 +43,7 @@ const TARGET_LABELS: Record<RuleTarget, string> = {
  * manages rules and lists recent fired
  * alerts. Gated behind the `logStreams` plan entitlement.
  */
-export const AlertsSection = ({ organizationId, preloaded }: AlertsSectionProps): ReactElement => {
+export const AlertsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.billing.entitlements>>): ReactElement => {
     const entitlements = usePreloadedQuery(preloaded);
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const rules = useQuery(api.alerts.rules, gated ? "skip" : { organizationId });

@@ -1,10 +1,10 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Server-side builds (GAPS.md A3/A4). A verified GitHub push records a build
@@ -48,12 +48,12 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * as-is (`reused: true`) instead of queuing a rebuild.
  */
 export const recordPush = mutation
-    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
+    .use(dbRateLimit("machine"))
     .input({
-        branch: v.string().check((value) => value.length <= 255, { message: "must be at most 255 characters", schema: { maxLength: 255 } }),
-        commitSha: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        branch: boundedString(LIMITS.gitRef),
+        commitSha: boundedString(LIMITS.id),
         installationId: v.number(),
-        repository: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        repository: boundedString(LIMITS.token),
     })
     .mutation(async ({ ctx: context, args: { branch, commitSha, installationId, repository } }): Promise<null | { buildId: Id<"builds">; reused: boolean }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });

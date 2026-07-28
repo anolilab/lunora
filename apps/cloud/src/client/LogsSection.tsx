@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
@@ -6,15 +6,8 @@ import { useState } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
-import type { OrgId, ProjectId } from "./types";
-
-interface LogsSectionProps {
-    /** Deep-link in: prefilter the log lines to this trace (from a trace's "View logs"). */
-    focusTraceId?: string;
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
-}
+import type { ProjectId } from "./types";
+import type { SectionProps } from "./tabs";
 
 /** The seven-tier `ctx.log` severity ramp, ordered least→most severe for the filter chips. */
 type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
@@ -36,7 +29,7 @@ const renderFields = (fields: Record<string, unknown>): string =>
  * both push to the server-side `logs.list`. The query is live, so the view tails
  * on its own — no polling.
  */
-export const LogsSection = ({ focusTraceId, organizationId, preloaded }: LogsSectionProps): ReactElement => {
+export const LogsSection = ({ focusTraceId, organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const { from, to } = useTimeRange();
     const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
@@ -44,10 +37,15 @@ export const LogsSection = ({ focusTraceId, organizationId, preloaded }: LogsSec
     const [scriptName, setScriptName] = useState("");
     const [levels, setLevels] = useState<Set<LogLevel>>(new Set());
     const [search, setSearch] = useState("");
-    // Deep-link in: adopt an incoming trace filter (from a trace's "View logs")
-    // as a one-shot state seed. The dashboard remounts the section on each
-    // deep-link (via a `key`), so `focusTraceId` is consumed here rather than
-    // synced in a `useEffect` that would re-apply a stale filter on re-render.
+    // Deep-link in: adopt an incoming trace filter (from a trace's "View logs") as a
+    // one-shot state seed, so the user can then clear or change it freely.
+    //
+    // The invariant this relies on is the route's `key={traceId}` (see
+    // `src/routes/_authed.orgs.$organizationId.logs.tsx`), which remounts the section
+    // whenever `?traceId=` changes. It is NOT the old dashboard's `seq` counter —
+    // that was deleted with the SPA shell — and it is not free: the router alone
+    // remounts on a route change, not on a search-param change, so removing that
+    // `key` silently reintroduces a filter that outlives the URL.
     const [traceFilter, setTraceFilter] = useState<string | undefined>(focusTraceId);
 
     const logs = useQuery(

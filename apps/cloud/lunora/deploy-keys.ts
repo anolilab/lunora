@@ -1,11 +1,10 @@
-import { dbRateLimit } from "@lunora/ratelimit";
-
 import { isDeployCapable } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /** Public view of a deploy key — never exposes the stored hash. */
 interface DeployKeyView {
@@ -56,11 +55,11 @@ export const list = query
  * only.
  */
 export const issue = mutation
-    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
+    .use(dbRateLimit("sensitive"))
     .input({
         // `ingest` mints a telemetry-only key (OTLP push, no deploy); omitted/`deploy` is a full deploy key.
         capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
         projectId: v.optional(v.id("projects")),
         type: v.union(v.literal("production"), v.literal("dev"), v.literal("preview")),
@@ -93,7 +92,7 @@ export const issue = mutation
 
 /** Revoke a deploy key (owners/admins only). A revoked key fails `verify`. */
 export const revoke = mutation
-    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
+    .use(dbRateLimit("sensitive"))
     .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -116,8 +115,15 @@ export const revoke = mutation
  * `lastUsedAt` bump on a genuine match.
  */
 export const verify = mutation
-    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
-    .input({ key: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
+    // `machine`, not `sensitive`: this is the per-request credential check for
+    // `/v1/deploy` and `/v1/mcp`, so a human-scale 20/min bucket caps the whole
+    // machine surface at ~20 deploys (or ~10 MCP calls) per minute per IP — and
+    // inverts the two-tier design, since the router's outer per-IP bucket is
+    // 120/min and is supposed to be the one that throttles first. Brute force is
+    // not the risk it looks like: the key is a 256-bit secret matched by hash, and
+    // an invalid or revoked one returns `null` rather than an oracle.
+    .use(dbRateLimit("machine"))
+    .input({ key: boundedString(LIMITS.token) })
     .mutation(
         async ({
             ctx: context,
@@ -181,7 +187,7 @@ const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
  */
 export const ingestKeyCipher = query
     .input({
-        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        deployKey: boundedString(LIMITS.token),
         organizationId: v.id("organizations"),
     })
     .query(async ({ ctx: context, args: { deployKey, organizationId } }): Promise<CipherEnvelope | null> => {
@@ -199,14 +205,14 @@ export const ingestKeyCipher = query
  * token whose hash wasn't stored). Deploy-key authorized.
  */
 export const recordIngestKey = mutation
-    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
+    .use(dbRateLimit("sensitive"))
     .input({
-        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        deployKey: boundedString(LIMITS.token),
         encryptedSecret: v.object({
-            ciphertext: v.string().check((value) => value.length <= 8192, { message: "must be at most 8192 characters", schema: { maxLength: 8192 } }),
-            iv: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+            ciphertext: boundedString(LIMITS.secret),
+            iv: boundedString(LIMITS.id),
         }),
-        hashedKey: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        hashedKey: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, encryptedSecret, hashedKey, organizationId } }): Promise<CipherEnvelope> => {

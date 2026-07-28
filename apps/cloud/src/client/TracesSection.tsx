@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
@@ -9,15 +9,8 @@ import { CrossTabLink } from "./CrossTabLink";
 import { formatMs } from "./format";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import { SpanDetail, TraceWaterfall } from "./TraceDetail";
-import type { DeploymentId, OrgId, ProjectId } from "./types";
-
-interface TracesSectionProps {
-    /** Deep-link: when set (e.g. from an Issue or a log line), open this trace's waterfall. */
-    focusTraceId?: string;
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
-}
+import type { DeploymentId, ProjectId } from "./types";
+import type { SectionProps } from "./tabs";
 
 /**
  * Traces tab — real-duration, nested trace waterfalls over the span store
@@ -29,18 +22,23 @@ interface TracesSectionProps {
  * indented by its depth under `parentSpanId` — a true span waterfall, not a
  * log-gap timeline. Both queries are live.
  */
-export const TracesSection = ({ focusTraceId, organizationId, preloaded }: TracesSectionProps): ReactElement => {
+export const TracesSection = ({ focusTraceId, organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const client = useLunora();
     const { from, to } = useTimeRange();
     const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [deploymentId, setDeploymentId] = useState<DeploymentId | "">("");
-    // Deep-link in: open the focused trace's waterfall directly (`traces.get`
-    // needs only org + traceId, so no project/deployment pick is required). This
-    // is a one-shot state seed — the dashboard remounts the section on each
-    // deep-link (via a `key`), so `focusTraceId` is consumed here, not synced in
-    // a `useEffect` that would re-fire a stale trace on unrelated re-renders.
+    // Deep-link in: open the focused trace's waterfall directly (`traces.get` needs
+    // only org + traceId, so no project/deployment pick is required) as a one-shot
+    // state seed, so the user can then browse to other traces.
+    //
+    // Depends on the route's `key={traceId}` to remount when `?traceId=` changes —
+    // the router does not remount on a search-param change by itself. Note the
+    // converse limitation: selecting a different trace *in the table* updates this
+    // local state without rewriting the URL, so an in-page selection is not
+    // shareable. Incoming links are; making outgoing selections shareable means
+    // driving this through `navigate({ search })`.
     const [traceId, setTraceId] = useState(focusTraceId ?? "");
     const [errorOnly, setErrorOnly] = useState(false);
     const [selectedSpanId, setSelectedSpanId] = useState("");
