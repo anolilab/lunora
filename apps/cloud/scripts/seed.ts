@@ -305,6 +305,19 @@ const ensureDeployment = async (cookie: string, organizationId: string, projectI
     }
 
     const created = await rpc<{ deploymentId: string; scriptName: string; version: number }>(cookie, "deployments:create", {
+        // A representative spread of Cloudflare resource kinds, so the deployment's
+        // binding graph has something to draw. These mirror what a real wrangler
+        // config for an app like this one would declare.
+        bindings: [
+            { name: "DB", target: "acme-dev-db", type: "d1" },
+            { name: "CACHE", target: "acme-dev-cache", type: "kv" },
+            { name: "ASSETS", target: "acme-dev-assets", type: "r2" },
+            { name: "SHARD", target: "ShardDO", type: "durable_object" },
+            { name: "EMAILS", target: "acme-dev-emails", type: "queue" },
+            { name: "AI", type: "ai" },
+            { name: "STRIPE_SECRET_KEY", type: "secret" },
+            { name: "APP_ENV", target: "production", type: "var" },
+        ],
         branch: "main",
         kind: "production",
         organizationId,

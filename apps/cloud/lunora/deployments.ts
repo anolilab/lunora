@@ -18,6 +18,7 @@ interface DeploymentRow {
     adminTokenCiphertext?: string;
     adminTokenIv?: string;
     alias?: string;
+    bindings?: { name: string; target?: string; type: string }[];
     branch?: string;
     bundleHash?: string;
     createdAt: number;
@@ -196,6 +197,9 @@ export const create = mutation
         adminToken: v.optional(boundedString(LIMITS.sealedToken)),
         adminTokenCiphertext: v.optional(boundedString(LIMITS.cipher)),
         adminTokenIv: v.optional(boundedString(LIMITS.id)),
+        // What the tenant's wrangler config binds, captured at deploy time — the
+        // studio renders this as the deployment's binding graph.
+        bindings: v.optional(v.array(v.object({ name: boundedString(LIMITS.name), target: v.optional(boundedString(LIMITS.name)), type: boundedString(LIMITS.tag) }))),
         branch: v.optional(boundedString(LIMITS.gitRef)),
         // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
         cronSpecs: v.optional(v.array(boundedString(LIMITS.name))),
@@ -262,6 +266,7 @@ export const create = mutation
             organizationId: arguments_.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
+            ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
             ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
             scriptName: `${arguments_.scriptName}-v${String(version)}`,
             status: "queued",

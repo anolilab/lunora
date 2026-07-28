@@ -2080,6 +2080,22 @@ export const openApiSpec: Record<string, unknown> = {
                                             "adminToken": {},
                                             "adminTokenCiphertext": {},
                                             "adminTokenIv": {},
+                                            "bindings": {
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "name": {},
+                                                        "target": {},
+                                                        "type": {}
+                                                    },
+                                                    "required": [
+                                                        "name",
+                                                        "type"
+                                                    ],
+                                                    "type": "object"
+                                                },
+                                                "type": "array"
+                                            },
                                             "branch": {},
                                             "cronSpecs": {
                                                 "items": {},
