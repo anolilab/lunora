@@ -256,7 +256,10 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
   per-socket cursor resume ✅. RLS identity under live subscription ✅ — pinned
   at the relay tier's uniformity gate, where the failure mode is a cohort
   multicast computed under the anonymous identity reaching an identity-scoped
-  subscriber.
+  subscriber. All ten legs run against **both** hosts: the platform reference
+  host (`packages/shard-engine/__tests__/engine-conformance.test.ts`) and real
+  workerd through `createShardPlatform`
+  (`packages/do/__tests__/workerd/engine-conformance.workerd.test.ts`).
 - **Blocked: scheduler at-least-once + dead-letter.** Not expressible against
   the current contracts. `SchedulerHost` is `{schedule, cancel, cron?}` —
   enqueue and cancel only, with no delivery surface, attempt count, or
