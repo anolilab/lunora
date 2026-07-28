@@ -923,6 +923,12 @@ importers:
       '@icons-pack/react-simple-icons':
         specifier: catalog:web
         version: 13.13.0(react@19.2.8)
+      '@lunora/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../../packages/errors
       '@lunora/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
