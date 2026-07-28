@@ -27,16 +27,45 @@
  * untyped/unavailable.
  */
 import { passkeyClient } from "@better-auth/passkey/client";
-import { adminClient, emailOTPClient, magicLinkClient, organizationClient, twoFactorClient } from "better-auth/client/plugins";
+import {
+    adminClient,
+    anonymousClient,
+    deviceAuthorizationClient,
+    emailOTPClient,
+    lastLoginMethodClient,
+    magicLinkClient,
+    multiSessionClient,
+    oneTapClient,
+    organizationClient,
+    phoneNumberClient,
+    twoFactorClient,
+    usernameClient,
+} from "better-auth/client/plugins";
 
-/** Which client plugins to include. Each defaults to `false`. */
+/**
+ * Which client plugins to include. Each defaults to `false`.
+ *
+ * These are the same names `@lunora/auth-ui` gates its cards on, so one object
+ * can drive both `createLunoraAuthClient` and `registerAuthClientPlugins` — a
+ * flow the UI can show but this cannot install would be a card that renders and
+ * then fails at call time.
+ *
+ * `oneTap` is absent on purpose: Google One Tap needs a client id, not a
+ * boolean, so it comes in through {@link CreateLunoraAuthClientOptions.oneTapClientId}.
+ */
 interface LunoraAuthPluginToggles {
     admin?: boolean;
+    anonymous?: boolean;
+    deviceAuthorization?: boolean;
     emailOtp?: boolean;
+    lastLoginMethod?: boolean;
     magicLink?: boolean;
+    multiSession?: boolean;
     organization?: boolean;
     passkey?: boolean;
+    phoneNumber?: boolean;
     twoFactor?: boolean;
+    username?: boolean;
 }
 
 // A better-auth client plugin instance. better-auth's inferred client-plugin
@@ -72,6 +101,30 @@ const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthCli
         plugins.push(adminClient());
     }
 
+    if (toggles.username) {
+        plugins.push(usernameClient());
+    }
+
+    if (toggles.phoneNumber) {
+        plugins.push(phoneNumberClient());
+    }
+
+    if (toggles.multiSession) {
+        plugins.push(multiSessionClient());
+    }
+
+    if (toggles.anonymous) {
+        plugins.push(anonymousClient());
+    }
+
+    if (toggles.deviceAuthorization) {
+        plugins.push(deviceAuthorizationClient());
+    }
+
+    if (toggles.lastLoginMethod) {
+        plugins.push(lastLoginMethodClient());
+    }
+
     return plugins;
 };
 
@@ -82,6 +135,12 @@ interface CreateLunoraAuthClientOptions {
     baseURL?: string;
     /** Your own client plugins, appended after the standard set. */
     extraPlugins?: LunoraAuthClientPlugin[];
+
+    /**
+     * Google OAuth client id. Setting it installs the One Tap client plugin —
+     * a boolean toggle can't, because the prompt is Google's and needs the id.
+     */
+    oneTapClientId?: string;
     /** Which standard client plugins to include. */
     plugins?: LunoraAuthPluginToggles;
 }
@@ -113,12 +172,13 @@ const createLunoraAuthClient = <TClient>(
     createAuthClient: (options: Record<string, unknown>) => TClient,
     options: CreateLunoraAuthClientOptions = {},
 ): TClient => {
-    const { baseURL, extraPlugins = [], plugins, ...rest } = options;
+    const { baseURL, extraPlugins = [], oneTapClientId, plugins, ...rest } = options;
+    const oneTap = oneTapClientId === undefined || oneTapClientId === "" ? [] : [oneTapClient({ clientId: oneTapClientId })];
 
     return createAuthClient({
         ...rest,
         baseURL: baseURL ?? currentOrigin(),
-        plugins: [...lunoraAuthPlugins(plugins), ...extraPlugins],
+        plugins: [...lunoraAuthPlugins(plugins), ...oneTap, ...extraPlugins],
     });
 };
 

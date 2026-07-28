@@ -24,15 +24,38 @@
 import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
 import { createAuthClient } from "better-auth/client";
 
-import { registerAuthClientPlugins } from "./core";
+import { captchaHeaders, registerAuthClientPlugins } from "./core";
 
+/**
+ * The flows this client is built for. Every name here is one `@lunora/auth-ui`
+ * gates a card on, so the two halves cannot drift: a flow you turn on installs
+ * the better-auth client plugin that drives it *and* tells the cards it exists.
+ *
+ * Turn one on and run its server half (`lunora add auth-magic-link`, or the
+ * matching plugin in `lunora/auth/index.ts`). With `uiConfig()` mounted the
+ * server's answer is combined with this list, so a flow enabled here but not
+ * deployed stays hidden rather than rendering a card that 404s.
+ */
 const AUTH_PLUGINS = {
+    admin: false,
+    anonymous: false,
+    deviceAuthorization: false,
     emailOtp: true,
+    lastLoginMethod: false,
     magicLink: true,
+    multiSession: false,
     organization: true,
     passkey: true,
+    phoneNumber: false,
     twoFactor: true,
+    username: false,
 };
+
+/**
+ * Google One Tap needs a client id rather than a boolean, so it is configured
+ * here instead of in `AUTH_PLUGINS`. Leave it unset and `<OneTap>` stays off.
+ */
+const ONE_TAP_CLIENT_ID: string | undefined = undefined;
 
 /**
  * Where better-auth is served. Left undefined, the client uses the current
@@ -61,7 +84,21 @@ const authBaseUrl = (): string | undefined => {
 
 export const authClient = createLunoraAuthClient(createAuthClient, {
     baseURL: authBaseUrl(),
+    /*
+     * Attach a solved CAPTCHA token, if `<Captcha>` is mounted and produced one.
+     * This is the one place it can happen: better-auth's captcha plugin reads an
+     * `x-captcha-response` header, and threading fetch options through every
+     * flow instead would touch a dozen call sites. No captcha, no header.
+     */
+    fetchOptions: {
+        onRequest: (context: { headers: Headers }) => {
+            for (const [key, value] of Object.entries(captchaHeaders())) {
+                context.headers.set(key, value);
+            }
+        },
+    },
+    oneTapClientId: ONE_TAP_CLIENT_ID,
     plugins: AUTH_PLUGINS,
 });
 
-registerAuthClientPlugins(authClient, AUTH_PLUGINS);
+registerAuthClientPlugins(authClient, { ...AUTH_PLUGINS, oneTap: ONE_TAP_CLIENT_ID !== undefined });
