@@ -215,7 +215,19 @@ export const cancelDeletion = mutation
  */
 export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): Promise<{ purged: number }> => {
     const cutoff = context.now - DELETION_RETENTION_MS;
-    const { page } = await context.db.organizations.findMany({});
+    // DESC, deliberately, and not ASC like the other retention sweeps. `findMany({})`
+    // returns one 1000-row page, and `deletionRequestedAt` is optional — SQLite sorts
+    // NULLs FIRST on ASC, so ascending order would fill the page with the overwhelming
+    // majority of organizations that were never scheduled for deletion and starve the
+    // few that were. DESC puts NULLs last, so every organization pending deletion is
+    // seen before any that is not.
+    //
+    // Residual limit: within that non-NULL block DESC is newest-request-first, so with
+    // more than 1000 organizations pending deletion at once the oldest — the ones
+    // actually past the retention cutoff — would trail. That set is bounded by
+    // customers who asked for deletion in the last 30 days, so it is not the runaway
+    // case the log/metric/span prunes face.
+    const { page } = await context.db.organizations.findMany({ orderBy: [{ deletionRequestedAt: "desc" }] });
     const due = (page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[]).filter(
         (organization) => organization.deletionRequestedAt != null && organization.deletionRequestedAt < cutoff,
     );

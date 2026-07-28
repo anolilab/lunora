@@ -480,7 +480,14 @@ interface ObservationRow {
 /** Delete span observations past retention (Traces). SYSTEM only (cron dispatch). */
 export const pruneObservations = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - OBSERVATION_RETENTION_MS;
-    const { page } = await context.db.observations.findMany({});
+    // `findMany({})` returns ONE page (capped at 1000) and the age filter used to run
+    // in memory afterwards, so once the table exceeded that cap the page filled with
+    // rows the sweep did not want and the genuinely stale ones were never reached —
+    // the prune silently stopped making progress while reporting success. Ordering
+    // ASCENDING by the retention column puts the oldest rows, i.e. exactly the
+    // candidates, at the head of every page. The column is `v.number()` (never NULL),
+    // so no row can sort ahead of them.
+    const { page } = await context.db.observations.findMany({ orderBy: [{ startedAt: "asc" }] });
     const stale = (page as unknown as ObservationRow[]).filter((row) => row.startedAt < cutoff);
 
     for (const row of stale) {
