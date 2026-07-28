@@ -53,12 +53,29 @@ const AUTH_UI_OPTIONS: ReadonlyArray<SelectOption<AuthUiItem>> = [
 const DEFAULT_AUTH_UI_ITEM: AuthUiItem = "auth-ui-react";
 
 /**
+ * Is this a React Native (Expo) project? Every auth-UI port renders DOM — `div`,
+ * `form`, `input`, and a stylesheet of `lunora-auth-*` classes — so the React
+ * payload would type-check and then render nothing on a native target. Detected
+ * ahead of the framework match because an Expo app also depends on `react`, which
+ * would otherwise silently resolve to `auth-ui-react`.
+ */
+const isReactNativeProject = (dependencies: Readonly<Record<string, string>>): boolean =>
+    Object.hasOwn(dependencies, "react-native") || Object.hasOwn(dependencies, "@lunora/react-native") || Object.hasOwn(dependencies, "expo");
+
+/**
  * Detect which auth-UI item fits a project from its package.json dependencies.
  * The Lunora framework adapter dep wins; a bare framework (or its meta-framework)
- * is the fallback. Returns `undefined` when nothing matches (caller then prompts).
+ * is the fallback. Returns `undefined` when nothing matches (caller then prompts)
+ * — including for React Native, which has no DOM to render these screens into;
+ * callers gate on {@link isReactNativeProject} first so that case gets its own
+ * message rather than the generic "couldn't detect your framework".
  */
 const detectAuthUiItem = (dependencies: Readonly<Record<string, string>>): AuthUiItem | undefined => {
     const has = (name: string): boolean => Object.hasOwn(dependencies, name);
+
+    if (isReactNativeProject(dependencies)) {
+        return undefined;
+    }
 
     if (has("@lunora/react")) {
         return "auth-ui-react";
@@ -144,5 +161,15 @@ const normalizeFeature = (raw: string): NormalizedFeature | undefined => {
     return { item: lower, kind: "item" };
 };
 
-export { AUTH_PROVIDER_OPTIONS, AUTH_UI_OPTIONS, DEFAULT_AUTH_ITEM, DEFAULT_AUTH_UI_ITEM, detectAuthUiItem, EMAIL_ITEM, normalizeFeature, promptAuthProvider };
+export {
+    AUTH_PROVIDER_OPTIONS,
+    AUTH_UI_OPTIONS,
+    DEFAULT_AUTH_ITEM,
+    DEFAULT_AUTH_UI_ITEM,
+    detectAuthUiItem,
+    EMAIL_ITEM,
+    isReactNativeProject,
+    normalizeFeature,
+    promptAuthProvider,
+};
 export type { AuthUiItem, FeatureItem, NormalizedFeature };

@@ -187,6 +187,61 @@ export const appConfig: ApplicationConfig = {
 };
 ```
 
+## Meta-frameworks
+
+The cards are client components in every framework — they hold form state and
+call better-auth from event handlers. What differs per meta-framework is the
+router you hand to `nav`, and where the client boundary sits.
+
+| Framework                     | Item              | `nav` comes from                                              |
+| ----------------------------- | ----------------- | ------------------------------------------------------------- |
+| Next (App Router)             | `auth-ui-react`   | `useRouter()` from `next/navigation`; `Link` from `next/link` |
+| React Router (framework mode) | `auth-ui-react`   | `useNavigate()` from `react-router`                           |
+| TanStack Start (React)        | `auth-ui-react`   | `useRouter()` from `@tanstack/react-router`                   |
+| TanStack Start (Solid)        | `auth-ui-solid`   | `useRouter()` from `@tanstack/solid-router`                   |
+| Astro                         | `auth-ui-react`   | none needed — see below                                       |
+| Nuxt                          | `auth-ui-vue`     | `useRouter()` from `vue-router`                               |
+| SvelteKit                     | `auth-ui-svelte`  | `goto` from `$app/navigation`                                 |
+| Analog                        | `auth-ui-angular` | Angular's `Router`                                            |
+
+Three things are worth knowing before you wire one up.
+
+**Next.js.** The React views already carry `"use client"`, so you can render a
+card straight from a server component — no wrapper needed. The one difference is
+`lunora/auth-ui/client.ts`, which reads `import.meta.env.VITE_AUTH_URL`: that is
+a Vite API, and Next does not populate it. The expression is optional-chained so
+it is harmless (the client falls back to the current origin, which is what you
+want when the Worker is same-origin), but if you do need a different auth origin,
+edit that line to read `process.env.NEXT_PUBLIC_AUTH_URL`.
+
+**Astro.** Each `client:*` directive creates its own island with its own React
+root, and context does not cross islands. Put `<AuthUIProvider>` and the cards in
+one component and hydrate that:
+
+```astro
+---
+import SignIn from "../components/SignIn"; // renders <AuthUIProvider><SignInCard /></AuthUIProvider>
+---
+
+<SignIn client:load />
+```
+
+Hydrating `AuthUIProvider` and a card as two separate islands throws
+`useAuthUI must be used inside <AuthUIProvider />`.
+
+**SSR.** Every card renders its empty state on the server and fills in on the
+client — the settings and organization cards fetch on mount, so a server-rendered
+page shows their loading state. That is intended: session-dependent markup should
+not be in the SSR payload. Nothing reads `window` or `document` at module scope,
+so no card needs a `<ClientOnly>` / `client:only` escape hatch.
+
+**React Native / Expo is not supported.** The screens render DOM elements and a
+stylesheet; Metro has nothing to mount them into. `lunora add auth-ui` detects a
+React Native project and refuses rather than copying them in. The server half
+(`lunora add auth`) and the better-auth Expo bridge
+(`@lunora/react-native/auth`) both work — build the screens with React Native
+primitives against that same client.
+
 ## Making them yours
 
 Restyle `styles.css` — it reads the same design tokens as the rest of Lunora, so

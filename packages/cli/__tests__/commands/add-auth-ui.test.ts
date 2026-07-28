@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { detectAuthUiItem, normalizeFeature } from "../../src/commands/add/features";
+import { detectAuthUiItem, isReactNativeProject, normalizeFeature } from "../../src/commands/add/features";
 import { runAddFeature } from "../../src/commands/add/handler";
 import type { Logger } from "../../src/util/logger";
 
@@ -73,6 +73,15 @@ describe("detectAuthUiItem", () => {
 
         expect(detectAuthUiItem({ lodash: "4.0.0" })).toBeUndefined();
     });
+
+    it("does not resolve React Native to the DOM React payload", () => {
+        expect.assertions(3);
+
+        // An Expo app depends on `react`, which would otherwise match `auth-ui-react`.
+        expect(detectAuthUiItem({ expo: "54.0.0", react: "19.2.0", "react-native": "0.83.0" })).toBeUndefined();
+        expect(detectAuthUiItem({ "@lunora/react-native": "1.0.0", react: "19.2.0" })).toBeUndefined();
+        expect(isReactNativeProject({ "react-native": "0.83.0" })).toBe(true);
+    });
 });
 
 describe("runAddFeature (auth-ui)", () => {
@@ -139,6 +148,21 @@ describe("runAddFeature (auth-ui)", () => {
 
         expect(result.items).toStrictEqual(["auth-ui-react"]);
         expect(lines.join("\n")).toMatch(/couldn't detect your framework/);
+    });
+
+    it("`add auth-ui` refuses on React Native instead of copying the DOM screens", async () => {
+        expect.assertions(3);
+
+        seedProject(workdir, { expo: "54.0.0", "@lunora/react-native": "1.0.0", react: "19.2.0", "react-native": "0.83.0" });
+
+        const { lines, logger } = makeLogger();
+        // `--yes` so the "couldn't detect your framework" fallback would otherwise
+        // have installed `auth-ui-react` without asking.
+        const result = await runAddFeature({ cwd: workdir, feature: "auth-ui", from: registryRoot, logger, yes: true });
+
+        expect(result.code).toBe(1);
+        expect(lines.join("\n")).toMatch(/no React Native port/);
+        expect(existsSync(join(workdir, "lunora", "auth-ui"))).toBe(false);
     });
 
     it("uses the injected framework prompt when detection fails and not --yes", async () => {

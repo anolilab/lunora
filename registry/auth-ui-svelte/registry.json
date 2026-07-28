@@ -5,7 +5,7 @@
     "description": "Copy-in, user-owned Svelte auth screens on top of the base `auth` item and @lunora/svelte: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Svelte views under lunora/auth-ui/svelte, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
     "docs": "Import lunora/auth-ui/styles.css once and mount the provider from lunora/auth-ui/svelte, passing the authClient from lunora/auth-ui/client.ts plus your router into the nav adapter. Requires the base `auth` server item (auto-added). Enable optional flows by also running `lunora add auth-magic-link` / `auth-otp` and flipping the matching `plugins` in lunora/auth-ui/client.ts.",
     "requires": ["auth"],
-    "deps": { "@lunora/svelte": "workspace:*", "@lunora/auth": "workspace:*", "@lunora/errors": "workspace:*", "better-auth": "^1.6.23" },
+    "deps": { "@lunora/svelte": "workspace:*", "@lunora/auth": "workspace:*", "@lunora/errors": "workspace:*", "better-auth": "1.7.0-rc.2" },
     "files": [
         { "from": "client.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/client.ts" },
         { "from": "core/change-email.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/change-email.ts" },

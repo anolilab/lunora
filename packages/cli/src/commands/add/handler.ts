@@ -20,6 +20,7 @@ import {
     DEFAULT_AUTH_UI_ITEM,
     detectAuthUiItem,
     EMAIL_ITEM,
+    isReactNativeProject,
     normalizeFeature,
     promptAuthProvider,
 } from "./features";
@@ -263,6 +264,18 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     // Must be inside a Lunora project: a `lunora/` source dir + a wrangler config.
     if (!existsSync(join(cwd, "lunora")) || findWranglerFile(cwd) === undefined) {
         options.logger.error("add: not a Lunora project here (need a lunora/ directory and a wrangler.jsonc). Run `lunora init` first.");
+
+        return { code: 1, items: [] };
+    }
+
+    // Every auth-UI port renders DOM. On React Native the React payload would
+    // install and type-check, then render nothing — so say that instead of
+    // shipping `div`s into a Metro bundle. `auth` (the server half) is
+    // unaffected and `@lunora/react-native/auth` covers the client half.
+    if (feature.kind === "auth-ui" && isReactNativeProject(readProjectDependencies(cwd))) {
+        options.logger.error(
+            "add: auth-ui has no React Native port — the screens render DOM elements and a stylesheet, which Metro has nothing to mount. Build the screens with React Native primitives against the same better-auth client (`@lunora/react-native/auth`); `lunora add auth` still installs the server half.",
+        );
 
         return { code: 1, items: [] };
     }

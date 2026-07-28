@@ -70,22 +70,24 @@ const AuthUIProvider = ({
      * calls the setter, so this is a constant; every field reads through
      * `latest` at call time.
      */
-    const [handlers] = useState(() => {return {
-        nav: {
-            navigate: (to: string): void => {
-                (latest.current.nav ?? defaultNav).navigate(to);
+    const [handlers] = useState(() => {
+        return {
+            nav: {
+                navigate: (to: string): void => {
+                    (latest.current.nav ?? defaultNav).navigate(to);
+                },
+                replace: (to: string): void => {
+                    (latest.current.nav ?? defaultNav).replace(to);
+                },
             },
-            replace: (to: string): void => {
-                (latest.current.nav ?? defaultNav).replace(to);
+            onError: (error: unknown): void => {
+                latest.current.onError?.(error);
             },
-        },
-        onError: (error: unknown): void => {
-            latest.current.onError?.(error);
-        },
-        onSessionChange: (): void => {
-            latest.current.onSessionChange?.();
-        },
-    }});
+            onSessionChange: (): void => {
+                latest.current.onSessionChange?.();
+            },
+        };
+    });
 
     // `theme` is a function, so its identity is as unstable as the callbacks —
     // key on what it *returns* instead, which is what the cards actually consume.
