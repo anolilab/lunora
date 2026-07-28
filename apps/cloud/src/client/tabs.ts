@@ -1,3 +1,23 @@
+import {
+    Activity01Icon,
+    AlertCircleIcon,
+    AlertDiamondIcon,
+    Analytics01Icon,
+    Chart01Icon,
+    Clock01Icon,
+    CreditCardIcon,
+    File01Icon,
+    Globe02Icon,
+    Key01Icon,
+    MailAdd01Icon,
+    Notification03Icon,
+    PackageIcon,
+    PackageProcessIcon,
+    Pulse01Icon,
+    Route01Icon,
+    SquareLockPasswordIcon,
+    UserMultipleIcon,
+} from "@hugeicons/core-free-icons";
 import type { Preloaded } from "@lunora/client";
 
 import type { OrgId } from "./types";
@@ -12,26 +32,29 @@ import type { OrgId } from "./types";
  * `useState`; the ids are unchanged so the labels and ordering carry over.
  */
 export const TABS = [
-    { id: "projects", label: "Projects", to: "/orgs/$organizationId/projects" },
-    { id: "members", label: "Members", to: "/orgs/$organizationId/members" },
-    { id: "keys", label: "Deploy keys", to: "/orgs/$organizationId/keys" },
-    { id: "secrets", label: "Secrets", to: "/orgs/$organizationId/secrets" },
-    { id: "domains", label: "Domains", to: "/orgs/$organizationId/domains" },
-    { id: "builds", label: "Builds", to: "/orgs/$organizationId/builds" },
-    { id: "logs", label: "Logs", to: "/orgs/$organizationId/logs" },
-    { id: "traces", label: "Traces", to: "/orgs/$organizationId/traces" },
-    { id: "sessions", label: "Sessions", to: "/orgs/$organizationId/sessions" },
-    { id: "metrics", label: "Metrics", to: "/orgs/$organizationId/metrics" },
-    { id: "dashboards", label: "Dashboards", to: "/orgs/$organizationId/dashboards" },
-    { id: "issues", label: "Issues", to: "/orgs/$organizationId/issues" },
-    { id: "incidents", label: "Incidents", to: "/orgs/$organizationId/incidents" },
-    { id: "uptime", label: "Uptime", to: "/orgs/$organizationId/uptime" },
-    { id: "alerts", label: "Alerts", to: "/orgs/$organizationId/alerts" },
-    { id: "invitations", label: "Invitations", to: "/orgs/$organizationId/invitations" },
-    { id: "usage", label: "Usage", to: "/orgs/$organizationId/usage" },
-    { id: "billing", label: "Billing", to: "/orgs/$organizationId/billing" },
-    { id: "activity", label: "Activity", to: "/orgs/$organizationId/activity" },
+    { id: "projects", label: "Projects", to: "/orgs/$organizationId/projects", group: "Deploy", icon: PackageIcon },
+    { id: "members", label: "Members", to: "/orgs/$organizationId/members", group: "Team", icon: UserMultipleIcon },
+    { id: "keys", label: "Deploy keys", to: "/orgs/$organizationId/keys", group: "Deploy", icon: Key01Icon },
+    { id: "secrets", label: "Secrets", to: "/orgs/$organizationId/secrets", group: "Deploy", icon: SquareLockPasswordIcon },
+    { id: "domains", label: "Domains", to: "/orgs/$organizationId/domains", group: "Deploy", icon: Globe02Icon },
+    { id: "builds", label: "Builds", to: "/orgs/$organizationId/builds", group: "Deploy", icon: PackageProcessIcon },
+    { id: "logs", label: "Logs", to: "/orgs/$organizationId/logs", group: "Observability", icon: File01Icon },
+    { id: "traces", label: "Traces", to: "/orgs/$organizationId/traces", group: "Observability", icon: Route01Icon },
+    { id: "sessions", label: "Sessions", to: "/orgs/$organizationId/sessions", group: "Observability", icon: Clock01Icon },
+    { id: "metrics", label: "Metrics", to: "/orgs/$organizationId/metrics", group: "Observability", icon: Chart01Icon },
+    { id: "dashboards", label: "Dashboards", to: "/orgs/$organizationId/dashboards", group: "Observability", icon: Analytics01Icon },
+    { id: "issues", label: "Issues", to: "/orgs/$organizationId/issues", group: "Observability", icon: AlertCircleIcon },
+    { id: "incidents", label: "Incidents", to: "/orgs/$organizationId/incidents", group: "Observability", icon: AlertDiamondIcon },
+    { id: "uptime", label: "Uptime", to: "/orgs/$organizationId/uptime", group: "Observability", icon: Pulse01Icon },
+    { id: "alerts", label: "Alerts", to: "/orgs/$organizationId/alerts", group: "Observability", icon: Notification03Icon },
+    { id: "invitations", label: "Invitations", to: "/orgs/$organizationId/invitations", group: "Team", icon: MailAdd01Icon },
+    { id: "usage", label: "Usage", to: "/orgs/$organizationId/usage", group: "Account", icon: Analytics01Icon },
+    { id: "billing", label: "Billing", to: "/orgs/$organizationId/billing", group: "Account", icon: CreditCardIcon },
+    { id: "activity", label: "Activity", to: "/orgs/$organizationId/activity", group: "Account", icon: Activity01Icon },
 ] as const;
+
+/** Sidebar section order (top to bottom), from the recovered design. */
+export const TAB_GROUPS = ["Deploy", "Observability", "Team", "Account"] as const;
 
 /**
  * What every dashboard section receives.
