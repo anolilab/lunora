@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.74",
+    "version": "1.0.0-alpha.75",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -61,20 +61,20 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.53",
-        "@lunora/agent": "1.0.0-alpha.29",
-        "@lunora/container": "1.0.0-alpha.16",
-        "@lunora/errors": "1.0.0-alpha.8",
-        "@lunora/queue": "1.0.0-alpha.10",
-        "@lunora/scheduler": "1.0.0-alpha.12",
-        "@lunora/values": "1.0.0-alpha.11",
-        "@lunora/workflow": "1.0.0-alpha.13",
+        "@lunora/advisor": "1.0.0-alpha.54",
+        "@lunora/agent": "1.0.0-alpha.30",
+        "@lunora/container": "1.0.0-alpha.17",
+        "@lunora/errors": "1.0.0-alpha.9",
+        "@lunora/queue": "1.0.0-alpha.11",
+        "@lunora/scheduler": "1.0.0-alpha.13",
+        "@lunora/values": "1.0.0-alpha.12",
+        "@lunora/workflow": "1.0.0-alpha.14",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.52",
-        "@lunora/server": "1.0.0-alpha.50",
+        "@lunora/do": "1.0.0-alpha.53",
+        "@lunora/server": "1.0.0-alpha.51",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
