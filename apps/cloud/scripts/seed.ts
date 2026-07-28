@@ -31,13 +31,13 @@
  * custom domain plus telemetry (logs, metric series, traces, errors) for the
  * observability views.
  *
- * Three stages currently report a skip instead of data, and none is a seed bug:
+ * Three stages still report a skip instead of data, and none is a seed bug:
  *  - **domain** needs the `customDomains` entitlement, which resolves from a synced
  *    billing subscription; there is no non-webhook path to one locally.
- *  - **deployment activation** and **telemetry** are both blocked by the same
- *    upstream defect — optional columns on `.global()` (D1) tables come back as SQL
- *    NULL, and the app compares them against `undefined`. See the notes in
- *    `driveToLive` and `main`.
+ *  - **deployment activation** is blocked upstream: `updateStatus` re-validates the
+ *    merged document on patch, and an unset optional column on a `.global()` (D1)
+ *    table reads back as SQL NULL, which `v.optional(...)` rejects. See
+ *    `driveToLive`.
  *  - **builds** need a claimed GitHub installation, recorded only by the
  *    signature-verified webhook. See `seedTelemetry`.
  *
@@ -67,6 +67,9 @@ const PROJECT_SLUG = "web";
 const SCRIPT_NAME = "acme-dev-web";
 const DOMAIN_HOSTNAME = "web.acme-dev.test";
 const DEPLOY_KEY_NAME = "dev-seed";
+
+/** Appended when the lifecycle could not run; see {@link driveToLive}. */
+const BLOCKED_SUFFIX = ", not activated — updateStatus rejects D1 NULLs on patch";
 
 /** A trace id is 32 hex chars and a span id 16 — the W3C widths the UI parses. */
 const hex = (length: number, seed: number): string => Array.from({ length }, (_, index) => ((seed * 31 + index * 17 + 7) % 16).toString(16)).join("");
@@ -294,8 +297,6 @@ const driveToLive = async (cookie: string, id: string): Promise<boolean> => {
         // deployment `queued` rather than failing outright, so every later stage
         // (deploy key, telemetry) still seeds.
         if (message.includes("VALIDATION_ERROR")) {
-            console.info(`  deployment  (left queued — updateStatus rejects D1 NULLs on patch; see the note in driveToLive)`);
-
             return false;
         }
 
@@ -322,9 +323,9 @@ const ensureDeployment = async (cookie: string, organizationId: string, projectI
             return found._id;
         }
 
-        if (await driveToLive(cookie, found._id)) {
-            console.info(`  deployment  ${SCRIPT_NAME} (resumed from ${found.status} → live)`);
-        }
+        const resumed = await driveToLive(cookie, found._id);
+
+        console.info(`  deployment  ${SCRIPT_NAME} ${resumed ? `(resumed from ${found.status} → live)` : `(${found.status}${BLOCKED_SUFFIX})`}`);
 
         return found._id;
     }
@@ -340,7 +341,7 @@ const ensureDeployment = async (cookie: string, organizationId: string, projectI
 
     const live = await driveToLive(cookie, created.deploymentId);
 
-    console.info(`  deployment  ${SCRIPT_NAME} v${String(created.version)} (created${live ? ", live" : ""})`);
+    console.info(`  deployment  ${SCRIPT_NAME} v${String(created.version)} (created${live ? ", live" : BLOCKED_SUFFIX})`);
 
     return created.deploymentId;
 };

@@ -172,7 +172,7 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
         decision: ReturnType<typeof evaluateDunning>,
     ): null | { counter: "graced" | "recovered" | "suspended"; patch: Record<string, unknown> } => {
         if (decision.phase === "ok") {
-            if (organization.paymentFailedAt === undefined && organization.suspendedReason !== "dunning") {
+            if (organization.paymentFailedAt == null && organization.suspendedReason !== "dunning") {
                 return null;
             }
 
@@ -186,10 +186,10 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
         }
 
         if (decision.phase === "grace") {
-            return organization.paymentFailedAt === undefined ? { counter: "graced", patch: { paymentFailedAt: decision.paymentFailedAt } } : null;
+            return organization.paymentFailedAt == null ? { counter: "graced", patch: { paymentFailedAt: decision.paymentFailedAt } } : null;
         }
 
-        return organization.suspendedAt === undefined
+        return organization.suspendedAt == null
             ? { counter: "suspended", patch: { paymentFailedAt: decision.paymentFailedAt, suspendedAt: now, suspendedReason: "dunning" } }
             : null;
     };

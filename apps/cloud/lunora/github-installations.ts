@@ -63,7 +63,7 @@ export const claim = mutation
             throw new LunoraError("NOT_FOUND", "installation not found — install the GitHub App first");
         }
 
-        if (installation.organizationId !== undefined && installation.organizationId !== organizationId) {
+        if (installation.organizationId != null && installation.organizationId !== organizationId) {
             throw new LunoraError("CONFLICT", "installation is already claimed by another organization");
         }
 

@@ -71,7 +71,7 @@ const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organiza
     const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
     const row = (page as unknown as DeployKeyRow[])[0];
 
-    if (!row || row.revokedAt !== undefined || row.organizationId !== organizationId) {
+    if (!row || row.revokedAt != null || row.organizationId !== organizationId) {
         throw new LunoraError("FORBIDDEN", "invalid key for this organization");
     }
 
@@ -102,7 +102,7 @@ export const authorizeDeployKey = async (
         throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
     }
 
-    if (row.projectId !== undefined && projectId !== undefined && row.projectId !== projectId) {
+    if (row.projectId != null && projectId !== undefined && row.projectId !== projectId) {
         throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
     }
 
@@ -134,7 +134,7 @@ export const resolveDeployKeyOrg = async (context: QueryContext, key: string): P
     const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
     const row = (page as unknown as DeployKeyRow[])[0];
 
-    return row && row.revokedAt === undefined ? row.organizationId : null;
+    return row && row.revokedAt == null ? row.organizationId : null;
 };
 
 /**

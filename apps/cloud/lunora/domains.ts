@@ -159,7 +159,7 @@ export const routeForHostname = query
         const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase() } });
         const domain = (page as unknown as DomainRow[])[0];
 
-        if (domain?.verifiedAt === undefined) {
+        if (domain?.verifiedAt == null) {
             return null;
         }
 
