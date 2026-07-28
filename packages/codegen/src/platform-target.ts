@@ -107,6 +107,19 @@ const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
     cloudflare: CLOUDFLARE_CAPABILITIES,
 };
 
+/**
+ * The target ids codegen can gate against.
+ *
+ * Exported so `@lunora/config` can assert that its driver registry and this
+ * capability-matrix registry name the same targets. They are two id spaces for one
+ * concept: a target that ships a driver but no matrix passes the CLI's
+ * validation and then emits an un-gated surface, and one with a matrix but no
+ * driver gates a surface nothing can deploy. Today both hold exactly
+ * `cloudflare`, which is why nothing has noticed.
+ * @returns the registered matrix ids, sorted.
+ */
+const platformMatrixIds = (): ReadonlyArray<string> => Object.keys(PLATFORM_MATRICES).toSorted((a, b) => a.localeCompare(b));
+
 /** A platform feature key in the `@lunora/platform` capability matrix. */
 type PlatformFeatureKey = keyof PlatformCapabilities["features"];
 
@@ -224,4 +237,4 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string): PlatformGate
 };
 
 export type { PlatformDiagnostic, PlatformGateResult };
-export { DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures, PROJECT_CONFIG_FILE, readProjectTarget, resolveCodegenTarget };
+export { DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures, platformMatrixIds, PROJECT_CONFIG_FILE, readProjectTarget, resolveCodegenTarget };

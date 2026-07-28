@@ -1,7 +1,14 @@
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { PlatformCapabilities } from "@lunora/platform";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FeatureUsage } from "../src/discover-feature-usage";
+import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
+import { runCodegen } from "../src/run-codegen";
 
 const ALL_OFF: FeatureUsage = {
     access: false,
@@ -99,5 +106,75 @@ describe("gatePlatformFeatures", () => {
         const result = gatePlatformFeatures(usage, "cloudflare");
 
         expect(result.usage).toStrictEqual(usage);
+    });
+});
+
+describe("project-declared target", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixtureRoot = join(here, "fixtures", "simple");
+    let workdir: string;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-target-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    const writeConfig = (text: string): void => {
+        writeFileSync(join(workdir, "lunora.json"), text, "utf8");
+    };
+
+    const diagnosticNames = (target?: string): string[] =>
+        runCodegen({ projectRoot: workdir, target }).platformDiagnostics.map((diagnostic) => diagnostic.name);
+
+    it("gates against the project's declared target when the caller passes none", () => {
+        expect.assertions(2);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+
+        writeConfig(`{ "target": "aws" }`);
+
+        // The point of resolving inside `runCodegen`: a call site that forgets
+        // to thread a target would otherwise emit the DEFAULT surface with no
+        // diagnostic at all, and the mismatch would only surface at runtime on
+        // the deployed app.
+        expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
+    });
+
+    it("reads the target as JSONC, matching how the rest of lunora.json is parsed", () => {
+        expect.assertions(1);
+
+        // `@lunora/config` parses this file with `jsonc-parser`. A second reader
+        // using plain `JSON.parse` would reject a config the CLI accepts, which
+        // is exactly the drift a shared parser exists to prevent.
+        writeConfig(`{\n    // the target we ship to\n    "target": "aws",\n}`);
+
+        expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
+    });
+
+    it("lets an explicit target override the project config", () => {
+        expect.assertions(1);
+
+        writeConfig(`{ "target": "aws" }`);
+
+        expect(diagnosticNames("cloudflare")).toStrictEqual([]);
+    });
+
+    it("degrades to the default on an unusable config rather than throwing", () => {
+        expect.assertions(3);
+
+        writeConfig("{ not json");
+
+        expect(readProjectTarget(workdir)).toBeUndefined();
+
+        writeConfig(`{ "target": 42 }`);
+
+        // A non-string is a shape error, not a name the user meant — unlike a
+        // misspelled string, which must reach the registry and be rejected.
+        expect(readProjectTarget(workdir)).toBeUndefined();
+        expect(resolveCodegenTarget(workdir)).toBe("cloudflare");
     });
 });

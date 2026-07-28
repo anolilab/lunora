@@ -1138,6 +1138,12 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | undefined;
 ```
 
+### `platformMatrixIds` (const)
+
+```ts
+const platformMatrixIds: () => ReadonlyArray<string>;
+```
+
 ### `readProjectTarget` (const)
 
 ```ts

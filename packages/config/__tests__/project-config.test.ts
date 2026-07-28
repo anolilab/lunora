@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { platformMatrixIds } from "@lunora/codegen";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "../src/driver-registry";
+import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "../src/driver-registry";
 import { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
 
 describe("interpretRemote", () => {
@@ -162,5 +163,20 @@ describe("deploy-target resolution", () => {
         // was unrecognized ships an app to the wrong provider.
         expect(resolveProjectTarget(root)).toBe("clouflare");
         expect(() => resolveDeployDriver(resolveProjectTarget(root))).toThrow(/unknown deploy target "clouflare"/);
+    });
+});
+
+describe("target registries", () => {
+    it("keeps the driver registry and codegen's capability matrices in agreement", () => {
+        expect.assertions(1);
+
+        // Two id spaces for one concept. A target with a driver but no matrix
+        // passes `resolveTargetOrThrow` and then emits an un-gated surface —
+        // reintroducing the silent fallback with the guard fully in place. One
+        // with a matrix but no driver gates a surface nothing can deploy.
+        // They agree today only because both hold exactly `cloudflare`; this is
+        // what makes the next target's omission a failing test instead of a
+        // production surprise.
+        expect(deployTargetIds()).toStrictEqual(platformMatrixIds());
     });
 });
