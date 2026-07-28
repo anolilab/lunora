@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 
 import type { AuthUser } from "../core";
 import { createSessionController, userInitials, userLabel } from "../core/session";
@@ -24,9 +24,6 @@ interface UserAvatarProps {
 const UserAvatar = ({ size = 32, user }: UserAvatarProps): ReactElement => {
     const [failed, setFailed] = useState(false);
     const image = user?.image;
-    const onError = useCallback(() => {
-        setFailed(true);
-    }, []);
 
     /*
      * A new user means a new image URL, so a previous failure must not stick to
@@ -44,7 +41,17 @@ const UserAvatar = ({ size = 32, user }: UserAvatarProps): ReactElement => {
     const style = { height: `${String(size)}px`, width: `${String(size)}px` };
 
     if (image !== undefined && image !== "" && !failed) {
-        return <img alt="" className="lunora-auth-avatar" onError={onError} src={image} style={style} />;
+        return (
+            <img
+                alt=""
+                className="lunora-auth-avatar"
+                onError={() => {
+                    setFailed(true);
+                }}
+                src={image}
+                style={style}
+            />
+        );
     }
 
     return (
@@ -97,29 +104,30 @@ const UserButton = ({ children, hideWhenSignedOut }: UserButtonProps): ReactElem
     const triggerRef = useRef<HTMLButtonElement | null>(null);
     const menuId = useId();
 
-    const close = useCallback(() => {
-        setOpen(false);
-        triggerRef.current?.focus();
-    }, []);
+    /*
+     * Effect events, not callbacks: both read current state but must not be
+     * effect dependencies, or the listeners would be torn down and re-attached
+     * on every render that changes their identity.
+     */
+    const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+            setOpen(false);
+            triggerRef.current?.focus();
+        }
+    });
+
+    const onPointerDown = useEffectEvent((event: MouseEvent) => {
+        if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+            // Focus is deliberately *not* returned here: a click elsewhere is
+            // the user moving on, and yanking it back would fight them for it.
+            setOpen(false);
+        }
+    });
 
     useEffect(() => {
         if (!open) {
             return undefined;
         }
-
-        const onKeyDown = (event: KeyboardEvent): void => {
-            if (event.key === "Escape") {
-                close();
-            }
-        };
-
-        const onPointerDown = (event: MouseEvent): void => {
-            if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-                // Not `close()`: a click elsewhere is the user moving on, and
-                // yanking focus back to the trigger would fight them for it.
-                setOpen(false);
-            }
-        };
 
         document.addEventListener("keydown", onKeyDown);
         document.addEventListener("mousedown", onPointerDown);
@@ -128,7 +136,7 @@ const UserButton = ({ children, hideWhenSignedOut }: UserButtonProps): ReactElem
             document.removeEventListener("keydown", onKeyDown);
             document.removeEventListener("mousedown", onPointerDown);
         };
-    }, [open, close]);
+    }, [open]);
 
     // "Not asked yet" and "asked, nobody home" look identical in `user`, and
     // rendering a sign-in link during the first request makes every page flash

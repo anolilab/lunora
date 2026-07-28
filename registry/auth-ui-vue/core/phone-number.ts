@@ -145,7 +145,7 @@ const createPhoneForgotPasswordController = (context: ControllerContext): FormCo
         },
     });
 
-type PhoneResetPasswordField = "confirmPassword" | "newPassword" | "otp" | "phoneNumber";
+type PhoneResetPasswordField = "confirmPassword" | "newPassword" | "otp" | "phoneNumber"; // secret-scanner:allow -- field names, not values.
 
 /** Consume the SMS code and set a new password. */
 const createPhoneResetPasswordController = (context: ControllerContext): FormController<PhoneResetPasswordField> =>

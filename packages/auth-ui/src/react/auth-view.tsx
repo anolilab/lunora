@@ -115,8 +115,7 @@ const PhoneSignInCard = (): ReactElement | null => {
  *
  * The segments are configurable through the provider's `viewPaths`, so the URLs
  * stay the app's decision — this only maps whichever segment arrives to the card
- * that owns it. An unrecognized segment falls back to sign-in rather than
- * rendering nothing, because a typo'd auth URL should still let someone in.
+ * that owns it.
  */
 interface AuthViewProps {
     /** The URL segment, e.g. `"sign-up"`. Falls back to the sign-in card. */
@@ -127,52 +126,34 @@ const AuthView = ({ view }: AuthViewProps = {}): ReactElement => {
     const { plugins, viewPaths } = useAuthUI();
 
     /*
-     * Plugin-gated views are checked here rather than left to the card's own
-     * gate. A card that returns null leaves a blank page, which on a *route* is
-     * a dead end; falling back to sign-in keeps the user moving. The cards keep
-     * their own gate for when they are mounted directly.
+     * A lookup keyed by the resolved segment, not a `switch` over
+     * `viewPaths.*`. Both express the same mapping, but React Compiler cannot
+     * reorder member expressions in case labels, so the switch form opted this
+     * whole component out of automatic memoization (nine `react-hooks-js/todo`
+     * errors, one per case).
+     *
+     * Plugin-gated views are resolved here rather than left to the card's own
+     * gate: a card that returns null leaves a blank page, which on a *route* is
+     * a dead end, so those fall back to sign-in. The cards keep their own gate
+     * for when they are mounted directly.
      */
-    switch (view) {
-        case viewPaths.acceptInvitation: {
-            return <AcceptInvitationCard />;
-        }
+    const routes: Record<string, () => ReactElement> = {
+        [viewPaths.acceptInvitation]: () => <AcceptInvitationCard />,
+        [viewPaths.deviceAuthorization]: () => (plugins.deviceAuthorization ? <DeviceAuthorizationCard /> : <SignInCard />),
+        [viewPaths.emailOtp]: () => (plugins.emailOtp ? <EmailOtpCard /> : <SignInCard />),
+        [viewPaths.forgotPassword]: () => <ForgotPasswordCard />,
+        [viewPaths.magicLink]: () => (plugins.magicLink ? <MagicLinkCard /> : <SignInCard />),
+        [viewPaths.resetPassword]: () => <ResetPasswordCard />,
+        [viewPaths.signUp]: () => <SignUpCard />,
+        [viewPaths.twoFactor]: () => (plugins.twoFactor ? <TwoFactorCard /> : <SignInCard />),
+        [viewPaths.verifyEmail]: () => <VerifyEmailCard />,
+    };
 
-        case viewPaths.deviceAuthorization: {
-            return plugins.deviceAuthorization ? <DeviceAuthorizationCard /> : <SignInCard />;
-        }
+    // An unrecognized segment falls back to sign-in rather than rendering
+    // nothing, because a typo'd auth URL should still let someone in.
+    const render = view === undefined ? undefined : routes[view];
 
-        case viewPaths.emailOtp: {
-            return plugins.emailOtp ? <EmailOtpCard /> : <SignInCard />;
-        }
-
-        case viewPaths.forgotPassword: {
-            return <ForgotPasswordCard />;
-        }
-
-        case viewPaths.magicLink: {
-            return plugins.magicLink ? <MagicLinkCard /> : <SignInCard />;
-        }
-
-        case viewPaths.resetPassword: {
-            return <ResetPasswordCard />;
-        }
-
-        case viewPaths.signUp: {
-            return <SignUpCard />;
-        }
-
-        case viewPaths.twoFactor: {
-            return plugins.twoFactor ? <TwoFactorCard /> : <SignInCard />;
-        }
-
-        case viewPaths.verifyEmail: {
-            return <VerifyEmailCard />;
-        }
-
-        default: {
-            return <SignInCard />;
-        }
-    }
+    return render === undefined ? <SignInCard /> : render();
 };
 
 export type { AuthViewProps };

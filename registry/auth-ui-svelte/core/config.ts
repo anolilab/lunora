@@ -237,7 +237,7 @@ const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
         deviceAuthorization: viewPaths?.deviceAuthorization ?? "device",
         emailOtp: viewPaths?.emailOtp ?? "email-otp",
         // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the forgot-password screen, not a credential.
-        forgotPassword: viewPaths?.forgotPassword ?? "forgot-password",
+        forgotPassword: viewPaths?.forgotPassword ?? "forgot-password", // secret-scanner:allow -- a URL segment, not a credential.
         magicLink: viewPaths?.magicLink ?? "magic-link",
         // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the reset-password screen, not a credential.
         resetPassword: viewPaths?.resetPassword ?? "reset-password",

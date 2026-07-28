@@ -114,6 +114,13 @@ const UserButton = (props: UserButtonProps): JSX.Element => {
     const [session, sessionActions] = createController(createSessionController);
     const [open, setOpen] = createSignal(false);
     const menuId = createUniqueId();
+    /*
+     * Callback refs rather than Solid's `ref={root}` shorthand. The shorthand is
+     * rewritten to an assignment by the compiler, which static analysis cannot
+     * see — CodeQL then proves the `root &&` guard below is always false and
+     * flags it as dead code. Assigning explicitly keeps the guard (a listener
+     * can fire before the element is attached) and keeps the analyser honest.
+     */
     let root: HTMLDivElement | undefined;
     let trigger: HTMLButtonElement | undefined;
 
@@ -167,7 +174,12 @@ const UserButton = (props: UserButtonProps): JSX.Element => {
             >
                 {/* `Show` hands the narrowed user to the callback — no cast needed. */}
                 {(user) => (
-                    <div class="lunora-auth-userbutton" ref={root}>
+                    <div
+                        class="lunora-auth-userbutton"
+                        ref={(element) => {
+                            root = element;
+                        }}
+                    >
                         <button
                             aria-controls={open() ? menuId : undefined}
                             aria-expanded={open()}

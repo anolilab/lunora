@@ -70,6 +70,14 @@ const setCaptchaToken = (token: string | undefined): void => {
     store.set({ token });
 };
 
+/** The bit of a `&lt;script>` element this module sets, named so the DOM lib isn't needed. */
+interface ScriptElement {
+    addEventListener: (type: string, listener: () => void) => void;
+    async: boolean;
+    defer: boolean;
+    src: string;
+}
+
 /** One in-flight load per script URL, so several widgets share it. */
 const scripts = new Map<string, Promise<void>>();
 
@@ -81,7 +89,21 @@ const loadScript = async (source: string): Promise<void> => {
     }
 
     const pending = new Promise<void>((resolve, reject) => {
-        const documentReference = (globalThis as { document?: Document }).document;
+        /*
+         * Reached structurally rather than through the DOM's `Document`, like
+         * every other global in `core/`. A consumer project that also pulls in
+         * `@cloudflare/workers-types` has a different `head.append` in scope —
+         * HTMLRewriter's, which takes a string — so naming `Document` here type
+         * -errors in the app rather than in this package.
+         */
+        const documentReference = (
+            globalThis as {
+                document?: {
+                    createElement: (tag: string) => ScriptElement;
+                    head: { appendChild: (node: ScriptElement) => void };
+                };
+            }
+        ).document;
 
         if (documentReference === undefined) {
             reject(new Error("no document to load a captcha script into"));
@@ -104,7 +126,8 @@ const loadScript = async (source: string): Promise<void> => {
             reject(new Error(`could not load ${source}`));
         });
 
-        documentReference.head.append(element);
+        // eslint-disable-next-line unicorn/prefer-dom-node-append -- `append` is what the autofix wants, but a consumer that also has @cloudflare/workers-types in scope resolves it to HTMLRewriter's string-only `append` and fails to compile. `appendChild` is unambiguous.
+        documentReference.head.appendChild(element);
     });
 
     scripts.set(source, pending);

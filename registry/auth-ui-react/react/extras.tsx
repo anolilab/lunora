@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import type { CaptchaProvider } from "../core/captcha";
@@ -122,20 +122,17 @@ const OrganizationLogoCard = ({ organizationId }: OrganizationLogoCardProps = {}
     const [state, actions] = useController((context_) => createOrganizationLogoController(context_, { organizationId }), [organizationId]);
     const inputRef = useRef<HTMLInputElement | null>(null);
 
-    const onPick = useCallback(
-        (event: { target: { files?: FileList | null } }): void => {
-            const file = event.target.files?.[0];
+    const onPick = (event: { target: { files?: FileList | null } }): void => {
+        const file = event.target.files?.[0];
 
-            if (inputRef.current) {
-                inputRef.current.value = "";
-            }
+        if (inputRef.current) {
+            inputRef.current.value = "";
+        }
 
-            if (file) {
-                void actions.upload(file);
-            }
-        },
-        [actions],
-    );
+        if (file) {
+            void actions.upload(file);
+        }
+    };
 
     if (context.avatar.upload === undefined || !context.plugins.organization) {
         return null;

@@ -135,6 +135,10 @@ const OrganizationLogoCard = (props: OrganizationLogoCardProps = {}): JSX.Elemen
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = createController((context_) => createOrganizationLogoController(context_, { organizationId: props.organizationId }));
+    // A callback ref rather than Solid's shorthand — see the note in
+    // `user-button.tsx`: the shorthand's compiler-generated assignment is
+    // invisible to static analysis, which then reads the `if (input)` guard
+    // below as dead code.
     let input: HTMLInputElement | undefined;
 
     if (context.avatar.upload === undefined || !context.plugins.organization) {
@@ -171,7 +175,9 @@ const OrganizationLogoCard = (props: OrganizationLogoCardProps = {}): JSX.Elemen
                         aria-label={t.avatarUpload}
                         class="lunora-auth-visually-hidden"
                         onChange={onPick}
-                        ref={input}
+                        ref={(element) => {
+                            input = element;
+                        }}
                         type="file"
                     />
                     <button

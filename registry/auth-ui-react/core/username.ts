@@ -22,7 +22,7 @@ const createUsernameSignInController = (context: ControllerContext): FormControl
         },
         sessionChanging: true,
         submit: async (values, context_) => {
-            const response = assertOk(await context_.authClient.signIn.username({ password: values.password, username: values.username.trim() }));
+            const response = assertOk(await context_.authClient.signIn.username({ password: values.password, username: values.username.trim() })); // secret-scanner:allow -- forwards the typed password; no literal.
 
             // Same trap as email sign-in: better-auth answers a 2FA challenge with
             // a *success* payload carrying `twoFactorRedirect` and no session.

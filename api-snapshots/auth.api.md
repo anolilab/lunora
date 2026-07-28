@@ -1233,6 +1233,42 @@ const withAuthPlugins: <Auth extends LunoraAuth>(auth: Auth, options?: WithAuthP
 
 ## `@lunora/auth/plugins`
 
+### `UiConfigOptions` (interface)
+
+```ts
+interface UiConfigOptions {
+    expose?: {
+        organization?: boolean;
+        plugins?: boolean;
+        socialProviders?: boolean;
+    };
+    extraProviders?: string[];
+    path?: string;
+}
+```
+
+### `UiConfigOrganization` (interface)
+
+```ts
+interface UiConfigOrganization {
+    enabled: boolean;
+    roles: boolean;
+    teams: boolean;
+}
+```
+
+### `UiConfigPayload` (interface)
+
+```ts
+interface UiConfigPayload {
+    emailAndPassword: boolean;
+    organization: UiConfigOrganization;
+    plugins: string[];
+    signUp: boolean;
+    socialProviders: string[];
+}
+```
+
 ### `admin` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1332,6 +1368,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `twoFactor` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `uiConfig` (const)
+
+```ts
+const uiConfig: (options?: UiConfigOptions) => BetterAuthPlugin;
+```
 
 ### `username` (const)
 
