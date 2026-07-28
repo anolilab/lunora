@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
 import type { FilterClause, TableInfo } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions } from "../../lib/internal";
 import { maskColumnsForTable, maskRows, mergeSensitiveColumns } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
@@ -30,6 +31,9 @@ import { ShardExplorer } from "./shard-explorer";
 import { StagedDiffPanel } from "./staged-edits";
 import { TableListSidebar } from "./table-list-sidebar";
 
+/** Browser-local store for per-table pinned columns. */
+const PINNED_COLUMNS_KEY = "lunora-studio-pinned-columns";
+
 interface DataBrowserProps {
     /**
      * Allow editing: surfaces insert/edit/delete actions that issue
@@ -49,6 +53,8 @@ interface DataBrowserProps {
     readonly initialFilters?: FilterClause[];
     /** Sort to hydrate from a shared link / saved query. */
     readonly initialOrderBy?: DataView["orderBy"];
+    /** Comma-separated pinned columns from the URL; wins over the per-browser default. */
+    readonly initialPins?: string;
     /** Substring search to hydrate from a shared link / saved query. */
     readonly initialSearch?: string;
     /** Shard key the browser targets on first load. Defaults to the root shard. */
@@ -263,6 +269,7 @@ export const DataBrowser = ({
     globalTableNames,
     initialFilters,
     initialOrderBy,
+    initialPins,
     initialSearch,
     initialShardKey,
     onNavigateToGlobal,
@@ -331,6 +338,35 @@ export const DataBrowser = ({
         viewMode,
         writeError,
     } = useDataBrowser({ initialFilters, initialOrderBy, initialSearch, initialShardKey, onSelectTable, onViewChange, pageSize: initialPageSize, tableParam });
+
+    // Pinned columns, per table, persisted on this browser. Per table because a
+    // pin is a statement about THAT table's shape ("keep the email visible"),
+    // not a global preference; persisted because re-pinning on every navigation
+    // would make the feature not worth using.
+    const [pinsByTable, setPinsByTable] = usePersistedValue<Record<string, string[]>>(PINNED_COLUMNS_KEY, {});
+    // `selectedTable` is null before a table is chosen; key on "" so the lookup
+    // is total and no pins are ever attributed to the wrong table.
+    const pinKey = selectedTable ?? "";
+    // The URL wins when it names pins — a shared link to a wide table is only
+    // useful if it arrives with the same columns frozen. Browser storage is the
+    // per-browser default for when the link doesn't carry any.
+    const pinnedColumns = useMemo(() => {
+        const fromUrl = (initialPins ?? "").split(",").filter((name) => name !== "");
+
+        return new Set(fromUrl.length > 0 ? fromUrl : (pinsByTable[pinKey] ?? []));
+    }, [initialPins, pinKey, pinsByTable]);
+
+    const onTogglePin = useCallback(
+        (columnId: string): void => {
+            setPinsByTable((current) => {
+                const existing: string[] = current[pinKey] ?? [];
+                const next = existing.includes(columnId) ? existing.filter((id) => id !== columnId) : [...existing, columnId];
+
+                return { ...current, [pinKey]: next };
+            });
+        },
+        [pinKey, setPinsByTable],
+    );
 
     const client = useLunora();
 
@@ -590,16 +626,21 @@ export const DataBrowser = ({
                             <DataBrowserTableView
                                 edit={edit}
                                 editable={editable}
+                                highlight={filter}
                                 mask={maskView}
                                 onDelete={onRowDelete}
                                 onEdit={onRowEdit}
                                 onInspect={setInspecting}
+                                onTogglePin={onTogglePin}
+                                pinnedColumns={pinnedColumns}
                                 refs={references}
+                                scrollLeft={table.scrollLeft}
                                 scrollRef={table.scrollRef}
                                 scrollToIndex={table.scrollToIndex}
                                 table={table.table}
                                 tableRows={table.tableRows}
                                 tbodyStyle={table.tbodyStyle}
+                                viewportWidth={table.viewportWidth}
                                 virtualRows={table.virtualRows}
                             />
                         )}

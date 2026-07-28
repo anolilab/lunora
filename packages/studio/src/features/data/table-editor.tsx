@@ -292,6 +292,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
             globalTableNames={globalTableNames}
             initialFilters={view.filters}
             initialOrderBy={view.orderBy}
+            initialPins={search.pins}
             initialSearch={view.search}
             initialShardKey={view.shard ?? initialShardKey}
             onNavigateToGlobal={onNavigateToGlobal}

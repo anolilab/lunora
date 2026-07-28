@@ -75,17 +75,115 @@ const sizedCellStyle = (width: number): CSSProperties => {
 };
 
 /**
- * Style for the first data column when pinned: the {@link sizedCellStyle} base
- * made `sticky` just right of the frozen select column, so the primary-key column
- * stays put during horizontal scroll.
+ * Style for a pinned data column: the {@link sizedCellStyle} base made `sticky`
+ * at a cumulative left offset, so several pinned columns stack correctly instead
+ * of overlapping.
+ *
+ * `offsetPx` is the summed width of the pinned columns BEFORE this one. The
+ * earlier single-column version hard-coded `left: PINNED_DATA_LEFT`, which was
+ * correct only while exactly one column could be pinned — every column past the
+ * first would have stacked on top of it.
  */
-const pinnedDataCellStyle = (width: number): CSSProperties => {
-    return { ...sizedCellStyle(width), left: PINNED_DATA_LEFT, position: "sticky", zIndex: 2 };
+const pinnedDataCellStyle = (width: number, offsetPx: number): CSSProperties => {
+    return { ...sizedCellStyle(width), left: `calc(${PINNED_DATA_LEFT} + ${offsetPx.toString()}px)`, position: "sticky", zIndex: 2 };
 };
 
 /** Borderless per-row action button (Details / Edit / Delete). */
 const ROW_BTN =
     "rounded-md px-2 py-0.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
+
+/** A windowed slice of the columns: what to render, and the spacer widths standing in for the rest. */
+interface ColumnWindow {
+    /** Column ids to render, in order — the on-screen run plus every pinned column. */
+    readonly ids: ReadonlySet<string>;
+    /** Width (px) of the skipped columns before the window. */
+    readonly leadPx: number;
+    /** Width (px) of the skipped columns after the window. */
+    readonly tailPx: number;
+}
+
+/**
+ * Choose which columns to actually mount for a horizontal scroll position.
+ *
+ * A 200-column table previously mounted every cell of every visible row — the
+ * row virtualizer bounded the vertical axis only, so the horizontal one grew
+ * without limit. This windows it: columns whose span intersects
+ * `[scrollLeft - overscan, scrollLeft + viewport + overscan)` render, the rest
+ * collapse into two spacer cells that preserve total width (so the scrollbar and
+ * column alignment are unchanged).
+ *
+ * Pinned columns are ALWAYS in the window regardless of scroll — they are
+ * `position: sticky` and would otherwise vanish the moment they scrolled out of
+ * their own span. Their width is excluded from the spacers for the same reason.
+ *
+ * A zero viewport (jsdom, first paint before measurement) yields every column,
+ * so tests and the first frame are never blank.
+ */
+const columnWindow = (
+    columns: ReadonlyArray<{ getSize: () => number; id: string }>,
+    pinnedIds: ReadonlySet<string>,
+    scrollLeft: number,
+    viewportPx: number,
+    overscanPx = 300,
+): ColumnWindow => {
+    if (viewportPx <= 0) {
+        return { ids: new Set(columns.map((column) => column.id)), leadPx: 0, tailPx: 0 };
+    }
+
+    const from = scrollLeft - overscanPx;
+    const to = scrollLeft + viewportPx + overscanPx;
+    const ids = new Set<string>();
+    let cursor = 0;
+    let leadPx = 0;
+    let tailPx = 0;
+
+    for (const column of columns) {
+        const width = column.getSize();
+        const pinned = pinnedIds.has(column.id);
+        const visible = cursor + width > from && cursor < to;
+
+        if (pinned || visible) {
+            ids.add(column.id);
+        } else if (cursor < from) {
+            leadPx += width;
+        } else {
+            tailPx += width;
+        }
+
+        cursor += width;
+    }
+
+    return { ids, leadPx, tailPx };
+};
+
+/**
+ * Left offset (in px) for each pinned column, keyed by column id — the summed
+ * width of the pinned columns before it. Computed from the VISIBLE order so
+ * hiding a pinned column shifts the rest rather than leaving a gap.
+ */
+const pinnedOffsets = (columns: ReadonlyArray<{ getSize: () => number; id: string }>, pinnedIds: ReadonlySet<string>): Map<string, number> => {
+    const offsets = new Map<string, number>();
+    let running = 0;
+
+    for (const column of columns) {
+        if (pinnedIds.has(column.id)) {
+            offsets.set(column.id, running);
+            running += column.getSize();
+        }
+    }
+
+    return offsets;
+};
+
+/**
+ * The search term to highlight inside one cell, or `undefined` for none.
+ *
+ * A MASKED cell is never highlighted: the highlight reveals WHERE in the
+ * redacted value the match landed, which leaks exactly the position the mask
+ * exists to hide.
+ */
+const cellHighlight = (highlight: string | undefined, mask: MaskView, column: string): string | undefined =>
+    mask.enabled && mask.columns.has(column) ? undefined : highlight;
 
 /** A loaded row keyed by column name. */
 type TableRow = Record<string, unknown>;
@@ -385,7 +483,20 @@ const CellEditor = ({
  * editable and the column isn't a meta column — double-click opens an inline
  * {@link CellEditor} that stages the change.
  */
-const EditableCell = ({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; mask: MaskView; refs: GridReferences }): ReactElement => {
+const EditableCell = ({
+    cell,
+    edit,
+    highlight,
+    mask,
+    refs,
+}: {
+    cell: Cell<TableRow, unknown>;
+    edit: GridEdit;
+    /** Active row-search term, highlighted inside matching cells. */
+    highlight?: string;
+    mask: MaskView;
+    refs: GridReferences;
+}): ReactElement => {
     const column = cell.column.id;
     const rawValue = cell.getValue();
     const id = rowId(cell.row.original);
@@ -467,7 +578,7 @@ const EditableCell = ({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown
     return (
         <>
             <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
-                <CellValue value={display} />
+                <CellValue highlight={cellHighlight(highlight, mask, column)} value={display} />
             </span>
             <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
         </>
@@ -484,7 +595,8 @@ const GridHeaderCell = ({
     draggedRef,
     header,
     masked = false,
-    pinned = false,
+    onTogglePin,
+    pinnedOffset,
     table,
 }: {
     draggedRef: React.RefObject<null | string>;
@@ -492,7 +604,9 @@ const GridHeaderCell = ({
     /** Show a "masked" chip: this column is covered by a `.use(mask(...))` policy (static annotation, independent of the toggle). */
     masked?: boolean;
     /** Freeze this header at the left edge (the primary-key column) during horizontal scroll. */
-    pinned?: boolean;
+    onTogglePin: (columnId: string) => void;
+    /** Summed width of the pinned columns before this one, or `undefined` when unpinned. */
+    pinnedOffset?: number;
     table: Table<TableRow>;
 }): ReactElement => {
     const onDragStart = (): void => {
@@ -528,12 +642,12 @@ const GridHeaderCell = ({
 
     return (
         <th
-            className={cn("text-start text-xs font-medium text-muted-foreground", pinned && "border-e border-border bg-muted")}
+            className={cn("group/head text-start text-xs font-medium text-muted-foreground", pinnedOffset !== undefined && "border-e border-border bg-muted")}
             draggable
             onDragOver={onDragOver}
             onDragStart={onDragStart}
             onDrop={onDrop}
-            style={pinned ? pinnedDataCellStyle(header.getSize()) : sizedCellStyle(header.getSize())}
+            style={pinnedOffset === undefined ? sizedCellStyle(header.getSize()) : pinnedDataCellStyle(header.getSize(), pinnedOffset)}
         >
             <button
                 className="inline-flex max-w-full cursor-grab items-center gap-1 truncate outline-none hover:text-foreground"
@@ -553,6 +667,24 @@ const GridHeaderCell = ({
                     masked
                 </span>
             )}
+            {/* Pin toggle. Freezing more than one column is the point: an operator
+                scanning a wide table usually wants the key AND the one human-readable
+                column (name, email) to stay put, not just the key. */}
+            <button
+                aria-label={pinnedOffset === undefined ? `Pin ${header.column.id}` : `Unpin ${header.column.id}`}
+                aria-pressed={pinnedOffset !== undefined}
+                className={cn(
+                    "ms-1 rounded-sm px-1 text-[0.625rem] outline-none transition-opacity hover:bg-accent focus-visible:bg-accent",
+                    pinnedOffset === undefined ? "opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100" : "opacity-100 text-foreground",
+                )}
+                data-testid={`db-pin-${header.column.id}`}
+                onClick={() => {
+                    onTogglePin(header.column.id);
+                }}
+                type="button"
+            >
+                📌
+            </button>
             <span
                 aria-hidden="true"
                 className="absolute inset-y-0 end-0 w-1 cursor-col-resize touch-none select-none hover:bg-ring/60 data-[resizing=true]:bg-ring"
@@ -630,27 +762,40 @@ const DataBrowserTableView = ({
     onDelete,
     onEdit,
     onInspect,
+    highlight,
+    onTogglePin,
+    pinnedColumns,
     refs,
+    scrollLeft,
     scrollRef,
     scrollToIndex,
     table,
     tableRows,
     tbodyStyle,
+    viewportWidth,
     virtualRows,
 }: {
     edit: GridEdit;
     editable: boolean;
+    /** Active row-search term, highlighted inside matching cells. */
+    highlight?: string;
     /** Mask preview state: the active table's masked columns + whether the toggle is on. Drives the header chips and per-cell redaction. */
     mask: MaskView;
     onDelete: (id: null | string) => void;
     onEdit: (id: null | string, original: TableRow) => void;
     onInspect: (original: TableRow) => void;
+    onTogglePin: (columnId: string) => void;
+    /** Column ids frozen at the left edge, in no particular order — the render derives offsets from visible order. */
+    pinnedColumns: ReadonlySet<string>;
     refs: GridReferences;
+    /** Horizontal scroll offset + measured viewport width, driving the column window. */
+    scrollLeft: number;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
     tbodyStyle: CSSProperties;
+    viewportWidth: number;
     virtualRows: { index: number; size: number; start: number }[];
 }): ReactElement => {
     // Carries the column id being dragged between a header's dragstart and the
@@ -725,6 +870,20 @@ const DataBrowserTableView = ({
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent */
     }, [active, scrollToIndex]);
 
+    const visibleColumns = table.getVisibleLeafColumns().map((column) => {
+        return { getSize: () => column.getSize(), id: column.id };
+    });
+    const columnSlice = columnWindow(visibleColumns, pinnedColumns, scrollLeft, viewportWidth);
+
+    // Derived from the VISIBLE column order each render, so reordering or hiding a
+    // pinned column re-flows the rest instead of leaving a gap.
+    const pinOffsets = pinnedOffsets(
+        table.getVisibleLeafColumns().map((column) => {
+            return { getSize: () => column.getSize(), id: column.id };
+        }),
+        pinnedColumns,
+    );
+
     const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
         const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
         const { original } = tableRow;
@@ -742,21 +901,30 @@ const DataBrowserTableView = ({
         return (
             <tr className="border-b border-border text-xs transition-colors hover:bg-muted/50" data-testid="db-row" key={tableRow.id} style={rowStyle}>
                 <RowSelectCell row={tableRow} />
+                {columnSlice.leadPx > 0 && <td aria-hidden="true" style={{ flex: `0 0 ${columnSlice.leadPx.toString()}px` }} />}
                 {tableRow.getVisibleCells().map((cell, colIndex) => {
-                    // The first data column is frozen beside the select column.
-                    const pinned = colIndex === 0;
+                    if (!columnSlice.ids.has(cell.column.id)) {
+                        return null;
+                    }
+
+                    const offset = pinOffsets.get(cell.column.id);
                     const ring = active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : "";
 
                     return (
                         <td
-                            className={cn("group/cell truncate font-mono text-muted-foreground", pinned && "border-e border-border bg-background", ring)}
+                            className={cn(
+                                "group/cell truncate font-mono text-muted-foreground",
+                                offset !== undefined && "border-e border-border bg-background",
+                                ring,
+                            )}
                             key={cell.id}
-                            style={pinned ? pinnedDataCellStyle(cell.column.getSize()) : sizedCellStyle(cell.column.getSize())}
+                            style={offset === undefined ? sizedCellStyle(cell.column.getSize()) : pinnedDataCellStyle(cell.column.getSize(), offset)}
                         >
-                            <EditableCell cell={cell} edit={edit} mask={mask} refs={refs} />
+                            <EditableCell cell={cell} edit={edit} highlight={highlight} mask={mask} refs={refs} />
                         </td>
                     );
                 })}
+                {columnSlice.tailPx > 0 && <td aria-hidden="true" style={{ flex: `0 0 ${columnSlice.tailPx.toString()}px` }} />}
                 <td className="flex items-center gap-1" style={ACTION_CELL_STYLE}>
                     <button
                         className={ROW_BTN}
@@ -805,16 +973,23 @@ const DataBrowserTableView = ({
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
                             <SelectAllHeaderCell table={table} />
-                            {table.getFlatHeaders().map((header, index) => (
-                                <GridHeaderCell
-                                    draggedRef={draggedColumn}
-                                    header={header}
-                                    key={header.id}
-                                    masked={mask.columns.has(header.column.id)}
-                                    pinned={index === 0}
-                                    table={table}
-                                />
-                            ))}
+                            {columnSlice.leadPx > 0 && <th aria-hidden="true" style={{ flex: `0 0 ${columnSlice.leadPx.toString()}px` }} />}
+                            {table
+                                .getFlatHeaders()
+                                .map((header) =>
+                                    columnSlice.ids.has(header.column.id) ? (
+                                        <GridHeaderCell
+                                            draggedRef={draggedColumn}
+                                            header={header}
+                                            key={header.id}
+                                            masked={mask.columns.has(header.column.id)}
+                                            onTogglePin={onTogglePin}
+                                            pinnedOffset={pinOffsets.get(header.column.id)}
+                                            table={table}
+                                        />
+                                    ) : null,
+                                )}
+                            {columnSlice.tailPx > 0 && <th aria-hidden="true" style={{ flex: `0 0 ${columnSlice.tailPx.toString()}px` }} />}
                             <th aria-label="Row actions" style={ACTION_CELL_STYLE} />
                         </tr>
                     </thead>
@@ -827,11 +1002,14 @@ const DataBrowserTableView = ({
 
 /** What {@link useDataBrowserTable} hands back to the component. */
 interface DataBrowserTableModel {
+    /** Horizontal scroll offset, driving the column window. */
+    scrollLeft: number;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
     tbodyStyle: CSSProperties;
+    viewportWidth: number;
     virtualRows: { index: number; size: number; start: number }[];
 }
 
@@ -942,6 +1120,40 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         [virtualizer],
     );
 
+    // Horizontal scroll + viewport width, for the column window. Tracked with a
+    // passive listener rather than React state per scroll event: this fires at
+    // frame rate on a wide table, and only the derived window matters.
+    const [horizontal, setHorizontal] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
+
+    useEffect(() => {
+        const node = scrollRef.current;
+
+        if (node === null) {
+            return undefined;
+        }
+
+        const sync = (): void => {
+            setHorizontal((current) =>
+                current.left === node.scrollLeft && current.width === node.clientWidth ? current : { left: node.scrollLeft, width: node.clientWidth },
+            );
+        };
+
+        // No synchronous `sync()` here: a setState inside an effect body renders
+        // twice and is a lint error in this repo. `ResizeObserver` fires once on
+        // observe, which is the initial measurement — and where it does not (jsdom),
+        // the viewport stays 0 and `columnWindow` falls back to every column.
+        node.addEventListener("scroll", sync, { passive: true });
+
+        const observer = new ResizeObserver(sync);
+
+        observer.observe(node);
+
+        return () => {
+            node.removeEventListener("scroll", sync);
+            observer.disconnect();
+        };
+    }, []);
+
     const virtualRows = virtualizer.getVirtualItems();
     const totalSize = virtualizer.getTotalSize();
     // The tbody spans the full virtual height so the scrollbar reflects all rows
@@ -951,8 +1163,8 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
 
     const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
 
-    return { scrollRef, scrollToIndex, table, tableRows, tbodyStyle, virtualRows };
+    return { scrollLeft: horizontal.left, scrollRef, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth: horizontal.width, virtualRows };
 };
 
-export { DataBrowserTableView, rowId, useDataBrowserTable };
+export { columnWindow, DataBrowserTableView, pinnedOffsets, rowId, useDataBrowserTable };
 export type { DataBrowserTableModel, GridEdit, GridReferences, TableRow };

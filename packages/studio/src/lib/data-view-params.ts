@@ -29,8 +29,17 @@ import type { DataView } from "./saved-queries";
 interface DataViewSearch {
     /** JSON-encoded {@link FilterClause}[] (validated to parse into ≥1 clause). */
     filters?: string;
+
     /** Sort as `column:asc` / `column:desc` (validated against that grammar). */
     order?: string;
+
+    /**
+     * Comma-separated pinned column names. In the URL as well as browser storage
+     * because a link to a wide table is only useful if it arrives with the same
+     * columns frozen — the storage copy is the per-browser default, the URL wins
+     * when present.
+     */
+    pins?: string;
     /** Storage tier; only `"global"` is carried (the shard default is omitted). */
     schema?: "global";
     /** Substring search across all columns. */
@@ -133,6 +142,19 @@ const SNAPSHOT_HASH_RE = /^[\da-f]{16}$/u;
  */
 export const validateDataViewSearch = (search: Record<string, unknown>): DataViewSearch => {
     const validated: DataViewSearch = {};
+
+    // Column names, comma-separated. Capped and shape-checked so a hand-edited
+    // link can't push an unbounded string into persisted UI state.
+    if (typeof search["pins"] === "string" && search["pins"] !== "") {
+        const pins = search["pins"]
+            .split(",")
+            .filter((name) => name !== "" && name.length <= 64)
+            .slice(0, 12);
+
+        if (pins.length > 0) {
+            validated.pins = pins.join(",");
+        }
+    }
 
     if (search["schema"] === "global") {
         validated.schema = "global";

@@ -943,6 +943,51 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
     return { params: [...pathParameters, clause.value], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
 };
 
+/** `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — the prefixes worth treating as a range. */
+const DATE_PREFIX = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u;
+
+/**
+ * Epoch-millisecond half-open range `[from, to)` for a date-prefix term, or
+ * `undefined` when the term is not one.
+ *
+ * Half-open on purpose: a closed upper bound would either miss the last
+ * millisecond of the period or double-count the boundary between two periods.
+ * Values are compared as epoch millis, which is how `_creationTime` and
+ * `v.timestamp()` fields are stored.
+ */
+const datePrefixRange = (needle: string): undefined | { from: number; to: number } => {
+    const match = DATE_PREFIX.exec(needle.trim());
+
+    if (match === null) {
+        return undefined;
+    }
+
+    const year = Number(match[1]);
+    const month = match[2] === undefined ? undefined : Number(match[2]);
+    const day = match[3] === undefined ? undefined : Number(match[3]);
+
+    if (month !== undefined && (month < 1 || month > 12)) {
+        return undefined;
+    }
+
+    if (day !== undefined && (day < 1 || day > 31)) {
+        return undefined;
+    }
+
+    const from = Date.UTC(year, (month ?? 1) - 1, day ?? 1);
+    let to: number;
+
+    if (day !== undefined) {
+        to = Date.UTC(year, month === undefined ? 0 : month - 1, day + 1);
+    } else if (month === undefined) {
+        to = Date.UTC(year + 1, 0, 1);
+    } else {
+        to = Date.UTC(year, month, 1);
+    }
+
+    return { from, to };
+};
+
 /**
  * Compile the active substring `search` + structured `filters` into a single
  * AND-combined SQL predicate (or `undefined` when none apply). Shared by
@@ -953,7 +998,11 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
  *
  * The search conjunct is a case-insensitive LIKE OR'd across every PHYSICAL
  * column — for doc-stored tables `__doc__` holds every field value, so this
- * still covers all user fields.
+ * still covers all user fields — plus, when the term parses as a date or a
+ * date-time prefix, a typed RANGE predicate (see {@link datePrefixRange}).
+ * Without the range half, searching `2026-07` only matches rows whose stored
+ * text happens to contain that substring, which for an epoch-millis or ISO
+ * timestamp is an accident rather than a month filter.
  */
 const buildTablePredicate = (columns: string[], needle: string, filters: FilterClause[] | undefined): undefined | { parameters: unknown[]; where: string } => {
     const conjuncts: string[] = [];
@@ -961,9 +1010,23 @@ const buildTablePredicate = (columns: string[], needle: string, filters: FilterC
 
     if (needle !== "" && columns.length > 0) {
         const pattern = `%${escapeLike(needle)}%`;
+        const disjuncts = columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`);
 
-        conjuncts.push(`(${columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`).join(" OR ")})`);
         parameters.push(...columns.map(() => pattern));
+
+        // A date-shaped term additionally matches timestamp columns by RANGE, so
+        // `2026-07` finds July's rows rather than only those whose rendered text
+        // literally contains "2026-07".
+        const range = datePrefixRange(needle);
+
+        if (range !== undefined) {
+            for (const name of columns) {
+                disjuncts.push(`(${quoteIdentifier(name)} >= ? AND ${quoteIdentifier(name)} < ?)`);
+                parameters.push(range.from, range.to);
+            }
+        }
+
+        conjuncts.push(`(${disjuncts.join(" OR ")})`);
     }
 
     for (const clause of filters ?? []) {
@@ -1518,6 +1581,7 @@ export {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
     createFanoutCounters,
+    datePrefixRange,
     DEFAULT_FANOUT_TOPIC_LIMIT,
     facetColumn,
     findStorageReferences,

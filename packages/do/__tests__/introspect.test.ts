@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SqlCursor, SqlExec } from "../src/ctx-db";
 import {
     createFanoutCounters,
+    datePrefixRange,
     facetColumn,
     findStorageReferences,
     listTables,
@@ -744,5 +745,41 @@ describe("introspect", () => {
 
             expect(base).toEqual(createFanoutCounters());
         });
+    });
+});
+
+describe("datePrefixRange", () => {
+    it("turns a year into a whole-year half-open range", () => {
+        expect.assertions(2);
+
+        const range = datePrefixRange("2026");
+
+        expect(range?.from).toBe(Date.UTC(2026, 0, 1));
+        expect(range?.to).toBe(Date.UTC(2027, 0, 1));
+    });
+
+    it("turns a month into that month, and rolls the year at December", () => {
+        expect.assertions(3);
+
+        expect(datePrefixRange("2026-07")?.from).toBe(Date.UTC(2026, 6, 1));
+        expect(datePrefixRange("2026-07")?.to).toBe(Date.UTC(2026, 7, 1));
+        // December must roll into next January, not month 12 of the same year.
+        expect(datePrefixRange("2026-12")?.to).toBe(Date.UTC(2027, 0, 1));
+    });
+
+    it("turns a full date into a single day", () => {
+        expect.assertions(2);
+
+        expect(datePrefixRange("2026-07-04")?.from).toBe(Date.UTC(2026, 6, 4));
+        expect(datePrefixRange("2026-07-04")?.to).toBe(Date.UTC(2026, 6, 5));
+    });
+
+    it("ignores terms that are not date prefixes", () => {
+        expect.assertions(4);
+
+        expect(datePrefixRange("alice")).toBeUndefined();
+        expect(datePrefixRange("2026-13")).toBeUndefined();
+        expect(datePrefixRange("2026-07-32")).toBeUndefined();
+        expect(datePrefixRange("")).toBeUndefined();
     });
 });

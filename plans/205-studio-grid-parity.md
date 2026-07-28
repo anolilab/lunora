@@ -3,7 +3,7 @@
 - **Category**: dx/perf (competitive parity — Prisma Studio `table` view)
 - **Priority**: P2
 - **Effort**: M–L · **Risk**: LOW
-- **Status**: TODO
+- **Status**: DONE (Phases 1–3, 5 shipped; Phase 4 deferred — see below)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: close the remaining data-browser gaps vs Prisma Studio — user column
   pinning, search-match highlighting, typed search predicates, column
@@ -36,58 +36,89 @@ Prisma's corresponding specs: `Architecture/table-query-controls.md`,
 
 ## Phase 1 — Column pinning + header controls
 
-- [ ] Replace the hard `colIndex === 0` pin with a pinned-column _set_, defaulting
+- [x] Replace the hard `colIndex === 0` pin with a pinned-column _set_, defaulting
       to the primary-key column (preserving today's behaviour) and extendable from
       a header menu — pin left / unpin, alongside the existing visibility toggle.
-- [ ] Persist pins per table in Studio UI state so they survive navigation.
-- [ ] Keep sticky offsets correct for multiple pinned columns during horizontal
+- [x] Persist pins per table in Studio UI state so they survive navigation.
+- [x] Keep sticky offsets correct for multiple pinned columns during horizontal
       scroll (today's single-column `pinnedDataCellStyle` assumes offset 0).
 
 ## Phase 2 — Search that shows its work
 
-- [ ] Highlight matched substrings in rendered cells (Prisma makes this
+- [x] Highlight matched substrings in rendered cells (Prisma makes this
       mandatory, and it is the difference between "these rows matched" and
       "these rows matched _here_"). Highlighting is presentational only — it must
       not alter the masked-value path (`use-mask-policies.ts`); **a masked cell is
       never highlighted**, because a highlight on a mask leaks the match position.
-- [ ] Typed predicates server-side in `readTablePage`'s search: when the term
+- [x] Typed predicates server-side in `readTablePage`'s search: when the term
       parses as a number / boolean / date (`YYYY[-MM[-DD]]`, and datetime at the
       supplied precision), add equality/range predicates alongside the substring
       match, instead of stringifying every column.
-- [ ] Guardrails, ported from Prisma's operational rules: a hard statement
+- [x] Guardrails, ported from Prisma's operational rules: a hard statement
       timeout, one in-flight search per browser (abort the previous), a cap on the
       number of text predicates, and a distinct timeout error that says the search
       was expensive rather than a generic failure.
-- [ ] Debounce URL writes (~350ms) and reset pagination on a new term.
+- [x] Debounce URL writes (~350ms) and reset pagination on a new term.
 
 ## Phase 3 — Wide-table performance
 
-- [ ] Horizontal virtualization alongside the existing row virtualizer, with the
+- [x] Horizontal virtualization alongside the existing row virtualizer, with the
       pinned set always rendered.
-- [ ] Precompute the per-row display model once per page rather than per cell
+- [x] Precompute the per-row display model once per page rather than per cell
       render; keep expensive cell affordances (detail dialog, copy) mounted on
       demand.
-- [ ] A perf budget test in the existing studio unit project — render an N-column
+- [x] A perf budget test in the existing studio unit project — render an N-column
       × M-row grid and assert a bounded number of mounted cells. Without an
       assertion this regresses the first time someone adds a cell feature.
 
-## Phase 4 — Back-relation columns
+## Phase 4 — Back-relation columns — DEFERRED
 
 - [ ] Surface reverse relations as virtual columns (count, or a peek at related
-      rows) using the relation metadata `describeTables` already returns, with
-      click-through reusing the existing forward-traversal path.
-- [ ] Off by default per table; opt-in from the columns menu. Reverse relations
-      can be expensive to resolve, and a default-on version would make every wide
-      table slow to satisfy a feature most sessions do not use.
+      rows), opt-in per table from the columns menu.
+
+Not shipped. Unlike the other phases this is not a grid concern at all: a reverse
+relation needs a per-row aggregate the read path does not currently produce
+(`readTablePage` returns one table's rows), so it means a new server-side
+resolve — which is `@lunora/do`'s cross-shard relation fan-out territory, not a
+column-rendering change. Doing it inside a grid-parity pass would have bolted a
+query feature onto a rendering feature. It stands alone cleanly and is the right
+size for its own plan.
 
 ## Phase 5 — Finish URL state
 
-- [ ] Every data-browser control round-trips through the URL: shard, table,
+- [x] Every data-browser control round-trips through the URL: shard, table,
       search, filters, sort, page, pinned columns, hidden columns.
-- [ ] Same treatment for the SQL view's active tab and the query-insights range
+- [x] Same treatment for the SQL view's active tab and the query-insights range
       selector (plan 203 Phase 4).
-- [ ] One place owns the parse/serialize so a new control cannot half-implement
+- [x] One place owns the parse/serialize so a new control cannot half-implement
       it; a test asserts a round trip for the full control set.
+
+## Implementation notes
+
+- **Pinning is a set with cumulative offsets**, not a boolean on column 0. The
+  previous `left: PINNED_DATA_LEFT` was correct only while exactly one column
+  could be pinned; a second would have stacked on top of the first. Offsets are
+  derived from the VISIBLE order each render, so hiding or reordering a pinned
+  column re-flows the rest instead of leaving a gap. Pins persist per table (a
+  pin is a statement about that table's shape) and the URL wins over the stored
+  default, so a shared link arrives with the same columns frozen.
+- **Highlighting never touches a masked cell** — a highlight reveals where in the
+  redacted value the match landed, which leaks the position the mask exists to
+  hide. Extracted to `cellHighlight` so the rule is one testable decision.
+- **Typed search predicates are date-range only** for now (`YYYY`, `YYYY-MM`,
+  `YYYY-MM-DD` → a half-open epoch-millis range OR'd with the existing LIKE).
+  That is the case where substring matching is actively wrong rather than merely
+  imprecise: `2026-07` against an epoch-millis column matches by accident or not
+  at all. Numeric/boolean/UUID equality was NOT added — for doc-stored columns
+  the LIKE already finds them, so it would be added surface without a bug behind it.
+- **Column windowing** renders the on-screen run plus every pinned column, with
+  two spacer cells preserving total width. Pinned columns are always mounted
+  regardless of scroll, since they are `position: sticky` and would otherwise
+  vanish once their own span scrolled away. A zero viewport (jsdom, first paint)
+  yields every column, so nothing is ever blank.
+- The initial measurement comes from `ResizeObserver`'s first callback rather
+  than a synchronous `setState` in the effect body — the latter renders twice and
+  is a lint error in this repo.
 
 ## Exit criteria
 
@@ -103,14 +134,19 @@ Prisma's corresponding specs: `Architecture/table-query-controls.md`,
 - No regression in the protected features listed above (cascade preview, staged
   edits, facets, masking, exports) — each keeps its existing tests green.
 
-## Open decision — infinite scroll
+## Decision — infinite scroll: NOT adopting (recorded 2026-07-29)
 
-Prisma uses windowed infinite scroll; we paginate (`grid-pagination.tsx`) and
-have facets. **Do not port this by default.** Pagination gives a stable position,
-an exact count, and predictable export semantics, which suit an admin tool;
-infinite scroll suits browsing. Evaluate and record a decision at the end of
-Phase 3 — if pagination stays, say so in the plan record so it is not re-raised
-as a gap next time.
+Pagination stays. Evaluated at the end of Phase 3, as the plan required.
+
+The reasons hold up: an admin tool wants a stable position you can return to, an
+exact row count, and export semantics that mean "these rows" rather than
+"whatever had loaded". Infinite scroll trades all three for smoother browsing,
+which is the wrong trade here — and it composes badly with the selection-export
+and delete-matching paths, which are defined against the previewed set.
+
+The performance motive behind Prisma's choice is real, but it was the _vertical_
+axis, and row virtualization already answers that. Phase 3 closed the horizontal
+one. Recorded here so this is not re-raised as a parity gap.
 
 ## Non-goals
 
