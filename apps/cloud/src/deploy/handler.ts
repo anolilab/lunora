@@ -296,18 +296,45 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             };
 
             const { healthCheck } = deps;
-            const outcome = await runDeployment(spec, {
-                onProgress: async (progress: DeployProgress) => {
-                    write({ ...progress, deploymentId });
 
-                    if (progress.phase === "provisioning" || progress.phase === "verifying" || progress.phase === "live" || progress.phase === "failed") {
-                        await deps.backend.updateStatus({ bundleHash: progress.bundleHash, deploymentId, key, status: progress.phase, url: progress.url });
-                    }
-                },
-                provisioner: deps.provisioner,
-                scheduler: deps.scheduler,
-                ...(healthCheck ? { verify: (result) => healthCheck(result.url) } : {}),
-            });
+            let outcome: Awaited<ReturnType<typeof runDeployment>>;
+
+            try {
+                outcome = await runDeployment(spec, {
+                    onProgress: async (progress: DeployProgress) => {
+                        write({ ...progress, deploymentId });
+
+                        if (progress.phase === "provisioning" || progress.phase === "verifying" || progress.phase === "live" || progress.phase === "failed") {
+                            await deps.backend.updateStatus({ bundleHash: progress.bundleHash, deploymentId, key, status: progress.phase, url: progress.url });
+                        }
+                    },
+                    provisioner: deps.provisioner,
+                    scheduler: deps.scheduler,
+                    ...(healthCheck ? { verify: (result) => healthCheck(result.url) } : {}),
+                });
+            } catch (error) {
+                // `runDeployment` converts provisioner/scheduler faults into
+                // `{ status: "failed" }` itself, so reaching here means the *callback*
+                // threw — an `updateStatus` write that failed, most likely. Without
+                // this the rejection escapes `start`, the row is stranded mid-flight in
+                // `accepted`/`provisioning` forever, and the NDJSON stream is never
+                // closed, so the client hangs instead of seeing a failure.
+                const message = error instanceof Error ? error.message : "deployment failed";
+
+                write({ deploymentId, error: message, phase: "failed" });
+
+                try {
+                    await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
+                } catch {
+                    // The status write is the likeliest thing to have just failed;
+                    // reporting the failure downstream matters more than recording it.
+                }
+
+                write({ deploymentId, done: true, status: "failed" });
+                controller.close();
+
+                return;
+            }
 
             // Health-checked release: swap the project's stable-URL pointer to
             // this deployment and supersede the previous one (GAPS.md A1). An
