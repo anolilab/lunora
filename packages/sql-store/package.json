@@ -65,7 +65,6 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/do": "1.0.0-alpha.53",
         "@lunora/errors": "1.0.0-alpha.9",
         "@lunora/search-core": "workspace:*",
         "@lunora/shard-engine": "workspace:*",
@@ -74,6 +73,7 @@
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/do": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

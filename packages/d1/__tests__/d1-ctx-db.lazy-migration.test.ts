@@ -1,4 +1,4 @@
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { createSqlCtxDb } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

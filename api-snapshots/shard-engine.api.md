@@ -2647,6 +2647,15 @@ const jsonPath: (field: string) => string;
 const jsonPathSql: (field: string) => SQL;
 ```
 
+### `liftSourceId` (const)
+
+```ts
+const liftSourceId: (row: Record<string, unknown>, options?: {
+    idColumn?: string;
+    map?: (row: Record<string, unknown>) => Record<string, unknown>;
+}) => Record<string, unknown>;
+```
+
 ### `listTables` (const)
 
 ```ts
@@ -2735,6 +2744,18 @@ const normalizeIdStructurally: (schema: SchemaLike, tableName: string, id: strin
 
 ```ts
 const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined) => OrderKey[];
+```
+
+### `normalizeSourceDocument` (const)
+
+```ts
+const normalizeSourceDocument: (document: Record<string, unknown>) => Record<string, unknown>;
+```
+
+### `normalizeSourceValue` (const)
+
+```ts
+const normalizeSourceValue: (value: unknown) => unknown;
 ```
 
 ### `param` (const)

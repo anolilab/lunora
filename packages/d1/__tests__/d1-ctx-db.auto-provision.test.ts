@@ -1,4 +1,4 @@
-import type { SchemaLike, ValidatorLike } from "@lunora/do";
+import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb } from "../src/d1-ctx-db";

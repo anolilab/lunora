@@ -74,6 +74,7 @@ export {
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { param, renderSql } from "./drizzle";
+export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export type {

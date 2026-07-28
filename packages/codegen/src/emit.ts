@@ -2,6 +2,7 @@ import type { Finding } from "@lunora/advisor";
 // The /component subpath avoids the package barrel (which pulls the agent
 // runtime + AI SDK into the codegen process just to enumerate function names).
 import { agentComponent } from "@lunora/agent/component";
+import { LunoraError } from "@lunora/errors";
 import type {
     AdvisoryFinding,
     MaskPoliciesResult,
@@ -10,8 +11,7 @@ import type {
     StorageRulesResult,
     StudioFeaturesResult,
     WorkflowsResult,
-} from "@lunora/do";
-import { LunoraError } from "@lunora/errors";
+} from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";

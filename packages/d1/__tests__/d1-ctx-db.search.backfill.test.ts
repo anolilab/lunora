@@ -1,5 +1,5 @@
-import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { MAX_INDEXED_TOKENS } from "@lunora/search-core";
+import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import type { SqlDialect } from "@lunora/sql-store";
 import { backfillSqlSearchIndexes, createSqlCtxDb, runSqlSearchMigrations } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

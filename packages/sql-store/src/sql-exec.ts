@@ -12,8 +12,8 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "sql-exec" sits beside "ctx-db", the established module naming in this package. */
 /* eslint-disable no-restricted-syntax -- `sql\`…\` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 
-import type { TableDefinitionLike } from "@lunora/do";
-import { renderSql } from "@lunora/do";
+import type { TableDefinitionLike } from "@lunora/shard-engine";
+import { renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { DatabaseWriterLike, SchemaLike, SqlCursor, SqlExec, ValidatorLike } from "@lunora/do";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/do";
+import type { DatabaseWriterLike, SchemaLike, SqlCursor, SqlExec, ValidatorLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import type { SqlDialect } from "@lunora/sql-store";
 import { createSqlCtxDb } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

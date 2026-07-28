@@ -1,4 +1,4 @@
-import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";

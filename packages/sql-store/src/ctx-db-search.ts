@@ -16,8 +16,8 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
-import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/do";
 import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/search-core";
+import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 
 import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";

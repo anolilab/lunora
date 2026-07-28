@@ -13,6 +13,16 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @lunora/do's "ctx-db.ts" twin. Renaming would break those importers. */
 
 /* eslint-disable no-restricted-syntax -- `sql\`…\`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
+import { LunoraError } from "@lunora/errors";
+import {
+    assertSearchWithinCap,
+    createSearchAnalyzer,
+    createSearchBuilder,
+    finishSearchPage,
+    planSearchPage,
+    resolveSearchScan,
+    searchPageScan,
+} from "@lunora/search-core";
 import type {
     AggregateIndexDefinitionLike,
     AggregateOptions,
@@ -37,7 +47,7 @@ import type {
     ValidatorLike,
     WhereInput,
     WhereSqlStrategy,
-} from "@lunora/do";
+} from "@lunora/shard-engine";
 import {
     aggregateSqlFunction,
     aggregateTableName,
@@ -79,17 +89,7 @@ import {
     softDeleteScope,
     sortColumnName,
     throwingScheduler,
-} from "@lunora/do";
-import { LunoraError } from "@lunora/errors";
-import {
-    assertSearchWithinCap,
-    createSearchAnalyzer,
-    createSearchBuilder,
-    finishSearchPage,
-    planSearchPage,
-    resolveSearchScan,
-    searchPageScan,
-} from "@lunora/search-core";
+} from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 

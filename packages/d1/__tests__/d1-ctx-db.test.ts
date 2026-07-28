@@ -1,5 +1,5 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchedulerLike, SchemaLike, TriggerEventLike, ValidatorLike } from "@lunora/do";
-import { ConflictError } from "@lunora/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchedulerLike, SchemaLike, TriggerEventLike, ValidatorLike } from "@lunora/shard-engine";
+import { ConflictError } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";

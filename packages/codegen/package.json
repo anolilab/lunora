@@ -75,8 +75,9 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.53",
+        "@lunora/do": "workspace:*",
         "@lunora/server": "1.0.0-alpha.51",
+        "@lunora/shard-engine": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

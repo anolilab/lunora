@@ -16,7 +16,7 @@
  * blessed pattern that unblocks the use case today.
  */
 
-import { liftSourceId } from "@lunora/do";
+import { liftSourceId } from "@lunora/shard-engine";
 
 import type { SqlClient } from "./types";
 

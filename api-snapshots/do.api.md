@@ -1909,12 +1909,7 @@ const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | u
 
 ### `liftSourceId` (const)
 
-```ts
-const liftSourceId: (row: Record<string, unknown>, options?: {
-    idColumn?: string;
-    map?: (row: Record<string, unknown>) => Record<string, unknown>;
-}) => Record<string, unknown>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `listTables` (const)
 

@@ -1,4 +1,4 @@
-import type { StudioFeaturesResult } from "@lunora/do";
+import type { StudioFeaturesResult } from "@lunora/shard-engine";
 import type { Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 

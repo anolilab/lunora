@@ -1,4 +1,4 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ServerDefaultContextLike, ValidatorLike } from "@lunora/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ServerDefaultContextLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";

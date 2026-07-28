@@ -1,5 +1,3 @@
-import type { SchemaLike } from "@lunora/do";
-import { createShardCtxDb, runShardMigrations } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
 import type {
     ActionCtx,
@@ -20,6 +18,8 @@ import type {
     SpanHandle,
     TableDefinition,
 } from "@lunora/server";
+import type { SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 
 import { evaluationAttributes } from "./evaluation-telemetry";
 import { createFakeScheduler } from "./fake-scheduler";

@@ -1,4 +1,4 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { backfillSqlSearchIndexes, runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

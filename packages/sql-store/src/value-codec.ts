@@ -10,7 +10,7 @@
  * MySQL `JSON`/`TINYINT`) would find them silently unused. Do not rely on that
  * seam without first routing the core through it.
  */
-import type { ValidatorLike } from "@lunora/do";
+import type { ValidatorLike } from "@lunora/shard-engine";
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {

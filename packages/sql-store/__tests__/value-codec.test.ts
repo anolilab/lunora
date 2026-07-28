@@ -1,4 +1,4 @@
-import type { ValidatorLike } from "@lunora/do";
+import type { ValidatorLike } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "../src/value-codec";
