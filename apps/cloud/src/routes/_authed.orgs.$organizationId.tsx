@@ -62,7 +62,7 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
                 </div>
             ) : null}
             {deleting ? (
-                <div className="callout" role="alert">
+                <div className="rounded-lg border bg-muted/30 p-4 text-sm" role="alert">
                     Deletion requested — this organization and all its data will be erased after the 30-day retention window.
                 </div>
             ) : null}
