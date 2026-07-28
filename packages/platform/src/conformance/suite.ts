@@ -397,6 +397,62 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                 host.cleanup?.();
             });
+
+            it("reports a second cancel of the same job as false", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+
+                if (host.scheduler === undefined) {
+                    expect(host.scheduler).toBeUndefined();
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const job = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
+
+                expect(await host.scheduler.cancel(job.id)).toBe(true);
+
+                // `cancel` is documented to answer "was there something to
+                // cancel". A host that returned `true` unconditionally would let
+                // a caller believe it had stopped a job that is still pending —
+                // and a retry layer reading that answer would stop retrying a
+                // delivery that never happened.
+                expect(await host.scheduler.cancel(job.id)).toBe(false);
+
+                host.cleanup?.();
+            });
+
+            it("gives two identical schedules independently cancellable ids", async () => {
+                expect.assertions(3);
+
+                const host = await createHost();
+
+                if (host.scheduler === undefined) {
+                    expect(host.scheduler).toBeUndefined();
+                    expect(true).toBe(true);
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const first = await host.scheduler.schedule("tasks/remind", { user: "ada" }, { delayMs: 10_000 });
+                const second = await host.scheduler.schedule("tasks/remind", { user: "ada" }, { delayMs: 10_000 });
+
+                expect(second.id).not.toBe(first.id);
+
+                // Same function, same args, two jobs — so cancelling one must
+                // leave the other pending. A host that keyed jobs by payload
+                // would silently drop the survivor: the caller enqueued twice,
+                // cancelled once, and is owed one delivery.
+                expect(await host.scheduler.cancel(first.id)).toBe(true);
+                expect(await host.scheduler.cancel(second.id)).toBe(true);
+
+                host.cleanup?.();
+            });
         });
 
         describe("ShardKvStore", () => {

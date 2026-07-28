@@ -244,6 +244,31 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
   (`pokeStart/Part/End` framing, per-socket cursor resume), attachment
   round-trip across simulated recycle, RLS identity under live subscription
   (the `cb632cd7` regression), scheduler at-least-once + dead-letter.
+- **Split across two suites, and the split is forced rather than chosen.**
+  `@lunora/platform/conformance` asserts what a HOST provides; the engine-level
+  legs need `createShardCtxDb`/`relay-hub`, which live in `@lunora/shard-engine`,
+  and `@lunora/platform` is zero-dependency by contract — importing the engine
+  from there would invert the dependency and cycle. So the engine legs ship as
+  `@lunora/shard-engine/conformance`, and a host is proven only when it passes
+  both.
+- **Status.** OCC-409 ✅ (plus the trigger-recursion ceiling, which is a
+  _different_ `ConflictKind` and must stay distinct). Shape-poke ordering +
+  per-socket cursor resume ✅. RLS identity under live subscription ✅ — pinned
+  at the relay tier's uniformity gate, where the failure mode is a cohort
+  multicast computed under the anonymous identity reaching an identity-scoped
+  subscriber.
+- **Blocked: scheduler at-least-once + dead-letter.** Not expressible against
+  the current contracts. `SchedulerHost` is `{schedule, cancel, cron?}` —
+  enqueue and cancel only, with no delivery surface, attempt count, or
+  dead-letter key. The retry/backoff/`dead:` machinery lives in `SchedulerDO`
+  (`@lunora/scheduler`), which is Cloudflare-resident and not extracted. What
+  IS host-varying was added to the platform suite instead: `cancel` must answer
+  truthfully on a second call, and two identical schedules must get
+  independently cancellable ids (a host keying jobs by payload silently drops
+  the survivor — a caller that enqueued twice and cancelled once is owed one
+  delivery). Unblocking the rest means either growing `SchedulerHost` a delivery
+  surface or extracting `SchedulerDO` host-neutrally — see §7 open question 2,
+  which already asks exactly that.
 - Reference host: the existing in-memory `lunoraTest` harness (it _is_ the
   spec's executable form today).
 - CI: run against (a) in-memory reference, (b) workerd/miniflare (gated,
