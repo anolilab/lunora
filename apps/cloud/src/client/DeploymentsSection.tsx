@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import { ProjectGraph } from "./ProjectGraph";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
@@ -203,8 +204,8 @@ const SourceCard = ({
 }: {
     branch?: string;
     commitSha?: string;
-    gitProvider?: string;
     githubRepo?: string;
+    gitProvider?: string;
 }): null | ReactElement => {
     if (githubRepo === undefined && branch === undefined && commitSha === undefined) {
         return null;
@@ -470,8 +471,22 @@ export const DeploymentsSection = ({ gitProvider, githubRepo, onBack, organizati
     return (
         <div className="flex flex-col gap-6">
             {active ? <ProjectHero deployment={active} onBack={onBack} projectName={projectName} visitUrl={active.url} /> : header}
-            <DomainsCard domains={domains ?? EMPTY} url={active?.url} />
-            <SourceCard branch={branch} commitSha={activeBuild?.commitSha} gitProvider={gitProvider} githubRepo={githubRepo} />
+            {/* Two columns, as the design has it — Domains and Source are peers. */}
+            <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">
+                <DomainsCard domains={domains ?? EMPTY} url={active?.url} />
+                <SourceCard branch={branch} commitSha={activeBuild?.commitSha} githubRepo={githubRepo} gitProvider={gitProvider} />
+            </div>
+            {active?.bindings && active.bindings.length > 0 ? (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Bindings</CardTitle>
+                        <CardDescription>Cloudflare resources this deployment connects to, from its wrangler config.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <ProjectGraph bindings={active.bindings} projectName={projectName} />
+                    </CardContent>
+                </Card>
+            ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
             <DeploymentsTable
                 activeId={active?._id}

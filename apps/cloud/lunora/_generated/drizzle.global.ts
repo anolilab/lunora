@@ -70,6 +70,7 @@ export const deployments = sqliteTable("deployments", {
     alias: text("alias"),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
+    bindings: text("bindings", { mode: "json" }).$type<Array<{ name: string; target: string | undefined; type: string }>>(),
     bundleHash: text("bundleHash"),
     createdAt: real("createdAt").notNull(),
     createdBy: text("createdBy").notNull(),

@@ -876,6 +876,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "array"
         },
         {
+            "name": "bindings",
+            "optional": true,
+            "type": "array"
+        },
+        {
             "name": "bundleHash",
             "optional": true,
             "type": "string"

@@ -134,6 +134,11 @@ export default defineSchema({
         // drops cron triggers for namespaced workers, so the control plane fans
         // ticks out to these from its own `scheduled()` (§2.4 / src/fanout).
         cronSpecs: v.optional(v.array(v.string())),
+        // The Cloudflare resources this deployment's wrangler config binds, captured
+        // at deploy time so the studio can render the binding graph without reaching
+        // into the tenant's script. `type` is the wrangler kind (d1/kv/r2/queue/ai/
+        // durable_object/secret/var), `target` the concrete resource it points at.
+        bindings: v.optional(v.array(v.object({ name: v.string(), target: v.optional(v.string()), type: v.string() }))),
         // Content hash of the uploaded worker bundle; rollback re-converges to a
         // prior hash retained in R2 (§2.2).
         bundleHash: v.optional(v.string()),
