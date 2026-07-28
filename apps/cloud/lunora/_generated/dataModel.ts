@@ -112,6 +112,7 @@ export interface Doc_deployments {
     alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
+    bindings?: Array<{ name: string; target: string | undefined; type: string }>;
     bundleHash?: string;
     createdAt: number;
     createdBy: string;
@@ -776,6 +777,7 @@ export interface Insert_deployments {
     alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
+    bindings?: Array<{ name: string; target: string | undefined; type: string }>;
     bundleHash?: string;
     createdAt: number;
     createdBy: string;
