@@ -36,6 +36,7 @@ export { useController } from "./use-controller";
 export { default as AuthCard } from "./AuthCard.vue";
 export { default as AuthDivider } from "./AuthDivider.vue";
 export { default as AuthLink } from "./AuthLink.vue";
+export { default as ErrorToaster } from "./ErrorToaster.vue";
 export { default as Field } from "./Field.vue";
 export { default as FormBanner } from "./FormBanner.vue";
 export { default as Skeleton } from "./Skeleton.vue";
@@ -45,9 +46,11 @@ export { default as SubmitButton } from "./SubmitButton.vue";
 // Auth cards.
 export { default as AnonymousButton } from "./AnonymousButton.vue";
 export { default as AuthView } from "./AuthView.vue";
+export { default as Captcha } from "./Captcha.vue";
 export { default as EmailOtpCard } from "./EmailOtpCard.vue";
 export { default as ForgotPasswordCard } from "./ForgotPasswordCard.vue";
 export { default as MagicLinkCard } from "./MagicLinkCard.vue";
+export { default as OneTap } from "./OneTap.vue";
 export { default as PhoneSignInCard } from "./PhoneSignInCard.vue";
 export { default as ResetPasswordCard } from "./ResetPasswordCard.vue";
 export { default as SignInCard } from "./SignInCard.vue";
@@ -89,5 +92,6 @@ export { default as TeamsCard } from "./TeamsCard.vue";
 
 // Organization cards.
 export { default as MembersCard } from "./MembersCard.vue";
+export { default as OrganizationLogoCard } from "./OrganizationLogoCard.vue";
 export { default as OrganizationSettingsCard } from "./OrganizationSettingsCard.vue";
 export { default as OrganizationsCard } from "./OrganizationsCard.vue";

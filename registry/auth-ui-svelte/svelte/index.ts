@@ -41,6 +41,11 @@ export { default as Skeleton } from "./Skeleton.svelte";
 export { default as SocialButtons } from "./SocialButtons.svelte";
 export { default as SubmitButton } from "./SubmitButton.svelte";
 
+// Extras mounted beside the cards rather than inside them.
+export { default as Captcha } from "./Captcha.svelte";
+export { default as ErrorToaster } from "./ErrorToaster.svelte";
+export { default as OneTap } from "./OneTap.svelte";
+
 // Auth cards.
 export { default as AnonymousButton } from "./AnonymousButton.svelte";
 export { default as AuthView } from "./AuthView.svelte";
@@ -82,6 +87,7 @@ export { default as MultiSessionCard } from "./MultiSessionCard.svelte";
 
 // Organization cards.
 export { default as MembersCard } from "./MembersCard.svelte";
+export { default as OrganizationLogoCard } from "./OrganizationLogoCard.svelte";
 export { default as OrganizationSettingsCard } from "./OrganizationSettingsCard.svelte";
 export { default as OrganizationsCard } from "./OrganizationsCard.svelte";
 export { default as TeamsCard } from "./TeamsCard.svelte";

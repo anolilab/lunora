@@ -15,6 +15,7 @@ import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
 import { assertOk } from "./map-error";
+import { notifyError } from "./notify-error";
 import type { AuthAccount, Controller } from "./types";
 
 /**
@@ -47,7 +48,7 @@ const createAccountsController = (context: ControllerContext, options: { autoLoa
                 try {
                     assertOk(await context.authClient.linkSocial({ callbackURL: context.redirects.afterSignIn, provider }));
                 } catch (error) {
-                    context.onError?.(error);
+                    notifyError(context, error, context.localization.genericError);
                 }
             },
             refetch: resource.refetch,

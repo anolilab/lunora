@@ -1,13 +1,22 @@
 /**
  * The better-auth client for your app — the one seam you own and edit.
  *
- * `AUTH_PLUGINS` is the single place a flow is declared. Flip a toggle (and run
- * the matching `lunora add` server item) to enable one; the cards for a disabled
- * flow don't render.
+ * `AUTH_PLUGINS` declares which better-auth **client** plugins this client is
+ * built with. Flip a toggle (and run the matching `lunora add` server item) to
+ * enable one.
  *
- * `registerAuthClientPlugins` tells the auth UI what this client was built with.
- * It has to be told: `createAuthClient` returns a dynamic-path proxy, so the
- * cards cannot inspect the client to find out (every method appears to exist).
+ * It is not, on its own, what decides which cards render. If your Worker mounts
+ * `uiConfig()` (the base `auth` item does by default), the UI also asks the
+ * server which plugins and social providers are actually enabled, and the two
+ * answers are combined: a card renders when the server has the endpoint **and**
+ * this client registered the plugin that drives it. So adding a social provider
+ * server-side needs no change here at all, and a plugin listed here that the
+ * server doesn't run is correctly hidden rather than rendered and broken.
+ *
+ * `registerAuthClientPlugins` is how the UI learns this half. It has to be told:
+ * `createAuthClient` returns a dynamic-path proxy, so the cards cannot inspect
+ * the client to find out (every method appears to exist). Without `uiConfig()`
+ * server-side, this list is the only source and behaves as it always did.
  *
  * `createAuthClient` is passed in rather than chosen for you because the variant
  * has to match your UI framework (better-auth/react here).

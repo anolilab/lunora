@@ -166,6 +166,19 @@ and it needs `@better-auth/oauth-provider` wired server-side first.
 `PasskeysCard` covers list/add/remove; the controller also exposes `rename`, left
 out of the default card so all five ports render the same thing.
 
+## Upgrading a copied port
+
+These screens are user-owned, so an upgrade is a 3-way merge into files someone
+may have edited. One rename in this release conflicts by design:
+
+**Angular — `ControllerSignalOptions.destroyRef` is now `injector`.** The signal
+bridge rebuilds its controller when the context identity changes (which is how a
+card's flow gate follows server discovery), and an `effect` needs an `Injector`;
+`DestroyRef` is derived from it. Every in-repo call site is updated. If you
+copied the Angular port before this, rename the option at your call sites — there
+is no compatibility shim, because silently accepting both would leave the effect
+unregistered and the gate frozen, which is exactly the bug the rename fixes.
+
 ## Docs
 
 [Auth UI](https://lunora.sh/docs/concepts/auth-ui) — the user-facing guide.

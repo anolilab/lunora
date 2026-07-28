@@ -5,15 +5,20 @@
  * and the theme.
  */
 import { fireEvent, render, screen } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ThemeTokens } from "../../src/core";
-import { resetFlowWarnings } from "../../src/core";
+import { pushToast, resetFlowWarnings, resetToasts } from "../../src/core";
+import ErrorToaster from "../../src/svelte/ErrorToaster.svelte";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
 import Harness from "./Harness.svelte";
 
 afterEach(() => {
     resetFlowWarnings();
+    // The toast store is module-level, so a leftover toast would otherwise show
+    // up in whichever test renders <ErrorToaster> next.
+    resetToasts();
     vi.restoreAllMocks();
 });
 
@@ -84,5 +89,25 @@ describe("svelte theme", () => {
 
         expect(card.style.getPropertyValue("--primary")).toBe("rebeccapurple");
         expect(card.style.getPropertyValue("--border")).toBe("");
+    });
+});
+
+describe("svelte ErrorToaster", () => {
+    it("renders a pushed toast and drops it again when dismissed", async () => {
+        expect.assertions(3);
+
+        render(ErrorToaster);
+        await tick();
+
+        expect(screen.queryByRole("status")).toBeNull();
+
+        pushToast("Could not sign out.");
+        await tick();
+
+        expect(screen.getByText("Could not sign out.")).toBeDefined();
+
+        await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+        expect(screen.queryByText("Could not sign out.")).toBeNull();
     });
 });

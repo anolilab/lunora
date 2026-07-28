@@ -184,6 +184,7 @@ interface AuthClient {
         revoke: (input: { sessionToken: string }) => Promise<AuthResponse<{ status?: boolean }>>;
         setActive: (input: { sessionToken: string }) => Promise<AuthResponse<SessionData>>;
     };
+    oneTap: (input?: { callbackURL?: string }) => Promise<AuthResponse<SessionData>>;
     organization: {
         acceptInvitation: (input: { invitationId: string }) => Promise<AuthResponse<{ invitation?: AuthInvitation; member?: AuthMember }>>;
         cancelInvitation: (input: { invitationId: string }) => Promise<AuthResponse<{ status?: boolean }>>;

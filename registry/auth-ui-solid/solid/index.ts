@@ -20,6 +20,8 @@ export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProp
 export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
 export type { AuthViewProps } from "./auth-view";
 export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
+export type { CaptchaProps, OrganizationLogoCardProps } from "./extras";
+export { Captcha, ErrorToaster, OneTap, OrganizationLogoCard } from "./extras";
 export type { OrganizationSettingsCardProps } from "./organization";
 export { MembersCard, OrganizationSettingsCard, OrganizationsCard } from "./organization";
 export type { DeviceAuthorizationCardProps } from "./plugin-cards";

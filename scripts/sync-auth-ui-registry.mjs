@@ -12,6 +12,7 @@
  *   lunora/auth-ui/core/*        (framework-agnostic controllers — identical across frameworks)
  *   lunora/auth-ui/<view>/*      (react|vue|svelte|solid|angular view layer)
  *   lunora/auth-ui/styles.css
+ *   lunora/auth/emails.tsx        (the auth-emails item — rendered server-side)
  *   lunora/auth-ui/client.ts     (hand-authored per item; the createAuthClient seam)
  *
  * Usage:
@@ -135,6 +136,27 @@ for (const { item, view } of FRAMEWORKS) {
     const next = await prettier.format(JSON.stringify({ ...manifest, files }), { ...prettierOptions, parser: "json" });
 
     emit(manifestPath, next);
+}
+
+// The email templates are their own item: they are rendered by the Worker, not
+// by any view layer, so they belong to every framework equally and to none of
+// them in particular. Mirrored here anyway so the same drift check covers them —
+// otherwise `src/emails/` and the registry copy diverge silently.
+{
+    const itemDir = join(REGISTRY, "auth-emails");
+    const manifestPath = join(itemDir, "registry.json");
+
+    if (!existsSync(manifestPath)) {
+        throw new Error(`Missing ${relative(ROOT, manifestPath)} — create the registry item shell first.`);
+    }
+
+    emit(join(itemDir, "emails.tsx"), readFileSync(join(SRC, "emails", "index.tsx"), "utf8"));
+
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const files = [{ from: "emails.tsx", merge: "create-or-skip", to: "lunora/auth/emails.tsx" }];
+    const prettierOptions = await prettier.resolveConfig(manifestPath);
+
+    emit(manifestPath, await prettier.format(JSON.stringify({ ...manifest, files }), { ...prettierOptions, parser: "json" }));
 }
 
 if (CHECK && pending.length > 0) {
