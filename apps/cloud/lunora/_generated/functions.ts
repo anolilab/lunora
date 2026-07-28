@@ -73,6 +73,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:appendLog": lunora_builds_3.appendLog as unknown as RegisteredLunoraFunction,
     "builds:claimNext": lunora_builds_3.claimNext as unknown as RegisteredLunoraFunction,
     "builds:complete": lunora_builds_3.complete as unknown as RegisteredLunoraFunction,
+    "builds:dispatch": lunora_builds_3.dispatch as unknown as RegisteredLunoraFunction,
     "builds:expireStale": lunora_builds_3.expireStale as unknown as RegisteredLunoraFunction,
     "builds:fail": lunora_builds_3.fail as unknown as RegisteredLunoraFunction,
     "builds:listByProject": lunora_builds_3.listByProject as unknown as RegisteredLunoraFunction,
@@ -618,6 +619,7 @@ export interface Caller {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
         claimNext: (args: { runnerId: string }) => Promise<{ buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
+        dispatch: (args?: {}) => Promise<{ ran: number; }>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "pending" | "building" | "successful" | "failed" }[]>;
@@ -797,6 +799,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         appendLog: (args) => callRegistered(context, "builds:appendLog", args),
         claimNext: (args) => callRegistered(context, "builds:claimNext", args),
         complete: (args) => callRegistered(context, "builds:complete", args),
+        dispatch: (args) => callRegistered(context, "builds:dispatch", args),
         expireStale: (args) => callRegistered(context, "builds:expireStale", args),
         fail: (args) => callRegistered(context, "builds:fail", args),
         listByProject: (args) => callRegistered(context, "builds:listByProject", args),

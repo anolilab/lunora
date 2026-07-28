@@ -21,8 +21,8 @@ export interface LunoraCronJob {
  */
 export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [
     "0 */1 * * *",
-    "0 */6 * * *",
     "*/1 * * * *",
+    "0 */6 * * *",
 ];
 
 /**
@@ -36,6 +36,10 @@ export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
         { name: "expire stale builds", functionPath: "builds:expireStale", args: {} },
         { name: "rollup platform usage", functionPath: "usage:rollup", args: {} },
     ],
+    "*/1 * * * *": [
+        { name: "dispatch builds", functionPath: "builds:dispatch", args: {} },
+        { name: "tenant cron fan-out tick", functionPath: "fanout:tick", args: {} },
+    ],
     "0 */6 * * *": [
         { name: "enforce dunning", functionPath: "billing:enforceDunning", args: {} },
         { name: "prune metric points", functionPath: "metrics:prune", args: {} },
@@ -44,8 +48,5 @@ export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
         { name: "prune trace observations", functionPath: "telemetry:pruneObservations", args: {} },
         { name: "prune uptime checks", functionPath: "uptime:prune", args: {} },
         { name: "purge deleted organizations", functionPath: "organizations:purgeDeleted", args: {} },
-    ],
-    "*/1 * * * *": [
-        { name: "tenant cron fan-out tick", functionPath: "fanout:tick", args: {} },
     ],
 };
