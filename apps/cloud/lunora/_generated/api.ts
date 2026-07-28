@@ -17,7 +17,6 @@ export interface ApiTypes {
     };
     audit_log: {
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"auditLog">; action: string; actorUserId: string; createdAt: number; organizationId: Id<"organizations">; target?: string }[]>;
-        record: FunctionReference<"mutation", { action: unknown; organizationId: Id<"organizations">; target?: unknown }, Id<"auditLog">>;
     };
     billing: {
         checkout: FunctionReference<"action", { cancelUrl: unknown; organizationId: Id<"organizations">; priceId: unknown; successUrl: unknown }, { url: string; }>;
@@ -29,7 +28,6 @@ export interface ApiTypes {
     builds: {
         listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "pending" | "building" | "successful" | "failed" }[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: FunctionReference<"mutation", { branch: unknown; commitSha: unknown; installationId: number; repository: unknown }, { buildId: Id<"builds">; reused: boolean; } | null>;
     };
     cells: {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
@@ -150,6 +148,9 @@ export const api = anyApi as unknown as ApiTypes;
 
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
+    audit_log: {
+        record: FunctionReference<"mutation", { action: unknown; organizationId: Id<"organizations">; target?: unknown }, Id<"auditLog">>;
+    };
     billing: {
         enforceDunning: FunctionReference<"mutation", {}, { graced: number; recovered: number; suspended: number; }>;
     };
@@ -159,6 +160,7 @@ export interface InternalApiTypes {
         complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
         expireStale: FunctionReference<"mutation", {}, { expired: number; }>;
         fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
+        recordPush: FunctionReference<"mutation", { branch: unknown; commitSha: unknown; installationId: number; repository: unknown }, { buildId: Id<"builds">; reused: boolean; } | null>;
     };
     cells: {
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;

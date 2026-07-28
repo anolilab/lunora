@@ -1,5 +1,5 @@
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -18,7 +18,7 @@ interface AuditRow {
  * hosted-studio admin proxy and other flows that need a durable record of who
  * did what.
  */
-export const record = mutation
+export const record = internalMutation
     .use(rateLimit("api"))
     .input({
         action: boundedString(LIMITS.name),

@@ -156,7 +156,7 @@ export const markVerified = mutation
 export const routeForHostname = query
     .input({ hostname: boundedString(LIMITS.hostname) })
     .query(async ({ ctx: context, args: { hostname } }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string }> => {
-        const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase() } });
+        const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase().trim() } });
         const domain = (page as unknown as DomainRow[])[0];
 
         if (domain?.verifiedAt == null) {

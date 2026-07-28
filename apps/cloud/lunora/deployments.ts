@@ -494,7 +494,7 @@ export const updateStatus = mutation
 
         await (deployKey
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
-            : assertMember(context, existing.organizationId));
+            : assertMember(context, existing.organizationId, ["owner", "admin", "member"]));
 
         const { now } = context;
         const phaseColumn = PHASE_TIMESTAMP[status];

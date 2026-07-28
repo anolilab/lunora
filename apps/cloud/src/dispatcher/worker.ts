@@ -79,7 +79,16 @@ export default {
             const custom = await customDomainResolver(url.hostname.toLowerCase());
 
             if (custom?.redirectTo) {
-                return Response.redirect(custom.redirectTo, custom.redirectStatusCode ?? 308);
+                // `redirectTo`/`redirectStatusCode` come from a tenant-editable
+                // control-plane row, and `Response.redirect` THROWS on a malformed URL
+                // or an out-of-range status. This branch runs before the try/catch
+                // below, so an invalid row would 500 every request for that hostname
+                // instead of falling through to normal routing.
+                const status = custom.redirectStatusCode ?? 308;
+
+                if (URL.canParse(custom.redirectTo) && status >= 300 && status <= 399) {
+                    return Response.redirect(custom.redirectTo, status);
+                }
             }
         }
 
