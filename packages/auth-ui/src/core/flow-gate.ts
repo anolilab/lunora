@@ -41,6 +41,7 @@ const FLOW_NAMES: ReadonlyArray<FlowName> = [
     "lastLoginMethod",
     "magicLink",
     "multiSession",
+    "oauthProvider",
     "oneTap",
     "organization",
     "passkey",

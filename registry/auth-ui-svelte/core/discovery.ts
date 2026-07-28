@@ -62,6 +62,7 @@ const PLUGIN_ID_TO_FLOW: Readonly<Record<string, string>> = {
     "last-login-method": "lastLoginMethod",
     "magic-link": "magicLink",
     "multi-session": "multiSession",
+    "oauth-provider": "oauthProvider",
     "one-tap": "oneTap",
     organization: "organization",
     passkey: "passkey",

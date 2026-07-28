@@ -178,3 +178,64 @@ describe("redirectTo", () => {
         expect(isSafeRedirect("/ok\nSet-Cookie: x=1")).toBe(false);
     });
 });
+
+describe("oauth-provider consent", () => {
+    it("labels known scopes and shows unknown ones verbatim", async () => {
+        expect.assertions(2);
+
+        const { scopeLabels } = await import("../../src/core");
+
+        expect(scopeLabels("openid profile email")).toStrictEqual(["Your identity", "Your name and picture", "Your email address"]);
+        // Hiding a scope it can't describe would mean consenting to something
+        // the user was never shown.
+        expect(scopeLabels("openid billing:write")).toStrictEqual(["Your identity", "billing:write"]);
+    });
+
+    it("treats an absent scope string as no scopes", async () => {
+        expect.assertions(2);
+
+        const { scopeLabels } = await import("../../src/core");
+
+        expect(scopeLabels()).toStrictEqual([]);
+        expect(scopeLabels("   ")).toStrictEqual([]);
+    });
+
+    it("never auto-accepts, and refuses to redirect without a destination", async () => {
+        expect.assertions(3);
+
+        const { createConsentController, resolveContext } = await import("../../src/core");
+
+        const consent = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                getSession: vi.fn(),
+                oauth2: {
+                    consent,
+                    getConsent: vi.fn(() => Promise.resolve({ data: { clientName: "Acme", scope: "openid" }, error: null })),
+                },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            plugins: { oauthProvider: true },
+        });
+
+        const controller = createConsentController(context, { consentId: "c1" });
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        // Loading a request must never approve it.
+        expect(consent).not.toHaveBeenCalled();
+
+        await controller.actions.accept();
+
+        // better-auth answered without a redirect, so the request is no longer
+        // answerable — surface that rather than invent a destination for an
+        // authorization code.
+        expect(replace).not.toHaveBeenCalled();
+        expect(controller.getState().error).toBeDefined();
+    });
+});

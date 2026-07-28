@@ -42,6 +42,7 @@ export { AuthViewComponent, PhoneSignInCardComponent, UsernameSignInCardComponen
 export type { ControllerSignalOptions, ControllerSignalResult } from "./controller-signal";
 export { controllerSignal } from "./controller-signal";
 export { CaptchaComponent, ErrorToasterComponent, OneTapComponent, OrganizationLogoCardComponent } from "./extras";
+export { AuthorizedAppsCardComponent, ConsentCardComponent } from "./oauth-provider";
 export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent } from "./organization";
 export {
     AdminUsersCardComponent,

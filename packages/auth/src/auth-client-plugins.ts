@@ -26,6 +26,7 @@
  * client plugin without its server half (or vice-versa) leaves those actions
  * untyped/unavailable.
  */
+import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import { passkeyClient } from "@better-auth/passkey/client";
 import {
     adminClient,
@@ -61,6 +62,7 @@ interface LunoraAuthPluginToggles {
     lastLoginMethod?: boolean;
     magicLink?: boolean;
     multiSession?: boolean;
+    oauthProvider?: boolean;
     organization?: boolean;
     passkey?: boolean;
     phoneNumber?: boolean;
@@ -123,6 +125,10 @@ const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthCli
 
     if (toggles.lastLoginMethod) {
         plugins.push(lastLoginMethodClient());
+    }
+
+    if (toggles.oauthProvider) {
+        plugins.push(oauthProviderClient());
     }
 
     return plugins;

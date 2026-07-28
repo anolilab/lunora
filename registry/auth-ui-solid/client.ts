@@ -44,6 +44,7 @@ const AUTH_PLUGINS = {
     lastLoginMethod: false,
     magicLink: true,
     multiSession: false,
+    oauthProvider: false,
     organization: true,
     passkey: true,
     phoneNumber: false,

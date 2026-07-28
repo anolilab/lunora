@@ -23,6 +23,8 @@ interface Localization {
     adminUsersEmpty: string;
     anonymousSignIn: string;
     appearance: string;
+    authorizedApps: string;
+    authorizedAppsEmpty: string;
     avatar: string;
     avatarNoUploader: string;
     avatarRemove: string;
@@ -42,6 +44,12 @@ interface Localization {
     changePasswordDone: string;
     codeLabel: string;
     confirmPasswordLabel: string;
+    consentAllow: string;
+    consentDeny: string;
+    consentExpired: string;
+    consentMissing: string;
+    consentTitle: string;
+    consentWants: string;
     createOrganization: string;
     currentPasswordLabel: string;
     currentSession: string;
@@ -116,6 +124,7 @@ interface Localization {
     resetPassword: string;
     resetPasswordDone: string;
     revoke: string;
+    revokeAccess: string;
     revokeOthers: string;
     roleLabel: string;
     saveChanges: string;
@@ -172,6 +181,8 @@ const DEFAULT_LOCALIZATION: Localization = {
     adminUsersEmpty: "No users match that search.",
     anonymousSignIn: "Continue as guest",
     appearance: "Appearance",
+    authorizedApps: "Authorized applications",
+    authorizedAppsEmpty: "You haven't authorized any applications.",
     avatar: "Avatar",
     avatarNoUploader: "Avatar uploads are not configured for this app.",
     avatarRemove: "Remove photo",
@@ -191,6 +202,12 @@ const DEFAULT_LOCALIZATION: Localization = {
     changePasswordDone: "Your password has been changed.",
     codeLabel: "Verification code",
     confirmPasswordLabel: "Confirm password",
+    consentAllow: "Allow",
+    consentDeny: "Deny",
+    consentExpired: "This request is no longer valid. Start again from the application.",
+    consentMissing: "There's no authorization request to review.",
+    consentTitle: "Authorize application",
+    consentWants: "wants access to:",
     createOrganization: "Create organization",
     currentPasswordLabel: "Current password",
     currentSession: "This device",
@@ -265,6 +282,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     resetPassword: "Set new password",
     resetPasswordDone: "Your password has been updated. You can sign in now.",
     revoke: "Revoke",
+    revokeAccess: "Revoke access",
     revokeOthers: "Sign out other sessions",
     roleLabel: "Role",
     saveChanges: "Save changes",

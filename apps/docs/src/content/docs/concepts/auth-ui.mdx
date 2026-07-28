@@ -220,6 +220,31 @@ Without `uiConfig()` mounted, discovery degrades silently and your client's list
 is the only source — exactly the previous behaviour. Override either way with the
 provider's `plugins` prop, or turn discovery off with `discover={false}`.
 
+## Being an OAuth provider
+
+Everywhere else your app is the OAuth _client_ — the user signs in to you. With
+`@better-auth/oauth-provider` wired server-side, it can be the authorization
+server too, and two screens are yours to host:
+
+`ConsentCard` is what a third-party application redirects the user into. It
+names the application, lists exactly the scopes being requested, and offers
+Allow and Deny. `AuthorizedAppsCard` is where that consent can be taken back.
+
+```tsx
+// e.g. /oauth/consent — the id arrives as ?consent_id=
+<ConsentCard />
+```
+
+Both are deliberately plain, and two properties are enforced in the controller
+rather than left to the view: nothing is ever pre-approved (an auto-accepting
+consent screen is indistinguishable from no consent screen), and denying is
+exactly as cheap as allowing. If the request can't be loaded, the screen resolves
+to _no decision_ rather than to a default — a broken consent screen must not
+become an approving one.
+
+Turn it on with `oauthProvider: true` in `lunora/auth-ui/client.ts` alongside the
+server plugin.
+
 ## Avatar and logo uploads
 
 `user.image` and `organization.logo` are plain string columns in better-auth, so

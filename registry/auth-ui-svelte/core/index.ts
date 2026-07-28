@@ -58,6 +58,8 @@ export { createMembersController } from "./members";
 export type { DeviceSessionsActions, DeviceSessionsController } from "./multi-session";
 export { createDeviceSessionsController } from "./multi-session";
 export { notifyError } from "./notify-error";
+export type { AuthorizedAppsActions, AuthorizedAppsController, ConsentActions, ConsentController, ConsentOptions, ConsentState } from "./oauth-provider";
+export { createAuthorizedAppsController, createConsentController, SCOPE_LABELS, scopeLabels } from "./oauth-provider";
 export { promptOneTap } from "./one-tap";
 export type { OrganizationsActions, OrganizationsController } from "./organization-list";
 export { createOrganizationsController } from "./organization-list";
@@ -134,6 +136,8 @@ export type {
     FormActions,
     FormController,
     FormState,
+    OAuthConsent,
+    OAuthPendingConsent,
     SessionData,
 } from "./types";
 export type { SetUsernameField, UsernameSignInField } from "./username";

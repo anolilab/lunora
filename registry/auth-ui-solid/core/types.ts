@@ -117,6 +117,25 @@ interface AuthDeviceRequest {
     userCode?: string;
 }
 
+/** A consent the user has already granted to an application. */
+interface OAuthConsent {
+    clientId?: string;
+    clientName?: string;
+    createdAt?: Date | string;
+    id?: string;
+    scopes?: string[];
+}
+
+/** The pending authorization request a consent screen decides on. */
+interface OAuthPendingConsent {
+    clientId?: string;
+    clientName?: string;
+    clientURI?: string;
+    logoURI?: string;
+    /** Space-separated, as OAuth specifies. */
+    scope?: string;
+}
+
 /** One registered passkey, as `listUserPasskeys` returns it. */
 interface AuthPasskey {
     createdAt?: Date | string;
@@ -200,6 +219,13 @@ interface AuthClient {
         listDeviceSessions: () => Promise<AuthResponse<AuthDeviceSession[]>>;
         revoke: (input: { sessionToken: string }) => Promise<AuthResponse<{ status?: boolean }>>;
         setActive: (input: { sessionToken: string }) => Promise<AuthResponse<SessionData>>;
+    };
+    /** The `@better-auth/oauth-provider` plugin — your app acting as an OAuth server. */
+    oauth2: {
+        consent: (input: { accept: boolean; scope?: string }) => Promise<AuthResponse<{ redirectURI?: string }>>;
+        deleteConsent: (input: { id: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+        getConsent: (input: { query: { id: string } }) => Promise<AuthResponse<OAuthPendingConsent>>;
+        getConsents: () => Promise<AuthResponse<OAuthConsent[]>>;
     };
     oneTap: (input?: { callbackURL?: string }) => Promise<AuthResponse<SessionData>>;
     organization: {
@@ -340,5 +366,7 @@ export type {
     FormActions,
     FormController,
     FormState,
+    OAuthConsent,
+    OAuthPendingConsent,
     SessionData,
 };

@@ -1,9 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient } from "../../src/core";
 import { pushToast, resetToasts } from "../../src/core";
-import { AuthUIProvider, ErrorToaster, OrganizationLogoCard } from "../../src/react";
+import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard } from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
@@ -49,5 +49,48 @@ describe("organizationLogoCard", () => {
         );
 
         expect(container.textContent).toBe("");
+    });
+});
+
+describe("consentCard", () => {
+    const consentClient = (overrides: Record<string, unknown> = {}): AuthClient =>
+        ({
+            getSession: vi.fn(),
+            oauth2: {
+                consent: vi.fn(() => Promise.resolve({ data: { redirectURI: "https://app.example/cb" }, error: null })),
+                getConsent: vi.fn(() => Promise.resolve({ data: { clientName: "Acme", scope: "openid email" }, error: null })),
+                ...overrides,
+            },
+        }) as unknown as AuthClient;
+
+    it("names the application and lists exactly the scopes requested", async () => {
+        expect.assertions(3);
+
+        render(
+            <AuthUIProvider authClient={consentClient()} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} plugins={{ oauthProvider: true }}>
+                <ConsentCard consentId="c1" />
+            </AuthUIProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText("Acme")).toBeDefined();
+        });
+
+        expect(screen.getByText("Your identity")).toBeDefined();
+        expect(screen.getByText("Your email address")).toBeDefined();
+    });
+
+    it("offers deny before allow, so the safe answer is reached first", async () => {
+        expect.assertions(1);
+
+        render(
+            <AuthUIProvider authClient={consentClient()} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} plugins={{ oauthProvider: true }}>
+                <ConsentCard consentId="c1" />
+            </AuthUIProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getAllByRole("button").map((button) => button.textContent)).toStrictEqual(["Deny", "Allow"]);
+        });
     });
 });

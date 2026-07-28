@@ -22,6 +22,8 @@ export type { AuthViewProps } from "./auth-view";
 export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
 export type { CaptchaProps, OrganizationLogoCardProps } from "./extras";
 export { Captcha, ErrorToaster, OneTap, OrganizationLogoCard } from "./extras";
+export type { ConsentCardProps } from "./oauth-provider";
+export { AuthorizedAppsCard, ConsentCard } from "./oauth-provider";
 export type { OrganizationSettingsCardProps } from "./organization";
 export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./organization";
 export type { DeviceAuthorizationCardProps } from "./plugin-cards";

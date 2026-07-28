@@ -592,3 +592,12 @@
     margin-bottom: 1rem;
     min-height: 65px;
 }
+
+/*
+ * Consent screen. The two answers are given equal visual weight on purpose —
+ * an authorization prompt that is easier to approve than to refuse is the
+ * failure mode the screen exists to prevent.
+ */
+.lunora-auth-actions > .lunora-auth-button--secondary {
+    flex: 1;
+}

@@ -81,7 +81,9 @@ export { default as TwoFactorSetupCard } from "./TwoFactorSetupCard.svelte";
 
 // Plugin cards.
 export { default as AdminUsersCard } from "./AdminUsersCard.svelte";
+export { default as AuthorizedAppsCard } from "./AuthorizedAppsCard.svelte";
 export { default as BackupCodesCard } from "./BackupCodesCard.svelte";
+export { default as ConsentCard } from "./ConsentCard.svelte";
 export { default as DeviceAuthorizationCard } from "./DeviceAuthorizationCard.svelte";
 export { default as MultiSessionCard } from "./MultiSessionCard.svelte";
 

@@ -159,9 +159,10 @@ there is no `@better-auth/api-key` package — so there is no endpoint to build 
 card against. `PluginFlags.apiKey` exists as an explicit-only escape hatch for an
 app running a fork or a later release; nothing sets it automatically.
 
-**OAuth-provider screens** (consent, account-select, authorized applications).
-Acting as an OAuth _server_ is a different product surface from signing users in,
-and it needs `@better-auth/oauth-provider` wired server-side first.
+Account-select on the OAuth consent flow (choosing _which_ signed-in account to
+authorize with) — it needs the `multiSession` plugin and the oauth-provider
+plugin together, and `<MultiSessionCard>` already covers switching before you
+start the flow.
 
 `PasskeysCard` covers list/add/remove; the controller also exposes `rename`, left
 out of the default card so all five ports render the same thing.

@@ -85,7 +85,9 @@ export { default as VerifyEmailCard } from "./VerifyEmailCard.vue";
 
 // Plugin cards.
 export { default as AdminUsersCard } from "./AdminUsersCard.vue";
+export { default as AuthorizedAppsCard } from "./AuthorizedAppsCard.vue";
 export { default as BackupCodesCard } from "./BackupCodesCard.vue";
+export { default as ConsentCard } from "./ConsentCard.vue";
 export { default as DeviceAuthorizationCard } from "./DeviceAuthorizationCard.vue";
 export { default as MultiSessionCard } from "./MultiSessionCard.vue";
 export { default as TeamsCard } from "./TeamsCard.vue";

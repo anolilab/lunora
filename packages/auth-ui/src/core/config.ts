@@ -52,6 +52,7 @@ interface PluginFlags {
     lastLoginMethod?: boolean;
     magicLink?: boolean;
     multiSession?: boolean;
+    oauthProvider?: boolean;
     oneTap?: boolean;
     organization?: boolean;
     passkey?: boolean;
