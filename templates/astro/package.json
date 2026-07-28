@@ -14,7 +14,7 @@
         "deploy": "lunora codegen && astro build && lunora deploy"
     },
     "dependencies": {
-        "@astrojs/cloudflare": "^13.7.0",
+        "@astrojs/cloudflare": "^14.1.5",
         "@astrojs/react": "^5.0.7",
         "@lunora/astro": "^0.0.0",
         "@lunora/react": "^0.0.0",

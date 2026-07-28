@@ -1,0 +1,29 @@
+{
+    // The config the Angular compiler actually builds with. `@analogjs/vite-plugin-angular`
+    // looks for this filename by convention.
+    //
+    // It exists because the root `tsconfig.json` sets `noEmit: true` — correct for
+    // an editor / `tsc --noEmit` config, fatal for a compiler that is supposed to
+    // produce output. Building against it emitted nothing at all: a 0-byte
+    // `dist/ssr/main.server.js` and a client chunk containing only Vite's
+    // modulepreload polyfill, with the build reporting success right up until
+    // Nitro failed on `does not provide an export named 'default'`. So `noEmit`
+    // is turned back off here, and `extends` inherits everything else.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "outDir": "./dist/out-tsc",
+        "target": "ES2022",
+        // Angular's AOT compiler supplies its own ambient types; the root config's
+        // `@cloudflare/workers-types` belongs to the `lunora/` worker code, not to
+        // the browser bundle.
+        "types": [],
+        // Required by Angular's DI: `useDefineForClassFields: true` turns
+        // constructor-injected fields into `defineProperty` writes that clobber
+        // the values Angular assigns.
+        "useDefineForClassFields": false
+    },
+    "files": ["src/main.ts", "src/main.server.ts"],
+    "include": ["src/**/*.d.ts", "src/app/pages/**/*.page.ts", "src/server/middleware/**/*.ts"],
+    "exclude": ["**/*.test.ts", "**/*.spec.ts"]
+}

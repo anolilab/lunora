@@ -99,22 +99,12 @@ ONLY_TEMPLATE="${1:-}"
 # is standardized on Vite 8 — see the official CF react-router starter which
 # pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
 #
-# Both entries are template bugs that predate the auth-ui payload — a control run
-# with the `lunora add auth-ui` step disabled fails identically. They are listed
-# rather than fixed here so this matrix can become a required check without
-# blocking every PR on work tracked elsewhere. Delete an entry with its fix; the
-# XPASS branch fails the run if one starts passing, so the list cannot rot.
-#
-#   analog        — `Could not resolve entry module "index.html"`, 0 modules
-#                   transformed. https://github.com/anolilab/lunora/issues/220
-#   react-router  — `Could not determine server runtime`; the Cloudflare template
-#                   needs a custom entry.server, not @react-router/node.
-#                   https://github.com/anolilab/lunora/issues/221
-#   astro         — `Missing field \`moduleType\`` out of @cloudflare/vite-plugin;
-#                   Astro drags Vite 7 while the repo is on Vite 8, the same
-#                   major mismatch that removed the templates mentioned above.
-#                   https://github.com/anolilab/lunora/issues/222
-XFAIL_BUILD=("analog" "astro" "react-router")
+# Currently empty: every template builds. It stays as a mechanism because the
+# XPASS branch makes it self-cleaning — an entry that starts passing fails the
+# run, so a fix can never quietly leave a stale exemption behind. That is how
+# the astro entry was retired: bumping @astrojs/cloudflare turned it green and
+# the matrix refused to accept the exemption.
+XFAIL_BUILD=()
 
 # ---------------------------------------------------------------------------
 # Templates excluded from this worker-toolchain smoke matrix.
