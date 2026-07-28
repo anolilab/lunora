@@ -160,7 +160,7 @@ export const planForScript = query
         // the plan string so the dispatcher's existing TTL cache carries it.
         const organization = (await context.db.get(deployment.organizationId)) as { suspendedAt?: number } | null;
 
-        if (organization?.suspendedAt !== undefined) {
+        if (organization?.suspendedAt != null) {
             return { plan: "suspended" };
         }
 
@@ -444,7 +444,7 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
     const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
 
     const expired = (page as unknown as DeploymentRow[]).filter(
-        (deployment) => deployment.status !== "destroyed" && deployment.expiresAt !== undefined && deployment.expiresAt < now,
+        (deployment) => deployment.status !== "destroyed" && deployment.expiresAt != null && deployment.expiresAt < now,
     );
 
     for (const deployment of expired) {

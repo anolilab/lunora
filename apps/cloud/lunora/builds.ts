@@ -117,7 +117,7 @@ export const claimNext = internalMutation
             .filter(
                 (build) =>
                     build.status === "pending" ||
-                    (build.status === "building" && build.processingStartedAt !== undefined && now - build.processingStartedAt > LEASE_STALE_MS),
+                    (build.status === "building" && build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS),
             )
             .toSorted((a, b) => a.createdAt - b.createdAt);
         const next = claimable[0];
@@ -249,7 +249,7 @@ export const expireStale = internalMutation.mutation(async ({ ctx: context }): P
     const stale = (page as unknown as BuildRow[]).filter(
         (build) =>
             (build.status === "pending" && now - build.createdAt > PENDING_EXPIRY_MS) ||
-            (build.status === "building" && build.processingStartedAt !== undefined && now - build.processingStartedAt > 4 * LEASE_STALE_MS),
+            (build.status === "building" && build.processingStartedAt != null && now - build.processingStartedAt > 4 * LEASE_STALE_MS),
     );
 
     for (const build of stale) {

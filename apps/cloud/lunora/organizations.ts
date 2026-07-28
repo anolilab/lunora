@@ -217,7 +217,7 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     const cutoff = context.now - DELETION_RETENTION_MS;
     const { page } = await context.db.organizations.findMany({});
     const due = (page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[]).filter(
-        (organization) => organization.deletionRequestedAt !== undefined && organization.deletionRequestedAt < cutoff,
+        (organization) => organization.deletionRequestedAt != null && organization.deletionRequestedAt < cutoff,
     );
 
     const orgScopedTables = [
@@ -279,7 +279,7 @@ export const linkCreditsAccount = internalMutation
     .mutation(async ({ ctx: context, args: { creditsAccountId, organizationId } }): Promise<void> => {
         const organization = (await context.db.get(organizationId)) as null | (OrganizationRow & { creditsAccountId?: string });
 
-        if (!organization || organization.creditsAccountId !== undefined) {
+        if (!organization || organization.creditsAccountId != null) {
             return;
         }
 

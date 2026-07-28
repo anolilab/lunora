@@ -201,7 +201,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         const usage = byOrg.get(organization._id) ?? { cpuMs: 0, requests: 0 };
         const decision = evaluateSpendCap({ capMinorOverride: organization.spendCapMinor, plan: organization.plan, usage });
 
-        if (decision.suspend && organization.suspendedAt === undefined) {
+        if (decision.suspend && organization.suspendedAt == null) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: context.now, suspendedReason: "spend-cap" });
             // eslint-disable-next-line no-await-in-loop -- one audit row per transition
@@ -213,7 +213,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
                 target: `spend ${String(decision.spendMinor)} >= cap ${String(decision.capMinor)}`,
             });
             suspended += 1;
-        } else if (!decision.suspend && organization.suspendedAt !== undefined && organization.suspendedReason === "spend-cap") {
+        } else if (!decision.suspend && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: undefined, suspendedReason: undefined });
