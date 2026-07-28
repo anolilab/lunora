@@ -61,6 +61,16 @@ export ASTRO_TELEMETRY_DISABLED=1
 # two-worker split expects; harmless for every other template, which ignores it.
 export NEXT_PUBLIC_LUNORA_URL="http://localhost:8787"
 
+# In-place `sed` is not portable: GNU (Linux/CI) takes `-i` with an OPTIONAL
+# suffix attached to the flag, BSD (macOS) requires the suffix as a separate
+# argument. Resolve the right spelling once — a `sed --version` that succeeds
+# means GNU.
+if sed --version > /dev/null 2>&1; then
+    SED_INPLACE=(sed -i)
+else
+    SED_INPLACE=(sed -i '')
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH="$(mktemp -d -t lunora-tmpl-XXXXXX)"
 
@@ -294,7 +304,21 @@ for tname in "${TEMPLATES[@]}"; do
     # Includes .vue and .svelte files so framework-specific templates that
     # embed {{name}} in their component markup are correctly substituted.
     find "$scaffold_dir" -type f \( -name "*.json" -o -name "*.jsonc" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.mjs" -o -name "*.html" -o -name "*.md" -o -name "*.vue" -o -name "*.svelte" \) \
-        -exec sed -i '' 's/{{name}}/'"$tname"'-app/g' {} \; 2>/dev/null || true
+        -exec "${SED_INPLACE[@]}" 's/{{name}}/'"$tname"'-app/g' {} +
+
+    # Fail loudly if any placeholder survived. This used to be
+    # `sed -i '' ... 2>/dev/null || true`, which is BSD-only: GNU sed reads the
+    # `''` as the backup suffix and the script as a FILENAME, so on Linux it
+    # errored out and changed nothing — and the redirect swallowed the error.
+    # The scaffolds then built with a literal `{{name}}` in wrangler.jsonc, which
+    # only some templates validate, so the matrix was green on macOS and failed
+    # in CI for four templates with an error that pointed at wrangler.
+    if grep -rlF '{{name}}' "$scaffold_dir" --exclude-dir=node_modules > /dev/null 2>&1; then
+        echo "  FAIL: {{name}} placeholder survived scaffolding in $tname"
+        grep -rlF '{{name}}' "$scaffold_dir" --exclude-dir=node_modules | sed "s|$scaffold_dir/|    |"
+        FAIL+=("$tname(scaffold:placeholder)")
+        continue
+    fi
 
     # -- Inject overrides ---------------------------------------------------
     inject_overrides "$scaffold_dir"
