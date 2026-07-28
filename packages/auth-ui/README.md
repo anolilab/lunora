@@ -50,11 +50,26 @@ src/
               tokens; no Tailwind)
 ```
 
-Two cross-cutting pieces sit beside them. `flow-gate.ts` decides which optional
-cards render, detecting the enabled plugins from the auth client itself so an app
-declares a flow once, in `client.ts`. `theme.ts` resolves the provider's `theme`
-into custom properties, emitting only what the caller changed so an app's own
-design tokens keep flowing through everything else.
+Three cross-cutting pieces sit beside them.
+
+`discovery.ts` asks the server what it supports — a plain `GET
+{basePath}/ui-config`, served by the `uiConfig()` better-auth plugin in
+`@lunora/auth/plugins` — so the cards and the social buttons configure
+themselves. With it mounted, an app declares its plugin set **once, server-side**,
+and the UI needs no plugin config at all.
+
+`flow-gate.ts` is the other half. A better-auth client cannot be probed —
+`createAuthClient` returns a dynamic-path `Proxy`, so `client.notAPlugin.notAMethod`
+is truthy — so `client.ts` _registers_ what it was built with. The two sources are
+**ANDed, not ranked**: the server knows the endpoint exists, the registration knows
+the client plugin that drives it was installed, and a flow with only one half is
+broken in a way a rendered card would hide (`passkey` without `passkeyClient()` has
+a live endpoint and no WebAuthn ceremony to reach it). Discovery degrades silently,
+so an app that doesn't mount `uiConfig()` keeps the previous behaviour exactly.
+
+`theme.ts` resolves the provider's `theme` into custom properties, emitting only
+what the caller changed so an app's own design tokens keep flowing through
+everything else.
 
 A controller owns state and transitions; a view renders it and forwards events.
 So a bug in the reset-password flow is fixed once, and every port inherits the
@@ -139,10 +154,17 @@ a Miniflare-backed worker.
 
 ## Not included
 
-API keys (better-auth 1.6.23 ships no `apiKey` plugin), teams, and custom
-organization roles. `PasskeysCard` covers list/add/remove; the controller also
-exposes `rename`, left out of the default card so all five ports render the
-same thing.
+**API keys.** better-auth still ships no `apiKey` plugin as of 1.7.0-rc.2, and
+there is no `@better-auth/api-key` package — so there is no endpoint to build a
+card against. `PluginFlags.apiKey` exists as an explicit-only escape hatch for an
+app running a fork or a later release; nothing sets it automatically.
+
+**OAuth-provider screens** (consent, account-select, authorized applications).
+Acting as an OAuth _server_ is a different product surface from signing users in,
+and it needs `@better-auth/oauth-provider` wired server-side first.
+
+`PasskeysCard` covers list/add/remove; the controller also exposes `rename`, left
+out of the default card so all five ports render the same thing.
 
 ## Docs
 

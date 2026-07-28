@@ -2,7 +2,7 @@ import { createAuthClient } from "better-auth/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient, ControllerContext, PluginFlags } from "../../src/core";
-import { derivePluginFlags, isFlowEnabled, registerAuthClientPlugins, resetFlowWarnings, resolveContext } from "../../src/core";
+import { derivePluginFlags, FLOW_NAMES, isFlowEnabled, registerAuthClientPlugins, resetFlowWarnings, resolveContext } from "../../src/core";
 
 const stub = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
@@ -37,15 +37,10 @@ describe("derivePluginFlags", () => {
 
         registerAuthClientPlugins(client, {});
 
-        expect(derivePluginFlags(client)).toStrictEqual({
-            admin: false,
-            apiKey: false,
-            emailOtp: false,
-            magicLink: false,
-            organization: false,
-            passkey: false,
-            twoFactor: false,
-        });
+        // Built from FLOW_NAMES rather than spelled out: the point of the
+        // assertion is "every flow is off", not "these seven are". A literal
+        // here fails whenever a flow is added, which says nothing about the gate.
+        expect(derivePluginFlags(client)).toStrictEqual(Object.fromEntries(FLOW_NAMES.map((flow) => [flow, false])));
     });
 
     it("leaves every flow on for a client that never registered", () => {
