@@ -92,6 +92,18 @@ PACK_DIR="$SCRATCH/tarballs"
 RESULTS_DIR="$SCRATCH/results"
 mkdir -p "$PACK_DIR" "$RESULTS_DIR"
 
+# Enforce the production-build prerequisite instead of documenting it. Packing a
+# development `dist/` fails a long way downstream — `next build` prerenders and
+# dies with `(0, p.jsxDEV) is not a function`, which reads as a Next problem and
+# is not. Easy to hit by accident: any `vis run build` (the DEV target) run while
+# debugging silently re-poisons `dist/` after a correct `build:packages:prod`.
+echo "==> Verifying dist/ holds production artifacts"
+if ! node "$REPO_ROOT/scripts/check-dist-production.js" > "$RESULTS_DIR/dist-check.log" 2>&1; then
+    echo "ERROR: dist/ carries development-build markers — run 'pnpm run build:packages:prod' first." >&2
+    tail -20 "$RESULTS_DIR/dist-check.log" >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Optional: single-template filter (first positional arg).
 # ---------------------------------------------------------------------------
