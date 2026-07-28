@@ -12,7 +12,7 @@ import type { Middleware } from "@lunora/server";
  * write attaches one of the buckets below:
  *
  * ```ts
- * .use(dbRateLimit("api"))
+ * .use(rateLimit("api"))
  * ```
  *
  * **Store.** `dbRateLimit` keeps the token buckets in the `rateLimits` table via
@@ -95,7 +95,7 @@ export const RATE_LIMITS = {
     ai: perHour(10),
 } satisfies RateLimitConfigMap;
 
-/** The bucket names {@link dbRateLimit} accepts. */
+/** The bucket names {@link rateLimit} accepts. */
 export type RateLimitBucket = keyof typeof RATE_LIMITS;
 
 /**
@@ -120,7 +120,7 @@ export const callerKey = <Context extends { auth: { userId: string | null }; ip?
 
 /**
  * The rate-limit middleware for one bucket — the only thing a procedure needs:
- * `.use(dbRateLimit("api"))`.
+ * `.use(rateLimit("api"))`.
  *
  * Binds the config and the key selector so neither can be forgotten. The previous
  * shape — `dbRateLimit(RATE_LIMITS, "api", { key: callerKey })` spelled out at 49
@@ -128,13 +128,14 @@ export const callerKey = <Context extends { auth: { userId: string | null }; ip?
  * silently becomes a single global counter shared by every caller, with no type
  * error and no test that would notice.
  *
- * **The name is deliberate, not lazy.** `@lunora/codegen`'s feeder decides whether
- * a procedure is rate-limited by matching the callee name of each `.use(f(...))`
+ * **The name is deliberate, not lazy.** `@lunora/codegen`'s feeder decides whether a
+ * procedure is rate-limited by matching the callee name of each `.use(f(...))`
  * against `{ rateLimit, dbRateLimit, … }` — by name, explicitly, so degraded type
- * info cannot blind the lint. A wrapper called anything else (`limit`) makes all 49
- * procedures read as unprotected and re-fires `public_mutation_without_ratelimit`;
- * the ergonomic win would have cost a security lint. Shadowing the imported name
- * keeps the detector satisfied by a call that genuinely installs a DB-backed limit.
+ * info cannot blind the lint. A wrapper called anything outside that set (`limit`)
+ * makes all 49 procedures read as unprotected and re-fires
+ * `public_mutation_without_ratelimit`, so the ergonomic win would have cost a
+ * security lint. `rateLimit` is in the set and, unlike `dbRateLimit`, carries no
+ * abbreviation for `unicorn/prevent-abbreviations` to object to.
  *
  * Generic in the context for the same reason as {@link callerKey}: `Context`
  * appears only in the return type, so it is inferred from the `.use()` site and the
@@ -143,7 +144,6 @@ export const callerKey = <Context extends { auth: { userId: string | null }; ip?
  * constraint spans both halves the middleware touches — `db` for the store,
  * `auth`/`ip` for {@link callerKey} — so the two stay unifiable.
  */
-// eslint-disable-next-line unicorn/prevent-abbreviations -- the `dbRateLimit` NAME is load-bearing: codegen's middleware detector matches callee names, so renaming it to `databaseRateLimit` makes all 49 procedures read as unprotected and re-fires `public_mutation_without_ratelimit`.
-export const dbRateLimit = <Context extends { auth: { userId: string | null }; db: RateLimitDb; ip?: string }>(
+export const rateLimit = <Context extends { auth: { userId: string | null }; db: RateLimitDb; ip?: string }>(
     bucket: RateLimitBucket,
 ): Middleware<Context, Context> => databaseRateLimitMiddleware<Context>(RATE_LIMITS, bucket, { key: callerKey });

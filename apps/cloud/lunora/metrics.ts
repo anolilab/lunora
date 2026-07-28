@@ -7,7 +7,7 @@ import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry
 import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeTelemetryKey } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -64,7 +64,7 @@ const toView = (series: MetricSeries): MetricSeriesView => {
  * the read fails — never throws on the dashboard's read path.
  */
 export const list = action
-    .use(dbRateLimit("archive"))
+    .use(rateLimit("archive"))
     .input({
         from: v.optional(v.number()),
         organizationId: v.id("organizations"),
@@ -120,7 +120,7 @@ const metricPointInput = v.object({
  * Metrics UI can read exact per-bucket series from {@link series}.
  */
 export const ingest = mutation
-    .use(dbRateLimit("ingest"))
+    .use(rateLimit("ingest"))
     .input({
         deployKey: boundedString(LIMITS.token),
         deploymentId: v.optional(v.id("deployments")),

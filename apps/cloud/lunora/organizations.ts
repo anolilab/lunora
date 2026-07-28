@@ -3,16 +3,33 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
+/**
+ * An organization as the dashboard consumes it.
+ *
+ * The suspension / pending-deletion columns are part of the contract, not an
+ * afterthought: the studio's org banners key on them (GAPS.md C1/C2/D3). They were
+ * absent from this type while the rows carried them at runtime, so the UI had to
+ * re-declare a local shape and cast to it — and the cast typed them as
+ * `number | undefined` when D1 actually returns `null`, which silently made every
+ * "is it suspended?" test false. Declared `| null` here so callers must handle the
+ * value the backend really sends.
+ */
 interface OrganizationRow {
     _id: Id<"organizations">;
     cellId: Id<"cells">;
     createdAt: number;
+    /** Set when an owner requested erasure; the purge cron acts after the retention window. */
+    deletionRequestedAt?: null | number;
     name: string;
     plan: "enterprise" | "free" | "pro";
     slug: string;
+    /** Set by the spend-cap / dunning enforcement crons (or support). */
+    suspendedAt?: null | number;
+    /** Which mechanism suspended the org — `"spend-cap"`, `"dunning"` or `"support"`. */
+    suspendedReason?: null | string;
 }
 
 const assertSignedIn = (userId: null | string): string => {
@@ -83,7 +100,7 @@ export const getBySlug = query.input({ slug: boundedString(LIMITS.id) }).query(a
  * `members.add` and `invitations.accept`.
  */
 export const create = mutation
-    .use(dbRateLimit("provision"))
+    .use(rateLimit("provision"))
     .input({
         // Explicit cell placement; omit to let `jurisdiction` (or the default
         // pool) pick an active cell (GAPS.md F data-residency).
@@ -145,7 +162,7 @@ export const create = mutation
 
 /** Rename an organization (owner only). The slug is immutable (it's the URL identity). */
 export const rename = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({
         name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
@@ -167,7 +184,7 @@ export const DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * {@link cancelDeletion}.
  */
 export const requestDeletion = mutation
-    .use(dbRateLimit("sensitive"))
+    .use(rateLimit("sensitive"))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
@@ -179,7 +196,7 @@ export const requestDeletion = mutation
 
 /** Cancel a pending deletion request (owner only). */
 export const cancelDeletion = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);

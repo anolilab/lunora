@@ -7,7 +7,7 @@ import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
 import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -280,7 +280,7 @@ export const upsertIncident = async (
  * under the unique `(org, hash)` index).
  */
 export const ingest = mutation
-    .use(dbRateLimit("ingest"))
+    .use(rateLimit("ingest"))
     .input({
         deployKey: boundedString(LIMITS.token),
         deploymentId: v.optional(v.id("deployments")),

@@ -3,7 +3,7 @@ import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "..
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /** Public view of a deploy key — never exposes the stored hash. */
@@ -55,7 +55,7 @@ export const list = query
  * only.
  */
 export const issue = mutation
-    .use(dbRateLimit("sensitive"))
+    .use(rateLimit("sensitive"))
     .input({
         // `ingest` mints a telemetry-only key (OTLP push, no deploy); omitted/`deploy` is a full deploy key.
         capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
@@ -92,7 +92,7 @@ export const issue = mutation
 
 /** Revoke a deploy key (owners/admins only). A revoked key fails `verify`. */
 export const revoke = mutation
-    .use(dbRateLimit("sensitive"))
+    .use(rateLimit("sensitive"))
     .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -122,7 +122,7 @@ export const verify = mutation
     // 120/min and is supposed to be the one that throttles first. Brute force is
     // not the risk it looks like: the key is a 256-bit secret matched by hash, and
     // an invalid or revoked one returns `null` rather than an oracle.
-    .use(dbRateLimit("machine"))
+    .use(rateLimit("machine"))
     .input({ key: boundedString(LIMITS.token) })
     .mutation(
         async ({
@@ -205,7 +205,7 @@ export const ingestKeyCipher = query
  * token whose hash wasn't stored). Deploy-key authorized.
  */
 export const recordIngestKey = mutation
-    .use(dbRateLimit("sensitive"))
+    .use(rateLimit("sensitive"))
     .input({
         deployKey: boundedString(LIMITS.token),
         encryptedSecret: v.object({

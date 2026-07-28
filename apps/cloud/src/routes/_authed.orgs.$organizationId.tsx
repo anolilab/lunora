@@ -1,3 +1,4 @@
+import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery } from "@lunora/react";
 import { createFileRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
@@ -11,11 +12,18 @@ import type { PaletteCommand } from "../client/use-command-palette";
 import { useCommandPalette } from "../client/use-command-palette";
 import { preload } from "../ssr/loader";
 
-interface OrgFlags {
-    deletionRequestedAt?: number;
-    suspendedAt?: number;
-    suspendedReason?: string;
-}
+/**
+ * The suspension/deletion fields off an organization row.
+ *
+ * Derived from the query's own return type rather than hand-declared. The previous
+ * local shadow typed these as `number | undefined` and was reconciled with an
+ * `org as OrgFlags` cast — which is exactly what hid a live bug: these columns come
+ * from D1, which returns explicit `null` for an unset value, so the `=== undefined`
+ * tests below were false for every organization and BOTH banners rendered on every
+ * one. The cast asserted a shape the data never had, so the compiler could not say
+ * so. Typing from the source keeps `null` visible.
+ */
+type OrgFlags = Pick<ReturnOf<typeof api.organizations.list>[number], "deletionRequestedAt" | "suspendedAt" | "suspendedReason">;
 
 /**
  * Why an organization is suspended, keyed by `suspendedReason`. A lookup rather than
@@ -28,23 +36,28 @@ const SUSPENSION_DETAIL: Record<string, string> = {
 
 /** Suspension / pending-deletion banners (GAPS.md C1/C2/D3). */
 const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
-    if (org.suspendedAt === undefined && org.deletionRequestedAt === undefined) {
+    // `== null` on purpose: D1 hands back `null`, the validators describe the column
+    // as optional, and both mean "not set". `=== undefined` caught only one of them.
+    const suspended = org.suspendedAt != null;
+    const deleting = org.deletionRequestedAt != null;
+
+    if (!suspended && !deleting) {
         return null;
     }
 
     return (
         <>
-            {org.suspendedAt === undefined ? null : (
+            {suspended ? (
                 <div className="callout error" role="alert">
                     This organization is suspended
                     {SUSPENSION_DETAIL[org.suspendedReason ?? ""] ?? SUSPENSION_DETAIL.default}
                 </div>
-            )}
-            {org.deletionRequestedAt === undefined ? null : (
+            ) : null}
+            {deleting ? (
                 <div className="callout" role="alert">
                     Deletion requested — this organization and all its data will be erased after the 30-day retention window.
                 </div>
-            )}
+            ) : null}
         </>
     );
 };
@@ -92,7 +105,7 @@ const OrganizationLayout = (): ReactElement => {
                 {org ? <span className="badge">{org.plan}</span> : null}
             </div>
 
-            {org ? <OrgBanners org={org as OrgFlags} /> : null}
+            {org ? <OrgBanners org={org} /> : null}
 
             <CommandPalette commands={paletteCommands} onClose={palette.close} open={palette.open} />
 
@@ -102,7 +115,7 @@ const OrganizationLayout = (): ReactElement => {
                     // from `location.pathname` needed a `useRouterState` subscription
                     // plus string surgery whose `?? "projects"` fallback could never
                     // fire — `"/orgs/x/".split("/").pop()` is `""`, not `undefined`.
-                    <Link activeProps={{ className: "tab active" }} className="tab" key={entry.id} params={{ organizationId }} to={entry.to}>
+                    <Link activeProps={{ className: "active" }} className="tab" key={entry.id} params={{ organizationId }} to={entry.to}>
                         {entry.label}
                     </Link>
                 ))}

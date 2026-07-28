@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeTelemetryKey } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -171,7 +171,7 @@ const matchesSearch = (row: TenantLogRow, needle: string): boolean => {
  * rejected outright.
  */
 export const ingest = mutation
-    .use(dbRateLimit("ingest"))
+    .use(rateLimit("ingest"))
     .input({
         deployKey: boundedString(LIMITS.token),
         lines: v.array(logEntry),

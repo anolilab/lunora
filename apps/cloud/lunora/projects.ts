@@ -2,7 +2,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 interface ProjectRow {
@@ -43,7 +43,7 @@ export const byGithubRepo = query
  * `plan` column — see `lunora/entitlements.ts`).
  */
 export const create = mutation
-    .use(dbRateLimit("provision"))
+    .use(rateLimit("provision"))
     .input({
         framework: v.optional(boundedString(LIMITS.id)),
         githubRepo: v.optional(boundedString(LIMITS.token)),
@@ -70,7 +70,7 @@ export const create = mutation
 
 /** Rename a project (owner/admin). The slug (and its URL alias) is immutable. */
 export const rename = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({
         id: v.id("projects"),
         name: boundedString(LIMITS.name),

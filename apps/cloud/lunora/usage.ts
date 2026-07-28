@@ -5,7 +5,7 @@ import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -45,7 +45,7 @@ export const record = internalMutation
  * path). The tenant Worker / metering sidecar reports requests/CPU/storage here.
  */
 export const ingest = mutation
-    .use(dbRateLimit("ingest"))
+    .use(rateLimit("ingest"))
     .input({
         deployKey: boundedString(LIMITS.token),
         deploymentId: v.optional(v.id("deployments")),
