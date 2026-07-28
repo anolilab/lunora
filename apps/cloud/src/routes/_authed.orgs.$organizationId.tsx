@@ -1,7 +1,7 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery } from "@lunora/react";
-import { createFileRoute, Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, redirect, useLocation, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
@@ -15,7 +15,7 @@ import { TAB_GROUPS, TABS } from "../client/tabs";
 import { TimeRangeProvider } from "../client/TimeRangeProvider";
 import type { OrgId } from "../client/types";
 import type { PaletteCommand } from "../client/use-command-palette";
-import { preload } from "../ssr/loader";
+import { loadMyOrganizationIds, preload } from "../ssr/loader";
 
 /** Strip a trailing slash before reading the active segment off the pathname. */
 const TRAILING_SLASH = /\/$/;
@@ -166,6 +166,19 @@ const OrganizationLayout = (): ReactElement => {
  * are gone.
  */
 export const Route = createFileRoute("/_authed/orgs/$organizationId")({
+    // Membership is resolved BEFORE the tabs load. Every tab query calls
+    // `assertMember`, so an org id the caller does not belong to — a stale bookmark,
+    // a deep link into a wiped dev database, someone else's id — used to surface as
+    // `FORBIDDEN: not a member of this organization` from whichever tab query ran
+    // first, leaving the visitor on an error boundary with no way back. Bouncing
+    // home is both recoverable and the behaviour the original design specified.
+    beforeLoad: async ({ params }) => {
+        const mine = await loadMyOrganizationIds();
+
+        if (!mine.includes(params.organizationId)) {
+            throw redirect({ to: "/" });
+        }
+    },
     component: OrganizationLayout,
     loader: async () => {
         return { organizations: await preload(api.organizations.list, {}) };
