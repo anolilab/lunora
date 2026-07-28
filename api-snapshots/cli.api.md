@@ -169,10 +169,10 @@ interface DevCommandOptions {
     port?: number;
     remote?: boolean;
     startCodegen?: typeof startCodegenWatch;
-    target?: string;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
+    target?: string;
     workerPort?: number;
 }
 ```
