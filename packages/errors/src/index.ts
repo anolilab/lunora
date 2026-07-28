@@ -9,8 +9,18 @@
  */
 export type { ErrorLocation, LunoraErrorCodeInput, LunoraErrorOptions } from "./base";
 export { LunoraError } from "./base";
-export type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode, Solution, SolutionRule } from "./catalog";
-export { ERROR_CATALOG, findSolutionByMessage, flattenHint, isInternalCode, MESSAGE_SOLUTIONS, resolveHint } from "./catalog";
+export type { CloudflarePlatformError, ErrorCatalogEntry, ErrorHint, LunoraErrorCode, Solution, SolutionRule } from "./catalog";
+export {
+    CLOUDFLARE_PLATFORM_ERRORS,
+    ERROR_CATALOG,
+    findCloudflarePlatformSolution,
+    findIssueSolution,
+    findSolutionByMessage,
+    flattenHint,
+    isInternalCode,
+    MESSAGE_SOLUTIONS,
+    resolveHint,
+} from "./catalog";
 export type { LunoraErrorLike } from "./guards";
 export { isLunoraError } from "./guards";
 export { invariant, unreachable } from "./invariant";
