@@ -131,3 +131,6 @@ tests/e2e/experiment.mjs
 tests/e2e/validate-studio.mjs
 .omo
 instruments-trend.png
+
+# Per-template logs archived by scripts/template-build-smoke.sh for CI upload.
+.template-smoke-logs/

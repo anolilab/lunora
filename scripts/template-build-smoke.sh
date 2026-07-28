@@ -45,7 +45,20 @@ export ASTRO_TELEMETRY_DISABLED=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH="$(mktemp -d -t lunora-tmpl-XXXXXX)"
-trap 'rm -rf "$SCRATCH"' EXIT
+
+# Archive the per-template logs next to the repo before deleting the scratch dir,
+# so a CI run can upload them. Without this the trap wins the race and a failed
+# matrix leaves nothing to read but the truncated tail this script prints.
+LOG_ARCHIVE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.template-smoke-logs"
+archive_logs() {
+    if [[ -d "$SCRATCH/results" ]]; then
+        rm -rf "$LOG_ARCHIVE"
+        mkdir -p "$LOG_ARCHIVE"
+        cp -R "$SCRATCH/results/." "$LOG_ARCHIVE/" 2>/dev/null || true
+    fi
+    rm -rf "$SCRATCH"
+}
+trap archive_logs EXIT
 
 PACK_DIR="$SCRATCH/tarballs"
 RESULTS_DIR="$SCRATCH/results"
@@ -82,6 +95,36 @@ SKIP_TEMPLATES=("expo")
 is_skipped() {
     local name="$1"
     for s in "${SKIP_TEMPLATES[@]+"${SKIP_TEMPLATES[@]}"}"; do
+        [[ "$s" == "$name" ]] && return 0
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Templates whose scaffold cannot typecheck the copied auth-ui payload with the
+# tooling it ships. A scaffold's only checker is `typescript` — no `vue-tsc`, no
+# `svelte-check`, no `@astrojs/check` — so a port written as SFCs, or a tsconfig
+# whose `include` pulls in files `tsc` cannot parse, has no in-scaffold gate.
+#
+# These are NOT unchecked: `pnpm --filter @lunora/auth-ui run lint:types` runs
+# vue-tsc and svelte-check over the same sources in the monorepo. What is missing
+# is only the proof that they compile against the meta-framework's own tsconfig.
+# Adding the matching checker to those templates' devDependencies would close it.
+# ---------------------------------------------------------------------------
+typecheck_skip_reason() {
+    case "$1" in
+        astro) echo "tsconfig includes .astro files; needs @astrojs/check" ;;
+        nuxt) echo "Vue SFC payload; needs vue-tsc + a nuxt prepare" ;;
+        sveltekit) echo "Svelte SFC payload; needs svelte-check + a svelte-kit sync" ;;
+        *) echo "no in-scaffold checker" ;;
+    esac
+}
+
+TYPECHECK_UNSUPPORTED=("astro" "nuxt" "sveltekit")
+
+is_typecheck_unsupported() {
+    local name="$1"
+    for s in "${TYPECHECK_UNSUPPORTED[@]+"${TYPECHECK_UNSUPPORTED[@]}"}"; do
         [[ "$s" == "$name" ]] && return 0
     done
     return 1
@@ -201,6 +244,7 @@ FAIL=()
 XFAIL=()
 XPASS=()
 SKIP_BUILD=()
+TYPECHECK_SKIPPED=()
 
 # ---------------------------------------------------------------------------
 # Per-template loop.
@@ -241,6 +285,8 @@ for tname in "${TEMPLATES[@]}"; do
         continue
     fi
     echo "  ==> install OK"
+
+    AUTHUI_ADDED="no"
 
     # -- lunora add auth-ui -------------------------------------------------
     # For every template whose framework the CLI can detect — the auth-ui payload
@@ -312,6 +358,8 @@ for tname in "${TEMPLATES[@]}"; do
             FAIL+=("$tname(auth-ui:install)")
             continue
         fi
+
+        AUTHUI_ADDED="yes"
     fi
 
     # -- pnpm run build -----------------------------------------------------
@@ -334,6 +382,51 @@ for tname in "${TEMPLATES[@]}"; do
     build_exit=0
     # Run build inside the scaffold dir.
     (cd "$scaffold_dir" && pnpm run build 2>&1) > "$build_log" || build_exit=$?
+
+    # -- typecheck the copied screens ---------------------------------------
+    # `pnpm run build` alone proves nothing about the payload: no template imports
+    # `lunora/auth-ui/**`, and a bundler only compiles what a build entry reaches,
+    # so the copied files are tree-shaken away before a compiler ever sees them.
+    # Every template's tsconfig DOES list `lunora/**/*`, so `tsc --noEmit` in the
+    # scaffold is what actually compiles them.
+    #
+    # Runs AFTER the build on purpose: the build is what emits `_generated/` and
+    # the framework's own route types, and without those `tsc` drowns in
+    # `Cannot find module '#lunora/_generated/server.js'`.
+    #
+    # Only diagnostics whose path is under `lunora/auth-ui/` fail the run. The
+    # templates carry unrelated type errors of their own (a `fontFamily` in the
+    # Solid template's `__root.tsx`, route types that need a build that failed) and
+    # this gate is not the place to litigate them — it answers one question: does
+    # the payload compile under this meta-framework's tsconfig? Unrelated errors
+    # are counted and printed so they stay visible.
+    if [[ "$AUTHUI_ADDED" == "yes" ]]; then
+        if is_typecheck_unsupported "$tname"; then
+            echo "  ==> NOTICE: no in-scaffold typecheck for $tname ($(typecheck_skip_reason "$tname"))"
+            TYPECHECK_SKIPPED+=("$tname")
+        else
+            echo "  ==> tsc --noEmit (compiling the copied screens)"
+            typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
+            (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$typecheck_log" || true
+
+            authui_errors="$(grep -c '^lunora/auth-ui/' "$typecheck_log" || true)"
+            other_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
+            other_errors=$((other_errors - authui_errors))
+
+            if [[ "$authui_errors" -gt 0 ]]; then
+                echo "  FAIL: $authui_errors type error(s) in the copied auth-ui screens in $tname (see $typecheck_log)"
+                grep '^lunora/auth-ui/' "$typecheck_log" | head -25 | sed 's/^/    /'
+                FAIL+=("$tname(auth-ui:typecheck)")
+                continue
+            fi
+
+            if [[ "$other_errors" -gt 0 ]]; then
+                echo "  ==> typecheck OK for lunora/auth-ui/** ($other_errors pre-existing error(s) elsewhere in $tname, not gated here)"
+            else
+                echo "  ==> typecheck OK"
+            fi
+        fi
+    fi
 
     if [[ $build_exit -eq 0 ]]; then
         # Build passed.
@@ -371,6 +464,7 @@ for t in "${TEMPLATES[@]}"; do
     result="unknown"
     for p in "${PASS[@]+"${PASS[@]}"}"; do [[ "$p" == "$t" ]] && result="PASS" && break; done
     for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "${t}(install)" ]] && result="FAIL(install)" && break; done
+    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "${t}(auth-ui:typecheck)" ]] && result="FAIL(typecheck)" && break; done
     for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "$t" ]] && result="FAIL(build)" && break; done
     for x in "${XFAIL[@]+"${XFAIL[@]}"}"; do [[ "$x" == "$t" ]] && result="XFAIL(expected)" && break; done
     for x in "${XPASS[@]+"${XPASS[@]}"}"; do [[ "$x" == "$t" ]] && result="XPASS(unexpected)" && break; done
@@ -381,6 +475,17 @@ echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
 echo "  XFAIL    : ${#XFAIL[@]}  (${XFAIL[*]+${XFAIL[*]}})"
 echo "  FAIL     : ${#FAIL[@]}   (${FAIL[*]+${FAIL[*]}})"
 echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"
+
+# State what the run did NOT cover, so a green matrix can't be read as more than
+# it is. A template listed here installed and built, but no compiler in the
+# scaffold ever looked at the auth-ui files it copied in.
+if [[ ${#TYPECHECK_SKIPPED[@]} -gt 0 ]]; then
+    echo ""
+    echo "  NOT typechecked in-scaffold (payload compiled only by the monorepo's lint:types):"
+    for t in "${TYPECHECK_SKIPPED[@]}"; do
+        printf "    %-20s  %s\n" "$t" "$(typecheck_skip_reason "$t")"
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # Exit code.

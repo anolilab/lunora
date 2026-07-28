@@ -49,3 +49,19 @@ e2e:
 
 codecov:
     - "codecov.yml"
+
+# The template scaffold+install+build+typecheck matrix. It packs every publishable
+# package and runs a real `pnpm install` per template, so it is far too slow for
+# every PR — but it is the ONLY gate that proves `lunora init` still installs and
+# that `lunora add auth-ui`'s copy-in payload compiles against a meta-framework's
+# own tsconfig. Both regressions it has caught (the CLI entry point, and an
+# unlisted `vue-demi` build script that broke every scaffold's first install) came
+# from packages/registry changes, not from the templates.
+templates:
+    - "templates/**"
+    - "registry/**"
+    - "packages/cli/**"
+    - "packages/auth-ui/**"
+    - "scripts/template-build-smoke.sh"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
