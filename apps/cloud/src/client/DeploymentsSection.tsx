@@ -321,7 +321,7 @@ const BuildLogsCard = ({ buildId, organizationId }: { buildId: BuildId; organiza
                             </button>
                         ))}
                     </div>
-                    <pre className="log-view">
+                    <pre className="bg-muted/40 max-h-96 overflow-auto p-4 font-mono text-xs leading-relaxed">
                         {shown.map((entry) => (
                             <span className={logLineClass(entry)} key={`${String(entry.createdAt)}-${entry.line}`}>
                                 [{new Date(entry.createdAt).toLocaleTimeString()}] {entry.line}
