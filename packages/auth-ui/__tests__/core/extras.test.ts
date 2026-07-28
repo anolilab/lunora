@@ -110,7 +110,7 @@ describe("prefill vs the user", () => {
         });
 
         const context = resolveContext({
-            authClient: { getSession: vi.fn() } as never,
+            authClient: { getSession: vi.fn() },
             nav: { navigate: vi.fn(), replace: vi.fn() },
         });
 

@@ -4,7 +4,7 @@ import { inject, provide, shallowRef } from "vue";
 import type { AuthUIConfig, AvatarConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig, ViewPaths } from "../core/config";
 import type { DiscoveredConfig } from "../core/discovery";
 import type { Localization } from "../core/localization";
-import type { AuthClient } from "../core/types";
+import type { AnyAuthClient } from "../core/types";
 import { DEFAULT_BASE_PATH, resolveContext } from "../core/config";
 import { defaultNav } from "../core/default-nav";
 import { discoverAuthConfig } from "../core/discovery";
@@ -32,7 +32,7 @@ const AUTH_UI_INJECTION_KEY: InjectionKey<AuthUIVueContext> = Symbol("lunora.aut
 
 /** The user-facing config accepted by every Vue provider form. Mirrors React's `AuthUIProviderProps` (minus `children`). */
 interface AuthUIProviderProps {
-    authClient: AuthClient;
+    authClient: AnyAuthClient;
     /** How avatars are stored; without an `upload` the profile card offers a URL field. */
     avatar?: AvatarConfig;
     /** Defaults to `/api/auth`. */

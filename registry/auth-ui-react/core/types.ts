@@ -140,6 +140,23 @@ interface SessionData {
 }
 
 /**
+ * What a consumer actually passes to `&lt;AuthUIProvider>`.
+ *
+ * Deliberately almost-empty. A real better-auth client's type contains only the
+ * plugins it was built with — a client without `adminClient()` has no
+ * `.admin` — so requiring the full `AuthClient` surface made every app cast
+ * (`authClient as never`), which is worse than no typing at all: that cast also
+ * silences the mistakes worth catching.
+ *
+ * `getSession` is the one method every better-auth client has regardless of
+ * configuration, so it is the only thing asserted here. `resolveContext`
+ * narrows once, at the boundary; see the note there for why that is sound.
+ */
+interface AnyAuthClient {
+    getSession: (...args: never[]) => unknown;
+}
+
+/**
  * The minimal better-auth client surface the core-auth controllers call. Written
  * by hand (rather than importing better-auth's inferred client type, which is
  * `any`-wide and non-portable) so `@lunora/auth-ui` type-checks cleanly. Later
@@ -300,6 +317,7 @@ interface Controller<TState, TActions> {
 type FormController<TField extends string> = Controller<FormState<TField>, FormActions<TField>>;
 
 export type {
+    AnyAuthClient,
     AuthAccount,
     AuthAdminUser,
     AuthClient,

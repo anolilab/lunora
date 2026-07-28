@@ -29,7 +29,7 @@ const STACK_STYLE: CSSProperties = { display: "grid", gap: 24, margin: "24px aut
  */
 export const AuthUiAccount = (): ReactElement => (
     <AuthUIProvider
-        authClient={authClient as never}
+        authClient={authClient}
         onSessionChange={() => {
             void authClient.getSession();
         }}

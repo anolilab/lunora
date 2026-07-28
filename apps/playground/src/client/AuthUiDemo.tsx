@@ -45,7 +45,7 @@ export const AuthUiDemo = (): ReactElement => {
 
     return (
         <AuthUIProvider
-            authClient={authClient as never}
+            authClient={authClient}
             nav={nav}
             // A same-origin cookie sign-in changes no token, so nothing prompts
             // `useSession` to re-read on its own — re-fetch it here. This is the

@@ -14,7 +14,7 @@ import type { Localization } from "./localization";
 import { resolveLocalization } from "./localization";
 import type { ThemeTokens } from "./theme";
 import { resolveThemeVariables } from "./theme";
-import type { AuthClient } from "./types";
+import type { AnyAuthClient, AuthClient } from "./types";
 
 /** better-auth's default mount path; matches `DEFAULT_AUTH_BASE_PATH` in the `@lunora/client` package. */
 const DEFAULT_BASE_PATH = "/api/auth";
@@ -103,7 +103,7 @@ interface AvatarConfig {
 
 /** The user-facing config passed to a framework `&lt;AuthUIProvider>`. */
 interface AuthUIConfig {
-    authClient: AuthClient;
+    authClient: AnyAuthClient;
     avatar?: AvatarConfig;
     /** Defaults to `/api/auth`. */
     basePath?: string;
@@ -199,7 +199,7 @@ const flagsFromDiscovery = (discovered: DiscoveredConfig): Partial<Record<keyof 
  * only one half is broken in a way a rendered card would hide: `passkey` without
  * `passkeyClient()` has a live endpoint and no WebAuthn ceremony to reach it.
  */
-const resolvePlugins = (authClient: AuthClient, plugins?: PluginFlags, discovered?: DiscoveredConfig): Required<PluginFlags> => {
+const resolvePlugins = (authClient: AnyAuthClient, plugins?: PluginFlags, discovered?: DiscoveredConfig): Required<PluginFlags> => {
     const registered = derivePluginFlags(authClient);
     const fromServer = discovered ? flagsFromDiscovery(discovered) : undefined;
     const resolved = {} as Required<PluginFlags>;
@@ -257,7 +257,19 @@ const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
  */
 const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): ControllerContext => {
     return {
-        authClient: config.authClient,
+        /*
+         * The one narrowing cast in the package, and it is load-bearing rather
+         * than lazy. `AnyAuthClient` is what an app can actually satisfy (see
+         * its docblock); `AuthClient` is what the controllers call. The bridge
+         * between them is the flow gate: a controller that reaches for
+         * `authClient.organization.*` only ever runs behind
+         * `isFlowEnabled(context, "organization", …)`, which is false unless
+         * the client registered that plugin — so the namespace exists by the
+         * time anything touches it. Widening `AuthClient` instead would push a
+         * `?.` onto every call in every controller and lose the type that makes
+         * those calls checkable at all.
+         */
+        authClient: config.authClient as AuthClient,
         avatar: { maxSize: config.avatar?.maxSize ?? DEFAULT_AVATAR_MAX_SIZE, upload: config.avatar?.upload },
         basePath: config.basePath ?? DEFAULT_BASE_PATH,
         credentials: discovered?.emailAndPassword ?? true,
