@@ -1917,6 +1917,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `AiRunBinding` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ApplyOnDeleteOptions` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -1997,6 +2001,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `DEFAULT_MAX_RELATION_KEYS` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2022,6 +2030,22 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `DeployInfo` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueArgs` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueDegradedReason` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueGrounding` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueResult` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2933,6 +2957,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `explainIssue` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `exportShardRows` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3018,6 +3046,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `normalizeOrderKeys` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `parseExplainIssueArgs` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3215,6 +3247,14 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 ## `lunorash/errors`
 
+### `CLOUDFLARE_PLATFORM_ERRORS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `CloudflarePlatformError` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `ERROR_CATALOG` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -3272,6 +3312,14 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `ToErrorBodyResult` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `findCloudflarePlatformSolution` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `findIssueSolution` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
