@@ -24,7 +24,7 @@
  *
  * Deliberately **not** exposed: the session policy, the rate-limit policy, user
  * field schemas, and anything under `secret`. Those are genuinely useful to an
- * attacker and useless to a login form. {@link AuthAdmin.config} still returns
+ * attacker and useless to a login form. `AuthAdmin.config` still returns
  * them — it sits behind your own authorization.
  *
  * # Wiring
@@ -43,6 +43,7 @@
  * `GET /api/auth/ui-config` then answers, and `lunora/auth-ui`'s provider picks
  * it up with no client configuration at all.
  */
+import type { BetterAuthPlugin } from "better-auth";
 import { createAuthEndpoint } from "better-auth/api";
 import { getAuthTables } from "better-auth/db";
 
@@ -91,7 +92,6 @@ interface UiConfigOptions {
 
     /**
      * Path the endpoint mounts at, relative to the auth basePath.
-     *
      * @default "/ui-config"
      */
     path?: string;
@@ -140,12 +140,7 @@ const deriveUiConfig = (options: ResolvedAuthOptions, pluginOptions: UiConfigOpt
     };
 };
 
-/**
- * The single endpoint, split out so {@link uiConfig} can name its own return
- * type without restating better-auth's deeply-generic endpoint type — which does
- * not survive being widened to its defaults (`StrictEndpoint<…, EndpointOptions>`
- * narrows `method` to the union of every verb and stops accepting a `"GET"`).
- */
+/** Build the endpoint, so {@link uiConfig} stays a plain object literal. */
 const createUiConfigEndpoint = (options: UiConfigOptions) =>
     createAuthEndpoint(
         options.path ?? "/ui-config",
@@ -158,19 +153,33 @@ const createUiConfigEndpoint = (options: UiConfigOptions) =>
             },
             method: "GET",
         },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- better-auth types the handler context generically over the whole endpoint map; the two fields read here are stable public API.
-        (context: any) => Promise.resolve(context.json(deriveUiConfig(context.context.options as ResolvedAuthOptions, options))),
+        (context: unknown) => {
+            // better-auth types the handler context generically over the whole
+            // endpoint map, which is not nameable here. `unknown` accepts that
+            // type, and the narrowing states exactly what is read — both fields
+            // are stable public API.
+            const endpointContext = context as { context: { options: ResolvedAuthOptions }; json: (body: UiConfigPayload) => unknown };
+
+            return Promise.resolve(endpointContext.json(deriveUiConfig(endpointContext.context.options, options)));
+        },
     );
 
 /**
- * better-auth server plugin publishing {@link UiConfigPayload} at
+ * A better-auth server plugin publishing {@link UiConfigPayload} at
  * `GET {basePath}/ui-config`.
  *
  * There is no client half: the payload is fetched with a plain `fetch` by
  * whatever renders your auth screens, so it works before a client exists and
  * from a framework this package knows nothing about.
+ *
+ * The return type is better-auth's own `BetterAuthPlugin` rather than the precise
+ * shape of the endpoint map. That is deliberate: `createAuthEndpoint`'s inferred
+ * type is anonymous, and naming it is the difference between a build that emits
+ * declarations and one that fails only in the bundler — after `tsc` and the
+ * tests have both gone green. `BetterAuthPlugin` is what `createAuth({ plugins })`
+ * consumes anyway.
  */
-const uiConfig = (options: UiConfigOptions = {}): { endpoints: { getUiConfig: ReturnType<typeof createUiConfigEndpoint> }; id: string } => {
+const uiConfig = (options: UiConfigOptions = {}): BetterAuthPlugin => {
     return {
         endpoints: { getUiConfig: createUiConfigEndpoint(options) },
         id: "lunora-ui-config",

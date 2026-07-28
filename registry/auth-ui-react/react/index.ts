@@ -15,12 +15,17 @@ export * from "../core";
  * import "./lunora/auth-ui/styles.css";
  * ```
  */
+export { AppearanceCard, AvatarCard, LinkedAccountsCard, SetUsernameCard } from "./account-cards";
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps } from "./auth-cards";
-export { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+export type { AuthViewProps } from "./auth-view";
+export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
 export type { OrganizationSettingsCardProps } from "./organization";
 export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./organization";
+export type { DeviceAuthorizationCardProps } from "./plugin-cards";
+export { AdminUsersCard, BackupCodesCard, DeviceAuthorizationCard, MultiSessionCard, TeamsCard } from "./plugin-cards";
 export type { AuthCardProps, FieldProps } from "./primitives";
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
+export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, Skeleton, SocialButtons, SubmitButton } from "./primitives";
 export type { AuthUIProviderProps } from "./provider";
 export { AuthUIProvider, useAuthUI, useAuthUILink } from "./provider";
 export type { ProfileCardProps, SignOutButtonProps } from "./settings-cards";
@@ -28,3 +33,7 @@ export { ChangeEmailCard, ChangePasswordCard, DeleteAccountCard, PasskeysCard, P
 export { TwoFactorSetupCard } from "./two-factor-setup-card";
 export { useController } from "./use-controller";
 export { useThemeStyle } from "./use-theme-style";
+export type { UserAvatarProps, UserButtonProps, UserViewProps } from "./user-button";
+export { UserAvatar, UserButton, UserView } from "./user-button";
+export type { AcceptInvitationCardProps, VerifyEmailCardProps } from "./verify-invite-cards";
+export { AcceptInvitationCard, ResendVerificationCard, UserInvitationsCard, VerifyEmailCard } from "./verify-invite-cards";

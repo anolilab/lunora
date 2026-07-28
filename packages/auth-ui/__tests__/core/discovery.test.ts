@@ -5,14 +5,16 @@ import { discoverAuthConfig, registerAuthClientPlugins, resetAuthConfigDiscovery
 
 const stub = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
-const payload = (overrides: Partial<DiscoveredConfig> = {}): DiscoveredConfig => ({
-    emailAndPassword: true,
-    organization: { enabled: false, roles: false, teams: false },
-    plugins: [],
-    signUp: true,
-    socialProviders: [],
-    ...overrides,
-});
+const payload = (overrides: Partial<DiscoveredConfig> = {}): DiscoveredConfig => {
+    return {
+        emailAndPassword: true,
+        organization: { enabled: false, roles: false, teams: false },
+        plugins: [],
+        signUp: true,
+        socialProviders: [],
+        ...overrides,
+    };
+};
 
 const contextFor = (authClient: AuthClient, discovered?: DiscoveredConfig, plugins?: Parameters<typeof resolveContext>[0]["plugins"]) =>
     resolveContext({ authClient, nav: { navigate: vi.fn(), replace: vi.fn() }, plugins }, discovered);
@@ -22,6 +24,9 @@ const contextFor = (authClient: AuthClient, discovered?: DiscoveredConfig, plugi
  * poll — `vi.waitFor` retries its callback, so an `expect` in there is counted
  * once per attempt and blows `expect.assertions`.
  */
+/** An absolute ui-config URL with exactly one slash between origin and path. */
+const RESOLVED_URL = /^https?:\/\/[^/]+\/api\/auth\/ui-config$/u;
+
 const settled = async (handle: { getState: () => { status: string } }): Promise<void> => {
     await vi.waitFor(() => {
         if (handle.getState().status === "loading") {
@@ -38,7 +43,7 @@ afterEach(() => {
 });
 
 describe("resolvePlugins precedence", () => {
-    it("ANDs the server's answer with the client's registration", () => {
+    it("aNDs the server's answer with the client's registration", () => {
         expect.assertions(2);
 
         const client = stub();
@@ -82,7 +87,7 @@ describe("resolvePlugins precedence", () => {
 
         registerAuthClientPlugins(client, { emailOtp: true });
 
-        const context = contextFor(client, undefined);
+        const context = contextFor(client);
 
         expect(context.plugins.emailOtp).toBe(true);
         expect(context.plugins.passkey).toBe(false);
@@ -122,7 +127,7 @@ describe("discovered config fields", () => {
 
         expect(contextFor(stub(), payload({ emailAndPassword: false })).credentials).toBe(false);
         // Without discovery the form stays — the pre-existing behaviour.
-        expect(contextFor(stub(), undefined).credentials).toBe(true);
+        expect(contextFor(stub()).credentials).toBe(true);
     });
 
     it("carries the organization sub-features teams and roles", () => {
@@ -158,7 +163,7 @@ describe("discoverAuthConfig", () => {
         expect(second).toBe(first);
     });
 
-    it("normalizes a trailing slash on the base path", async () => {
+    it("normalizes a trailing slash and resolves against the origin", async () => {
         expect.assertions(1);
 
         const fetchMock = vi.fn(() => Promise.resolve({ json: () => Promise.resolve(payload()), ok: true }));
@@ -167,7 +172,10 @@ describe("discoverAuthConfig", () => {
 
         await settled(discoverAuthConfig("/api/auth/"));
 
-        expect(fetchMock).toHaveBeenCalledWith("/api/auth/ui-config", expect.anything());
+        // The regex pins both halves at once: exactly one slash between origin
+        // and path (the trailing-slash bug), and an absolute URL (only a
+        // browser's `fetch` resolves relative ones — Node's rejects them).
+        expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(RESOLVED_URL), expect.anything());
     });
 
     it("reports unavailable for a 404 rather than throwing", async () => {

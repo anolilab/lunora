@@ -145,7 +145,7 @@ const AuthLink = ({ children, href }: AuthLinkProps): ReactElement => {
  * server discovery on, is whatever `socialProviders` the deployment configured.
  *
  * The provider's brand mark is left to CSS: each button carries a
- * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
+ * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
  * set with a stylesheet rule and this package ships no SVG payload for a list of
  * providers it can't know in advance.
  */
@@ -191,7 +191,6 @@ const SocialButtons = ({ lastUsed, onSelect, providers }: SocialButtonsProps): R
 const Skeleton = ({ rows = 3 }: { rows?: number }): ReactElement => (
     <div aria-hidden="true" className="lunora-auth-skeleton">
         {Array.from({ length: rows }, (_, index) => (
-            // eslint-disable-next-line react/no-array-index-key -- placeholders have no identity; the array is fixed-length and never reordered.
             <span className="lunora-auth-skeleton__row" key={index} />
         ))}
     </div>

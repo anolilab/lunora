@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import { deriveUiConfig, uiConfig } from "../src/ui-config";
 
 /** The subset of resolved better-auth options `deriveUiConfig` reads. */
-const options = (overrides: Record<string, unknown> = {}) => ({
-    emailAndPassword: { enabled: true },
-    plugins: [],
-    socialProviders: {},
-    ...overrides,
-});
+const options = (overrides: Record<string, unknown> = {}) => {
+    return {
+        emailAndPassword: { enabled: true },
+        plugins: [],
+        socialProviders: {},
+        ...overrides,
+    };
+};
 
 describe("deriveUiConfig", () => {
     it("reports the enabled plugin ids, sorted", () => {
@@ -84,23 +86,30 @@ describe("deriveUiConfig", () => {
             }),
         );
 
-        expect(Object.keys(payload).toSorted()).toStrictEqual(["emailAndPassword", "organization", "plugins", "signUp", "socialProviders"]);
+        expect(Object.keys(payload).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "emailAndPassword",
+            "organization",
+            "plugins",
+            "signUp",
+            "socialProviders",
+        ]);
     });
 });
 
 describe("uiConfig", () => {
     it("registers one GET endpoint under a stable plugin id", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const plugin = uiConfig();
 
         expect(plugin.id).toBe("lunora-ui-config");
-        expect(plugin.endpoints.getUiConfig.path).toBe("/ui-config");
+        expect(Object.keys(plugin.endpoints ?? {})).toStrictEqual(["getUiConfig"]);
+        expect(plugin.endpoints?.["getUiConfig"]?.path).toBe("/ui-config");
     });
 
     it("honours a custom path", () => {
         expect.assertions(1);
 
-        expect(uiConfig({ path: "/public-config" }).endpoints.getUiConfig.path).toBe("/public-config");
+        expect(uiConfig({ path: "/public-config" }).endpoints?.["getUiConfig"]?.path).toBe("/public-config");
     });
 });

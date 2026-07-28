@@ -17,13 +17,36 @@
  * A client built some other way is *unknown*, not empty — every flow stays on,
  * because silently hiding a card we cannot reason about is the worse failure.
  * Pass `plugins` to the provider to state it explicitly.
+ *
+ * `discovery.ts` adds the server's half of the answer, which is what removes the
+ * second declaration entirely; `resolvePlugins` in `config.ts` combines the two.
  */
-import type { ControllerContext, PluginFlags } from "./config";
+import type { PluginFlags } from "./config";
 
 /** The optional flows a card can depend on. */
 type FlowName = keyof PluginFlags;
 
-const FLOW_NAMES: FlowName[] = ["admin", "apiKey", "emailOtp", "magicLink", "organization", "passkey", "twoFactor"];
+/**
+ * Every flow name. Lives here rather than in `config.ts` so the import edge runs
+ * one way at runtime: `config.ts` imports this module for values, this module
+ * imports `config.ts` for types only (erased at compile time). Reversing it
+ * would make the two a runtime cycle.
+ */
+const FLOW_NAMES: ReadonlyArray<FlowName> = [
+    "admin",
+    "anonymous",
+    "apiKey",
+    "deviceAuthorization",
+    "emailOtp",
+    "lastLoginMethod",
+    "magicLink",
+    "multiSession",
+    "organization",
+    "passkey",
+    "phoneNumber",
+    "twoFactor",
+    "username",
+];
 
 /**
  * Toggles by auth client. A `WeakMap` so a discarded client is collectable, and
@@ -84,8 +107,11 @@ const warned = new Set<string>();
  * component and the fix — a card that vanishes with no explanation is a worse
  * bug than the one this gate prevents. It only fires for a card you mounted with
  * its flow deliberately off, so it stays quiet in a correct app.
+ *
+ * Typed against the `plugins` slice rather than the whole `ControllerContext` so
+ * this module keeps its type-only edge to `config.ts`.
  */
-const isFlowEnabled = (context: ControllerContext, flow: FlowName, component: string): boolean => {
+const isFlowEnabled = (context: { plugins: Required<PluginFlags> }, flow: FlowName, component: string): boolean => {
     if (context.plugins[flow]) {
         return true;
     }
@@ -107,4 +133,4 @@ const resetFlowWarnings = (): void => {
 };
 
 export type { FlowName };
-export { derivePluginFlags, isFlowEnabled, registerAuthClientPlugins, resetFlowWarnings };
+export { derivePluginFlags, FLOW_NAMES, isFlowEnabled, registerAuthClientPlugins, resetFlowWarnings };

@@ -1,20 +1,39 @@
 <script lang="ts">
     import { createSignUpController } from "../core/sign-up";
+    import { signInWithSocial } from "../core/social";
     import AuthCard from "./AuthCard.svelte";
+    import AuthDivider from "./AuthDivider.svelte";
     import AuthLink from "./AuthLink.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
     import Field from "./Field.svelte";
     import FormBanner from "./FormBanner.svelte";
+    import SocialButtons from "./SocialButtons.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
     let { signInHref = "/sign-in" }: { signInHref?: string } = $props();
 
-    const t = useAuthUI().localization;
+    const context = useAuthUI();
+    const t = context.localization;
+    const social = context.social;
     const { actions, state: form } = controllerStore(createSignUpController);
 </script>
 
 <AuthCard title={t.signUp}>
+    <!--
+        Social buttons belong on sign-up too — OAuth is a sign-up path, not just a
+        sign-in one, and omitting them here sends new users through a password form
+        they never needed. This was the gap against better-auth-ui's <AuthView>.
+    -->
+    <SocialButtons
+        onSelect={(provider) => {
+            void signInWithSocial(context, provider);
+        }}
+        providers={social}
+    />
+    {#if social.length > 0}
+        <AuthDivider />
+    {/if}
     <form
         class="lunora-auth-form"
         novalidate

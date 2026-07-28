@@ -7,6 +7,7 @@
  */
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
 
+import { providerLabel } from "../core/labels";
 import type { FieldState } from "../core/types";
 import { injectAuthUI, injectAuthUILink } from "./provider";
 
@@ -134,7 +135,15 @@ class FormBannerComponent {
     readonly success = input<string>();
 }
 
-/** OAuth provider buttons. Rendered only when the caller passes providers. */
+/**
+ * OAuth provider buttons. Rendered only when there are providers — which, with
+ * server discovery on, is whatever `socialProviders` the deployment configured.
+ *
+ * The provider's brand mark is left to CSS: each button carries a
+ * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
+ * set with a stylesheet rule and this package ships no SVG payload for a list of
+ * providers it can't know in advance.
+ */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-social-buttons",
@@ -143,8 +152,12 @@ class FormBannerComponent {
         @if (providers().length > 0) {
             <div class="lunora-auth-social">
                 @for (provider of providers(); track provider) {
-                    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="select.emit(provider)">
-                        Continue with {{ labelFor(provider) }}
+                    <button class="lunora-auth-button lunora-auth-button--secondary lunora-auth-social__button" type="button" (click)="select.emit(provider)">
+                        <span aria-hidden="true" [class]="'lunora-auth-social__icon lunora-auth-social__icon--' + provider"></span>
+                        <span class="lunora-auth-social__label">{{ t.signInWith }} {{ providerLabel(provider) }}</span>
+                        @if (lastUsed() === provider) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
                     </button>
                 }
             </div>
@@ -152,12 +165,40 @@ class FormBannerComponent {
     `,
 })
 class SocialButtonsComponent {
+    /** Highlight the provider used last on this device, when known. */
+    readonly lastUsed = input<string>();
     readonly providers = input.required<ReadonlyArray<string>>();
     readonly select = output<string>();
 
-    protected labelFor(provider: string): string {
-        return provider.charAt(0).toUpperCase() + provider.slice(1);
-    }
+    protected readonly t = injectAuthUI().localization;
+
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly providerLabel = providerLabel;
+}
+
+/**
+ * A loading placeholder sized in rows. Purely decorative, and hidden from the
+ * accessibility tree: the region it fills is already announced as busy by the
+ * card that owns it, and a screen reader has no use for "three grey boxes".
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-auth-skeleton",
+    standalone: true,
+    template: `
+        <div class="lunora-auth-skeleton" aria-hidden="true">
+            @for (row of rowIndexes(); track row) {
+                <span class="lunora-auth-skeleton__row"></span>
+            }
+        </div>
+    `,
+})
+class SkeletonComponent {
+    readonly rows = input(3);
+
+    // Placeholders have no identity, so the track key is the index — the list is
+    // fixed-length and never reordered.
+    protected readonly rowIndexes = computed(() => Array.from({ length: this.rows() }, (_unused, index) => index));
 }
 
 /** A labelled visual separator ("or"). */
@@ -206,6 +247,7 @@ export {
     AuthLinkComponent,
     FormBannerComponent,
     serializeThemeVariables,
+    SkeletonComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
 };

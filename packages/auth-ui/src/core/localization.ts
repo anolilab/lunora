@@ -31,8 +31,8 @@ interface Localization {
     avatarUploadFailed: string;
     avatarWrongType: string;
     backToSignIn: string;
-    backupCodeSignIn: string;
     backupCodes: string;
+    backupCodeSignIn: string;
     backupCodesRegenerate: string;
     backupCodesRegenerated: string;
     cancel: string;
@@ -68,9 +68,9 @@ interface Localization {
     invitationAccept: string;
     invitationMissing: string;
     invitationReject: string;
-    invitationTitle: string;
     invitations: string;
     invitationsEmpty: string;
+    invitationTitle: string;
     inviteEmailLabel: string;
     inviteMember: string;
     lastUsed: string;
@@ -89,18 +89,18 @@ interface Localization {
     organizationLogo: string;
     organizationName: string;
     organizationNameRequired: string;
+    organizations: string;
     organizationSaved: string;
     organizationSettings: string;
     organizationSlug: string;
     organizationSlugRequired: string;
-    organizations: string;
     otpRequired: string;
     passkeyAdd: string;
     passkeyName: string;
     passkeyRename: string;
-    passkeyUnnamed: string;
     passkeys: string;
     passkeysEmpty: string;
+    passkeyUnnamed: string;
     passwordLabel: string;
     passwordMismatch: string;
     passwordRequired: string;
@@ -179,8 +179,8 @@ const DEFAULT_LOCALIZATION: Localization = {
     avatarUploadFailed: "Could not upload that image. Try again.",
     avatarWrongType: "Choose a PNG, JPEG, WebP, GIF, or AVIF image.",
     backToSignIn: "Back to sign in",
-    backupCodeSignIn: "Use a backup code",
     backupCodes: "Save these backup codes somewhere safe:",
+    backupCodeSignIn: "Use a backup code",
     backupCodesRegenerate: "Regenerate backup codes",
     backupCodesRegenerated: "New backup codes generated. The old ones no longer work.",
     cancel: "Cancel",
@@ -216,9 +216,9 @@ const DEFAULT_LOCALIZATION: Localization = {
     invitationAccept: "Accept invitation",
     invitationMissing: "That invitation link is not valid or has expired.",
     invitationReject: "Decline",
-    invitationTitle: "You've been invited",
     invitations: "Pending invitations",
     invitationsEmpty: "No invitations waiting for you.",
+    invitationTitle: "You've been invited",
     inviteEmailLabel: "Email to invite",
     inviteMember: "Invite member",
     lastUsed: "Last used",
@@ -237,18 +237,18 @@ const DEFAULT_LOCALIZATION: Localization = {
     organizationLogo: "Logo URL",
     organizationName: "Organization name",
     organizationNameRequired: "Organization name is required.",
+    organizations: "Organizations",
     organizationSaved: "Organization settings saved.",
     organizationSettings: "Organization settings",
     organizationSlug: "Slug",
     organizationSlugRequired: "Slug is required.",
-    organizations: "Organizations",
     otpRequired: "Enter the code we sent you.",
     passkeyAdd: "Add a passkey",
     passkeyName: "Passkey name",
     passkeyRename: "Rename",
-    passkeyUnnamed: "Unnamed passkey",
     passkeys: "Passkeys",
     passkeysEmpty: "No passkeys registered yet.",
+    passkeyUnnamed: "Unnamed passkey",
     passwordLabel: "Password",
     passwordMismatch: "Passwords do not match.",
     passwordRequired: "Password is required.",

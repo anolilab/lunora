@@ -10,6 +10,13 @@ import type { AuthOrganization, Controller } from "./types";
 
 interface OrganizationsActions {
     create: (name: string, slug: string) => Promise<void>;
+
+    /**
+     * Leave an organization you are a member of. Distinct from `remove`,
+     * which deletes it for everyone — the two are one keystroke apart in a menu,
+     * so they are never the same action here.
+     */
+    leave: (organizationId: string) => Promise<void>;
     refetch: () => Promise<void>;
     remove: (organizationId: string) => Promise<void>;
     setActive: (organizationId: string) => Promise<void>;
@@ -27,6 +34,13 @@ const createOrganizationsController = (context: ControllerContext, options: { au
     return {
         actions: {
             create: (name: string, slug: string) => resource.mutate(async () => assertOk(await context.authClient.organization.create({ name, slug }))),
+            leave: (organizationId: string) =>
+                resource.mutate(async () => {
+                    assertOk(await context.authClient.organization.leave({ organizationId }));
+                    // Leaving the active organization leaves the session pointing at
+                    // one the user can no longer read, so the app has to re-resolve.
+                    context.onSessionChange?.();
+                }),
             refetch: resource.refetch,
             remove: (organizationId: string) => resource.mutate(async () => assertOk(await context.authClient.organization.delete({ organizationId }))),
             setActive: (organizationId: string) => resource.mutate(async () => assertOk(await context.authClient.organization.setActive({ organizationId }))),

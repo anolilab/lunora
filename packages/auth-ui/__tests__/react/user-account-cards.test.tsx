@@ -23,7 +23,7 @@ const renderWith = (client: AuthClient, node: ReactElement, config: Partial<Auth
     render(
         // `discover={false}` keeps these render tests off the network; discovery
         // itself is covered in __tests__/core/discovery.test.ts.
-        <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} {...config}>
+        <AuthUIProvider authClient={client} avatar={config.avatar} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} social={config.social}>
             {node}
         </AuthUIProvider>,
     );
@@ -42,7 +42,7 @@ describe("userButton", () => {
         renderWith(stubClient(), <UserButton />);
 
         await waitFor(() => {
-            expect(screen.getByRole("button", { name: "Ada Lovelace" })).toBeTruthy();
+            expect(screen.getByRole("button", { name: "Ada Lovelace" }).getAttribute("aria-haspopup")).toBe("true");
         });
     });
 
@@ -70,7 +70,7 @@ describe("userButton", () => {
         renderWith(stubClient({ getSession: vi.fn(() => ok({})) }), <UserButton />);
 
         await waitFor(() => {
-            expect(screen.getByRole("link")).toBeTruthy();
+            expect(screen.getByRole("link").textContent).toBe("Sign in");
         });
     });
 
@@ -126,7 +126,7 @@ describe("linkedAccountsCard", () => {
         renderWith(stubClient(), <LinkedAccountsCard />, { social: ["github", "google"] });
 
         await waitFor(() => {
-            expect(screen.getByRole("button", { name: "Link account: Google" })).toBeTruthy();
+            expect(screen.getByRole("button", { name: "Link account: Google" }).tagName).toBe("BUTTON");
         });
 
         expect(screen.queryByRole("button", { name: "Link account: GitHub" })).toBeNull();
@@ -137,15 +137,11 @@ describe("avatarCard", () => {
     it("renders nothing when the app configured no upload handler", () => {
         expect.assertions(1);
 
-        const { container } = render(
-            <AuthUIProvider authClient={stubClient()} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
-                <AvatarCard />
-            </AuthUIProvider>,
-        );
+        renderWith(stubClient(), <AvatarCard />);
 
         // Without somewhere to put the bytes there is no upload to offer, and
         // <ProfileCard>'s URL field is the honest fallback.
-        expect(container.querySelector(".lunora-auth-card")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Upload photo" })).toBeNull();
     });
 
     it("uploads a picked file and stores the returned URL", async () => {
@@ -156,10 +152,9 @@ describe("avatarCard", () => {
 
         renderWith(client, <AvatarCard />, { avatar: { upload } });
 
-        const input = document.querySelector("input[type=file]") as HTMLInputElement;
         const file = new File(["x"], "a.png", { type: "image/png" });
 
-        fireEvent.change(input, { target: { files: [file] } });
+        fireEvent.change(screen.getByLabelText("Upload photo"), { target: { files: [file] } });
 
         await waitFor(() => {
             expect(upload).toHaveBeenCalledWith(file);
@@ -176,12 +171,12 @@ describe("avatarCard", () => {
 
         renderWith(client, <AvatarCard />, { avatar: { maxSize: 10, upload } });
 
-        const input = document.querySelector("input[type=file]") as HTMLInputElement;
-
-        fireEvent.change(input, { target: { files: [new File(["much-larger-than-ten-bytes"], "a.png", { type: "image/png" })] } });
+        fireEvent.change(screen.getByLabelText("Upload photo"), {
+            target: { files: [new File(["much-larger-than-ten-bytes"], "a.png", { type: "image/png" })] },
+        });
 
         await waitFor(() => {
-            expect(screen.getByRole("alert")).toBeTruthy();
+            expect(screen.getByRole("alert").textContent).toContain("too large");
         });
 
         expect(upload).not.toHaveBeenCalled();

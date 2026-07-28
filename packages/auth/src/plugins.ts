@@ -48,6 +48,21 @@
  * the plugin factories with a Lunora-namespaced import path.
  */
 
+/**
+ * SCIM 2.0 server — directory-driven user provisioning, so an enterprise IdP can
+ * create/update/deactivate users without anyone signing in. Users only (no
+ * `/Groups`), and deactivation needs the `admin` plugin. See the package docs for
+ * the setup and its security-relevant defaults.
+ */
+
+/**
+ * Publish which plugins and social providers this deployment enabled, at
+ * `GET {basePath}/ui-config`, so an auth UI configures itself instead of making
+ * you restate the list client-side. Lunora's own, not a better-auth re-export.
+ */
+export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload } from "./ui-config";
+export { uiConfig } from "./ui-config";
+
 // OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`.
 // better-auth 1.7 moved these out of its core barrel into `@better-auth/mcp`, and
 // renamed `withMcpAuth` to `requireMcpAuth` (`mcpHandler` is new alongside it).
@@ -58,22 +73,8 @@ export { mcp, mcpHandler, requireMcpAuth } from "@better-auth/mcp";
 // removed in 1.7; the factory is named `oauthProvider` in its new home.
 export { oauthProvider } from "@better-auth/oauth-provider";
 export { passkey } from "@better-auth/passkey";
-
-/**
- * SCIM 2.0 server — directory-driven user provisioning, so an enterprise IdP can
- * create/update/deactivate users without anyone signing in. Users only (no
- * `/Groups`), and deactivation needs the `admin` plugin. See the package docs for
- * the setup and its security-relevant defaults.
- */
 export { scim } from "@better-auth/scim";
 
-/**
- * Publish which plugins and social providers this deployment enabled, at
- * `GET {basePath}/ui-config`, so an auth UI configures itself instead of making
- * you restate the list client-side. Lunora's own, not a better-auth re-export.
- */
-export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload } from "./ui-config";
-export { uiConfig } from "./ui-config";
 // `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox) has no
 // dedicated `better-auth/plugins/<name>` subpath in better-auth's exports map —
 // it ships only via the `better-auth/plugins` barrel, so it is re-exported from

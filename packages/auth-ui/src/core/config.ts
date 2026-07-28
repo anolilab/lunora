@@ -232,10 +232,13 @@ const resolveRedirects = (redirects?: RedirectConfig): Required<RedirectConfig> 
 const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
     return {
         acceptInvitation: viewPaths?.acceptInvitation ?? "accept-invitation",
+
         deviceAuthorization: viewPaths?.deviceAuthorization ?? "device",
         emailOtp: viewPaths?.emailOtp ?? "email-otp",
+        // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the forgot-password screen, not a credential.
         forgotPassword: viewPaths?.forgotPassword ?? "forgot-password",
         magicLink: viewPaths?.magicLink ?? "magic-link",
+        // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the reset-password screen, not a credential.
         resetPassword: viewPaths?.resetPassword ?? "reset-password",
         signIn: viewPaths?.signIn ?? "sign-in",
         signUp: viewPaths?.signUp ?? "sign-up",

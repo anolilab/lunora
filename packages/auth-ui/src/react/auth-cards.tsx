@@ -25,6 +25,23 @@ const onSubmit =
         void action();
     };
 
+/** Guest sign-in, when the `anonymous` plugin is on. */
+const AnonymousButton = (): ReactElement => {
+    const context = useAuthUI();
+
+    return (
+        <button
+            className="lunora-auth-button lunora-auth-button--secondary"
+            onClick={() => {
+                void signInAnonymously(context);
+            }}
+            type="button"
+        >
+            {context.localization.anonymousSignIn}
+        </button>
+    );
+};
+
 interface SignInCardProps {
     forgotPasswordHref?: string;
     signUpHref?: string;
@@ -89,23 +106,6 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
                 </form>
             ) : null}
         </AuthCard>
-    );
-};
-
-/** "Continue as guest", when the `anonymous` plugin is on. */
-const AnonymousButton = (): ReactElement => {
-    const context = useAuthUI();
-
-    return (
-        <button
-            className="lunora-auth-button lunora-auth-button--secondary"
-            onClick={() => {
-                void signInAnonymously(context);
-            }}
-            type="button"
-        >
-            {context.localization.anonymousSignIn}
-        </button>
     );
 };
 

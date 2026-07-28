@@ -5,16 +5,18 @@
  * standalone component binding a core controller to the shared view primitives.
  */
 import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, DestroyRef, inject, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, Injector, input } from "@angular/core";
 
 import type { EmailOtpActions, EmailOtpState } from "../core/email-otp";
 import type { ForgotPasswordField } from "../core/forgot-password";
 import type { ResetPasswordField } from "../core/reset-password";
 import type { TwoFactorField } from "../core/two-factor-verify";
 import type { FormActions, FormState } from "../core/types";
+import { signInAnonymously } from "../core/anonymous";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
+import { readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createSignInController } from "../core/sign-in";
@@ -31,11 +33,28 @@ import {
     SocialButtonsComponent,
     SubmitButtonComponent,
 } from "./primitives";
-import { injectAuthUI } from "./provider";
+import { injectAuthUIContext } from "./provider";
+
+/** "Continue as guest", when the `anonymous` plugin is on. */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-anonymous-button",
+    standalone: true,
+    template: ` <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="signIn()">{{ t.anonymousSignIn }}</button> `,
+})
+class AnonymousButtonComponent {
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
+
+    protected signIn(): void {
+        void signInAnonymously(this.context());
+    }
+}
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     imports: [
+        AnonymousButtonComponent,
         AuthCardComponent,
         AuthDividerComponent,
         AuthFieldComponent,
@@ -48,33 +67,43 @@ import { injectAuthUI } from "./provider";
     standalone: true,
     template: `
         <lunora-auth-card [title]="t.signIn" [footer]="true">
-            <lunora-auth-social-buttons [providers]="social" (select)="signInSocial($event)" />
-            @if (social.length > 0) {
+            <lunora-auth-social-buttons [providers]="social()" [lastUsed]="lastUsed()" (select)="signInSocial($event)" />
+            @if (anonymous()) {
+                <lunora-anonymous-button />
+            }
+            @if (social().length > 0 && credentials()) {
                 <lunora-auth-divider />
             }
-            <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
-                <lunora-auth-banner [error]="state().formError" />
-                <lunora-auth-field
-                    [field]="state().fields.email"
-                    [label]="t.emailLabel"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    (changed)="actions.setField('email', $event)"
-                    (blurred)="actions.blur('email')"
-                />
-                <lunora-auth-field
-                    [field]="state().fields.password"
-                    [label]="t.passwordLabel"
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    (changed)="actions.setField('password', $event)"
-                    (blurred)="actions.blur('password')"
-                />
-                <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signIn }}</lunora-auth-submit-button>
-            </form>
+            <!--
+              An OAuth-only deployment has no password form to show. Discovery
+              reports that as emailAndPassword: false; without discovery it
+              defaults to true, which is the pre-existing behaviour.
+            -->
+            @if (credentials()) {
+                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
+                    <lunora-auth-banner [error]="state().formError" />
+                    <lunora-auth-field
+                        [field]="state().fields.email"
+                        [label]="t.emailLabel"
+                        name="email"
+                        type="email"
+                        autoComplete="email"
+                        (changed)="actions.setField('email', $event)"
+                        (blurred)="actions.blur('email')"
+                    />
+                    <lunora-auth-field
+                        [field]="state().fields.password"
+                        [label]="t.passwordLabel"
+                        name="password"
+                        type="password"
+                        autoComplete="current-password"
+                        (changed)="actions.setField('password', $event)"
+                        (blurred)="actions.blur('password')"
+                    />
+                    <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signIn }}</lunora-auth-submit-button>
+                </form>
+            }
             <lunora-auth-link lunoraAuthCardFooter [href]="signUpHref()">{{ t.noAccount }}</lunora-auth-link>
         </lunora-auth-card>
     `,
@@ -83,25 +112,55 @@ class SignInCardComponent {
     readonly forgotPasswordHref = input("/forgot-password");
     readonly signUpHref = input("/sign-up");
 
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
-    protected readonly social = this.context.social;
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSignInController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
 
+    // Read once rather than per change-detection run: it is a cookie, it is
+    // available before the first paint, and it only picks a badge.
+    private readonly lastLoginMethod = readLastLoginMethod();
+
+    /*
+     * All derived from the context, so the deployment's real shape — which
+     * providers exist, whether there is a password form at all — arrives with the
+     * discovery answer instead of being frozen at mount.
+     */
+    protected readonly anonymous = computed(() => this.context().plugins.anonymous);
+    protected readonly credentials = computed(() => this.context().credentials);
+    protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod : undefined));
+    protected readonly social = computed(() => this.context().social);
+
     protected signInSocial(provider: string): void {
-        void signInWithSocial(this.context, provider);
+        void signInWithSocial(this.context(), provider);
     }
 }
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
-    imports: [AuthCardComponent, AuthFieldComponent, AuthLinkComponent, FormBannerComponent, SubmitButtonComponent],
+    imports: [
+        AuthCardComponent,
+        AuthDividerComponent,
+        AuthFieldComponent,
+        AuthLinkComponent,
+        FormBannerComponent,
+        SocialButtonsComponent,
+        SubmitButtonComponent,
+    ],
     selector: "lunora-sign-up-card",
     standalone: true,
     template: `
         <lunora-auth-card [title]="t.signUp" [footer]="true">
+            <!--
+              Social buttons belong on sign-up too — OAuth is a sign-up path, not
+              just a sign-in one, and omitting them here sends new users through
+              a password form they never needed.
+            -->
+            <lunora-auth-social-buttons [providers]="social()" (select)="signInSocial($event)" />
+            @if (social().length > 0) {
+                <lunora-auth-divider />
+            }
             <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                 <lunora-auth-banner [error]="state().formError" />
                 <lunora-auth-field
@@ -139,11 +198,18 @@ class SignInCardComponent {
 class SignUpCardComponent {
     readonly signInHref = input("/sign-in");
 
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSignUpController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
+
+    /** Derived, so the provider list follows server discovery. */
+    protected readonly social = computed(() => this.context().social);
+
+    protected signInSocial(provider: string): void {
+        void signInWithSocial(this.context(), provider);
+    }
 }
 
 @Component({
@@ -174,16 +240,16 @@ class ForgotPasswordCardComponent implements OnInit {
     readonly resetPath = input<string>();
     readonly signInHref = input("/sign-in");
 
-    private readonly context = injectAuthUI();
-    private readonly destroyRef = inject(DestroyRef);
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    private readonly injector = inject(Injector);
+    protected readonly t = this.context().localization;
     protected state!: Signal<FormState<ForgotPasswordField>>;
     protected actions!: FormActions<ForgotPasswordField>;
 
     ngOnInit(): void {
         const bridge = controllerSignal((context) => createForgotPasswordController(context, { resetPath: this.resetPath() }), {
             context: this.context,
-            destroyRef: this.destroyRef,
+            injector: this.injector,
         });
 
         this.state = bridge.state;
@@ -227,16 +293,16 @@ class ResetPasswordCardComponent implements OnInit {
     /** The reset token from the URL (`?token=...`). */
     readonly token = input<string>();
 
-    private readonly context = injectAuthUI();
-    private readonly destroyRef = inject(DestroyRef);
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    private readonly injector = inject(Injector);
+    protected readonly t = this.context().localization;
     protected state!: Signal<FormState<ResetPasswordField>>;
     protected actions!: FormActions<ResetPasswordField>;
 
     ngOnInit(): void {
         const bridge = controllerSignal((context) => createResetPasswordController(context, { token: this.token() }), {
             context: this.context,
-            destroyRef: this.destroyRef,
+            injector: this.injector,
         });
 
         this.state = bridge.state;
@@ -250,7 +316,7 @@ class ResetPasswordCardComponent implements OnInit {
     selector: "lunora-magic-link-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.magicLink" [footer]="true">
                 <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                     <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
@@ -273,9 +339,9 @@ class ResetPasswordCardComponent implements OnInit {
 class MagicLinkCardComponent {
     readonly signInHref = input("/sign-in");
 
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "magicLink", "MagicLinkCard");
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "magicLink", "MagicLinkCard"));
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
@@ -287,7 +353,7 @@ class MagicLinkCardComponent {
     selector: "lunora-email-otp-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             @if (state().step === "verify") {
                 <lunora-auth-card [title]="t.emailOtp" [description]="t.emailOtpSent" [footer]="true">
                     <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.verify()">
@@ -323,9 +389,9 @@ class MagicLinkCardComponent {
     `,
 })
 class EmailOtpCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "emailOtp", "EmailOtpCard");
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "emailOtp", "EmailOtpCard"));
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createEmailOtpController, { context: this.context });
     protected readonly state: Signal<EmailOtpState> = this.bridge.state;
     protected readonly actions: EmailOtpActions = this.bridge.actions;
@@ -337,7 +403,7 @@ class EmailOtpCardComponent {
     selector: "lunora-two-factor-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.twoFactor">
                 <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                     <lunora-auth-banner [error]="state().formError" />
@@ -359,17 +425,17 @@ class TwoFactorCardComponent implements OnInit {
     readonly method = input<"otp" | "totp">();
     readonly trustDevice = input<boolean>();
 
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "twoFactor", "TwoFactorCard");
-    private readonly destroyRef = inject(DestroyRef);
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "twoFactor", "TwoFactorCard"));
+    private readonly injector = inject(Injector);
+    protected readonly t = this.context().localization;
     protected state!: Signal<FormState<TwoFactorField>>;
     protected actions!: FormActions<TwoFactorField>;
 
     ngOnInit(): void {
         const bridge = controllerSignal((context) => createTwoFactorVerifyController(context, { method: this.method(), trustDevice: this.trustDevice() }), {
             context: this.context,
-            destroyRef: this.destroyRef,
+            injector: this.injector,
         });
 
         this.state = bridge.state;
@@ -378,6 +444,7 @@ class TwoFactorCardComponent implements OnInit {
 }
 
 export {
+    AnonymousButtonComponent,
     EmailOtpCardComponent,
     ForgotPasswordCardComponent,
     MagicLinkCardComponent,

@@ -87,6 +87,20 @@ const AuthUIProvider = ({
      */
     const [handlers] = useState(() => {
         return {
+            nav: {
+                navigate: (to: string): void => {
+                    (latest.current.nav ?? defaultNav).navigate(to);
+                },
+                replace: (to: string): void => {
+                    (latest.current.nav ?? defaultNav).replace(to);
+                },
+            },
+            onError: (error: unknown): void => {
+                latest.current.onError?.(error);
+            },
+            onSessionChange: (): void => {
+                latest.current.onSessionChange?.();
+            },
             /*
              * `avatar.upload` is a callback like the rest, so it gets the same
              * treatment: a stable wrapper that reads through `latest`. Without
@@ -101,20 +115,6 @@ const AuthUIProvider = ({
                 }
 
                 return upload(file);
-            },
-            nav: {
-                navigate: (to: string): void => {
-                    (latest.current.nav ?? defaultNav).navigate(to);
-                },
-                replace: (to: string): void => {
-                    (latest.current.nav ?? defaultNav).replace(to);
-                },
-            },
-            onError: (error: unknown): void => {
-                latest.current.onError?.(error);
-            },
-            onSessionChange: (): void => {
-                latest.current.onSessionChange?.();
             },
         };
     });

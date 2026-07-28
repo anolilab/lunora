@@ -16,10 +16,10 @@ export * from "../core";
  * ```
  */
 export { AppearanceCard, AvatarCard, LinkedAccountsCard, SetUsernameCard } from "./account-cards";
-export type { AuthViewProps } from "./auth-view";
-export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps } from "./auth-cards";
 export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+export type { AuthViewProps } from "./auth-view";
+export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
 export type { OrganizationSettingsCardProps } from "./organization";
 export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./organization";
 export type { DeviceAuthorizationCardProps } from "./plugin-cards";

@@ -1,6 +1,7 @@
 import type { JSX } from "solid-js";
-import { createUniqueId, For, Show } from "solid-js";
+import { createUniqueId, For, Index, Show } from "solid-js";
 
+import { providerLabel } from "../core/labels";
 import type { FieldState } from "../core/types";
 import { useAuthUI, useAuthUILink } from "./provider";
 
@@ -148,32 +149,62 @@ const AuthLink = (props: AuthLinkProps): JSX.Element => {
     );
 };
 
-/** OAuth provider buttons. Rendered only when the caller passes providers. */
+/**
+ * OAuth provider buttons. Rendered only when there are providers — which, with
+ * server discovery on, is whatever `socialProviders` the deployment configured.
+ *
+ * The provider's brand mark is left to CSS: each button carries a
+ * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
+ * set with a stylesheet rule and this package ships no SVG payload for a list of
+ * providers it can't know in advance.
+ */
 interface SocialButtonsProps {
+    /** Highlight the provider used last on this device, when known. */
+    lastUsed?: string;
     onSelect: (provider: string) => void;
     providers: ReadonlyArray<string>;
 }
 
-const labelFor = (provider: string): string => provider.charAt(0).toUpperCase() + provider.slice(1);
+const SocialButtons = (props: SocialButtonsProps): JSX.Element => {
+    const { localization: t } = useAuthUI();
 
-const SocialButtons = (props: SocialButtonsProps): JSX.Element => (
-    <Show when={props.providers.length > 0}>
-        <div class="lunora-auth-social">
-            <For each={props.providers}>
-                {(provider) => (
-                    <button
-                        class="lunora-auth-button lunora-auth-button--secondary"
-                        onClick={() => {
-                            props.onSelect(provider);
-                        }}
-                        type="button"
-                    >
-                        Continue with {labelFor(provider)}
-                    </button>
-                )}
-            </For>
-        </div>
-    </Show>
+    return (
+        <Show when={props.providers.length > 0}>
+            <div class="lunora-auth-social">
+                <For each={props.providers}>
+                    {(provider) => (
+                        <button
+                            class="lunora-auth-button lunora-auth-button--secondary lunora-auth-social__button"
+                            onClick={() => {
+                                props.onSelect(provider);
+                            }}
+                            type="button"
+                        >
+                            <span aria-hidden="true" class={`lunora-auth-social__icon lunora-auth-social__icon--${provider}`} />
+                            <span class="lunora-auth-social__label">{`${t.signInWith} ${providerLabel(provider)}`}</span>
+                            <Show when={props.lastUsed === provider}>
+                                <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                            </Show>
+                        </button>
+                    )}
+                </For>
+            </div>
+        </Show>
+    );
+};
+
+/**
+ * A loading placeholder sized in rows. Purely decorative, and hidden from the
+ * accessibility tree: the region it fills is already announced as busy by the
+ * card that owns it, and a screen reader has no use for "three grey boxes".
+ *
+ * `Index` rather than `For`: the rows have no identity to key on, and `For`
+ * would try to diff a list of indistinguishable placeholders.
+ */
+const Skeleton = (props: { rows?: number }): JSX.Element => (
+    <div aria-hidden="true" class="lunora-auth-skeleton">
+        <Index each={Array.from({ length: props.rows ?? 3 })}>{() => <span class="lunora-auth-skeleton__row" />}</Index>
+    </div>
 );
 
 /** A labelled visual separator ("or"). */
@@ -184,4 +215,4 @@ const AuthDivider = (props: { label?: string }): JSX.Element => (
 );
 
 export type { AuthCardProps, FieldProps };
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton, themeStyle };
+export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, Skeleton, SocialButtons, SubmitButton, themeStyle };

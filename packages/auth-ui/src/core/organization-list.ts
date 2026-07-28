@@ -10,8 +10,9 @@ import type { AuthOrganization, Controller } from "./types";
 
 interface OrganizationsActions {
     create: (name: string, slug: string) => Promise<void>;
+
     /**
-     * Leave an organization you are a member of. Distinct from {@link remove},
+     * Leave an organization you are a member of. Distinct from `remove`,
      * which deletes it for everyone — the two are one keystroke apart in a menu,
      * so they are never the same action here.
      */

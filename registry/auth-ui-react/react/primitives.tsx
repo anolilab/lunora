@@ -4,7 +4,8 @@ import type { ComponentType, ReactElement, ReactNode } from "react";
 import { useId } from "react";
 
 import type { FieldState } from "../core";
-import { useAuthUILink } from "./provider";
+import { providerLabel } from "../core/labels";
+import { useAuthUI, useAuthUILink } from "./provider";
 import { useThemeStyle } from "./use-theme-style";
 
 /** Card shell: heading, optional description, and body. */
@@ -139,15 +140,25 @@ const AuthLink = ({ children, href }: AuthLinkProps): ReactElement => {
     );
 };
 
-/** OAuth provider buttons. Rendered only when the caller passes providers. */
+/**
+ * OAuth provider buttons. Rendered only when there are providers — which, with
+ * server discovery on, is whatever `socialProviders` the deployment configured.
+ *
+ * The provider's brand mark is left to CSS: each button carries a
+ * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
+ * set with a stylesheet rule and this package ships no SVG payload for a list of
+ * providers it can't know in advance.
+ */
 interface SocialButtonsProps {
+    /** Highlight the provider used last on this device, when known. */
+    lastUsed?: string;
     onSelect: (provider: string) => void;
     providers: ReadonlyArray<string>;
 }
 
-const labelFor = (provider: string): string => provider.charAt(0).toUpperCase() + provider.slice(1);
+const SocialButtons = ({ lastUsed, onSelect, providers }: SocialButtonsProps): ReactElement | null => {
+    const { localization: t } = useAuthUI();
 
-const SocialButtons = ({ onSelect, providers }: SocialButtonsProps): ReactElement | null => {
     if (providers.length === 0) {
         return null;
     }
@@ -156,19 +167,34 @@ const SocialButtons = ({ onSelect, providers }: SocialButtonsProps): ReactElemen
         <div className="lunora-auth-social">
             {providers.map((provider) => (
                 <button
-                    className="lunora-auth-button lunora-auth-button--secondary"
+                    className="lunora-auth-button lunora-auth-button--secondary lunora-auth-social__button"
                     key={provider}
                     onClick={() => {
                         onSelect(provider);
                     }}
                     type="button"
                 >
-                    Continue with {labelFor(provider)}
+                    <span aria-hidden="true" className={`lunora-auth-social__icon lunora-auth-social__icon--${provider}`} />
+                    <span className="lunora-auth-social__label">{`${t.signInWith} ${providerLabel(provider)}`}</span>
+                    {lastUsed === provider ? <span className="lunora-auth-social__badge">{t.lastUsed}</span> : null}
                 </button>
             ))}
         </div>
     );
 };
+
+/**
+ * A loading placeholder sized in rows. Purely decorative, and hidden from the
+ * accessibility tree: the region it fills is already announced as busy by the
+ * card that owns it, and a screen reader has no use for "three grey boxes".
+ */
+const Skeleton = ({ rows = 3 }: { rows?: number }): ReactElement => (
+    <div aria-hidden="true" className="lunora-auth-skeleton">
+        {Array.from({ length: rows }, (_, index) => (
+            <span className="lunora-auth-skeleton__row" key={index} />
+        ))}
+    </div>
+);
 
 /** A labelled visual separator ("or"). */
 const AuthDivider = ({ label = "or" }: { label?: string }): ReactElement => (
@@ -178,4 +204,4 @@ const AuthDivider = ({ label = "or" }: { label?: string }): ReactElement => (
 );
 
 export type { AuthCardProps, FieldProps };
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton };
+export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, Skeleton, SocialButtons, SubmitButton };

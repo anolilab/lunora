@@ -27,7 +27,9 @@ export * from "../core";
  * export class SignInPage {}
  * ```
  */
+export { AppearanceCardComponent, AvatarCardComponent, LinkedAccountsCardComponent, SetUsernameCardComponent } from "./account-cards";
 export {
+    AnonymousButtonComponent,
     EmailOtpCardComponent,
     ForgotPasswordCardComponent,
     MagicLinkCardComponent,
@@ -36,20 +38,29 @@ export {
     SignUpCardComponent,
     TwoFactorCardComponent,
 } from "./auth-cards";
+export { AuthViewComponent, PhoneSignInCardComponent, UsernameSignInCardComponent } from "./auth-view";
 export type { ControllerSignalOptions, ControllerSignalResult } from "./controller-signal";
 export { controllerSignal } from "./controller-signal";
 export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent } from "./organization";
+export {
+    AdminUsersCardComponent,
+    BackupCodesCardComponent,
+    DeviceAuthorizationCardComponent,
+    MultiSessionCardComponent,
+    TeamsCardComponent,
+} from "./plugin-cards";
 export {
     AuthCardComponent,
     AuthDividerComponent,
     AuthFieldComponent,
     AuthLinkComponent,
     FormBannerComponent,
+    SkeletonComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
 } from "./primitives";
 export type { AuthUIAngularConfig, AuthUIAngularContext } from "./provider";
-export { AUTH_UI_CONTEXT, injectAuthUI, injectAuthUILink, provideAuthUI } from "./provider";
+export { AUTH_UI_CONTEXT, injectAuthUI, injectAuthUIContext, injectAuthUILink, provideAuthUI } from "./provider";
 export {
     ChangeEmailCardComponent,
     ChangePasswordCardComponent,
@@ -60,3 +71,5 @@ export {
     SignOutButtonComponent,
 } from "./settings-cards";
 export { TwoFactorSetupCardComponent } from "./two-factor-setup-card";
+export { UserAvatarComponent, UserButtonComponent, UserViewComponent } from "./user-button";
+export { AcceptInvitationCardComponent, ResendVerificationCardComponent, UserInvitationsCardComponent, VerifyEmailCardComponent } from "./verify-invite-cards";

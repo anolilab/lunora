@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { readLastLoginMethod } from "../core/last-login-method";
 import { createSignInController } from "../core/sign-in";
 import { signInWithSocial } from "../core/social";
+import AnonymousButton from "./AnonymousButton.vue";
 import AuthCard from "./AuthCard.vue";
 import AuthDivider from "./AuthDivider.vue";
 import AuthLink from "./AuthLink.vue";
@@ -24,8 +26,10 @@ withDefaults(
 
 const context = useAuthUI();
 const t = context.localization;
-const social = context.social;
 const { actions, state } = useController(createSignInController);
+// Read once at setup rather than from a watcher: it is a cookie, it is there
+// before the first paint, and it only picks a badge.
+const lastUsed = readLastLoginMethod();
 
 const onSocial = (provider: string): void => {
     void signInWithSocial(context, provider);
@@ -33,10 +37,21 @@ const onSocial = (provider: string): void => {
 </script>
 
 <template>
+    <!--
+        `context` is read through in the template rather than destructured in
+        setup, so the provider list and the password gate follow server discovery
+        when its answer lands.
+    -->
     <AuthCard :title="t.signIn">
-        <SocialButtons :providers="social" @select="onSocial" />
-        <AuthDivider v-if="social.length > 0" />
-        <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
+        <SocialButtons :providers="context.social" :lastUsed="context.plugins.lastLoginMethod ? lastUsed : undefined" @select="onSocial" />
+        <AnonymousButton v-if="context.plugins.anonymous" />
+        <AuthDivider v-if="context.social.length > 0 && context.credentials" />
+        <!--
+            An OAuth-only deployment has no password form to show. Discovery
+            reports that as `emailAndPassword: false`; without discovery it
+            defaults to true, which is the pre-existing behaviour.
+        -->
+        <form v-if="context.credentials" class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
             <Field
                 :field="state.fields.email"

@@ -96,8 +96,8 @@ interface AuthDeviceSession {
 
 /** A user row from the admin plugin's `listUsers`. */
 interface AuthAdminUser extends AuthUser {
-    banned?: boolean;
     banExpires?: Date | string;
+    banned?: boolean;
     banReason?: string;
     createdAt?: Date | string;
     role?: string;

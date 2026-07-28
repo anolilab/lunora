@@ -7,7 +7,7 @@ let organizationFieldId = 0;
  * signals; the lists come from the core controllers.
  */
 import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import type { ResourceState } from "../core/create-resource-controller";
 import type { MembersActions, MembersState } from "../core/members";
@@ -21,7 +21,7 @@ import { createOrganizationsController } from "../core/organization-list";
 import { createOrganizationSettingsController } from "../core/organization-settings";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
-import { injectAuthUI } from "./provider";
+import { injectAuthUIContext } from "./provider";
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -29,7 +29,7 @@ import { injectAuthUI } from "./provider";
     selector: "lunora-organizations-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.organizations">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
@@ -79,10 +79,10 @@ import { injectAuthUI } from "./provider";
 class OrganizationsCardComponent {
     // Per-instance ids: two cards on one page must not collide.
     protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationsCard");
-    protected readonly t = this.context.localization;
-    private readonly bridge = controllerSignal((context) => createOrganizationsController(context, { autoLoad: this.enabled }), { context: this.context });
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "OrganizationsCard"));
+    protected readonly t = this.context().localization;
+    private readonly bridge = controllerSignal((context) => createOrganizationsController(context, { autoLoad: this.enabled() }), { context: this.context });
     protected readonly state: Signal<ResourceState<AuthOrganization>> = this.bridge.state;
     protected readonly actions: OrganizationsActions = this.bridge.actions;
 
@@ -112,7 +112,7 @@ class OrganizationsCardComponent {
     selector: "lunora-members-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.members">
                 <lunora-auth-banner [error]="state().error" />
 
@@ -184,10 +184,10 @@ class OrganizationsCardComponent {
 class MembersCardComponent {
     // Per-instance ids: two cards on one page must not collide.
     protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "organization", "MembersCard");
-    protected readonly t = this.context.localization;
-    private readonly bridge = controllerSignal((context) => createMembersController(context, { autoLoad: this.enabled }), { context: this.context });
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "MembersCard"));
+    protected readonly t = this.context().localization;
+    private readonly bridge = controllerSignal((context) => createMembersController(context, { autoLoad: this.enabled() }), { context: this.context });
     protected readonly state: Signal<MembersState> = this.bridge.state;
     protected readonly actions: MembersActions = this.bridge.actions;
 
@@ -214,7 +214,7 @@ class MembersCardComponent {
     selector: "lunora-organization-settings-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.organizationSettings">
                 @if (state().loading) {
                     <p class="lunora-auth-card__description">…</p>
@@ -253,10 +253,10 @@ class OrganizationSettingsCardComponent implements OnInit {
     /** Defaults to the user's active organization. */
     readonly organizationId = input<string>();
 
-    private readonly context = injectAuthUI();
-    private readonly destroyRef = inject(DestroyRef);
-    protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationSettingsCard");
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    private readonly injector = inject(Injector);
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "OrganizationSettingsCard"));
+    protected readonly t = this.context().localization;
     protected state!: Signal<FormState<OrganizationSettingsField>>;
     protected actions!: FormActions<OrganizationSettingsField>;
 
@@ -265,8 +265,8 @@ class OrganizationSettingsCardComponent implements OnInit {
     // every instance to the active organization.
     ngOnInit(): void {
         const bridge = controllerSignal(
-            (context) => createOrganizationSettingsController(context, { autoLoad: this.enabled, organizationId: this.organizationId() }),
-            { context: this.context, destroyRef: this.destroyRef },
+            (context) => createOrganizationSettingsController(context, { autoLoad: this.enabled(), organizationId: this.organizationId() }),
+            { context: this.context, injector: this.injector },
         );
 
         this.state = bridge.state;

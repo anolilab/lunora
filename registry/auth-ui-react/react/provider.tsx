@@ -2,12 +2,24 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, use, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import type { AuthUIConfig, ControllerContext } from "../core";
-import { resolveContext } from "../core/config";
+import type { AuthUIConfig, ControllerContext, DiscoveryState } from "../core";
+import { DEFAULT_BASE_PATH, resolveContext } from "../core/config";
 import { defaultNav } from "../core/default-nav";
+import { discoverAuthConfig } from "../core/discovery";
 import { resolveThemeVariables } from "../core/theme";
+
+/**
+ * The snapshot used when discovery is off. Module-level so its identity is
+ * stable — `useSyncExternalStore` re-renders forever if `getSnapshot` returns a
+ * fresh object each call.
+ */
+const NO_DISCOVERY: DiscoveryState = { status: "unavailable" };
+
+const noopSubscribe = (): (() => void) => () => {};
+
+const readNoDiscovery = (): DiscoveryState => NO_DISCOVERY;
 
 /** The React context also carries an optional framework `Link` for internal navigation. */
 interface AuthUIReactContext {
@@ -36,8 +48,10 @@ interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
  */
 const AuthUIProvider = ({
     authClient,
+    avatar,
     basePath,
     children,
+    discover,
     Link,
     localization,
     nav,
@@ -47,6 +61,7 @@ const AuthUIProvider = ({
     redirects,
     social,
     theme,
+    viewPaths,
 }: AuthUIProviderProps): ReactElement => {
     /*
      * Callbacks and `nav` are naturally written inline (`nav={{ navigate: (to) =>
@@ -56,11 +71,11 @@ const AuthUIProvider = ({
      * refetch. So they are held in refs and reached through stable wrappers, and
      * only *values* participate in the key.
      */
-    const latest = useRef({ nav, onError, onSessionChange });
+    const latest = useRef({ avatar, nav, onError, onSessionChange });
 
     useEffect(() => {
-        latest.current = { nav, onError, onSessionChange };
-    }, [nav, onError, onSessionChange]);
+        latest.current = { avatar, nav, onError, onSessionChange };
+    }, [avatar, nav, onError, onSessionChange]);
 
     /*
      * A lazy `useState` initializer, not `useRef(...).current`: both keep the
@@ -86,30 +101,74 @@ const AuthUIProvider = ({
             onSessionChange: (): void => {
                 latest.current.onSessionChange?.();
             },
+            /*
+             * `avatar.upload` is a callback like the rest, so it gets the same
+             * treatment: a stable wrapper that reads through `latest`. Without
+             * this, an inline `upload={async (file) => …}` would either rebuild
+             * every controller on each render or be captured stale forever.
+             */
+            upload: async (file: File): Promise<string> => {
+                const upload = latest.current.avatar?.upload;
+
+                if (upload === undefined) {
+                    throw new LunoraError("INTERNAL", "no avatar upload handler is configured");
+                }
+
+                return upload(file);
+            },
         };
     });
+
+    /*
+     * Ask the server which plugins and providers are on. The request is shared
+     * process-wide per endpoint (see `discovery.ts`), so mounting several
+     * providers costs one fetch; subscribing here is what turns the answer into
+     * a re-render.
+     */
+    const handle = useMemo(() => (discover === false ? undefined : discoverAuthConfig(basePath ?? DEFAULT_BASE_PATH)), [discover, basePath]);
+    const discovery = useSyncExternalStore(handle?.subscribe ?? noopSubscribe, handle?.getState ?? readNoDiscovery, readNoDiscovery);
 
     // `theme` is a function, so its identity is as unstable as the callbacks —
     // key on what it *returns* instead, which is what the cards actually consume.
     const themeKey = JSON.stringify(resolveThemeVariables(theme));
-    const configKey = JSON.stringify({ basePath, localization, plugins, redirects, social });
+    const configKey = JSON.stringify({
+        avatar: { hasUpload: avatar?.upload !== undefined, maxSize: avatar?.maxSize },
+        basePath,
+        localization,
+        plugins,
+        redirects,
+        social,
+        viewPaths,
+    });
+    // The discovered payload is a fresh object per fetch but settles exactly
+    // once, so keying on its content keeps the memo from churning on re-renders
+    // while still rebuilding the context when the answer lands.
+    const discoveryKey = JSON.stringify(discovery.config ?? null);
 
     const core = useMemo<ControllerContext>(
         () =>
-            resolveContext({
-                authClient,
-                basePath,
-                localization,
-                nav: handlers.nav,
-                onError: handlers.onError,
-                onSessionChange: handlers.onSessionChange,
-                plugins,
-                redirects,
-                social,
-                theme,
-            }),
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- object props are folded into configKey/themeKey; callbacks are ref-backed and stable.
-        [authClient, handlers, configKey, themeKey],
+            resolveContext(
+                {
+                    authClient,
+                    // Only `upload`'s *presence* is a config decision (it decides
+                    // whether the card shows a file picker or a URL field); the
+                    // function itself is reached through the stable wrapper.
+                    avatar: { maxSize: avatar?.maxSize, upload: avatar?.upload === undefined ? undefined : handlers.upload },
+                    basePath,
+                    localization,
+                    nav: handlers.nav,
+                    onError: handlers.onError,
+                    onSessionChange: handlers.onSessionChange,
+                    plugins,
+                    redirects,
+                    social,
+                    theme,
+                    viewPaths,
+                },
+                discovery.config,
+            ),
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- object props are folded into configKey/themeKey/discoveryKey; callbacks are ref-backed and stable.
+        [authClient, handlers, configKey, themeKey, discoveryKey],
     );
 
     // `Link` is deliberately outside the `core` memo: swapping it must not

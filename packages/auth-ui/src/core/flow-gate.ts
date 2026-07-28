@@ -32,7 +32,7 @@ type FlowName = keyof PluginFlags;
  * imports `config.ts` for types only (erased at compile time). Reversing it
  * would make the two a runtime cycle.
  */
-const FLOW_NAMES: readonly FlowName[] = [
+const FLOW_NAMES: ReadonlyArray<FlowName> = [
     "admin",
     "anonymous",
     "apiKey",
