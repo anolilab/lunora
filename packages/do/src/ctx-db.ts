@@ -3429,7 +3429,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
-            runRowValidators(tableDefinition, merged);
+            runRowValidators(tableDefinition, merged, true);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
