@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
-import type { SqlDiagnostic } from "./sql-diagnostics";
+import type { DiagnosticSource, SqlDiagnostic } from "./sql-diagnostics";
 
 /**
  * Typography the underline overlay MUST share with the editor textarea for the
@@ -24,6 +24,14 @@ interface Span {
  * dropping the later span rather than nesting decorations — two wavy underlines
  * on the same characters read as one smear, and the problems row below carries
  * both messages anyway.
+ *
+ * The rejection test is against the last span actually KEPT, not the previous
+ * element of the sorted input. Comparing against the neighbour lets a span slip
+ * through that overlaps an earlier, wider one — e.g. A=[0,10], B=[5,6], C=[6,8]:
+ * B is dropped, C passes because it clears B, and C still sits inside A. The
+ * render loop would then emit `slice(6,8)` after the cursor had already advanced
+ * to 10, duplicating characters and shifting every squiggle after that point out
+ * of alignment with the textarea.
  */
 const toSpans = (diagnostics: ReadonlyArray<SqlDiagnostic>, length: number): Span[] => {
     const spans: Span[] = [];
@@ -43,7 +51,15 @@ const toSpans = (diagnostics: ReadonlyArray<SqlDiagnostic>, length: number): Spa
 
     spans.sort((a, b) => a.start - b.start);
 
-    return spans.filter((span, index) => index === 0 || span.start >= (spans[index - 1]?.end ?? 0));
+    const kept: Span[] = [];
+
+    for (const span of spans) {
+        if (span.start >= (kept.at(-1)?.end ?? 0)) {
+            kept.push(span);
+        }
+    }
+
+    return kept;
 };
 
 /**
@@ -107,17 +123,16 @@ const DiagnosticsOverlay = ({
     );
 };
 
-/** Human-readable label per diagnostic source, so a row says where the finding came from. */
-const sourceLabel = (source: SqlDiagnostic["source"]): string => {
-    if (source === "gate") {
-        return "read-only";
-    }
-
-    if (source === "plan") {
-        return "plan";
-    }
-
-    return source === "syntax" ? "syntax" : "schema";
+/**
+ * Human-readable label per diagnostic source, so a row says where the finding
+ * came from. A record rather than a branch chain: adding a source to the union
+ * without a label here is then a compile error.
+ */
+const SOURCE_LABEL: Readonly<Record<DiagnosticSource, string>> = {
+    gate: "read-only",
+    plan: "plan",
+    schema: "schema",
+    syntax: "syntax",
 };
 
 /**
@@ -158,7 +173,7 @@ const DiagnosticsRow = ({
                                 diagnostic.severity === "error" ? "bg-destructive/15 text-destructive" : "bg-amber-500/15 text-amber-600",
                             )}
                         >
-                            {sourceLabel(diagnostic.source)}
+                            {SOURCE_LABEL[diagnostic.source]}
                         </span>
                         <span className="min-w-0 text-muted-foreground">{diagnostic.message}</span>
                     </button>

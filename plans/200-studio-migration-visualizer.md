@@ -181,6 +181,34 @@ appliedAt }] }` (list) and a by-hash detail returning the snapshot. **List and
   node ids come for free, so switching versions swaps arrays in place — the
   "MUST NOT key the canvas by version id" rule holds by construction.
 
+## Review corrections (thermo pass, 2026-07-28)
+
+- **The examples' regeneration silently dropped every schema advisory.** All 8
+  `_generated/shard.ts` were regenerated against a stale `@lunora/advisor` dist
+  and emitted `LUNORA_ADVISORIES: AdvisoryFinding[] = []`, blanking their Studio
+  Advisors pages — the entire −1272-line half of the diff. Rebuilt and
+  regenerated; the net per-example diff is now `+4/−1`, exactly the snapshot.
+- **`sortKeys` broke the studio bundle.** A generic arrow (`<T>(…) =>`) in a
+  `.ts` file parses as JSX under packem's Babel config. It was fine inside
+  `@lunora/codegen`; moving it to `shared/` put it in the studio bundle, which
+  had not built since. `tsc`, ESLint and 4000+ tests all passed regardless — only
+  `pnpm run build:packages` catches this class of break, so run it.
+- **`TABLE_ANCHORED` lived in the Studio**, a hand-maintained set of change-type
+  names 5 directories from the union it tracked, with zero compile-time pressure.
+  Adding a variant would silently render an affected table as untouched — the
+  exact UI-vs-gate divergence the `shared/` extraction exists to prevent. The
+  diff engine now stamps `scope: "table" | "schema"` at construction.
+- **The re-export shim in `schema-drift.ts` had already caused drift** — `emit.ts`
+  imported from `shared/` while `run-codegen.ts` went through the shim. Shim
+  deleted; the package barrel is the one place that re-exports both.
+- **`historyQuery.error` was swallowed**, so an unreachable RPC rendered "No
+  schema versions recorded yet" — asserting something about the database the
+  Studio did not know. Failures now surface as failures.
+- The three new admin reads moved out of `shard-do.ts`'s 64-arm dispatch chain
+  into a lookup table (`schema-history-reads.ts`), and the untranslated
+  `<h2>` headings moved into a real `MigrationsRoutePanel` component that can
+  call `useT()`.
+
 ## STOP conditions
 
 - **If `shared/` cannot be inlined into the `packages/studio` bundle** (packem

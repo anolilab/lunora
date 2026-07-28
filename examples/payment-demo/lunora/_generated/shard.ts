@@ -369,7 +369,203 @@ const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
 const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
+const LUNORA_ADVISORIES: AdvisoryFinding[] = [
+    {
+        "cacheKey": "table_without_insert:customers",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"customers\", …)` — table \"customers\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "customers"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:events",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"events\", …)` — table \"events\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "events"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:paymentSessions",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"paymentSessions\", …)` — table \"paymentSessions\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "paymentSessions"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:subscriptions",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"subscriptions\", …)` — table \"subscriptions\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "subscriptions"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:usageEvents",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"usageEvents\", …)` — table \"usageEvents\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "usageEvents"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:billing:checkout",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public action `checkout` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "checkout",
+            "file": "billing",
+            "kind": "action",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:billing:recordApiCall",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public action `recordApiCall` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "recordApiCall",
+            "file": "billing",
+            "kind": "action",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:billing:apiCallsRemaining",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public action `apiCallsRemaining` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "apiCallsRemaining",
+            "file": "billing",
+            "kind": "action",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:billing:portal",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public action `portal` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "portal",
+            "file": "billing",
+            "kind": "action",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:billing:checkout:priceId",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `priceId` of public procedure `checkout` (billing:14) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "priceId",
+            "exportName": "checkout",
+            "file": "billing",
+            "line": 14
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "http_action_missing_auth_guard:http:17",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "An `httpAction`/`httpRoute` handler performs a side effect (`ctx.runMutation`/`ctx.runAction`/a `ctx.db` write) but never reads `ctx.auth` — an unauthenticated HTTP endpoint driving a state change, bypassing the identity/RLS checks that guard the rest of the app.",
+        "detail": "`httpAction` handler `<module>` (http:17) calls `ctx.runAction` but never reads `ctx.auth` — an anonymous caller can drive this write. Authenticate the request before the side effect.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "<module>",
+            "file": "http",
+            "kind": "httpAction",
+            "line": 17,
+            "sideEffect": "runAction"
+        },
+        "name": "http_action_missing_auth_guard",
+        "remediation": "Read `ctx.auth` in the handler before the side effect — call `await ctx.auth.getIdentity()` (or check `ctx.auth.userId`) and reject unauthenticated/unauthorized requests, or forward through a `mutation`/`action` whose RLS policies enforce access. If the endpoint is intentionally public (e.g. a signed webhook), verify the provider signature before the write.",
+        "title": "Unauthenticated HTTP handler performs a side effect"
+    }
+];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA: RlsPoliciesResult = {

@@ -38,20 +38,6 @@ interface SchemaDiffModel {
     readonly tables: ReadonlyArray<DiffTable>;
 }
 
-/** Change types that mean "this table's own shape moved" (as opposed to a relation on the other side). */
-const TABLE_ANCHORED: ReadonlySet<DriftChange["type"]> = new Set([
-    "addedIndex",
-    "addedOptionalField",
-    "addedRequiredField",
-    "changedFieldKind",
-    "changedIndex",
-    "changedShardMode",
-    "fieldOptionalToRequired",
-    "fieldRequiredToOptional",
-    "removedField",
-    "removedIndex",
-]);
-
 /** Render a snapshot's fields as the `ColumnMeta` shape the existing diagram node consumes. */
 const columnsOf = (table: TableSnapshot): ColumnMeta[] =>
     Object.entries(table.fields).map(([name, field]) => {
@@ -108,7 +94,10 @@ const fieldStatusOf = (before: TableSnapshot | undefined, after: TableSnapshot |
  */
 const buildSchemaDiffModel = (before: SchemaSnapshot | undefined, after: SchemaSnapshot): SchemaDiffModel => {
     const { changes } = diffSchemaSnapshots(before, after);
-    const changedTables = new Set(changes.filter((change) => TABLE_ANCHORED.has(change.type) && change.table !== undefined).map((change) => change.table));
+    // `scope` is stamped by the diff engine itself (`shared/schema-snapshot.ts`),
+    // so a new change variant cannot silently render an affected table as
+    // untouched — which is what a set of type names maintained over here would do.
+    const changedTables = new Set(changes.filter((change) => change.scope === "table" && change.table !== undefined).map((change) => change.table));
 
     const tables: DiffTable[] = [];
 

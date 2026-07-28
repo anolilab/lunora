@@ -12,31 +12,37 @@ interface OpenConsoleOptions {
 /** The console's UI state, shared so any panel can open it without prop-drilling. */
 interface OperationConsoleValue {
     readonly close: () => void;
-    /** True when the drawer should render errors only. */
-    readonly errorsOnly: boolean;
     /** Which entry to highlight, or `undefined` for no particular one. */
     readonly focusSeq: number | undefined;
     readonly open: boolean;
     readonly openConsole: (options?: OpenConsoleOptions) => void;
+
+    /**
+     * Which operations the drawer lists. Owned HERE rather than seeded into the
+     * drawer's local state: the drawer only remounts when `open` flips, so a
+     * seeded copy silently ignored `openConsole({ errorsOnly: true })` whenever
+     * the drawer was already open — the button did nothing, which is worse than
+     * not offering it.
+     */
+    readonly setShown: (shown: ConsoleShown) => void;
+    readonly shown: ConsoleShown;
     readonly toggle: () => void;
 }
 
-/**
- * Default value for a tree with no provider. Deliberately inert rather than
- * throwing: `ErrorAlert` is rendered in unit tests and in isolated stories that
- * mount no shell, and an error component that itself throws because a debugging
- * affordance is unavailable would be the worst possible failure mode.
- */
-const INERT: OperationConsoleValue = {
-    close: () => {},
-    errorsOnly: false,
-    focusSeq: undefined,
-    open: false,
-    openConsole: () => {},
-    toggle: () => {},
-};
+/** Which operations the console lists. */
+type ConsoleShown = "all" | "errors";
 
-const OperationConsoleContext = createContext<OperationConsoleValue>(INERT);
+/**
+ * `undefined` outside a provider, so a consumer can tell "no console is mounted"
+ * from "a console is mounted and closed" and render nothing rather than a dead
+ * control. A host embedding a single Studio panel without the shell gets no
+ * button at all instead of one that silently does nothing on every error.
+ *
+ * Deliberately NOT a throwing context: `ErrorAlert` is rendered standalone by
+ * other suites, and an error component that crashes because a debugging
+ * affordance is unavailable is the worst possible failure mode.
+ */
+const OperationConsoleContext = createContext<OperationConsoleValue | undefined>(undefined);
 
 /**
  * Holds the operation console's open/focus state for the whole Studio shell.
@@ -48,10 +54,10 @@ const OperationConsoleContext = createContext<OperationConsoleValue>(INERT);
  * inside panels — turn a red callout into "show me the call that failed".
  */
 export const OperationConsoleProvider = ({ children }: { readonly children: ReactNode }): ReactElement => {
-    const [state, setState] = useState<{ errorsOnly: boolean; focusSeq: number | undefined; open: boolean }>({
-        errorsOnly: false,
+    const [state, setState] = useState<{ focusSeq: number | undefined; open: boolean; shown: ConsoleShown }>({
         focusSeq: undefined,
         open: false,
+        shown: "all",
     });
 
     const value = useMemo<OperationConsoleValue>(() => {
@@ -61,17 +67,23 @@ export const OperationConsoleProvider = ({ children }: { readonly children: Reac
                     return { ...current, open: false };
                 });
             },
-            errorsOnly: state.errorsOnly,
             focusSeq: state.focusSeq,
             open: state.open,
             openConsole: (options?: OpenConsoleOptions) => {
-                setState({ errorsOnly: options?.errorsOnly ?? false, focusSeq: options?.seq, open: true });
+                setState({ focusSeq: options?.seq, open: true, shown: options?.errorsOnly === true ? "errors" : "all" });
             },
-            toggle: () => {
-                // Toggling from the keyboard clears any prior focus: the operator is
-                // asking for the tape, not for the entry some earlier error pinned.
+            setShown: (shown: ConsoleShown) => {
                 setState((current) => {
-                    return { errorsOnly: false, focusSeq: undefined, open: !current.open };
+                    return { ...current, shown };
+                });
+            },
+            shown: state.shown,
+            toggle: () => {
+                // Toggling from the keyboard clears any prior focus and filter: the
+                // operator is asking for the tape, not for the entry some earlier
+                // error pinned.
+                setState((current) => {
+                    return { focusSeq: undefined, open: !current.open, shown: "all" };
                 });
             },
         };
@@ -80,7 +92,11 @@ export const OperationConsoleProvider = ({ children }: { readonly children: Reac
     return <OperationConsoleContext value={value}>{children}</OperationConsoleContext>;
 };
 
-/** Read the operation console's UI state. Inert outside a provider — see {@link INERT}. */
-export const useOperationConsole = (): OperationConsoleValue => use(OperationConsoleContext);
+/**
+ * Read the operation console's UI state, or `undefined` when no console is
+ * mounted above this tree. Callers MUST treat `undefined` as "do not offer the
+ * affordance" rather than rendering a control that cannot work.
+ */
+export const useOperationConsole = (): OperationConsoleValue | undefined => use(OperationConsoleContext);
 
-export type { OpenConsoleOptions, OperationConsoleValue };
+export type { ConsoleShown, OpenConsoleOptions, OperationConsoleValue };

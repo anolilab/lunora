@@ -114,6 +114,16 @@ it is already scoped as plan 205 Phase 2. Left there rather than duplicated.
   report. Do not adopt CodeMirror to rescue the overlay without a bundle-cost
   decision from the maintainer — that is a different plan.
 
+## Review corrections (thermo pass, 2026-07-28)
+
+- **`toSpans` dropped the wrong overlaps.** It compared each span against the
+  previous element of the sorted input rather than the last KEPT span, so a span
+  nested inside an earlier wider one survived — desynchronising the overlay from
+  the textarea for the rest of the statement. Latent (only one span-bearing
+  diagnostic is emitted today) but fixed, with a regression test.
+- The four hand-reset `lastIndex` scan loops became `matchAll`, and the
+  diagnostic-source label became an exhaustive record.
+
 ## Non-goals
 
 - A full SQL parser/AST in Studio. Diagnostics come from cheap regex/lexical

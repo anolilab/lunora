@@ -10,6 +10,7 @@ import useDebounced from "../hooks/use-debounced";
 import { createStudioI18n, useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
 import { resolveOrigin } from "../lib/internal";
+import { withOperationRecording } from "../lib/recording-client";
 import STUDIO_ROOT_CLASS from "../lib/theme-constants";
 import { loadToken, saveToken } from "../lib/token-storage";
 import { cn } from "../lib/utils";
@@ -169,9 +170,10 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
 
     const client = useMemo(() => {
         // A supplied client (dev mock / embedding) wins — render the chrome
-        // against it and don't build or own a real one.
+        // against it and don't build or own a real one. It is still wrapped for
+        // recording: an embedded studio's admin calls belong on the tape too.
         if (injectedClient !== undefined) {
-            return injectedClient;
+            return withOperationRecording(injectedClient);
         }
 
         // The admin token authorizes the WS upgrade too, but never rides the URL
@@ -191,7 +193,10 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
             created.onTokenExpired(provider.invalidate);
         }
 
-        return created;
+        // The single seam every admin RPC crosses. Wrapping here is what makes the
+        // operation console's coverage true by construction rather than by every
+        // call site remembering to opt in — see `lib/recording-client.ts`.
+        return withOperationRecording(created);
     }, [baseUrl, debouncedToken, injectedClient]);
 
     // Close the previous client when `token`/`baseUrl` changes (and on unmount)

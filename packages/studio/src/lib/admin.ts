@@ -1336,6 +1336,34 @@ export interface SchemaVersionDetail {
 }
 
 /**
+ * Payload of a `__lunora_admin__:schemaHistory` call: every schema version this
+ * shard has recorded, newest first, WITHOUT the snapshot payloads (they are tens
+ * of KB each — fetch one with `schemaVersion`).
+ */
+export interface SchemaVersionsResult {
+    versions: SchemaVersionSummary[];
+}
+
+/** One recorded schema version's identity + when the shard first ran it. */
+export interface SchemaVersionSummary {
+    /** Epoch millis the version was first seen on this shard. */
+    appliedAt: number;
+    /** Content hash of the snapshot — the version's identity. */
+    hash: string;
+    /** Monotonic apply order. */
+    seq: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaVersion` call: one version's full
+ * snapshot JSON. `version` is absent for an unknown hash (a stale deep link, or
+ * a version pruned past the ledger's retention cap) — an empty state, not an error.
+ */
+export interface SchemaVersionDetail {
+    version?: SchemaVersionSummary & { snapshotJson: string };
+}
+
+/**
  * Payload of a `__lunora_admin__:lintSql` call, mirroring `@lunora/do`'s
  * `SqlLintResult`: diagnostics to render in the editor plus the query plan the
  * statement would use. Optional on the wire — a worker predating the RPC simply

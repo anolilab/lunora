@@ -13,12 +13,21 @@
  * persisting it would create a new place for operational data to accumulate,
  * which is not a trade a local operator UI should make silently.
  *
- * **Shapes, never payloads.** An entry records the function path, the shard, a
- * per-function SUMMARY of the arguments (table name, filter count, limit), the
- * duration, and the outcome. Row values never enter the buffer. The summariser
- * map below is explicit per function, and the fallback records argument KEYS
- * only — a blanket `JSON.stringify(args)` is exactly how row data would leak in.
+ * **Argument shapes, never argument payloads.** An entry records the function
+ * path, the shard, a per-function SUMMARY of the arguments (table name, filter
+ * count, limit), the duration, and the outcome. The summariser map below is
+ * explicit per function, and the fallback records argument KEYS only — a blanket
+ * `JSON.stringify(args)` is exactly how row data would leak in.
+ *
+ * The one thing stored verbatim is a rejection's `message`, which the server
+ * writes and which CAN echo user data (SQLite's `near "&lt;token&gt;": syntax error`
+ * quotes the statement; a constraint violation can quote a value). That is a
+ * deliberate trade — the message is the diagnosis, it is already on screen in the
+ * error alert, and the tape is memory-only, never persisted or transmitted. The
+ * ⧉ Copy action deliberately copies only path + summary + shard, not the error.
  */
+
+import type { ADMIN_FUNCTIONS } from "./admin";
 
 /** How many operations the tape keeps before evicting the oldest. */
 const OPERATION_LOG_LIMIT = 300;
@@ -45,9 +54,10 @@ interface OperationEntry {
     kind: OperationKind;
 
     /**
-     * Server pushes received on a `subscription`. ONE entry counts them all —
-     * an entry per push would evict everything else on the tape within seconds
-     * of opening a live data-browser view.
+     * Server pushes received on a `subscription`. ONE entry counts them all — an
+     * entry per push would evict everything else on the tape within seconds of
+     * opening a live data-browser view. Mutated in place by {@link
+     * OperationLog.recordPush} while nothing is subscribed to the tape.
      */
     pushes?: number;
     /** Rows (or entries) the reply carried, when the shape is countable. */
@@ -84,8 +94,12 @@ const joinParts = (parts: ReadonlyArray<string | undefined>): string => parts.fi
  * after `__lunora_admin__:`). Anything not listed falls back to argument KEYS
  * only — deliberately lossy, because the default must never be able to leak a
  * value it was not designed for.
+ *
+ * Keyed against `ADMIN_FUNCTIONS` rather than plain `string` so a typo is a
+ * compile error instead of an entry that silently never matches, and so the
+ * covered set is discoverable from the type.
  */
-const SUMMARISERS: Readonly<Record<string, ArgumentSummariser>> = {
+const SUMMARISERS: Readonly<Partial<Record<keyof typeof ADMIN_FUNCTIONS, ArgumentSummariser>>> = {
     deleteRows: (args) => joinParts([scalar(args.table), Array.isArray(args.ids) ? `${String(args.ids.length)} rows` : undefined]),
     facetColumn: (args) => joinParts([scalar(args.table), scalar(args.column)]),
     lintSql: () => "sql",
@@ -115,7 +129,7 @@ const ADMIN_PREFIX = "__lunora_admin__:";
  */
 const summariseArgs = (functionPath: string, args: Record<string, unknown>): string => {
     const name = functionPath.startsWith(ADMIN_PREFIX) ? functionPath.slice(ADMIN_PREFIX.length) : functionPath;
-    const summariser = SUMMARISERS[name];
+    const summariser = SUMMARISERS[name as keyof typeof ADMIN_FUNCTIONS];
 
     if (summariser !== undefined) {
         return summariser(args);
@@ -191,6 +205,23 @@ class OperationLog {
      * counter — deliberately the only thing a push does to the tape.
      */
     public recordPush(seq: number): void {
+        // The one genuinely hot path: this fires on every push of every live
+        // admin subscription (logs, traces, metrics, the data browser…), which is
+        // once per DO write-flush. `patch` costs a `findIndex` plus a full
+        // OPERATION_LOG_LIMIT-element array copy, and the console is closed
+        // almost always — so when nothing is subscribed, bump the counter in
+        // place and skip both. The immutable-snapshot contract that
+        // `useSyncExternalStore` relies on only matters while a listener exists.
+        if (this.listeners.size === 0) {
+            const entry = this.entries.find((candidate) => candidate.seq === seq);
+
+            if (entry !== undefined) {
+                entry.pushes = (entry.pushes ?? 0) + 1;
+            }
+
+            return;
+        }
+
         this.patch(seq, (entry) => {
             return { ...entry, pushes: (entry.pushes ?? 0) + 1 };
         });

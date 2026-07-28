@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import type { SqlExec } from "../src/ctx-db";
-import { hasSchemaHistory, readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS } from "../src/schema-history";
+import { readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS } from "../src/schema-history";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 const snapshotWith = (tables: string[]): SchemaSnapshot => {
@@ -27,9 +27,8 @@ describe("schema-history ledger", () => {
     });
 
     it("reports no history before anything is recorded", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
-        expect(hasSchemaHistory(sql)).toBe(false);
         expect(readSchemaHistory(sql)).toStrictEqual([]);
     });
 
@@ -98,7 +97,7 @@ describe("schema-history ledger", () => {
     });
 
     it("never throws when the storage handle fails", () => {
-        expect.assertions(4);
+        expect.assertions(3);
 
         const broken = {
             exec: () => {
@@ -110,7 +109,6 @@ describe("schema-history ledger", () => {
         expect(record(broken, snapshotWith(["users"]))).toBe(false);
         expect(readSchemaHistory(broken)).toStrictEqual([]);
         expect(readSchemaVersion(broken, "abc")).toBeUndefined();
-        expect(hasSchemaHistory(broken)).toBe(false);
     });
 
     it("ignores an empty hash or payload", () => {

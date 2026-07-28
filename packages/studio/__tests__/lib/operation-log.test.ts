@@ -193,16 +193,6 @@ describe("operationLog", () => {
         expect(log.lastErrorSeq()).toBe(bad);
     });
 
-    it("marks one-shot calls as calls, so a stuck request reads differently to a healthy channel", () => {
-        expect.assertions(2);
-
-        log.start("__lunora_admin__:listTables", {}, "");
-        log.startSubscription("__lunora_admin__:getLogs", {}, "");
-
-        expect(log.getSnapshot()[0]?.kind).toBe("call");
-        expect(log.getSnapshot()[1]?.kind).toBe("subscription");
-    });
-
     it("notifies subscribers and stops after unsubscribe", () => {
         expect.assertions(2);
 
@@ -219,5 +209,33 @@ describe("operationLog", () => {
         log.start("__lunora_admin__:listTables", {}, "");
 
         expect(calls).toBe(1);
+    });
+});
+
+describe("operationLog push accounting", () => {
+    it("counts pushes with and without a subscriber, and keeps snapshots immutable while observed", () => {
+        expect.assertions(3);
+
+        const log = new OperationLog();
+        const seq = log.startSubscription("__lunora_admin__:getLogs", {}, "");
+
+        // Unobserved: the counter still advances (the tape must be correct when
+        // the operator finally opens the drawer)…
+        log.recordPush(seq);
+        log.recordPush(seq);
+
+        expect(log.getSnapshot()[0]?.pushes).toBe(2);
+
+        // …and once observed, a push must produce a NEW array, or
+        // `useSyncExternalStore` will not re-render.
+        const unsubscribe = log.subscribe(() => {});
+        const before = log.getSnapshot();
+
+        log.recordPush(seq);
+
+        expect(log.getSnapshot()).not.toBe(before);
+        expect(log.getSnapshot()[0]?.pushes).toBe(3);
+
+        unsubscribe();
     });
 });

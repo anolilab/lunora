@@ -2,7 +2,8 @@ import { flattenHint } from "@lunora/errors";
 import type { ReactElement } from "react";
 
 import { useT } from "../i18n/i18n-context";
-import { errorDocumentationUrl, errorHint, errorMessage, operationSeqOf } from "../lib/internal";
+import { errorDocumentationUrl, errorHint, errorMessage } from "../lib/internal";
+import { operationSeqOf } from "../lib/recording-client";
 import { useOperationConsole } from "./operation-console-provider";
 import { Alert } from "./ui/alert";
 
@@ -23,7 +24,10 @@ interface ErrorAlertProps {
  */
 export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement => {
     const t = useT();
-    const { openConsole } = useOperationConsole();
+    // `undefined` when no console is mounted above this tree (a host embedding a
+    // single panel, or a standalone render in a test). The affordance is then not
+    // rendered at all — a button that silently does nothing is worse than none.
+    const operationConsole = useOperationConsole();
     const hint = errorHint(error);
     const documentationUrl = errorDocumentationUrl(error);
     // `recordedCall` tags a rejection with its operation-tape entry, so this
@@ -33,7 +37,7 @@ export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): React
     const seq = operationSeqOf(error);
 
     const showInConsole = (): void => {
-        openConsole({ errorsOnly: true, seq });
+        operationConsole?.openConsole({ errorsOnly: true, seq });
     };
 
     return (
@@ -51,14 +55,16 @@ export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): React
                     View error docs
                 </a>
             )}
-            <button
-                className="mt-1 block text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                data-testid="error-show-in-console"
-                onClick={showInConsole}
-                type="button"
-            >
-                {t("Show in console")}
-            </button>
+            {operationConsole === undefined ? null : (
+                <button
+                    className="mt-1 block text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="error-show-in-console"
+                    onClick={showInConsole}
+                    type="button"
+                >
+                    {t("Show in console")}
+                </button>
+            )}
         </Alert>
     );
 };

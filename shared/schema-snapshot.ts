@@ -83,13 +83,32 @@ interface SchemaSnapshot {
     version: typeof SCHEMA_SNAPSHOT_VERSION;
 }
 
+/**
+ * Whether a change is anchored to one table's own shape, or to the schema as a
+ * whole.
+ *
+ * This is the signal a UI needs to decide which tables to mark as changed, and
+ * it lives HERE — next to the change union it classifies — rather than as a
+ * hand-maintained set of type names in the consumer. A set in the consumer gives
+ * zero compile-time pressure: adding a variant to `DriftChange["type"]` would
+ * silently render an affected table as untouched, which is exactly the
+ * UI-disagrees-with-the-deploy-gate divergence this module exists to prevent.
+ */
+type DriftScope = "schema" | "table";
+
 /** One classified structural change between two snapshots. */
 interface DriftChange {
+    /**
+     * `"table"` means this table's own DDL moved (fields, indexes, shard mode) —
+     * a relation whose foreign key lives on the OTHER table stays `"schema"`, so
+     * the "changed" signal keeps meaning "this table's shape moved".
+     */
+    scope: DriftScope;
     /** `"breaking"` changes need a data migration; `"safe"` changes are additive. */
     severity: "breaking" | "safe";
     /** Human-readable, actionable description (used in the gate message). */
     summary: string;
-    /** The table this change belongs to, so a UI can group changes per table. */
+    /** The table this change belongs to. Always set when `scope` is `"table"`. */
     table?: string;
     /** A machine-readable change discriminator. */
     type:
@@ -126,8 +145,14 @@ interface SchemaDrift {
  * developer and CI, or one machine before and after a Node upgrade) can
  * regenerate the same schema and produce different bytes, showing up as a
  * spurious diff and a false drift signal.
+ *
+ * A `function` declaration, not a generic arrow: this file is bundler-inlined
+ * into `@lunora/studio`, whose packem build runs Babel with the React preset,
+ * which parses `<T>(…)` as a JSX element and fails. `tsc`, ESLint, and every
+ * test pass either way — only the bundle build catches it.
  */
-const sortKeys = <T>(record: Record<string, T>): Record<string, T> => {
+// eslint-disable-next-line func-style -- see above: a generic arrow is misparsed as JSX by the studio's Babel config
+function sortKeys<T>(record: Record<string, T>): Record<string, T> {
     const sorted: Record<string, T> = {};
     const keys = Object.keys(record);
 
@@ -138,7 +163,7 @@ const sortKeys = <T>(record: Record<string, T>): Record<string, T> => {
     }
 
     return sorted;
-};
+}
 
 /** Serialize a snapshot to the exact bytes written to `lunora/.lunora-schema.json` (trailing newline). */
 const serializeSchemaSnapshot = (snapshot: SchemaSnapshot): string => `${JSON.stringify(snapshot, undefined, 2)}\n`;
@@ -152,8 +177,12 @@ const serializeSchemaSnapshot = (snapshot: SchemaSnapshot): string => `${JSON.st
  * `crypto.subtle`: this must run synchronously inside `runShardMigrations` on a
  * DO cold start, where `subtle.digest` is async and `node:crypto` is absent.
  * Content addressing here is for identity and dedup, not for security, so a
- * non-cryptographic digest is the right tool — a collision costs one merged
- * timeline entry, not a trust boundary.
+ * non-cryptographic digest is the right tool. A collision is not merely
+ * cosmetic, though: `recordSchemaVersion` treats a known hash as "already
+ * recorded" and keeps the OLDER snapshot, so the Studio would render a stale
+ * shape as the current version and diff it wrongly against its predecessor. With
+ * a ~64-bit digest and a 50-version cap that is negligible — but it is a wrong
+ * answer, not a merged row, and anyone widening the retention cap should know it.
  */
 const hashSchemaSnapshot = (snapshot: SchemaSnapshot): string => {
     const text = serializeSchemaSnapshot(snapshot);
@@ -252,6 +281,7 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
             severity: "breaking",
             summary: `field ${tableName}.${name} changed type: ${old.kind} → ${field.kind} — add a data migration to convert existing values`,
             table: tableName,
+            scope: "table",
             type: "changedFieldKind",
         });
     }
@@ -261,10 +291,17 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
             severity: "breaking",
             summary: `field ${tableName}.${name} became required — rows missing it would be invalid; add a data migration to backfill it`,
             table: tableName,
+            scope: "table",
             type: "fieldOptionalToRequired",
         });
     } else if (!old.optional && field.optional) {
-        changes.push({ severity: "safe", summary: `field ${tableName}.${name} became optional`, table: tableName, type: "fieldRequiredToOptional" });
+        changes.push({
+            scope: "table",
+            severity: "safe",
+            summary: `field ${tableName}.${name} became optional`,
+            table: tableName,
+            type: "fieldRequiredToOptional",
+        });
     }
 
     return changes;
@@ -273,11 +310,12 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
 /** Classify a field present only in the CURRENT snapshot: optional ⇒ safe, required ⇒ needs a backfill. */
 const addedFieldChange = (tableName: string, name: string, field: FieldSnapshot): DriftChange =>
     field.optional
-        ? { severity: "safe", summary: `added optional field ${tableName}.${name}`, table: tableName, type: "addedOptionalField" }
+        ? { scope: "table", severity: "safe", summary: `added optional field ${tableName}.${name}`, table: tableName, type: "addedOptionalField" }
         : {
               severity: "breaking",
               summary: `added required field ${tableName}.${name} — existing rows have no value; add a data migration to backfill it`,
               table: tableName,
+              scope: "table",
               type: "addedRequiredField",
           };
 
@@ -299,6 +337,7 @@ const diffFields = (tableName: string, baseline: TableSnapshot, current: TableSn
                 severity: "breaking",
                 summary: `removed field ${tableName}.${name} — add a data migration if stored data must be cleaned up`,
                 table: tableName,
+                scope: "table",
                 type: "removedField",
             });
         }
@@ -311,7 +350,7 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
         const old = baseline.indexes[name];
 
         if (old === undefined) {
-            changes.push({ severity: "safe", summary: `added index ${name} on ${tableName}`, table: tableName, type: "addedIndex" });
+            changes.push({ scope: "table", severity: "safe", summary: `added index ${name} on ${tableName}`, table: tableName, type: "addedIndex" });
 
             continue;
         }
@@ -321,6 +360,7 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
                 severity: "breaking",
                 summary: `index ${name} on ${tableName} changed shape — a query may have relied on the old index`,
                 table: tableName,
+                scope: "table",
                 type: "changedIndex",
             });
         }
@@ -332,6 +372,7 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
                 severity: "breaking",
                 summary: `removed index ${name} on ${tableName} — a query that used \`.withIndex("${name}")\` would break`,
                 table: tableName,
+                scope: "table",
                 type: "removedIndex",
             });
         }
@@ -342,13 +383,19 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
 const diffRelations = (tableName: string, baseline: TableSnapshot, current: TableSnapshot, changes: DriftChange[]): void => {
     for (const name of Object.keys(current.relations)) {
         if (baseline.relations[name] === undefined) {
-            changes.push({ severity: "safe", summary: `added relation ${tableName}.${name}`, table: tableName, type: "addedRelation" });
+            changes.push({ scope: "schema", severity: "safe", summary: `added relation ${tableName}.${name}`, table: tableName, type: "addedRelation" });
         }
     }
 
     for (const name of Object.keys(baseline.relations)) {
         if (current.relations[name] === undefined) {
-            changes.push({ severity: "breaking", summary: `removed relation ${tableName}.${name}`, table: tableName, type: "removedRelation" });
+            changes.push({
+                scope: "schema",
+                severity: "breaking",
+                summary: `removed relation ${tableName}.${name}`,
+                table: tableName,
+                type: "removedRelation",
+            });
         }
     }
 };
@@ -360,6 +407,7 @@ const diffExistingTable = (tableName: string, baseline: TableSnapshot, current: 
             severity: "breaking",
             summary: `table ${tableName} changed shard mode: ${baseline.shardMode} → ${current.shardMode} — its physical storage moves; add a data migration / re-shard plan`,
             table: tableName,
+            scope: "table",
             type: "changedShardMode",
         });
     }
@@ -383,7 +431,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
         const old = baselineTables[tableName];
 
         if (old === undefined) {
-            changes.push({ severity: "safe", summary: `added table ${tableName}`, table: tableName, type: "addedTable" });
+            changes.push({ scope: "table", severity: "safe", summary: `added table ${tableName}`, table: tableName, type: "addedTable" });
 
             continue;
         }
@@ -394,6 +442,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
     for (const tableName of Object.keys(baselineTables)) {
         if (current.tables[tableName] === undefined) {
             changes.push({
+                scope: "table",
                 severity: "breaking",
                 summary: `removed table ${tableName} — add a data migration if its data must be archived/cleaned up`,
                 table: tableName,
@@ -412,6 +461,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
         const to = current.jurisdiction ?? "(none)";
 
         changes.push({
+            scope: "schema",
             severity: "breaking",
             summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard, scheduler, and session-DO data in the old region (no in-place migration; export then import to move it). Revert the change, or override the gate to proceed intentionally.`,
             type: "changedJurisdiction",
@@ -422,4 +472,4 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
 };
 
 export { diffSchemaSnapshots, hashSchemaSnapshot, isValidTableSnapshot, parseSnapshotJson, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot, sortKeys };
-export type { DriftChange, FieldSnapshot, IndexSnapshot, RelationSnapshot, SchemaDrift, SchemaSnapshot, SnapshotParseOutcome, TableSnapshot };
+export type { DriftChange, DriftScope, FieldSnapshot, IndexSnapshot, RelationSnapshot, SchemaDrift, SchemaSnapshot, SnapshotParseOutcome, TableSnapshot };

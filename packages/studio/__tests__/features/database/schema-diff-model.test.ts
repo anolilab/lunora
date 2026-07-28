@@ -138,3 +138,25 @@ describe("snapshotFromJson", () => {
         expect(snapshotFromJson('{"version":99,"tables":{}}')).toBeUndefined();
     });
 });
+
+describe("scope classification", () => {
+    it("marks every table-anchored change scope:table and relation/jurisdiction changes scope:schema", () => {
+        expect.assertions(2);
+
+        // The Studio derives "which tables to ring amber" from `scope` alone, so
+        // this pins the classification at the source rather than in the consumer.
+        const fieldChange = buildSchemaDiffModel(
+            snapshot({ users: table({ fields: { name: { kind: "string", optional: false } } }) }),
+            snapshot({ users: table({ fields: { name: { kind: "number", optional: false } } }) }),
+        );
+
+        expect(fieldChange.changes.every((change) => change.scope === "table")).toBe(true);
+
+        const relationChange = buildSchemaDiffModel(
+            snapshot({ posts: table(), users: table() }),
+            snapshot({ posts: table(), users: table({ relations: { posts: { field: "authorId", kind: "many", table: "posts" } } }) }),
+        );
+
+        expect(relationChange.changes.every((change) => change.scope === "schema")).toBe(true);
+    });
+});

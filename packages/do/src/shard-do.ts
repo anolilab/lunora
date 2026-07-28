@@ -130,14 +130,14 @@ import {
     readRequestLog,
     REQUEST_LOG_TABLE,
 } from "./request-log";
-import { readSchemaHistory, readSchemaVersion } from "./schema-history";
+import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
 import { runSocketPool } from "./socket-pool";
 import { foldTraces, SpanBuffer } from "./span-buffer";
-import { lintReadonlySql, runReadonlySql } from "./sql-console";
+import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 import { resolveTraceAnchor } from "./trace-context";
@@ -7026,16 +7026,13 @@ abstract class ShardDO {
             return this.readAdminRunSql(sql, args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.lintSql) {
-            return this.readAdminLintSql(sql, args);
-        }
+        // The SQL linter + schema-version ledger reads live in their own module
+        // and register through a lookup, so this chain does not grow an arm per
+        // resolver — see `schema-history-reads.ts`.
+        const schemaHistoryRead = resolveSchemaHistoryRead(functionPath, ADMIN_FUNCTION_PREFIX, sql, args, ADMIN_WILDCARD);
 
-        if (functionPath === ADMIN_FUNCTIONS.schemaHistory) {
-            return this.readAdminSchemaHistory(sql);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.schemaVersion) {
-            return this.readAdminSchemaVersion(sql, args);
+        if (schemaHistoryRead !== undefined) {
+            return schemaHistoryRead;
         }
 
         const tableSignal = this.readAdminTableSignal(functionPath, sql, args);
@@ -7546,43 +7543,6 @@ abstract class ShardDO {
         const query = typeof args["sql"] === "string" ? args["sql"] : "";
 
         return { result: runReadonlySql(sql, query), tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `lintSql` admin read: plan (never execute) a statement via
-     * {@link lintReadonlySql} and return its diagnostics. Gated identically to
-     * {@link readAdminRunSql} — same read-only classifier, same wildcard table
-     * dependency — because a laxer lint path would be a way around the gate.
-     * One-shot: the studio re-lints on a debounce, it does not subscribe.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminLintSql(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const query = typeof args["sql"] === "string" ? args["sql"] : "";
-
-        return { result: lintReadonlySql(sql, query), tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `schemaHistory` admin read: every recorded schema version on
-     * this shard, newest first, WITHOUT the snapshot payloads (see
-     * {@link readSchemaHistory} — a wide schema's snapshot is tens of KB, so the
-     * timeline lists identity + time and fetches one payload on selection).
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminSchemaHistory(sql: SqlExec): { result: unknown; tables: Set<string> } {
-        return { result: { versions: readSchemaHistory(sql) }, tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `schemaVersion` admin read: one recorded version's full snapshot
-     * JSON, by content hash. Returns `{ version: undefined }` for an unknown hash
-     * rather than erroring — a stale deep link is an empty state, not a failure.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminSchemaVersion(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const hash = typeof args["hash"] === "string" ? args["hash"] : "";
-
-        return { result: { version: readSchemaVersion(sql, hash) }, tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**

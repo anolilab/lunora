@@ -177,20 +177,5 @@ const readSchemaVersion = (sql: SqlExec, hash: string): SchemaVersionRow | undef
     }
 };
 
-/**
- * Cheap "is there anything to show" probe for gating the Studio's nav item.
- * Deliberately a one-row `EXISTS`, not a list: the list is small but the table
- * it reads is the largest reserved one, and this runs on every Studio load.
- */
-const hasSchemaHistory = (sql: SqlExec): boolean => {
-    try {
-        ensureSchemaHistoryTable(sql);
-
-        return runSql(sql, `SELECT 1 FROM ${TABLE} LIMIT 1`).toArray().length > 0;
-    } catch {
-        return false;
-    }
-};
-
-export { hasSchemaHistory, readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS, SCHEMA_HISTORY_TABLE };
+export { readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS };
 export type { SchemaVersionRow };

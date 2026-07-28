@@ -126,9 +126,7 @@ describe("auditPanel", () => {
 
         const error = await screen.findByTestId("au-error");
 
-        // `toContain`, not `toBe`: the alert also carries the "Show in console"
-        // affordance (plan 204), so an exact-text assertion pins unrelated chrome.
-        expect(error.textContent).toContain("ADMIN_FORBIDDEN");
+        expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 
     it("opens a getAuditLog subscription on mount and renders pushed entries", async () => {

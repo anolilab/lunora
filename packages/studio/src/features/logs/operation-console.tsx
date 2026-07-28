@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
+import type { ConsoleShown } from "../../components/operation-console-provider";
 import { Badge } from "../../components/ui/badge";
 import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
@@ -8,9 +9,6 @@ import { copyToClipboard } from "../../lib/internal";
 import type { OperationEntry } from "../../lib/operation-log";
 import { operationLog } from "../../lib/operation-log";
 import { cn } from "../../lib/utils";
-
-/** Which operations the console shows. */
-type ConsoleFilter = "all" | "errors";
 
 /** Strip the reserved admin prefix so rows read as `readTablePage`, not `__lunora_admin__:readTablePage`. */
 const shortPath = (functionPath: string): string => functionPath.replace("__lunora_admin__:", "");
@@ -104,32 +102,36 @@ const OperationRow = ({ entry, focused }: { readonly entry: OperationEntry; read
  * whatever page you are on, not a destination.
  */
 export const OperationConsole = ({
-    errorsOnly = false,
     focusSeq,
     onClose,
+    onShownChange,
+    shown: shownFilter,
 }: {
-    /** Open showing only failures — what an error surface asks for. */
-    readonly errorsOnly?: boolean;
     /** Highlight and scroll to this tape entry, when the caller named one. */
     readonly focusSeq?: number;
     readonly onClose: () => void;
+    readonly onShownChange: (shown: ConsoleShown) => void;
+
+    /**
+     * Which operations to list. A CONTROLLED prop, not local state seeded from
+     * one: the drawer only remounts when it opens, so a seeded copy ignored
+     * `openConsole({ errorsOnly: true })` on an already-open drawer.
+     */
+    readonly shown: ConsoleShown;
 }): ReactElement => {
     const t = useT();
 
     const entries = useOperationLog();
-    // Seeded from the opener's intent, then owned by the operator's clicks — a
-    // derived-every-render filter would fight them the moment they widened it.
-    const [filter, setFilter] = useState<ConsoleFilter>(errorsOnly ? "errors" : "all");
     const [needle, setNeedle] = useState<string>("");
 
     const shown = useMemo(() => {
         const match = needle.trim().toLowerCase();
 
         return entries
-            .filter((entry) => (filter === "errors" ? entry.status === "error" : true))
+            .filter((entry) => (shownFilter === "errors" ? entry.status === "error" : true))
             .filter((entry) => match === "" || `${entry.functionPath} ${entry.summary} ${entry.shardKey}`.toLowerCase().includes(match))
             .toReversed();
-    }, [entries, filter, needle]);
+    }, [entries, needle, shownFilter]);
 
     const errorCount = entries.filter((entry) => entry.status === "error").length;
 
@@ -140,10 +142,10 @@ export const OperationConsole = ({
                 <Badge variant="secondary">{t("{count} calls", { count: entries.length })}</Badge>
                 {errorCount > 0 && <Badge variant="destructive">{t("{count} failed", { count: errorCount })}</Badge>}
                 <button
-                    className={cn("rounded px-2 py-0.5 text-xs outline-none hover:bg-accent focus-visible:bg-accent", filter === "errors" && "bg-accent")}
+                    className={cn("rounded px-2 py-0.5 text-xs outline-none hover:bg-accent focus-visible:bg-accent", shownFilter === "errors" && "bg-accent")}
                     data-testid="oc-filter-errors"
                     onClick={() => {
-                        setFilter(filter === "errors" ? "all" : "errors");
+                        onShownChange(shownFilter === "errors" ? "all" : "errors");
                     }}
                     type="button"
                 >

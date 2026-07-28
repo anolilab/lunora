@@ -93,8 +93,22 @@ const ContainersPanel = lazyNamed(() => import("../features/containers/container
 const DeploymentHealthPanel = lazyNamed(() => import("../features/health/deployment-health-panel"), "DeploymentHealthPanel");
 const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
 const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
-const MigrationsPanel = lazyNamed(() => import("../features/database/migrations"), "MigrationsPanel");
-const SchemaHistoryPanel = lazyNamed(() => import("../features/database/schema-history"), "SchemaHistoryPanel");
+const MigrationsRoutePanel = lazyNamed(() => import("../features/database/migrations-route"), "MigrationsRoutePanel");
+
+/**
+ * Per-route search-param validators. A route absent from this map takes no typed
+ * search params; `createRoute` accepts `undefined` for `validateSearch`.
+ *
+ * `/data` carries the whole data-browser view (table / tier / shard / search /
+ * sort / filters); `/migrations` carries the selected schema version, so a
+ * specific diff is a shareable link. A lookup rather than a branch per route:
+ * adding one is a one-line data change, and it sidesteps the
+ * route-property-order lint that blocked a spread.
+ */
+const SEARCH_VALIDATORS: Partial<Record<StudioTab, (search: Record<string, unknown>) => unknown>> = {
+    data: validateDataViewSearch,
+    migrations: validateSchemaVersionSearch,
+};
 const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
 const FlagsPanel = lazyNamed(() => import("../features/flags/flags-panel"), "FlagsPanel");
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
@@ -817,14 +831,33 @@ const StudioLayoutShell = (): ReactElement => {
     // because a tape you have to arm before the bug is a tape that misses it.
     // The open/focus state lives in a provider above this layout so an
     // `ErrorAlert` rendered deep inside a panel can open it on a specific entry.
-    const { close: closeConsole, errorsOnly: consoleErrorsOnly, focusSeq: consoleFocusSeq, open: consoleOpen, toggle: toggleConsole } = useOperationConsole();
+    // `StudioLayout` always mounts the provider above this component, so the
+    // context is present; the optional read is for the type, not a real branch.
+    const operationConsole = useOperationConsole();
+    const toggleConsole = operationConsole?.toggle;
 
     useEffect(() => {
+        if (toggleConsole === undefined) {
+            return undefined;
+        }
+
         const onKeyDown = (event: KeyboardEvent): void => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "`") {
-                event.preventDefault();
-                toggleConsole();
+            // Ctrl+` only — NOT ⌘`, which macOS owns as "cycle this app's
+            // windows" — with no other modifier, ignoring auto-repeat, and never
+            // while the operator is typing (the SQL editor is a full-page
+            // textarea, and ` is a legal character in it).
+            if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat || event.key !== "`") {
+                return;
             }
+
+            const { target } = event;
+
+            if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName))) {
+                return;
+            }
+
+            event.preventDefault();
+            toggleConsole();
         };
 
         globalThis.addEventListener("keydown", onKeyDown);
@@ -1082,7 +1115,14 @@ const StudioLayoutShell = (): ReactElement => {
                     </div>
                     {/* The operation console docks under whatever panel is open — it is a
                         companion to the current page, not a destination of its own. */}
-                    {consoleOpen && <OperationConsole errorsOnly={consoleErrorsOnly} focusSeq={consoleFocusSeq} onClose={closeConsole} />}
+                    {operationConsole?.open === true && (
+                        <OperationConsole
+                            focusSeq={operationConsole.focusSeq}
+                            onClose={operationConsole.close}
+                            onShownChange={operationConsole.setShown}
+                            shown={operationConsole.shown}
+                        />
+                    )}
                 </div>
             </SidebarInset>
         </SidebarProvider>
@@ -1184,23 +1224,7 @@ const buildRouter = ({
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         traces: <TracesPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
-        migrations: (
-            <div className="flex min-h-0 flex-1 flex-col gap-8">
-                {/* Schema versions first — what the shape was, and when it changed… */}
-                <div className="flex min-h-[24rem] flex-col gap-2">
-                    <h2 className="text-sm font-medium">Schema versions</h2>
-                    <SchemaHistoryPanel shardKey={initialShardKey} />
-                </div>
-                {/* …then the data migrations that ran alongside those versions. The
-                    two are different things (schema is applied at runtime from
-                    defineSchema; defineMigration is hand-written data movement), so
-                    they are correlated on one page, not merged into one timeline. */}
-                <div className="flex flex-col gap-2">
-                    <h2 className="text-sm font-medium">Data migrations</h2>
-                    <MigrationsPanel initialShardKey={initialShardKey} />
-                </div>
-            </div>
-        ),
+        migrations: <MigrationsRoutePanel initialShardKey={initialShardKey} />,
         notifications: <NotificationsPanel />,
         organizations: <OrganizationsPanel />,
         permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} schemaEditable={schemaEditable} />,
@@ -1236,41 +1260,17 @@ const buildRouter = ({
         path: "/",
     });
 
-    const tabRoutes = TABS.map((tab) => {
-        // The data browser stores its whole view (table / tier / shard / search /
-        // sort / filters) in the URL; the `/data` route validates + normalises
-        // those params at the router boundary (`validateDataViewSearch`) so
-        // malformed or legacy links are sanitised once and the panel reads a typed,
-        // trustworthy search instead of a raw record. Branched (rather than a
-        // spread into one `createRoute`) because the route-property-order lint can't
-        // analyse a spread element.
-        if (tab === "data") {
-            return createRoute({
-                component: () => panels[tab],
-                getParentRoute: () => rootRoute,
-                path: `/${tab}`,
-                validateSearch: validateDataViewSearch,
-            });
-        }
-
-        // The migrations route carries the selected schema VERSION so a specific
-        // diff is a shareable link (Prisma's migrations view does the same for the
-        // same reason: a diff you cannot paste to a colleague is half a feature).
-        if (tab === "migrations") {
-            return createRoute({
-                component: () => panels[tab],
-                getParentRoute: () => rootRoute,
-                path: `/${tab}`,
-                validateSearch: validateSchemaVersionSearch,
-            });
-        }
-
-        return createRoute({
+    // Routes that keep state in the URL validate + normalise it at the router
+    // boundary, so malformed or legacy links are sanitised once and each panel
+    // reads a typed, trustworthy search instead of a raw record.
+    const tabRoutes = TABS.map((tab) =>
+        createRoute({
             component: () => panels[tab],
             getParentRoute: () => rootRoute,
             path: `/${tab}`,
-        });
-    });
+            validateSearch: SEARCH_VALIDATORS[tab],
+        }),
+    );
 
     const routeTree = rootRoute.addChildren([indexRoute, ...tabRoutes]);
     // Browser when a DOM `window` exists; an in-memory history under SSR/tests.

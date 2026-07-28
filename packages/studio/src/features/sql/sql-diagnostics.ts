@@ -19,7 +19,10 @@
  * tables are never flagged.
  *
  * No SQL parser: everything works off a literal/comment-masked copy of the
- * statement, so offsets map back to the operator's text exactly.
+ * statement, so offsets map back to the operator's text exactly. Scans use
+ * `matchAll` rather than hand-reset `lastIndex` loops — a module-scoped `/g`
+ * regex carries mutable state, and one forgotten reset is a nondeterministic
+ * miss no test would catch.
  */
 import { classifyStatement } from "../../../../../shared/sql-readonly";
 import type { SqlSchema } from "./sql-autocomplete";
@@ -141,12 +144,8 @@ const maskNonCode = (sql: string): string => {
 const cteNames = (masked: string): Set<string> => {
     const names = new Set<string>();
 
-    CTE_BINDING.lastIndex = 0;
-    let match = CTE_BINDING.exec(masked);
-
-    while (match !== null) {
+    for (const match of masked.matchAll(CTE_BINDING)) {
         names.add((match[1] ?? "").toLowerCase());
-        match = CTE_BINDING.exec(masked);
     }
 
     return names;
@@ -160,10 +159,7 @@ const cteNames = (masked: string): Set<string> => {
 const qualifierTargets = (masked: string, known: Set<string>): Map<string, string> => {
     const targets = new Map<string, string>();
 
-    SOURCE_WITH_ALIAS.lastIndex = 0;
-    let match = SOURCE_WITH_ALIAS.exec(masked);
-
-    while (match !== null) {
+    for (const match of masked.matchAll(SOURCE_WITH_ALIAS)) {
         const table = (match[1] ?? "").toLowerCase();
         const alias = (match[2] ?? "").toLowerCase();
 
@@ -174,8 +170,6 @@ const qualifierTargets = (masked: string, known: Set<string>): Map<string, strin
                 targets.set(alias, table);
             }
         }
-
-        match = SOURCE_WITH_ALIAS.exec(masked);
     }
 
     return targets;
@@ -185,10 +179,7 @@ const qualifierTargets = (masked: string, known: Set<string>): Map<string, strin
 const unknownTableDiagnostics = (masked: string, known: Set<string>, ctes: Set<string>): SqlDiagnostic[] => {
     const diagnostics: SqlDiagnostic[] = [];
 
-    FROM_SOURCE.lastIndex = 0;
-    let match = FROM_SOURCE.exec(masked);
-
-    while (match !== null) {
+    for (const match of masked.matchAll(FROM_SOURCE)) {
         const name = match[1] ?? "";
         const lower = name.toLowerCase();
 
@@ -202,8 +193,6 @@ const unknownTableDiagnostics = (masked: string, known: Set<string>, ctes: Set<s
                 source: "schema",
             });
         }
-
-        match = FROM_SOURCE.exec(masked);
     }
 
     return diagnostics;
@@ -224,10 +213,7 @@ const unknownColumnDiagnostics = (masked: string, schema: SqlSchema, targets: Ma
         columnsByTable.set(table.toLowerCase(), new Set(columns.map((column) => column.toLowerCase())));
     }
 
-    QUALIFIED_COLUMN.lastIndex = 0;
-    let match = QUALIFIED_COLUMN.exec(masked);
-
-    while (match !== null) {
+    for (const match of masked.matchAll(QUALIFIED_COLUMN)) {
         const qualifier = (match[1] ?? "").toLowerCase();
         const column = match[2] ?? "";
         const table = targets.get(qualifier);
@@ -242,8 +228,6 @@ const unknownColumnDiagnostics = (masked: string, schema: SqlSchema, targets: Ma
                 source: "schema",
             });
         }
-
-        match = QUALIFIED_COLUMN.exec(masked);
     }
 
     return diagnostics;

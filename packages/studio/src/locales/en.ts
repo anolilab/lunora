@@ -503,6 +503,8 @@ const MESSAGE_IDS = [
     "SQL query",
     "SQL problems",
     "Operation console",
+    "Schema versions",
+    "Data migrations",
     "{count} pushes",
     "live",
     "Show in console",

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { SqlSchema } from "../../../src/features/sql/sql-autocomplete";
+import type { SqlDiagnostic } from "../../../src/features/sql/sql-diagnostics";
 import { lintDraft, maskNonCode } from "../../../src/features/sql/sql-diagnostics";
+import { toSpans } from "../../../src/features/sql/sql-diagnostics-ui";
 
 const schema: SqlSchema = {
     columns: { messages: ["id", "body", "authorId"], users: ["id", "name"] },
@@ -140,5 +142,42 @@ describe("lintDraft — unknown columns", () => {
 
         // `where` must not be bound as an alias for `messages`.
         expect(lintDraft("SELECT messages.body FROM messages WHERE id = 1", schema)).toStrictEqual([]);
+    });
+});
+
+describe("toSpans", () => {
+    const span = (offset: number, length: number): SqlDiagnostic => {
+        return { length, message: "x", offset, severity: "error", source: "schema" };
+    };
+
+    it("orders spans and drops ones with no extent", () => {
+        expect.assertions(2);
+
+        const spans = toSpans([span(10, 2), span(0, 3), span(5, 0)], 100);
+
+        expect(spans.map((entry) => entry.start)).toStrictEqual([0, 10]);
+        expect(spans).toHaveLength(2);
+    });
+
+    it("drops a span nested inside an earlier, wider one", () => {
+        expect.assertions(1);
+
+        // A=[0,10] B=[5,6] C=[6,8]: comparing each span against its NEIGHBOUR in
+        // the sorted list lets C through (it clears B), even though C sits inside
+        // A — which desynchronises the overlay from the textarea for the rest of
+        // the statement. The comparison must be against the last KEPT span.
+        expect(toSpans([span(0, 10), span(5, 1), span(6, 2)], 100)).toHaveLength(1);
+    });
+
+    it("ignores diagnostics with no span at all", () => {
+        expect.assertions(1);
+
+        expect(toSpans([{ message: "statement-wide", severity: "error", source: "gate" }], 100)).toStrictEqual([]);
+    });
+
+    it("clamps a span that runs past the end of the draft", () => {
+        expect.assertions(1);
+
+        expect(toSpans([span(3, 99)], 10)).toStrictEqual([{ end: 10, severity: "error", start: 3 }]);
     });
 });

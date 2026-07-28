@@ -19,10 +19,12 @@ export interface LiveErrorProps {
  */
 export const LiveError = ({ message, prefix }: LiveErrorProps): ReactElement | null => {
     const t = useT();
-    const { openConsole } = useOperationConsole();
+    // See `ErrorAlert`: absent outside the studio shell, in which case the
+    // affordance is not offered rather than offered-and-dead.
+    const operationConsole = useOperationConsole();
 
     const showInConsole = (): void => {
-        openConsole({ errorsOnly: true });
+        operationConsole?.openConsole({ errorsOnly: true });
     };
 
     if (message === undefined) {
@@ -36,14 +38,16 @@ export const LiveError = ({ message, prefix }: LiveErrorProps): ReactElement | n
                 operation tape; no seq is threaded here (LiveError receives only a
                 message), so this opens the errors-only view where it is the most
                 recent entry. */}
-            <button
-                className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                data-testid={`${prefix}-live-error-console`}
-                onClick={showInConsole}
-                type="button"
-            >
-                {t("Show in console")}
-            </button>
+            {operationConsole === undefined ? null : (
+                <button
+                    className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid={`${prefix}-live-error-console`}
+                    onClick={showInConsole}
+                    type="button"
+                >
+                    {t("Show in console")}
+                </button>
+            )}
         </span>
     );
 };

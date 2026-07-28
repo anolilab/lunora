@@ -2,6 +2,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import type { StorageTier } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -27,14 +28,6 @@ const STATUS_RING: Readonly<Record<TableStatus, string>> = {
     changed: "ring-2 ring-amber-500/70",
     context: "opacity-55",
     removed: "opacity-70 ring-2 ring-destructive/60",
-};
-
-/** Badge variant + label per status, for the table list beside the canvas. */
-const STATUS_LABEL: Readonly<Record<TableStatus, string>> = {
-    added: "added",
-    changed: "changed",
-    context: "unchanged",
-    removed: "removed",
 };
 
 /** Map a snapshot's shard mode onto the diagram's storage tier. */
@@ -156,6 +149,14 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
         return classes;
     }, [model]);
 
+    // An unreachable RPC (an older worker, a missing admin token) also yields no
+    // versions. Rendering the empty state for it would assert something about the
+    // database that the studio does not know — so the failure is shown as a
+    // failure, and only a genuinely empty ledger gets the empty state.
+    if (historyQuery.error !== null) {
+        return <ErrorAlert error={historyQuery.errorSource} testId="sh-error" />;
+    }
+
     if (versions.length === 0) {
         return (
             <EmptyState
@@ -216,5 +217,4 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
     );
 };
 
-export { STATUS_LABEL };
 export type { SchemaHistoryPanelProps };

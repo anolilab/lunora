@@ -6,6 +6,8 @@ import type { Finding } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
 import { Project } from "ts-morph";
 
+import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
+import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
 import { discoverAgents } from "./discover-agents";
@@ -92,8 +94,7 @@ import { emitApp } from "./emit-app";
 import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
-import type { SchemaSnapshot } from "./schema-drift";
-import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot } from "./schema-drift";
 
 /**
  * Committed, tracked baseline file holding the blessed structural schema

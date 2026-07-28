@@ -31,10 +31,11 @@ calls the same click fanned out.
 through an `onEvent` pipeline into bounded storage, rendered in a Console view
 with an explicit ordering contract and per-entry detail (`OperationEventEntry`).
 
-**We have exactly one choke point to hang this on.** Every admin call in Studio
-goes through `packages/studio/src/lib/internal.ts` (`adminRef`, `callOptions`,
-`errorMessage`, `fireAndForget`) and `hooks/use-admin-query.ts`. Instrumenting
-those two covers the surface; there is no second path to miss.
+**Where to hang it.** The first cut assumed `lib/internal.ts` +
+`hooks/use-admin-query.ts` were the choke point. They are NOT — ~53 imperative
+`client.query`/`mutation`/`action` sites dispatch directly (see "Review
+corrections"). The real single seam is the `LunoraClient` itself, built in one
+`useMemo` in `app/app.tsx`.
 
 ## Design
 
@@ -43,12 +44,13 @@ Studio context. Not persisted, not sent anywhere — it is a debugging tape for 
 current session, and persisting it would create a new place for sensitive data
 to accumulate.
 
-**Record shapes, never payloads.** An entry carries: sequence number, timestamp,
-function path, shard key, a _summary_ of arguments (table name, filter count,
-limit — never row values), duration, outcome (`ok` / `error` + message), and
-result size (row count / byte estimate). Row data never enters the buffer. This
-follows the same reasoning already recorded for the Studio admin token: Studio is
-a local operator UI, and the deliberate tradeoffs it makes should stay narrow.
+**Record argument shapes, never argument payloads.** An entry carries: sequence
+number, timestamp, function path, shard key, a _summary_ of arguments (table
+name, filter count, limit — never row values), duration, outcome, and result
+size. The one thing stored verbatim is a rejection's `message`, which the server
+writes and which can echo user data; that is a deliberate trade (it is the
+diagnosis, it is already on screen, and the tape is memory-only and never
+transmitted) and is documented at the module.
 
 **Complement, not replacement.** The console answers "what did this UI do"; the
 audit panel answers "what did the server record". Both stay, and the console
@@ -58,10 +60,10 @@ links out to the audit panel for a write it issued.
 
 - [x] `OperationEvent` type + a bounded `OperationLog` ring buffer in a Studio
       context provider.
-- [x] Instrument the single choke point: `lib/internal.ts` +
-      `hooks/use-admin-query.ts` emit an event per call — one on dispatch (with a
-      monotonic sequence number assigned at dispatch, so ordering reflects issue
-      order, not completion order) and one on settle.
+- [x] Instrument the real single seam — the client itself
+      (`lib/recording-client.ts`, applied in `app/app.tsx`) — emitting one event
+      per admin dispatch with a monotonic sequence number assigned at DISPATCH,
+      so ordering reflects issue order rather than completion order.
 - [x] Argument summarisation is per-function and explicit — a small map from
       function path to a summariser. Default for an unmapped function: record the
       argument _keys_ only. Never a blanket `JSON.stringify(args)`; that is how
@@ -91,11 +93,12 @@ links out to the audit panel for a write it issued.
 
 - [x] The drawer's open/focus state moved into `components/operation-console-provider.tsx`,
       wrapped around the shell (`StudioLayout` → provider → `StudioLayoutShell`,
-      split because a component cannot read a context it provides itself). The
-      provider's default value is INERT rather than throwing: `ErrorAlert` is
-      mounted standalone by other suites, and a debugging affordance must never be
-      the reason an error component crashes.
-- [x] `recordedCall` tags a rejection with its tape sequence under a Symbol key
+      split because a component cannot read a context it provides itself). Outside
+      a provider the context is `undefined` and the affordance is not rendered at
+      all — a button that silently does nothing is worse than none — but reading
+      it never throws, because `ErrorAlert` is mounted standalone by other suites
+      and must not crash over a debugging affordance.
+- [x] The recording proxy tags a rejection with its tape sequence under a Symbol key
       (invisible to `JSON.stringify` and to the existing `errorMessage`/`errorHint`
       readers), so `ErrorAlert` opens the console **on the exact entry that
       failed** rather than making the operator hunt for it.
@@ -115,14 +118,47 @@ links out to the audit panel for a write it issued.
   summary that produced it.
 - A test asserts no row values reach the buffer for the data-browser read path
   (the summariser map is exercised, not bypassed).
-- A component test drives a real failing call through `recordedCall`, clicks
-  "show in console", and asserts the drawer opens on that entry, filtered to
-  errors — plus that a provider-less `ErrorAlert` stays inert.
+- A component test drives a real failing call through the recording client,
+  clicks "show in console", and asserts the drawer opens on that entry filtered
+  to errors; that the filter still applies when the drawer is ALREADY open; and
+  that a provider-less `ErrorAlert` offers no affordance at all.
 - The buffer is bounded: a synthetic 10k-operation burst evicts oldest and does
   not grow memory without limit.
 - Zero events emitted when the drawer has never been opened is **not** a goal —
   recording is always on (a tape you have to arm before the bug is a tape that
   misses the bug); the cost is one small object per RPC.
+
+## Review corrections (thermo pass, 2026-07-28)
+
+Both reviewers independently found the same P1: `recordedCall` was documented as
+"THE choke point" but had ONE caller (`useAdminQuery`'s read fetcher). ~53
+imperative dispatches bypassed it, including every write — `writeRow`,
+`deleteRows`, `runMigration`, `pitrRestore`, `importShard`, `runSql` — so the
+console recorded reads only, and six of the eight summarisers were unreachable.
+The feature's whole purpose (reconstruct what happened before a failure) was
+missing exactly the operations that matter.
+
+Fixed by moving recording to the client itself (`lib/recording-client.ts`), a
+Proxy applied once where `app.tsx` builds the `LunoraClient`. Coverage is now
+true by construction rather than by every call site remembering to opt in;
+`recordedCall` and the `useAdminQuery` threading both deleted.
+
+Also corrected:
+
+- **`openConsole({ errorsOnly })` did nothing on an already-open drawer** — the
+  filter was seeded into the drawer's local state, and the drawer only remounts
+  when it opens. The filter now has a single owner in the provider. Regression
+  test added.
+- **The affordance rendered under the inert default context**, giving a
+  permanently dead button to any host embedding a single panel. The context is
+  now `undefined` outside a provider and the button is not rendered at all —
+  which also let the five `toBe` → `toContain` relaxations be reverted.
+- **`Object.defineProperty` on a caught error could throw from inside the catch**
+  and replace the real rejection. Guarded with `isExtensible` + try/catch.
+- **`recordPush` was O(300) per WS push** even with the console closed. It now
+  bumps in place while nothing is subscribed.
+- **⌘` is a macOS system shortcut** — the binding is Ctrl+` only, ignores
+  auto-repeat and other modifiers, and never fires while typing.
 
 ## Non-goals
 

@@ -3,7 +3,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
-import { adminRef, callOptions, errorMessage, fireAndForget, recordedCall } from "../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/internal";
 import { operationLog } from "../lib/operation-log";
 
 /**
@@ -207,18 +207,14 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 
     // The base read shares the generic client-query machinery (cache, dedup, error
     // normalisation, refetch); admin layers a live WS subscription on top.
-    // Routed through `recordedCall` so every read lands on the operation tape —
-    // this hook and the imperative `client.query` call sites are the only two
-    // ways an admin RPC leaves the Studio, and both go through that one wrapper.
-    const base = useClientQuery<T>(
-        queryKey,
-        () => recordedCall<T>(path, args, shardKey, () => client.query(adminRef(path), args, callOptions(shardKey)) as Promise<T>),
-        {
-            enabled,
-            keepPreviousData,
-            staleTime: staleTime ?? (live ? Number.POSITIVE_INFINITY : 0),
-        },
-    );
+    // No recording wrapper here: the client itself is wrapped once where the
+    // studio mounts it (`lib/recording-client.ts`), so every dispatch — this one
+    // and the ~50 imperative call sites alike — lands on the tape by construction.
+    const base = useClientQuery<T>(queryKey, () => client.query(adminRef(path), args, callOptions(shardKey)) as Promise<T>, {
+        enabled,
+        keepPreviousData,
+        staleTime: staleTime ?? (live ? Number.POSITIVE_INFINITY : 0),
+    });
 
     const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
