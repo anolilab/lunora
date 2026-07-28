@@ -144,7 +144,9 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                             </div>
                             <div className="grid gap-1">
                                 <p className="text-sm font-medium">Import your first project</p>
-                                <p className="max-w-xs text-sm text-muted-foreground">Connect a repository from GitHub or GitLab to deploy — no manual setup.</p>
+                                <p className="max-w-xs text-sm text-muted-foreground">
+                                    Connect a repository from GitHub or GitLab to deploy — no manual setup.
+                                </p>
                             </div>
                             <div className="flex flex-wrap justify-center gap-2">
                                 <Button
@@ -213,8 +215,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                     </CardHeader>
                     <CardContent>
                         <FieldForm
-                            onSubmit={(event) => {
-                                event.preventDefault();
+                            action={() => {
                                 setError(null);
 
                                 void (async () => {

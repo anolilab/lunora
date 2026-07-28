@@ -57,15 +57,26 @@ export const Field = ({ children, htmlFor, label }: { children: ReactNode; htmlF
 
 /** A vertical stack for the fields of a create/edit form (medium field rhythm). */
 export const FieldForm = ({
+    action,
     children,
     className,
     onSubmit,
 }: {
+    /**
+     * A React 19 form action. PREFER THIS over `onSubmit`: an action works without
+     * JavaScript and needs no `preventDefault`, which is what
+     * `react-doctor/no-prevent-default` asks for and what PR #224 converted every
+     * studio form to. `FieldForm` originally accepted only `onSubmit`, and that gap
+     * alone was enough to make a later redesign quietly convert two screens back to
+     * `preventDefault` — so the passthrough exists to stop that recurring.
+     */
+    action?: ComponentProps<"form">["action"];
     children: ReactNode;
     className?: string;
+    /** Escape hatch for forms that genuinely need the event; prefer `action`. */
     onSubmit?: ComponentProps<"form">["onSubmit"];
 }): ReactElement => (
-    <form className={cn("grid max-w-md gap-4", className)} onSubmit={onSubmit}>
+    <form action={action} className={cn("grid max-w-md gap-4", className)} onSubmit={onSubmit}>
         {children}
     </form>
 );

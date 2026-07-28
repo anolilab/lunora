@@ -1,4 +1,13 @@
-import { ArrowDown01Icon, ArrowLeft01Icon, ArrowUpRight01Icon, GitBranchIcon, GitCommitIcon, GithubIcon, GitlabIcon, Globe02Icon } from "@hugeicons/core-free-icons";
+import {
+    ArrowDown01Icon,
+    ArrowLeft01Icon,
+    ArrowUpRight01Icon,
+    GitBranchIcon,
+    GitCommitIcon,
+    GithubIcon,
+    GitlabIcon,
+    Globe02Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
 import { useMutation, useQuery } from "@lunora/react";
@@ -209,7 +218,11 @@ const SourceCard = ({
             <CardContent className="flex flex-col gap-2.5 text-sm">
                 {githubRepo ? (
                     <div className="flex items-center gap-2.5">
-                        <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={gitProvider === "gitlab" ? GitlabIcon : GithubIcon} strokeWidth={2} />
+                        <HugeiconsIcon
+                            className="size-4 shrink-0 text-muted-foreground"
+                            icon={gitProvider === "gitlab" ? GitlabIcon : GithubIcon}
+                            strokeWidth={2}
+                        />
                         {githubRepo}
                     </div>
                 ) : null}
@@ -446,8 +459,8 @@ export const DeploymentsSection = ({ gitProvider, githubRepo, onBack, organizati
                 {header}
                 <Card>
                     <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                        No deployments yet — push to {githubRepo ? <span className="font-medium text-foreground">{githubRepo}</span> : "the connected repo"} or run{" "}
-                        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">lunora deploy</code>.
+                        No deployments yet — push to {githubRepo ? <span className="font-medium text-foreground">{githubRepo}</span> : "the connected repo"} or
+                        run <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">lunora deploy</code>.
                     </CardContent>
                 </Card>
             </div>

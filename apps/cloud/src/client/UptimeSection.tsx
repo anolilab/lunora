@@ -72,7 +72,9 @@ export const UptimeSection = ({ organizationId, preloaded }: SectionProps<Return
                                         <TableCell className="font-mono text-base tabular-nums">
                                             {row.sampleCount === 0 ? "—" : formatUptime(row.upFraction)}
                                         </TableCell>
-                                        <TableCell className="text-muted-foreground font-mono text-xs tabular-nums">{formatLatency(row.avgLatencyMs)}</TableCell>
+                                        <TableCell className="text-muted-foreground font-mono text-xs tabular-nums">
+                                            {formatLatency(row.avgLatencyMs)}
+                                        </TableCell>
                                         <TableCell>
                                             {row.consecutiveFailures > 0 ? <StatusBadge tone="danger">{row.consecutiveFailures}</StatusBadge> : "—"}
                                         </TableCell>

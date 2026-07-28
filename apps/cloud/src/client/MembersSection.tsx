@@ -74,8 +74,7 @@ export const MembersSection = ({ organizationId, preloaded }: MembersSectionProp
                 </CardHeader>
                 <CardContent>
                     <FieldForm
-                        onSubmit={(event) => {
-                            event.preventDefault();
+                        action={() => {
                             setError(null);
 
                             void (async () => {

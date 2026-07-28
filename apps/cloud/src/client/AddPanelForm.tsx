@@ -31,8 +31,7 @@ export const AddPanelForm = ({ metricNames, onAdd }: AddPanelFormProps): ReactEl
     return (
         <form
             className="inline-form"
-            onSubmit={(event) => {
-                event.preventDefault();
+            action={() => {
                 setError(null);
 
                 if (usesMetric && metricName.trim() === "") {
