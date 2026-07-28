@@ -1388,6 +1388,7 @@ interface CreateLunoraAuthClientOptions {
     [option: string]: unknown;
     baseURL?: string;
     extraPlugins?: LunoraAuthClientPlugin[];
+    oneTapClientId?: string;
     plugins?: LunoraAuthPluginToggles;
 }
 ```
@@ -1403,11 +1404,18 @@ type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 ```ts
 interface LunoraAuthPluginToggles {
     admin?: boolean;
+    anonymous?: boolean;
+    deviceAuthorization?: boolean;
     emailOtp?: boolean;
+    lastLoginMethod?: boolean;
     magicLink?: boolean;
+    multiSession?: boolean;
+    oauthProvider?: boolean;
     organization?: boolean;
     passkey?: boolean;
+    phoneNumber?: boolean;
     twoFactor?: boolean;
+    username?: boolean;
 }
 ```
 
@@ -1470,6 +1478,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `oauthProviderClient` (const)
 
 Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
+
+### `oneTapClient` (const)
+
+Re-exported from `better-auth` — signature tracked at its source.
 
 ### `oneTimeTokenClient` (const)
 
