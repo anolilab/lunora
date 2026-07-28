@@ -73,6 +73,14 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `DEFAULT_LIMIT` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DEFAULT_MAX_LIMIT` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -94,6 +102,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DefineIdentityOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineListArgsConfig` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -282,6 +294,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LifecycleHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListArgsSpec` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListArgsValidators` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListArgsValue` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListFilterOperators` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListOrderByEntry` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListWhere` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -542,6 +578,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RelationDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RestCacheConfig` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -889,6 +929,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `clampLimit` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `composePluginMiddleware` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -922,6 +966,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineIdentity` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineListArgs` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1869,6 +1917,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `AiRunBinding` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ApplyOnDeleteOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1949,6 +2001,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `DEFAULT_MAX_RELATION_KEYS` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1976,6 +2032,22 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `DeployInfo` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `ExplainIssueArgs` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueDegradedReason` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueGrounding` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ExplainIssueResult` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `ExportRow` (interface)
 
@@ -2929,6 +3001,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `explainIssue` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `exportShardRows` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3016,6 +3092,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `normalizeOrderKeys` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `parseExplainIssueArgs` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `parseExportShardArgs` (const)
 
@@ -3211,6 +3291,14 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 ## `lunorash/errors`
 
+### `CLOUDFLARE_PLATFORM_ERRORS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `CloudflarePlatformError` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `ERROR_CATALOG` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -3268,6 +3356,14 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `ToErrorBodyResult` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `findCloudflarePlatformSolution` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `findIssueSolution` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -4245,6 +4341,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `applyRestCache` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `argsFromQuery` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4385,6 +4485,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `requestCarriesCredentials` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `resolveLogArchiveFromEnv` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4398,6 +4502,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `resolveShard` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `restCacheHeaders` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4511,6 +4619,14 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `DEFAULT_LIMIT` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DEFAULT_MAX_LIMIT` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -4532,6 +4648,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DefineIdentityOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineListArgsConfig` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4720,6 +4840,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LifecycleHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListArgsSpec` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListArgsValidators` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListArgsValue` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListFilterOperators` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListOrderByEntry` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ListWhere` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4980,6 +5124,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RelationDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RestCacheConfig` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5327,6 +5475,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `clampLimit` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `composePluginMiddleware` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5360,6 +5512,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineIdentity` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineListArgs` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6680,6 +6836,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RelationDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RestCacheConfig` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

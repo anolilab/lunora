@@ -14,6 +14,7 @@
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",
+        "@lunora/auth-ui": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/vite": "workspace:*",
         "better-auth": "catalog:auth",

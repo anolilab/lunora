@@ -40,6 +40,8 @@ export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, Ident
 export { defineIdentity } from "./identity";
 export type { LifecycleHandler } from "./lifecycle";
 export { onConnect, onDisconnect } from "./lifecycle";
+export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
+export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskStrategy } from "./mask/index";
 export { mask } from "./mask/index";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
@@ -143,6 +145,7 @@ export type {
     RegisteredQuery,
     RegisteredStream,
     RelationDefinition,
+    RestCacheConfig,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,

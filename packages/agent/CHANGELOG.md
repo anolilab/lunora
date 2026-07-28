@@ -1,3 +1,24 @@
+## @lunora/agent [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.29...%40lunora%2Fagent%401.0.0-alpha.30) (2026-07-28)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.43
+* **@lunora/errors:** upgraded to 1.0.0-alpha.9
+* **@lunora/mail:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.51
+* **@lunora/values:** upgraded to 1.0.0-alpha.12
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.14
+
+## @lunora/agent [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.28...%40lunora%2Fagent%401.0.0-alpha.29) (2026-07-28)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.42
+* **@lunora/mail:** upgraded to 1.0.0-alpha.35
+* **@lunora/server:** upgraded to 1.0.0-alpha.50
+
 ## @lunora/agent [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.27...%40lunora%2Fagent%401.0.0-alpha.28) (2026-07-27)
 
 

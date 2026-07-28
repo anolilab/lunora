@@ -23,6 +23,14 @@ import { defineConfig } from "vite";
  * `reactRouter()` configures the React JSX runtime itself.
  */
 export default defineConfig({
+    environments: {
+        // Vite names an environment's output directory after the environment, so
+        // `cloudflare({ viteEnvironment: { name: "ssr" } })` below would emit to
+        // `dist/ssr`. React Router reads its server manifest from
+        // `<buildDirectory>/server`, so pin the output there instead of renaming
+        // the environment — the Cloudflare plugin has to keep owning `ssr`.
+        ssr: { build: { outDir: "dist/server" } },
+    },
     resolve: {
         // Vite 8 resolves tsconfig paths natively — no vite-tsconfig-paths plugin needed.
         tsconfigPaths: true,

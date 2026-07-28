@@ -1,0 +1,16 @@
+{
+    // A second program for the Solid port. It can't share `tsconfig.json`:
+    // Solid's JSX compiles through its own runtime, and one program can hold
+    // only one `jsx`/`jsxImportSource` pair — the main one is React's.
+    //
+    // Vue and Svelte still have no type check here; their SFCs need `vue-tsc` /
+    // `svelte-check`, which are separate toolchains rather than another tsconfig.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "jsx": "preserve",
+        "jsxImportSource": "solid-js",
+        "types": ["node"]
+    },
+    "include": ["src/solid/**/*", "src/core/**/*", "__tests__/solid/**/*", "__tests__/fake-client.ts"],
+    "exclude": []
+}

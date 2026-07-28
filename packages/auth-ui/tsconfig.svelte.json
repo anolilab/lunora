@@ -1,0 +1,13 @@
+{
+    // The Svelte port, checked by `svelte-check` (it compiles `.svelte` and
+    // type-checks the result; plain `tsc` can't read the files at all).
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "jsx": "preserve",
+        "types": ["node"],
+        // Svelte 5 runes (`$props`, `$state`) come from these ambient types.
+        "verbatimModuleSyntax": false
+    },
+    "include": ["src/svelte/**/*", "src/core/**/*", "__tests__/svelte/**/*", "__tests__/fake-client.ts"],
+    "exclude": []
+}

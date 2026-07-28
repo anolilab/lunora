@@ -257,6 +257,7 @@ interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     expose?: {
+        cache?: ExposeCacheIR;
         rest?: boolean;
     };
     filePath: string;

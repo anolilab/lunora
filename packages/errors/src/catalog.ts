@@ -14,6 +14,14 @@
 
 /* eslint-disable import/exports-last -- a data + types module: the public error-code types are declared next to the catalog they describe; grouping all exports at the end would scatter the taxonomy. */
 
+/**
+ * Canonical Cloudflare support-docs pages for the two platform-error families.
+ * Private module constants, referenced by the {@link CLOUDFLARE_PLATFORM_ERRORS}
+ * table below.
+ */
+const CF_5XX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/";
+const CF_1XXX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/";
+
 /** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
 export type ErrorHint = string | ReadonlyArray<string>;
 
@@ -339,6 +347,272 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
 ];
 
 /**
+ * One documented Cloudflare **platform** error — an edge/origin (5xx) or
+ * Cloudflare-service (1xxx) failure surfaced in an error *message* rather than
+ * thrown by Lunora as a coded `LunoraError`. These reach a Lunora app as
+ * plain text: a Worker that fetches a Cloudflare-fronted origin sees `Error 522`,
+ * a deploy that throws surfaces as `Error 1101`, and so on. The fields are the
+ * curated facts a grounded explainer elaborates on — never invents beyond.
+ */
+export interface CloudflarePlatformError {
+    /** Documented likely causes (a short, comma-joined clause). */
+    causes: string;
+    /** The numeric Cloudflare error code, as it appears in the message (e.g. `"522"`, `"1101"`). */
+    code: string;
+    /** Canonical Cloudflare support-docs URL for this error's family. */
+    docsUrl: string;
+    /** Which docs family the code belongs to — shown in the "see docs" line. */
+    family: "1xxx" | "5xx";
+    /** The documented remediation. */
+    fix: string;
+    /** One-line summary of what the code means. */
+    summary: string;
+    /** Cloudflare's short name for the code (e.g. `"Connection timed out"`). */
+    title: string;
+}
+
+/**
+ * The curated Cloudflare platform-error table. Sourced from Cloudflare's official
+ * support docs — the codes surfaced to app authors on Workers/DO deployments (the
+ * origin-connection 52x family and the Worker/DNS/security 1xxx family). `1101`
+ * (a Worker threw) and `1102` (a Worker exceeded CPU) are the most Lunora-relevant.
+ */
+export const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> = [
+    {
+        causes: "the origin returned an empty, unknown, or malformed response Cloudflare couldn't interpret (often an origin crash or an oversized response header)",
+        code: "520",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "check your origin's logs for a crash, ensure it returns a valid HTTP response, and keep response headers under the size limit",
+        summary: "Cloudflare got an unknown/empty response from your origin web server.",
+        title: "Web server returns an unknown error",
+    },
+    {
+        causes: "the origin refused the connection — the web server is down, or a firewall is blocking Cloudflare's IP ranges",
+        code: "521",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "confirm the origin process is running and allowlist Cloudflare's published IP ranges in your firewall/security groups",
+        summary: "Cloudflare could not connect to your origin because it refused the connection.",
+        title: "Web server is down",
+    },
+    {
+        causes: "Cloudflare could not establish a TCP connection to the origin in time — the origin is overloaded, a firewall is dropping packets, or the origin IP is wrong",
+        code: "522",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "verify the origin is reachable and not overloaded, and that the DNS record points at the correct origin IP",
+        summary: "The connection to your origin timed out before it was established.",
+        title: "Connection timed out",
+    },
+    {
+        causes: "Cloudflare cannot route to the origin at all — a bad DNS record, an origin IP that changed, or invalid routing",
+        code: "523",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "verify the DNS A/AAAA record points at a reachable origin IP and that no upstream network is blocking Cloudflare",
+        summary: "Cloudflare could not reach your origin server.",
+        title: "Origin is unreachable",
+    },
+    {
+        causes: "Cloudflare made a TCP connection but the origin did not return an HTTP response within 100 seconds — a slow handler or long-running request",
+        code: "524",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "speed up the slow origin handler, or move long work off the request path into a background job (a Durable Object, Queue, or Workflow)",
+        summary: "Cloudflare connected to your origin but it did not respond in time.",
+        title: "A timeout occurred",
+    },
+    {
+        causes: "the TLS handshake between Cloudflare and the origin failed — a missing/invalid origin certificate, or a cipher/SNI mismatch under Full (Strict) SSL",
+        code: "525",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "install a valid certificate on the origin and align your Cloudflare SSL/TLS mode with the origin's certificate setup",
+        summary: "The SSL handshake with your origin failed.",
+        title: "SSL handshake failed",
+    },
+    {
+        causes: "Cloudflare could not validate the origin's certificate under Full (Strict) SSL — it is expired, self-signed, or issued for the wrong hostname",
+        code: "526",
+        docsUrl: CF_5XX_DOCS,
+        family: "5xx",
+        fix: "install a valid, publicly-trusted certificate on the origin (or use a Cloudflare Origin CA cert), matching the request hostname",
+        summary: "Cloudflare could not validate your origin's SSL certificate.",
+        title: "Invalid SSL certificate",
+    },
+    {
+        causes: "a DNS record points at a Cloudflare IP or another prohibited address instead of your real origin",
+        code: "1000",
+        docsUrl: CF_1XXX_DOCS,
+        family: "1xxx",
+        fix: "point the DNS record at your real origin IP, not a Cloudflare-owned or loopback address",
+        summary: "DNS points to a prohibited IP.",
+        title: "DNS points to prohibited IP",
+    },
+    {
+        causes: "Cloudflare could not resolve the requested hostname — a Worker fetched an unresolvable host, or a DNS record is misconfigured",
+        code: "1001",
+        docsUrl: CF_1XXX_DOCS,
+        family: "1xxx",
+        fix: "check the hostname you're requesting and the DNS records for the zone resolve to a valid origin",
+        summary: "Cloudflare could not resolve the origin DNS.",
+        title: "DNS resolution error",
+    },
+    {
+        causes: "a Worker or DNS record targets a restricted IP (for example a Cloudflare-owned or loopback address)",
+        code: "1002",
+        docsUrl: CF_1XXX_DOCS,
+        family: "1xxx",
+        fix: "change the Worker fetch target or DNS record to a valid, non-restricted origin address",
+        summary: "DNS points to a prohibited IP (Worker/restricted).",
+        title: "DNS points to a prohibited IP",
+    },
+    {
+        causes: "the visitor's IP was blocked by an IP Access Rule, WAF rule, or security configuration on the zone",
+        code: "1006",
+        docsUrl: CF_1XXX_DOCS,
+        family: "1xxx",
+        fix: "review the zone's Firewall/WAF and IP Access Rules to see why the address was banned, and adjust if it was blocked in error",
+        summary: "Access denied: the visitor's IP has been banned.",
+        title: "Access denied: your IP has been banned",
+    },
+    {
+        causes: "your Worker threw an unhandled JavaScript exception during the request",
+        code: "1101",
+        docsUrl: CF_1XXX_DOCS,
+        family: "1xxx",
+        fix: "reproduce with `wrangler tail` (or the Workers Logs / Studio Logs panel) to get the stack trace, then handle the throwing code path",
+        summary: "A Worker threw a JavaScript exception.",
+        title: "Worker threw a JavaScript exception",
+    },
+    {
+        causes: "the Worker used more CPU time than a single invocation is allowed — usually a hot loop or heavy synchronous work",
+        code: "1102",
+        docsUrl: CF_1XXX_DOCS,
+        family: "1xxx",
+        fix: "reduce per-request CPU (optimize hot loops, avoid heavy synchronous work) or offload the heavy work to a Durable Object, Queue, or Workflow",
+        summary: "A Worker exceeded its CPU-time resource limit.",
+        title: "Worker exceeded resource limits",
+    },
+];
+
+/** True when `character` is an ASCII digit — the token boundary both matchers below test. */
+const isDigit = (character: string | undefined): boolean => character !== undefined && character >= "0" && character <= "9";
+
+/**
+ * True when `code` appears in `haystack` as a standalone numeric token (not part
+ * of a longer number like `5200` or a version `1.1011`). A boundary-checked
+ * `indexOf` scan rather than a `RegExp` so no per-code pattern is constructed
+ * from a (here trusted, but conventionally avoided) dynamic string.
+ */
+const hasStandaloneNumber = (haystack: string, code: string): boolean => {
+    for (let from = haystack.indexOf(code); from !== -1; from = haystack.indexOf(code, from + code.length)) {
+        if (!isDigit(haystack[from - 1]) && !isDigit(haystack[from + code.length])) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * True when `haystack` carries Cloudflare's own `Error &lt;code>` / `Error: &lt;code>`
+ * phrasing for `code`, with `code` a whole token.
+ *
+ * The trailing-digit check matters as much here as in the loose matcher. Without
+ * it a plain `includes` matches a longer number by prefix, and the two most common
+ * socket errors in the wild collide with real Cloudflare codes: `"Error 10061:
+ * connect ECONNREFUSED"` (WSAECONNREFUSED) resolved to `1006` — "your IP has been
+ * banned" — and `"Error 10060"` (WSAETIMEDOUT) did the same. The wrong hint then
+ * became the wrong grounding facts in the explainer prompt.
+ */
+const hasCodePhrase = (haystack: string, code: string): boolean => {
+    for (const phrase of [`error ${code}`, `error: ${code}`]) {
+        for (let from = haystack.indexOf(phrase); from !== -1; from = haystack.indexOf(phrase, from + phrase.length)) {
+            if (!isDigit(haystack[from + phrase.length])) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Pre-filter over the RAW message, matching what both passes below require. Its
+ * only job is speed: it lets a non-matching message skip the `toLowerCase()`
+ * allocation as well as the scans. This table is a fallback on `resolveHint`, so
+ * the overwhelmingly common call is a message that matches nothing — scanning it
+ * unconditionally regressed the `unmatched message (worst case)` benchmark ~1.7x.
+ */
+const CF_PLATFORM_PREFILTER = /error|cloudflare/iu;
+
+/** Render one {@link CloudflarePlatformError} as the {@link Solution} the CLI and the Issue explainer ground in. */
+const cloudflarePlatformSolution = (entry: CloudflarePlatformError): Solution => {
+    return {
+        body: [
+            entry.summary,
+            "",
+            `**Likely cause:** ${entry.causes}.`,
+            "",
+            `**Fix:** ${entry.fix}.`,
+            "",
+            `See [Cloudflare's ${entry.family} error docs](${entry.docsUrl}).`,
+        ].join("\n"),
+        header: `Cloudflare Error ${entry.code}: ${entry.title}`,
+        id: `cloudflare-error-${entry.code}`,
+    };
+};
+
+/**
+ * Recognize a Cloudflare platform-error {@link CloudflarePlatformError} in a raw
+ * error message, conservatively: the message must carry Cloudflare's own
+ * `Error &lt;code>` phrasing, or mention `cloudflare` alongside the standalone
+ * code. That keeps a bare number (`expected 520 items`) from false-matching a 5xx
+ * code, at the cost of missing a context-free code — the safe trade for a
+ * grounded hint. Returns the matched code's {@link Solution}, or `undefined`.
+ *
+ * Matching runs in two passes, strongest first: Cloudflare's own `Error &lt;code>`
+ * phrasing is unambiguous, so it must win over the weaker "mentions cloudflare
+ * near some number" heuristic regardless of table order. A single pass let a weak
+ * match on an earlier entry beat an explicit match on a later one — `"Cloudflare
+ * Error 1102: exceeded after 524 ms"` resolved to 524, and that wrong grounded
+ * fix is exactly what the explainer prompt is built from.
+ */
+export const findCloudflarePlatformSolution = (message: string): Solution | undefined => {
+    // A message carrying neither word cannot match any code — bail before both
+    // the lowercasing and the per-entry scans.
+    if (!CF_PLATFORM_PREFILTER.test(message)) {
+        return undefined;
+    }
+
+    const lower = message.toLowerCase();
+    const mentionsError = lower.includes("error");
+    const mentionsCloudflare = lower.includes("cloudflare");
+
+    // Pass 1 — Cloudflare's own `Error <code>` phrasing is unambiguous.
+    if (mentionsError) {
+        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
+            if (hasCodePhrase(lower, entry.code)) {
+                return cloudflarePlatformSolution(entry);
+            }
+        }
+    }
+
+    // Pass 2 — the weaker "mentions cloudflare + a standalone code" heuristic.
+    if (mentionsCloudflare) {
+        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
+            if (hasStandaloneNumber(lower, entry.code)) {
+                return cloudflarePlatformSolution(entry);
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * Flatten a Markdown hint to plain text for a terminal / non-Markdown surface:
  * drop code-fence markers and strip inline `**bold**` / `` `code` `` emphasis.
  * Shared by the CLI renderer and the Studio `ErrorAlert` so the two can't drift.
@@ -364,6 +638,25 @@ export const findSolutionByMessage = (message: string): Solution | undefined => 
 
     return undefined;
 };
+
+/**
+ * Find a solution for `message` across BOTH Lunora's own rules and the curated
+ * Cloudflare platform-error table — the lookup the Studio Issues panel and the
+ * `explainIssue` grounding use.
+ *
+ * Deliberately separate from {@link findSolutionByMessage} rather than folded into
+ * it. That function is on `resolveHint`, and therefore on `toErrorBody` — the
+ * envelope builder for every failed request. Most `ERROR_CATALOG` entries
+ * carry no `hint`, so folding the platform table in there meant an ordinary
+ * `BAD_REQUEST` whose message merely mentioned "cloudflare" near a number shipped
+ * zone-configuration guidance ("review the zone's Firewall/WAF and IP Access
+ * Rules") to unauthenticated browsers. The same fold put the table on the CLI
+ * renderer and the Vite overlay, and on `toErrorBody`'s hot path.
+ *
+ * Platform errors are operator-facing context for an already-persisted Issue, so
+ * the operator-facing surfaces opt in here and the wire path stays Lunora-only.
+ */
+export const findIssueSolution = (message: string): Solution | undefined => findSolutionByMessage(message) ?? findCloudflarePlatformSolution(message);
 
 /**
  * Resolve an actionable hint for an error: prefer a hint carried on the error

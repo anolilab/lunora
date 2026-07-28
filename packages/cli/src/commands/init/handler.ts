@@ -36,6 +36,7 @@ import {
     withTuiSpinner,
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
+import { detectAuthUiItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import describeDownloadFailure from "./download-failure";
 import { emitMascot, emitStep } from "./flow";
@@ -341,6 +342,12 @@ const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = [
     "rs-module-lexer",
     "sharp",
     "unrs-resolver",
+    // `@lunora/client` → `@visulima/storage-client` → `@tanstack/vue-query` →
+    // `vue-demi`, whose postinstall points its shim at the installed Vue major.
+    // Every scaffold gets it, including `standalone` (which has no UI framework
+    // at all), so leaving it unlisted halted the very first `pnpm install`.
+    // Pure JS and self-swallowing, so it is allowed rather than denied.
+    "vue-demi",
     "workerd",
 ];
 
@@ -1226,6 +1233,19 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
         preselected: preselected.length > 0 ? preselected : undefined,
         projectName: basename(projectDirectory),
+        // Detect the per-framework auth-UI item from the scaffolded template's deps.
+        resolveAuthUiItem: () => {
+            try {
+                const pkg = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")) as {
+                    dependencies?: Record<string, string>;
+                    devDependencies?: Record<string, string>;
+                };
+
+                return detectAuthUiItem({ ...pkg.dependencies, ...pkg.devDependencies }) ?? "auth-ui-react";
+            } catch {
+                return "auth-ui-react";
+            }
+        },
         select:
             options.prompt?.select ??
             ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })),

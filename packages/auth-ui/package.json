@@ -1,0 +1,93 @@
+{
+    "name": "@lunora/auth-ui",
+    "version": "1.0.0-alpha.0",
+    "private": true,
+    "description": "Internal: source-of-truth for the copy-in, user-owned auth screens distributed via the `auth-ui-*` registry items. Not published — synced into registry/auth-ui-<framework>/ and copied into consumer projects.",
+    "keywords": [
+        "auth",
+        "better-auth",
+        "lunora",
+        "ui"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/auth-ui"
+    },
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        "./core": "./src/core/index.ts",
+        "./react": "./src/react/index.ts",
+        "./styles.css": "./src/styles/auth-ui.css",
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit && tsc -p tsconfig.solid.json --noEmit && vue-tsc --noEmit -p tsconfig.vue.json && svelte-check --tsconfig ./tsconfig.svelte.json",
+        "sync:registry": "node ../../scripts/sync-auth-ui-registry.mjs",
+        "sync:registry:check": "node ../../scripts/sync-auth-ui-registry.mjs --check",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/auth": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "better-auth": "catalog:auth"
+    },
+    "devDependencies": {
+        "@angular/common": "^22.0.7",
+        "@angular/compiler": "^22.0.7",
+        "@angular/compiler-cli": "^22.0.7",
+        "@angular/core": "^22.0.7",
+        "@angular/platform-browser": "^22.0.7",
+        "@solidjs/testing-library": "catalog:frontend",
+        "@sveltejs/vite-plugin-svelte": "catalog:frontend",
+        "@tanstack/react-query": "catalog:frontend",
+        "@testing-library/dom": "catalog:frontend",
+        "@testing-library/jest-dom": "catalog:frontend",
+        "@testing-library/react": "catalog:frontend",
+        "@testing-library/svelte": "catalog:frontend",
+        "@testing-library/vue": "catalog:frontend",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "@vitejs/plugin-vue": "catalog:frontend",
+        "@vitest/coverage-v8": "catalog:test",
+        "jsdom": "catalog:frontend",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
+        "rxjs": "^7.8.2",
+        "solid-js": "catalog:frontend",
+        "svelte": "catalog:frontend",
+        "svelte-check": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite-plugin-solid": "catalog:frontend",
+        "vitest": "catalog:test",
+        "vue": "catalog:frontend",
+        "vue-tsc": "catalog:frontend",
+        "zone.js": "^0.16.2"
+    },
+    "peerDependencies": {
+        "react": "^19.2.7"
+    },
+    "peerDependenciesMeta": {
+        "react": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

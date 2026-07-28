@@ -13,5 +13,12 @@ import type { Config } from "@react-router/dev/config";
  * Router only needs to emit `virtual:react-router/server-build`.
  */
 export default {
+    // Must match the Vite `build.outDir` the Cloudflare plugin writes to.
+    // React Router reads the emitted Vite manifests back at
+    // `<buildDirectory>/client/.vite/manifest.json` and
+    // `<buildDirectory>/server/.vite/manifest.json`; left at its `build` default
+    // it looked for files the Cloudflare build had written under `dist`, and the
+    // build died with a bare `ENOENT ... manifest.json`.
+    buildDirectory: "dist",
     ssr: true,
 } satisfies Config;

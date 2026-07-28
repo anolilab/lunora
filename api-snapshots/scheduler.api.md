@@ -336,6 +336,8 @@ interface Scheduler {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
+    dead: () => Promise<ScheduleRecord[]>;
+    deadRetry: (id: string) => Promise<boolean>;
     get: (id: string) => Promise<ScheduleRecord | null>;
     list: () => Promise<ScheduleRecord[]>;
     runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<{

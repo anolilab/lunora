@@ -30,6 +30,10 @@
  * those actions untyped/unavailable, and vice-versa.
  */
 
+// `lunoraAuthPlugins` — assemble the standard client plugin array from feature
+// toggles (used by the scaffolded `lunora/auth-ui/client.ts`).
+export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles } from "./auth-client-plugins";
+export { createLunoraAuthClient, lunoraAuthPlugins } from "./auth-client-plugins";
 // Client half of the `oauthProvider` plugin. Replaces `oidcClient`, which went with
 // the `oidcProvider` plugin better-auth removed in 1.7.
 export { oauthProviderClient } from "@better-auth/oauth-provider/client";

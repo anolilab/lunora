@@ -51,7 +51,9 @@ type ParseSchemaResult =
 
 const OPTIONAL_VALIDATOR_PATTERN = /^v\s*\.\s*optional\s*\(/u;
 const SHARD_BY_PATTERN = /\.shardBy\(\s*["']([^"']+)["']\s*\)/u;
-const GLOBAL_PATTERN = /\.global\(\s*\)/u;
+// Matches both `.global()` and `.global({ backend: "hyperdrive" })` — the latter
+// is what `lunora introspect` emits for a table whose rows live in an external database.
+const GLOBAL_PATTERN = /\.global\(\s*(?:\{[^{}]*\}\s*)?\)/u;
 const QUOTE_PATTERN = /["']/gu;
 
 /**

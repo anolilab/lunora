@@ -106,7 +106,11 @@ const leadingMajor = (range: string): number | null => {
  * compatibility signal worth gating in CI.
  */
 const LATEST_MAJORS: Record<string, number> = {
-    "@astrojs/cloudflare": 13,
+    // 14 is not cosmetic: 13 depends on `vite: ^7.3.2` while `astro@7` depends on
+    // `vite: ^8.0.13`, so `@cloudflare/vite-plugin` resolved against a second,
+    // older Vite and the build died inside workerd with `Missing field
+    // \`moduleType\``. 14 moved to `vite: ^8.0.13` and peers on `astro: ^7.0.0`.
+    "@astrojs/cloudflare": 14,
     "@astrojs/react": 5,
     "@cloudflare/workers-types": 4,
     "@opennextjs/cloudflare": 1,
