@@ -401,7 +401,10 @@ export default defineSchema({
         failedAt: v.optional(v.number()),
     })
         .global()
-        .index("by_project_commit", ["projectId", "commitSha"]),
+        .index("by_project_commit", ["projectId", "commitSha"])
+        // `purgeDeleted` filters this table by `organizationId`; without the index
+        // each org-deletion sweep degrades into a full scan of every build ever run.
+        .index("by_org", ["organizationId"]),
 
     // Streamed build output, one row per line (GAPS.md A3); the dashboard tails
     // a build live. Pruned with the retention cron.
@@ -413,7 +416,9 @@ export default defineSchema({
         organizationId: v.id("organizations"),
     })
         .global()
-        .index("by_build", ["buildId"]),
+        .index("by_build", ["buildId"])
+        // Same reason as `builds.by_org` — the purge sweep filters on it.
+        .index("by_org", ["organizationId"]),
 
     // Custom domains (GAPS.md B1). A hostname routes to a project's active
     // deployment once DNS-verified; cert issuance (Cloudflare for SaaS) is only

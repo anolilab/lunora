@@ -335,6 +335,13 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
     "builds": [
         {
             "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        },
+        {
+            "fields": [
                 "projectId",
                 "commitSha"
             ],
@@ -343,6 +350,13 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
         }
     ],
     "buildLogs": [
+        {
+            "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        },
         {
             "fields": [
                 "buildId"
