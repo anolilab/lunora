@@ -147,7 +147,7 @@ export const verify = mutation
             // would still be able to deploy. `authorizeDeployKey` blocks it on the
             // per-mutation paths; this blocks it at the deploy entrypoint (same
             // predicate, so they can't disagree).
-            if (!row || row.revokedAt !== undefined || !isDeployCapable(row)) {
+            if (!row || row.revokedAt != null || !isDeployCapable(row)) {
                 return null;
             }
 
@@ -176,7 +176,7 @@ interface IngestKeyRow {
  * its encrypted secret), so the reader and the writer can never drift apart.
  */
 const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
-    rows.find((candidate) => candidate.capability === "ingest" && candidate.revokedAt === undefined && candidate.encryptedSecret !== undefined);
+    rows.find((candidate) => candidate.capability === "ingest" && candidate.revokedAt == null && candidate.encryptedSecret != null);
 
 /**
  * The org's platform-managed ingest key ciphertext, for the deploy path to
