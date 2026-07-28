@@ -4,9 +4,8 @@ import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { includedUsageFor } from "../billing/overage";
-
-import type { SectionProps } from "./tabs";
 import { formatDate, formatNumber } from "./format";
+import type { SectionProps } from "./tabs";
 import { monthStart } from "./usage-period";
 
 const formatBytes = (bytes: number): string => {
@@ -46,7 +45,7 @@ const Meter = ({ included, label, used }: { included: number; label: string; use
                 </span>
             </div>
             <div className="meter-track">
-                {/* eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- the width is derived per render by design; a meter has no stable style identity */}
+                {}
                 <div className={`meter-fill meter-${state}`} style={{ width: `${String(Math.min(100, ratio * 100))}%` }} />
             </div>
             {state === "over" ? <p className="meter-note">Beyond plan allowance — drawing from prepaid credits.</p> : null}

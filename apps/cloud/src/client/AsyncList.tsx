@@ -1,5 +1,8 @@
 import type { ReactElement, ReactNode } from "react";
 
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
+
 interface AsyncListProps<T> {
     /** Message shown when the query has resolved to an empty list. */
     empty: string;
@@ -15,11 +18,23 @@ interface AsyncListProps<T> {
  */
 export const AsyncList = <T,>({ empty, render, rows }: AsyncListProps<T>): ReactElement => {
     if (rows === undefined) {
-        return <p className="muted">Loading…</p>;
+        return (
+            <div className="flex flex-col gap-2">
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-2/3" />
+            </div>
+        );
     }
 
     if (rows.length === 0) {
-        return <p className="muted">{empty}</p>;
+        return (
+            <Empty className="border-0 py-8">
+                <EmptyHeader>
+                    <EmptyDescription>{empty}</EmptyDescription>
+                </EmptyHeader>
+            </Empty>
+        );
     }
 
     return <>{render(rows)}</>;
