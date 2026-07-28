@@ -194,7 +194,17 @@ interface ControllerContext {
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
     /** Organization sub-features, server-derived when discovery answers. */
-    organization: { roles: boolean; showSlug: boolean; teams: boolean };
+    organization: {
+        /** False when the server forbids ordinary users from creating one. */
+        allowUserToCreate: boolean;
+        invitationLimit?: number;
+        /** Max organizations per user, when the server sets one. */
+        limit?: number;
+        membershipLimit?: number;
+        roles: boolean;
+        showSlug: boolean;
+        teams: boolean;
+    };
     password: PasswordPolicy;
     plugins: Required<PluginFlags>;
     redirects: Required<RedirectConfig>;
@@ -318,6 +328,10 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         onError: config.onError,
         onSessionChange: config.onSessionChange,
         organization: {
+            allowUserToCreate: discovered?.organization.allowUserToCreate ?? true,
+            invitationLimit: discovered?.organization.invitationLimit,
+            limit: discovered?.organization.limit,
+            membershipLimit: discovered?.organization.membershipLimit,
             roles: discovered?.organization.roles ?? false,
             showSlug: config.organization?.showSlug ?? true,
             teams: discovered?.organization.teams ?? false,

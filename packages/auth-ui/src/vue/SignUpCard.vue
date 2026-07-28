@@ -70,7 +70,7 @@ const onSocial = (provider: string): void => {
                 @blur="actions.blur('password')"
                 @change="actions.setField('password', $event)"
             />
-            <PasswordStrength :value="state.fields.password.value" />
+            <PasswordStrength :value="state.fields.password.value" /><!-- secret-scanner:allow -- a field path, not a value. -->
             <SubmitButton :pending="state.status === 'submitting'">{{ t.signUp }}</SubmitButton>
         </form>
         <template #footer>

@@ -50,6 +50,8 @@ interface Localization {
     consentMissing: string;
     consentTitle: string;
     consentWants: string;
+    copied: string;
+    copy: string;
     createOrganization: string;
     currentPasswordLabel: string;
     currentSession: string;
@@ -94,6 +96,8 @@ interface Localization {
     newPasswordLabel: string;
     noAccount: string;
     noOrganizations: string;
+    organizationCreateDisallowed: string;
+    organizationLimitReached: string;
     organizationLogo: string;
     organizationName: string;
     organizationNameRequired: string;
@@ -157,7 +161,9 @@ interface Localization {
     twoFactorEnable: string;
     twoFactorEnabled: string;
     twoFactorFailed: string;
+    twoFactorNeedsPassword: string;
     twoFactorScan: string;
+    twoFactorSecret: string;
     twoFactorSetup: string;
     /** Fallback when a session has neither a user-agent nor an IP. */
     unknownDevice: string;
@@ -217,6 +223,8 @@ const DEFAULT_LOCALIZATION: Localization = {
     consentMissing: "There's no authorization request to review.",
     consentTitle: "Authorize application",
     consentWants: "wants access to:",
+    copied: "Copied",
+    copy: "Copy",
     createOrganization: "Create organization",
     currentPasswordLabel: "Current password",
     currentSession: "This device",
@@ -261,6 +269,8 @@ const DEFAULT_LOCALIZATION: Localization = {
     newPasswordLabel: "New password",
     noAccount: "Don't have an account? Sign up",
     noOrganizations: "You're not in any organization yet.",
+    organizationCreateDisallowed: "Your account can't create organizations.",
+    organizationLimitReached: "You've reached the maximum number of organizations.",
     organizationLogo: "Logo URL",
     organizationName: "Organization name",
     organizationNameRequired: "Organization name is required.",
@@ -324,7 +334,9 @@ const DEFAULT_LOCALIZATION: Localization = {
     twoFactorEnable: "Enable 2FA",
     twoFactorEnabled: "Two-factor authentication is on.",
     twoFactorFailed: "That code is not valid. Try again.",
+    twoFactorNeedsPassword: "Set a password before turning on two-factor authentication.",
     twoFactorScan: "Scan this with your authenticator app, then enter the 6-digit code.",
+    twoFactorSecret: "Or enter this key manually:",
     twoFactorSetup: "Two-factor authentication",
     unknownDevice: "Unknown device",
     usernameAvailable: "That username is available.",

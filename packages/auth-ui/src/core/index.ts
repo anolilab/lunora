@@ -5,6 +5,8 @@
  */
 export type { AccountsActions, AccountsController } from "./accounts";
 export { createAccountsController, linkedProviderIds, NON_SOCIAL_PROVIDERS } from "./accounts";
+export type { ActiveMemberActions, ActiveMemberController, ActiveMemberState } from "./active-member";
+export { createActiveMemberController } from "./active-member";
 export type { AdminUsersActions, AdminUsersController, AdminUsersOptions, AdminUsersState } from "./admin-users";
 export { createAdminUsersController } from "./admin-users";
 export { signInAnonymously } from "./anonymous";
@@ -115,7 +117,7 @@ export { createThemeModeController, THEME_MODES, THEME_STORAGE_KEY } from "./the
 export type { Toast, ToastState } from "./toast";
 export { dismissToast, getToasts, pushToast, resetToasts, subscribeToasts, TOAST_DURATION_MS } from "./toast";
 export type { TwoFactorSetupActions, TwoFactorSetupController, TwoFactorSetupState } from "./two-factor-setup";
-export { createTwoFactorSetupController } from "./two-factor-setup";
+export { createTwoFactorSetupController, totpSecret } from "./two-factor-setup";
 export type { TwoFactorField, TwoFactorVerifyOptions } from "./two-factor-verify";
 export { createTwoFactorVerifyController } from "./two-factor-verify";
 export type {

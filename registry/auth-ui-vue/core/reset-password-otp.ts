@@ -17,7 +17,7 @@ import { assertOk } from "./map-error";
 import type { FormController } from "./types";
 import { email as validateEmail, password as validatePassword, required } from "./validators";
 
-type ResetPasswordOtpField = "confirmPassword" | "email" | "otp" | "password";
+type ResetPasswordOtpField = "confirmPassword" | "email" | "otp" | "password"; // secret-scanner:allow -- field names, not values.
 
 const createResetPasswordOtpController = (context: ControllerContext, options: { initialEmail?: string } = {}): FormController<ResetPasswordOtpField> =>
     createFormController<ResetPasswordOtpField>(context, {

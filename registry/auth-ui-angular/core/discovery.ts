@@ -23,7 +23,13 @@ import { createStore } from "./store";
 
 /** Organization sub-features, mirroring the server payload. */
 interface DiscoveredOrganization {
+    /** Whether an ordinary user may create one at all. */
+    allowUserToCreate: boolean;
     enabled: boolean;
+    invitationLimit?: number;
+    /** Max organizations one user may belong to, when the server sets one. */
+    limit?: number;
+    membershipLimit?: number;
     roles: boolean;
     teams: boolean;
 }
@@ -102,7 +108,11 @@ const normalize = (raw: Partial<DiscoveredConfig> & Pick<DiscoveredConfig, "plug
     return {
         emailAndPassword: raw.emailAndPassword ?? true,
         organization: {
+            allowUserToCreate: raw.organization?.allowUserToCreate ?? true,
             enabled: raw.organization?.enabled ?? false,
+            invitationLimit: raw.organization?.invitationLimit,
+            limit: raw.organization?.limit,
+            membershipLimit: raw.organization?.membershipLimit,
             roles: raw.organization?.roles ?? false,
             teams: raw.organization?.teams ?? false,
         },

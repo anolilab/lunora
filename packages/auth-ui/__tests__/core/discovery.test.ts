@@ -8,7 +8,7 @@ const stub = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClien
 const payload = (overrides: Partial<DiscoveredConfig> = {}): DiscoveredConfig => {
     return {
         emailAndPassword: true,
-        organization: { enabled: false, roles: false, teams: false },
+        organization: { allowUserToCreate: true, enabled: false, roles: false, teams: false },
         plugins: [],
         signUp: true,
         socialProviders: [],
@@ -133,7 +133,7 @@ describe("discovered config fields", () => {
     it("carries the organization sub-features teams and roles", () => {
         expect.assertions(2);
 
-        const context = contextFor(stub(), payload({ organization: { enabled: true, roles: true, teams: true } }));
+        const context = contextFor(stub(), payload({ organization: { allowUserToCreate: true, enabled: true, roles: true, teams: true } }));
 
         expect(context.organization.teams).toBe(true);
         expect(context.organization.roles).toBe(true);

@@ -49,7 +49,15 @@ import { getAuthTables } from "better-auth/db";
 
 /** Organization sub-features a UI branches on. */
 interface UiConfigOrganization {
+    /** Whether an ordinary user may create one at all. */
+    allowUserToCreate: boolean;
     enabled: boolean;
+    /** Max invitations per organization, when configured. */
+    invitationLimit?: number;
+    /** Max organizations one user may belong to, when configured. */
+    limit?: number;
+    /** Max members per organization, when configured. */
+    membershipLimit?: number;
     /** Custom roles / dynamic access control are configured. */
     roles: boolean;
     /** Teams are enabled. */
@@ -107,8 +115,23 @@ const sorted = (values: Iterable<string>): string[] => [...values].toSorted((a, 
  */
 interface ResolvedAuthOptions {
     emailAndPassword?: { disableSignUp?: boolean; enabled?: boolean };
-    plugins?: { id: string }[];
+    plugins?: { id: string; options?: OrganizationLimits }[];
     socialProviders?: Record<string, unknown>;
+}
+
+/**
+ * The organization plugin's numeric limits.
+ *
+ * Published because a client cannot derive them: better-auth enforces them
+ * server-side and exposes no endpoint that reports them, so a UI either hides
+ * the limit until the user hits it or guesses. They are configuration, not
+ * secrets — the user discovers each one by being refused.
+ */
+interface OrganizationLimits {
+    allowUserToCreateOrganization?: boolean | ((...arguments_: never[]) => unknown);
+    invitationLimit?: number;
+    membershipLimit?: number;
+    organizationLimit?: number;
 }
 
 /** Build the payload from resolved better-auth options. Exported for tests. */
@@ -122,8 +145,19 @@ const deriveUiConfig = (options: ResolvedAuthOptions, pluginOptions: UiConfigOpt
     // table, though, and the resolved table map is derivable from options —
     // which is how `AuthAdmin.config` reads the same two flags.
     const tables = getAuthTables(options as Parameters<typeof getAuthTables>[0]);
+    const organizationOptions = (options.plugins ?? []).find((plugin) => plugin.id === "organization")?.options ?? {};
+    // A function form is a per-request decision this endpoint cannot evaluate,
+    // so it reports "allowed" and lets the server refuse — the alternative is a
+    // create button hidden from everyone because one user might be refused.
+    const allowUserToCreate =
+        typeof organizationOptions.allowUserToCreateOrganization === "function" ? true : organizationOptions.allowUserToCreateOrganization !== false;
+
     const organization: UiConfigOrganization = {
+        allowUserToCreate,
         enabled: ids.has("organization"),
+        invitationLimit: organizationOptions.invitationLimit,
+        limit: organizationOptions.organizationLimit,
+        membershipLimit: organizationOptions.membershipLimit,
         roles: Boolean(tables["organizationRole"]),
         teams: Boolean(tables["team"]),
     };
@@ -132,7 +166,7 @@ const deriveUiConfig = (options: ResolvedAuthOptions, pluginOptions: UiConfigOpt
         emailAndPassword,
         // `disableSignUp` only means anything when the password provider is on;
         // an OAuth-only deployment has no sign-up form to gate.
-        organization: expose.organization === false ? { enabled: false, roles: false, teams: false } : organization,
+        organization: expose.organization === false ? { allowUserToCreate: true, enabled: false, roles: false, teams: false } : organization,
         plugins: expose.plugins === false ? [] : sorted(ids),
         signUp: emailAndPassword && options.emailAndPassword?.disableSignUp !== true,
         socialProviders:
@@ -186,5 +220,5 @@ const uiConfig = (options: UiConfigOptions = {}): BetterAuthPlugin => {
     };
 };
 
-export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload };
+export type { OrganizationLimits, UiConfigOptions, UiConfigOrganization, UiConfigPayload };
 export { deriveUiConfig, uiConfig };

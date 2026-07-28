@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient } from "../../src/core";
 import { pushToast, resetToasts } from "../../src/core";
-import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, SignUpCard } from "../../src/react";
+import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, SignUpCard, TwoFactorSetupCard } from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
@@ -121,5 +121,43 @@ describe("password policy reaches the cards", () => {
         });
 
         expect(screen.getByText("At least one uppercase letter")).toBeDefined();
+    });
+});
+
+describe("two-factor setup without a password", () => {
+    const clientWith = (accounts: unknown[]) =>
+        ({
+            getSession: vi.fn(() => Promise.resolve({ data: null, error: null })),
+            listAccounts: vi.fn(() => Promise.resolve({ data: accounts, error: null })),
+            twoFactor: { enable: vi.fn(), verifyTotp: vi.fn() },
+        }) as unknown as AuthClient;
+
+    const renderCard = (client: AuthClient) =>
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} plugins={{ twoFactor: true }}>
+                <TwoFactorSetupCard />
+            </AuthUIProvider>,
+        );
+
+    it("explains why, rather than vanishing, for an OAuth-only account", async () => {
+        expect.assertions(1);
+
+        // A security setting that is simply absent reads as "this app doesn't
+        // support 2FA", which sends people looking for a setting that is there.
+        renderCard(clientWith([{ id: "a1", providerId: "github" }]));
+
+        await waitFor(() => {
+            expect(screen.getByText("Set a password before turning on two-factor authentication.")).toBeDefined();
+        });
+    });
+
+    it("offers enrolment when a credential row exists", async () => {
+        expect.assertions(1);
+
+        renderCard(clientWith([{ id: "a1", providerId: "credential" }]));
+
+        await waitFor(() => {
+            expect(screen.queryByText("Set a password before turning on two-factor authentication.")).toBeNull();
+        });
     });
 });

@@ -9,6 +9,7 @@
     "files": [
         { "from": "client.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/client.ts" },
         { "from": "core/accounts.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/accounts.ts" },
+        { "from": "core/active-member.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/active-member.ts" },
         { "from": "core/admin-users.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/admin-users.ts" },
         { "from": "core/anonymous.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/anonymous.ts" },
         { "from": "core/avatar.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/avatar.ts" },
