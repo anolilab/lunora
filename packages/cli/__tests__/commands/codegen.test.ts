@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,12 +65,17 @@ describe("lunora codegen", () => {
         it("emits the default surface with no target given", () => {
             expect.assertions(2);
 
-            const result = runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+            const before = runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+            const generated = readFileSync(join(workdir, "lunora", "_generated", "server.ts"), "utf8");
 
-            // The default path must stay byte-identical for existing projects,
-            // so an absent target produces no diagnostics at all.
-            expect(result.error).toBeUndefined();
-            expect(existsSync(join(workdir, "lunora", "_generated", "server.ts"))).toBe(true);
+            expect(before.error).toBeUndefined();
+
+            // Byte-identical, not merely present: the default path is what every
+            // existing project already builds, so this asserts the target work
+            // changed nothing for them rather than just that a file exists.
+            runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "cloudflare" });
+
+            expect(readFileSync(join(workdir, "lunora", "_generated", "server.ts"), "utf8")).toBe(generated);
         });
 
         it("refuses an unregistered --target instead of emitting an un-gated surface", () => {
@@ -83,7 +88,10 @@ describe("lunora codegen", () => {
             // target that does not exist, warn, and exit 0 — the silent
             // fallback the driver registry exists to prevent.
             expect(result.error).toMatch(/unknown deploy target "aws"/);
-            expect(result.outputDirectory).toBe("");
+
+            // Nothing was written: the target is rejected before codegen runs,
+            // so a rejected run cannot leave a half-emitted surface behind.
+            expect(existsSync(join(workdir, "lunora", "_generated", "server.ts"))).toBe(false);
         });
 
         it("refuses an unregistered target from lunora.json", () => {

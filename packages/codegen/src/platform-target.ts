@@ -22,14 +22,81 @@
  * not have.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { PlatformCapabilities } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
+import type { ParseError } from "jsonc-parser";
+import { parse as parseJsonc } from "jsonc-parser";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover-feature-usage";
 
 /** The default codegen target — today's behavior, byte-identical goldens. */
 const DEFAULT_TARGET = "cloudflare";
+
+/** The project-config file the target is declared in. Same file `@lunora/config` reads for `remote`. */
+const PROJECT_CONFIG_FILE = "lunora.json";
+
+/**
+ * Read `target` from `&lt;projectRoot>/lunora.json`.
+ *
+ * This lives in `@lunora/codegen` rather than `@lunora/config` — where the rest
+ * of the `lunora.json` reading lives — because `@lunora/config` depends on
+ * `@lunora/codegen`, not the reverse. Putting it there and importing it here
+ * would invert that edge, so config delegates to this instead and there is
+ * still exactly one parser for the key.
+ *
+ * Best-effort and deliberately unvalidated: a missing file, malformed JSONC, or
+ * a non-string value all collapse to `undefined`, because those are shape
+ * errors rather than a name the user meant. An unrecognized *name* is returned
+ * as-is so the caller's registry lookup rejects it — swallowing a typo into the
+ * default would ship an app to the wrong provider.
+ * @param projectRoot Directory containing `lunora.json`.
+ * @returns the declared target, or `undefined` when none is usable.
+ */
+const readProjectTarget = (projectRoot: string): string | undefined => {
+    const configPath = join(projectRoot, PROJECT_CONFIG_FILE);
+
+    if (!existsSync(configPath)) {
+        return undefined;
+    }
+
+    let text: string;
+
+    try {
+        text = readFileSync(configPath, "utf8");
+    } catch {
+        return undefined;
+    }
+
+    const parseErrors: ParseError[] = [];
+    const parsed: unknown = parseJsonc(text, parseErrors, { allowTrailingComma: true });
+
+    if (parseErrors.length > 0 || parsed === null || typeof parsed !== "object") {
+        return undefined;
+    }
+
+    const { target } = parsed as { target?: unknown };
+
+    return typeof target === "string" && target.length > 0 ? target : undefined;
+};
+
+/**
+ * The target codegen should emit for: an explicit option wins, then
+ * `lunora.json`, then the default.
+ *
+ * `runCodegen` applies this itself so a caller that forgets to pass a target
+ * still emits the surface the project declared. That default matters more than
+ * it looks: a call site that silently omits the target emits the *default*
+ * surface with no diagnostic to notice, and the mismatch only shows up at
+ * runtime on the deployed app.
+ * @param projectRoot Directory containing `lunora.json`.
+ * @param explicit A caller-supplied target, if any.
+ * @returns the resolved target id — not guaranteed to be registered.
+ */
+const resolveCodegenTarget = (projectRoot: string, explicit?: string): string => explicit ?? readProjectTarget(projectRoot) ?? DEFAULT_TARGET;
 
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
@@ -157,4 +224,4 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string): PlatformGate
 };
 
 export type { PlatformDiagnostic, PlatformGateResult };
-export { DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures };
+export { DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures, PROJECT_CONFIG_FILE, readProjectTarget, resolveCodegenTarget };

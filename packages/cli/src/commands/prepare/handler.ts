@@ -6,15 +6,15 @@
  */
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { resolveDeployDriver } from "@lunora/config";
+import { resolveDeployDriver, resolveTargetOrThrow } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenFailure } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveTargetOrThrow } from "../../util/deploy-target";
 import type { Logger } from "../../util/logger";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { PrepareOptions } from "./index";
@@ -28,7 +28,7 @@ interface PrepareCommandOptions {
     logger: Logger;
 
     /**
-     * Deploy target, matching `deploy` and `logs`. Defaults to `"cloudflare"`.
+     * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`.
      * Resolved through the same registry they use so a second driver does not
      * have to be found here separately.
      */
@@ -106,9 +106,8 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
  */
 const runPrepareCommand = async (options: PrepareCommandOptions): Promise<PrepareCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    // Resolved ONCE and reused for both codegen and binding provisioning. Two
-    // resolutions could disagree — emitting a surface for one target while
-    // provisioning another's bindings — and nothing downstream would notice.
+    // Resolved ONCE and reused for both codegen and binding provisioning, so
+    // the emitted surface and the provisioned bindings cannot disagree.
     const target = resolveTargetOrThrow(cwd, options.target);
 
     options.logger.info("running codegen");
@@ -118,6 +117,10 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     try {
         codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd, target });
         options.logger.success("codegen complete");
+
+        // `prepare` is the CI entry point, so a gated surface has to be visible
+        // here rather than only in the deployed app.
+        reportPlatformDiagnostics(codegen.platformDiagnostics, options.logger);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 

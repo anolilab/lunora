@@ -56,10 +56,9 @@ export interface LunoraPluginOptions {
      * `"target"` in `lunora.json`, then `"cloudflare"` — so an existing project
      * emits byte-identical output.
      *
-     * Set it here only to override the project config for one build. Keeping
-     * the two in sync matters: codegen tailors the surface to a target while
-     * `lunora deploy` picks the driver that ships it, and a mismatch produces
-     * an app that builds cleanly and fails at runtime.
+     * Set it here only to override the project config for one build — keeping
+     * this and `lunora deploy` on the same target is what the shared resolution
+     * in `@lunora/config` exists to guarantee.
      */
     target?: string;
     /** Validate that `wrangler.jsonc` declares the bindings the schema implies. Defaults to `true`. */

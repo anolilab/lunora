@@ -5,9 +5,10 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveTargetOrThrow } from "../../util/deploy-target";
+import { resolveTargetOrError } from "../../util/deploy-target";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import type { CodegenOptions } from "./index";
 
 /** Cloudflare caps a Worker at 3 Cron Triggers (distinct cron expressions). */
@@ -20,14 +21,14 @@ interface CodegenCommandOptions {
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
     logger: Logger;
-    /** Deploy target the emitted `ctx.*` surface is tailored to. Defaults to `"cloudflare"`. */
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
     target?: string;
 }
 
 interface CodegenCommandResult {
     advisories: ReadonlyArray<{ detail: string; level: string; name: string; remediation: string }>;
     cronTriggers: ReadonlyArray<string>;
-    /** Set when the run aborted on an invalid `--format` before codegen ran. */
+    /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
     error?: string;
     outputDirectory: string;
 }
@@ -47,22 +48,18 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         return { advisories: [], cronTriggers: [], error: formatError, outputDirectory: "" };
     }
 
-    let target: string;
+    // Validated here because codegen resolves no driver of its own — an
+    // unregistered name would otherwise emit the full Cloudflare surface
+    // un-gated and exit 0.
+    const resolvedTarget = resolveTargetOrError(projectRoot, options.target);
 
-    try {
-        // Resolved through the shared helper so a `lunora.json` target applies
-        // without the flag, and the emitted surface matches what `deploy` will
-        // ship it to. Validated here because codegen resolves no driver of its
-        // own — an unregistered name would otherwise emit the full Cloudflare
-        // surface un-gated and exit 0.
-        target = resolveTargetOrThrow(projectRoot, options.target);
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
+    if (resolvedTarget.target === undefined) {
+        options.logger.error(resolvedTarget.error ?? "unknown deploy target");
 
-        options.logger.error(message);
-
-        return { advisories: [], cronTriggers: [], error: message, outputDirectory: "" };
+        return { advisories: [], cronTriggers: [], error: resolvedTarget.error ?? "unknown deploy target", outputDirectory: "" };
     }
+
+    const { target } = resolvedTarget;
 
     const result = runCodegen({
         apiSpec: options.apiSpec,
@@ -95,16 +92,10 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
     }
 
-    // Platform-portability diagnostics: `ctx.*` features the deploy target does
-    // not support (omitted from the emitted surface) or an unknown target.
-    // Empty on the default Cloudflare target, so this stays silent there.
-    if (result.platformDiagnostics.length > 0) {
-        const count = result.platformDiagnostics.length;
-        const lines = result.platformDiagnostics.map(
-            (diagnostic) => `  [${diagnostic.level.toUpperCase()}] ${diagnostic.name} — ${diagnostic.message}\n      ↳ ${diagnostic.remediation}`,
-        );
+    const platformError = reportPlatformDiagnostics(result.platformDiagnostics, logger);
 
-        logger.warn(`${count.toString()} platform ${count === 1 ? "diagnostic" : "diagnostics"}:\n${lines.join("\n")}`);
+    if (platformError !== undefined) {
+        commandResult.error = platformError;
     }
 
     // Distinct cron expressions map 1:1 to wrangler `triggers.crons`; Cloudflare

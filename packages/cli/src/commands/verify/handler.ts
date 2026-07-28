@@ -8,6 +8,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenHint } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
@@ -39,16 +40,25 @@ interface VerifyCommandOptions {
      * health step is skipped entirely, so `verify` stays offline-safe by default.
      */
     healthUrl?: string;
+
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
     spawner?: Spawner;
+
+    /**
+     * Deploy target the drift gate's snapshot is emitted for. Defaults to
+     * `"target"` in `lunora.json`, then `"cloudflare"`. Verify never writes, but
+     * a snapshot emitted for the wrong target compares against the wrong
+     * baseline.
+     */
+    target?: string;
     /** When false, skip the TypeScript type-check step. Defaults to true. */
     typecheck?: boolean;
 }
 
 interface VerifyCommandResult {
     code: number;
-    /** Set when the run aborted on an invalid `--format` before validation ran. */
+    /** Set when the run aborted before validation ran: an invalid `--format`, or an unregistered deploy target. */
     error?: string;
     errors: ReadonlyArray<string>;
     warnings: ReadonlyArray<string>;
@@ -194,7 +204,20 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         // `dryRun` keeps `lunora/_generated/` untouched but still returns the
         // current schema snapshot, so the read-only drift gate can run without
         // mutating any file (verify never writes — see `readOnly: true`).
-        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd });
+        // Validated even though verify never writes: the drift gate compares a
+        // snapshot emitted for this target against the committed baseline, so
+        // an unrecognized name silently checks the wrong surface.
+        const resolvedTarget = resolveTargetOrError(cwd, options.target);
+
+        if (resolvedTarget.target === undefined) {
+            const message = resolvedTarget.error ?? "unknown deploy target";
+
+            logger.error(message);
+
+            return { code: 1, error: message, errors: [message], warnings: [], wranglerPath: undefined };
+        }
+
+        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });
         const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, logger, readOnly: true });
 
         if (gate.blocked) {
@@ -244,6 +267,7 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
         format: options.format,
         healthUrl: options.healthUrl,
         logger,
+        target: options.target,
         // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it
         // under the negated `typecheck` key (false when passed, true when absent).
         typecheck: options.typecheck === false ? false : undefined,

@@ -93,7 +93,7 @@ import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } fr
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { PlatformDiagnostic } from "./platform-target";
-import { DEFAULT_TARGET, gatePlatformFeatures } from "./platform-target";
+import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
 import type { SchemaSnapshot } from "./schema-drift";
 import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
 
@@ -521,7 +521,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // gate is the identity and the emitted surface (and goldens) is unchanged;
     // a target that lacks a used feature omits its `ctx.*` surface below and
     // reports a `platform_unsupported_feature` diagnostic.
-    const platformGate = gatePlatformFeatures(rawFeatureUsage, options.target ?? DEFAULT_TARGET);
+    // Resolved here rather than demanded of every caller: a call site that omits
+    // the target emits the DEFAULT surface with no diagnostic, so the mismatch
+    // stays invisible until the deployed app fails. Falling back to the
+    // project's declared target makes every caller correct without remembering.
+    const platformGate = gatePlatformFeatures(rawFeatureUsage, resolveCodegenTarget(options.projectRoot, options.target));
     const featureUsage = platformGate.usage;
     const hasAi = featureUsage.ai;
     const hasPayments = featureUsage.payments;

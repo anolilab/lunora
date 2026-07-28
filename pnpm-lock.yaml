@@ -2481,6 +2481,9 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
+      jsonc-parser:
+        specifier: catalog:vite
+        version: 3.3.1
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0

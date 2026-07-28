@@ -1741,6 +1741,12 @@ const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
 const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 ```
 
+### `resolveTargetOrThrow` (const)
+
+```ts
+const resolveTargetOrThrow: (projectRoot: string, explicit?: string) => string;
+```
+
 ### `scaffoldPolicyFile` (const)
 
 ```ts

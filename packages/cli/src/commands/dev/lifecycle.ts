@@ -490,6 +490,14 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--no-studio");
     }
 
+    // Forwarded explicitly, like every other flag here: the daemon is a fresh
+    // process that re-parses argv, so an unforwarded flag is silently dropped.
+    // `lunora.json`'s target still reaches it (the daemon re-reads the config),
+    // which is what makes a missing `--target` look accepted and do nothing.
+    if (options.target !== undefined) {
+        args.push("--target", options.target);
+    }
+
     if (remote) {
         args.push("--remote");
     }

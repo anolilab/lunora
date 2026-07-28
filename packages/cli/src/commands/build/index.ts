@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 /**
  * `lunora build` — run codegen + all pre-deploy gates and emit the bundled
@@ -23,6 +24,7 @@ const buildCommand: Command = {
     name: "build",
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
     ],
@@ -34,4 +36,5 @@ export type BuildOptions = CreateOptions<{
     "api-spec": string | undefined;
     format: string | undefined;
     "out-dir": string | undefined;
+    target: string | undefined;
 }>;

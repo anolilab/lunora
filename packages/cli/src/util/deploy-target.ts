@@ -8,15 +8,22 @@
  *
  * A command that omits the flag is not target-neutral — it is pinned to the
  * default. Anything that resolves a `DeployDriver` or emits a `ctx.*` surface
- * needs it, because those two must agree: codegen tailors the surface to a
- * target while deploy picks the driver that ships it, and an app generated for
- * one provider and deployed to another fails at runtime with nothing in the
- * build to explain it.
+ * needs it; see `resolveProjectTarget` in `@lunora/config` for why those two
+ * must agree.
  */
-import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver, resolveProjectTarget } from "@lunora/config";
+import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveTargetOrThrow } from "@lunora/config";
 
-/** Human-readable list of registered targets, for help text and errors. */
-const TARGET_HELP = `${deployTargetIds().join(" | ")} (default ${DEFAULT_DEPLOY_TARGET})`;
+/**
+ * Human-readable list of registered targets, for help text and errors.
+ *
+ * The `(default …)` suffix is dropped while only one target is registered,
+ * where it would render as the redundant `cloudflare (default cloudflare)`.
+ */
+const TARGET_HELP = (() => {
+    const ids = deployTargetIds();
+
+    return ids.length > 1 ? `${ids.join(" | ")} (default ${DEFAULT_DEPLOY_TARGET})` : ids.join(" | ");
+})();
 
 /** The `--target` option descriptor, spread into a command's `options` array. */
 const TARGET_OPTION = {
@@ -26,27 +33,23 @@ const TARGET_OPTION = {
 } as const;
 
 /**
- * Resolve the target for a command and reject an unregistered one.
+ * Resolve and validate a target, reshaped to the return-an-error idiom the CLI
+ * handlers already use (see `validateOutputFormat`) rather than throwing.
  *
- * The validation is the point. `resolveProjectTarget` deliberately passes an
- * unknown name through — a typo must not collapse into the default — and the
- * commands that resolve a `DeployDriver` then fail on it naturally. Codegen
- * does not resolve a driver, so without this it would emit the full Cloudflare
- * surface un-gated for a target that does not exist, report it as a warning,
- * and exit `0`. That is the silent fallback the registry was designed to
- * prevent, arriving through the back door.
- *
- * Routing every command through here also means one error message rather than
- * one per entry point.
- * @throws when the resolved target names no registered driver.
+ * The throwing form is right for `@lunora/config`, whose callers differ; inside
+ * a handler it forces a try/catch around what is otherwise a flat sequence of
+ * guards, which is both noisier and a different shape from the guard sitting
+ * five lines above it.
+ * @param projectRoot Directory containing `lunora.json`.
+ * @param explicit A caller-supplied target, if any.
+ * @returns the resolved target, or the message explaining why it was rejected.
  */
-const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string => {
-    const target = resolveProjectTarget(projectRoot, explicit);
-
-    // Resolved purely to validate — the driver itself is the caller's business.
-    resolveDeployDriver(target);
-
-    return target;
+const resolveTargetOrError = (projectRoot: string, explicit?: string): { error?: string; target?: string } => {
+    try {
+        return { target: resolveTargetOrThrow(projectRoot, explicit) };
+    } catch (error: unknown) {
+        return { error: error instanceof Error ? error.message : String(error) };
+    }
 };
 
-export { resolveTargetOrThrow, TARGET_HELP, TARGET_OPTION };
+export { resolveTargetOrError, TARGET_HELP, TARGET_OPTION };

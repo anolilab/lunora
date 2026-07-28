@@ -176,6 +176,22 @@ const runCodegenSafely = (
             }
         }
 
+        // Platform-portability diagnostics: a `ctx.*` surface the target cannot
+        // provide, or a target with no registered capability matrix. Surfaced
+        // here for the same reason the CLI surfaces them — without this a
+        // `vite build` against a mis-declared target emits the default surface,
+        // prints nothing, and exits 0, which is the Vite-first path around the
+        // guard the CLI already has.
+        for (const diagnostic of result.platformDiagnostics) {
+            const line = advisoryLine(diagnostic.level === "error" ? "ERROR" : "WARN", diagnostic.name, diagnostic.message, diagnostic.remediation);
+
+            if (diagnostic.level === "error") {
+                logger.error(line);
+            } else {
+                logger.warn(line);
+            }
+        }
+
         // Codegen succeeded. The browser error overlay (if any was shown) is
         // cleared by the single `full-reload` the change handler sends after a
         // successful run — so there is nothing to do here. (Build mode passes no
