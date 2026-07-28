@@ -51,6 +51,7 @@ export const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    lintSql: "__lunora_admin__:lintSql",
     listFlags: "__lunora_admin__:listFlags",
     listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
     listQueues: "__lunora_admin__:listQueues",
@@ -79,6 +80,8 @@ export const ADMIN_FUNCTIONS = {
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
     resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
+    schemaHistory: "__lunora_admin__:schemaHistory",
+    schemaVersion: "__lunora_admin__:schemaVersion",
     runAs: "__lunora_admin__:runAs",
     runMigration: "__lunora_admin__:runMigration",
     runSql: "__lunora_admin__:runSql",
@@ -1302,6 +1305,54 @@ export interface SqlConsoleResult {
     rowCount: number;
     rows: Record<string, unknown>[];
     truncated: boolean;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaHistory` call: every schema version this
+ * shard has recorded, newest first, WITHOUT the snapshot payloads (they are tens
+ * of KB each — fetch one with `schemaVersion`).
+ */
+export interface SchemaVersionsResult {
+    versions: SchemaVersionSummary[];
+}
+
+/** One recorded schema version's identity + when the shard first ran it. */
+export interface SchemaVersionSummary {
+    /** Epoch millis the version was first seen on this shard. */
+    appliedAt: number;
+    /** Content hash of the snapshot — the version's identity. */
+    hash: string;
+    /** Monotonic apply order. */
+    seq: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaVersion` call: one version's full
+ * snapshot JSON. `version` is absent for an unknown hash (a stale deep link, or
+ * a version pruned past the ledger's retention cap) — an empty state, not an error.
+ */
+export interface SchemaVersionDetail {
+    version?: SchemaVersionSummary & { snapshotJson: string };
+}
+
+/**
+ * Payload of a `__lunora_admin__:lintSql` call, mirroring `@lunora/do`'s
+ * `SqlLintResult`: diagnostics to render in the editor plus the query plan the
+ * statement would use. Optional on the wire — a worker predating the RPC simply
+ * rejects the call, and the editor keeps its client-side diagnostics.
+ */
+export interface SqlLintResult {
+    diagnostics: SqlLintDiagnostic[];
+    plan: string[];
+}
+
+/** One server-produced editor diagnostic; `offset`/`length` index into the linted query. */
+export interface SqlLintDiagnostic {
+    length?: number;
+    message: string;
+    offset?: number;
+    severity: "error" | "warning";
+    source: "gate" | "plan" | "syntax";
 }
 
 /**

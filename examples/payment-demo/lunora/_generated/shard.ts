@@ -369,203 +369,7 @@ const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
 const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [
-    {
-        "cacheKey": "table_without_insert:customers",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
-        "detail": "No function calls `ctx.db.insert(\"customers\", …)` — table \"customers\" has no discovered insert path.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "table": "customers"
-        },
-        "name": "table_without_insert",
-        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
-        "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "table_without_insert:events",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
-        "detail": "No function calls `ctx.db.insert(\"events\", …)` — table \"events\" has no discovered insert path.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "table": "events"
-        },
-        "name": "table_without_insert",
-        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
-        "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "table_without_insert:paymentSessions",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
-        "detail": "No function calls `ctx.db.insert(\"paymentSessions\", …)` — table \"paymentSessions\" has no discovered insert path.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "table": "paymentSessions"
-        },
-        "name": "table_without_insert",
-        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
-        "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "table_without_insert:subscriptions",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
-        "detail": "No function calls `ctx.db.insert(\"subscriptions\", …)` — table \"subscriptions\" has no discovered insert path.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "table": "subscriptions"
-        },
-        "name": "table_without_insert",
-        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
-        "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "table_without_insert:usageEvents",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
-        "detail": "No function calls `ctx.db.insert(\"usageEvents\", …)` — table \"usageEvents\" has no discovered insert path.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "table": "usageEvents"
-        },
-        "name": "table_without_insert",
-        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
-        "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:checkout",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `checkout` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "checkout",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:recordApiCall",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `recordApiCall` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "recordApiCall",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:apiCallsRemaining",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `apiCallsRemaining` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "apiCallsRemaining",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:portal",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `portal` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "portal",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:billing:checkout:priceId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `priceId` of public procedure `checkout` (billing:14) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "priceId",
-            "exportName": "checkout",
-            "file": "billing",
-            "line": 14
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "http_action_missing_auth_guard:http:17",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "An `httpAction`/`httpRoute` handler performs a side effect (`ctx.runMutation`/`ctx.runAction`/a `ctx.db` write) but never reads `ctx.auth` — an unauthenticated HTTP endpoint driving a state change, bypassing the identity/RLS checks that guard the rest of the app.",
-        "detail": "`httpAction` handler `<module>` (http:17) calls `ctx.runAction` but never reads `ctx.auth` — an anonymous caller can drive this write. Authenticate the request before the side effect.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "<module>",
-            "file": "http",
-            "kind": "httpAction",
-            "line": 17,
-            "sideEffect": "runAction"
-        },
-        "name": "http_action_missing_auth_guard",
-        "remediation": "Read `ctx.auth` in the handler before the side effect — call `await ctx.auth.getIdentity()` (or check `ctx.auth.userId`) and reject unauthenticated/unauthorized requests, or forward through a `mutation`/`action` whose RLS policies enforce access. If the endpoint is intentionally public (e.g. a signed webhook), verify the provider signature before the write.",
-        "title": "Unauthenticated HTTP handler performs a side effect"
-    }
-];
+const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA: RlsPoliciesResult = {
@@ -598,6 +402,9 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "vectors": false,
     "workflows": false
 };
+
+/** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "8fae76d001f5783e", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"customers\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerCustomerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_customer\": {\n          \"fields\": [\n            \"provider\",\n            \"providerCustomerId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"events\": {\n      \"fields\": {\n        \"processedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerEventId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"type\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_event\": {\n          \"fields\": [\n            \"provider\",\n            \"providerEventId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"paymentSessions\": {\n      \"fields\": {\n        \"amountMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"capturedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currency\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"refundedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_session\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"subscriptions\": {\n      \"fields\": {\n        \"cancelAtPeriodEnd\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currentPeriodEnd\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"currentPeriodStart\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"priceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSubscriptionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSubscriptionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"usageEvents\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"featureId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"idempotencyKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"reportedToProvider\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference_feature\": {\n          \"fields\": [\n            \"referenceId\",\n            \"featureId\"\n          ],\n          \"unique\": false\n        },\n        \"by_idempotency\": {\n          \"fields\": [\n            \"provider\",\n            \"idempotencyKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -1036,7 +843,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false });
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
             this.migrated = true;
         }
 

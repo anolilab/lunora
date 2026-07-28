@@ -133,7 +133,7 @@ describe("schema-drift", () => {
                 buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField, role: stringField })]), []),
             );
 
-            expect(safe.changes).toStrictEqual([{ severity: "safe", summary: "added optional field users.bio", type: "addedOptionalField" }]);
+            expect(safe.changes).toStrictEqual([{ severity: "safe", summary: "added optional field users.bio", table: "users", type: "addedOptionalField" }]);
             expect(breaking.changes.some((c) => c.type === "addedRequiredField" && c.severity === "breaking")).toBe(true);
         });
 
@@ -164,7 +164,9 @@ describe("schema-drift", () => {
                 buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField }), table("posts", { title: stringField })]), []),
             );
 
-            expect(widened.changes).toStrictEqual([{ severity: "safe", summary: "field users.name became optional", type: "fieldRequiredToOptional" }]);
+            expect(widened.changes).toStrictEqual([
+                { severity: "safe", summary: "field users.name became optional", table: "users", type: "fieldRequiredToOptional" },
+            ]);
             expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
         });
 

@@ -107,6 +107,20 @@ const parseOrder = (raw: unknown): DataView["orderBy"] => {
 };
 
 /**
+ * Search params for the `/migrations` route: which recorded schema version's
+ * diff is open. Validated at the router boundary like {@link DataViewSearch} so
+ * the panel reads a trustworthy value instead of a raw record — a hash that is
+ * not a plausible content hash is dropped rather than passed through to an RPC.
+ */
+interface SchemaVersionSearch {
+    /** Content hash of the selected schema version. */
+    version?: string;
+}
+
+/** A snapshot content hash: the 16 lowercase hex chars `hashSchemaSnapshot` produces. */
+const SNAPSHOT_HASH_RE = /^[\da-f]{16}$/u;
+
+/**
  * The `/data` route's `validateSearch`: normalise the raw router search into the
  * typed {@link DataViewSearch} at the router boundary, dropping anything
  * malformed (a non-`global` `schema`, an `order` that isn't `column:asc|desc`,
@@ -198,4 +212,11 @@ export const dataViewToSearch = (view: DataView): Record<string, string | undefi
     };
 };
 
-export type { DataViewSearch };
+/** Validate/normalise the `/migrations` route's search params. */
+export const validateSchemaVersionSearch = (search: Record<string, unknown>): SchemaVersionSearch => {
+    const { version } = search;
+
+    return typeof version === "string" && SNAPSHOT_HASH_RE.test(version) ? { version } : {};
+};
+
+export type { DataViewSearch, SchemaVersionSearch };

@@ -47,9 +47,19 @@ interface TierVisibility {
 
 const ALL_TIERS: TierVisibility = { global: true, shard: true };
 
+/** Hoisted empty decoration map so the plain schema viewer does not allocate one per render. */
+const EMPTY_NODE_CLASSES: Readonly<Record<string, string>> = {};
+
 interface SchemaDiagramProps {
     /** True when the typed-column probe failed — nodes show a "columns unavailable" hint instead of an empty `—`. */
     readonly columnsError?: boolean;
+
+    /**
+     * Extra CSS classes per table name, applied to that table's node. Used by the
+     * schema-history diff to ring added / changed / removed tables and dim
+     * untouched context; the plain schema viewer passes nothing.
+     */
+    readonly nodeClasses?: Readonly<Record<string, string>>;
     /** Every table to render, across both storage tiers, with its typed columns. */
     readonly tables: ReadonlyArray<DiagramTable>;
     /** Prefix for every `data-testid` so the diagram's controls are addressable. */
@@ -97,8 +107,12 @@ const deriveEdges = (tables: ReadonlyArray<DiagramTable>): SchemaEdge[] =>
             }),
     );
 
-/** Build the React Flow nodes from the tables + their typed columns, seeded by the depth layout. */
-const buildNodes = (tables: ReadonlyArray<DiagramTable>, columnsError: boolean): DatabaseSchemaNodeType[] => {
+/**
+ * Build the React Flow nodes from the tables + their typed columns, seeded by
+ * the depth layout. `nodeClasses` decorates a node by table name (the schema
+ * history view rings added/changed/removed tables); absent for the plain viewer.
+ */
+const buildNodes = (tables: ReadonlyArray<DiagramTable>, columnsError: boolean, nodeClasses: Readonly<Record<string, string>>): DatabaseSchemaNodeType[] => {
     const names = tables.map((table) => table.name);
     const counts = new Map<string, number>(tables.map((table) => [table.name, table.columns.length]));
     const positions = computeLayout(names, deriveEdges(tables), counts);
@@ -113,6 +127,7 @@ const buildNodes = (tables: ReadonlyArray<DiagramTable>, columnsError: boolean):
 
         return [
             {
+                className: nodeClasses[name],
                 data: { columns: table.columns, label: name, loadError: columnsError, tier: table.tier },
                 id: name,
                 position: { x, y },
@@ -285,7 +300,7 @@ const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: Reac
  * cycle-safe) so the diagram opens stable, then the operator can drag nodes.
  * Read-only — connecting is disabled.
  */
-export const SchemaDiagram = ({ columnsError, tables, testIdPrefix }: SchemaDiagramProps): ReactElement => {
+export const SchemaDiagram = ({ columnsError, nodeClasses, tables, testIdPrefix }: SchemaDiagramProps): ReactElement => {
     const t = useT();
 
     const [tierFilter, setTierFilter] = useState<TierVisibility>(ALL_TIERS);
@@ -300,7 +315,10 @@ export const SchemaDiagram = ({ columnsError, tables, testIdPrefix }: SchemaDiag
         return tables.filter((table) => tierFilter[table.tier] && table.name.toLowerCase().includes(needle));
     }, [tables, tierFilter, query]);
 
-    const seededNodes = useMemo(() => buildNodes(visibleTables, columnsError ?? false), [visibleTables, columnsError]);
+    const seededNodes = useMemo(
+        () => buildNodes(visibleTables, columnsError ?? false, nodeClasses ?? EMPTY_NODE_CLASSES),
+        [visibleTables, columnsError, nodeClasses],
+    );
     const seededEdges = useMemo(() => buildEdges(visibleTables), [visibleTables]);
 
     const [nodes, setNodes, onNodesChange] = useNodesState<DatabaseSchemaNodeType>(seededNodes);

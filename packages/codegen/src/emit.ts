@@ -13,6 +13,8 @@ import type {
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
 
+import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
+import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import type { CapabilityKey } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
@@ -3800,6 +3802,15 @@ interface EmitShardOptions {
     queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
+
+    /**
+     * The structural snapshot the pre-deploy drift gate diffs against, threaded
+     * in so the emitted DO records it in `__lunora_schema_history` on cold start
+     * (plan 200 — the Studio's schema-version timeline). Optional so an emitter
+     * caller that has no snapshot (tests, fixtures) emits the pre-ledger shape
+     * unchanged.
+     */
+    schemaSnapshot?: SchemaSnapshot;
     /** Replication shapes declared via `defineShape` in `lunora/shapes.ts` — wires the `resolveShape` subscription override. */
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
@@ -3834,6 +3845,7 @@ const emitShard = ({
     queues = [],
     rlsMetadata,
     schema,
+    schemaSnapshot,
     shapes = [],
     storageRules,
     studioFeatures,
@@ -3843,6 +3855,23 @@ const emitShard = ({
     const base = baseSpecifiers(useUmbrella);
     const hasMutators = mutators.length > 0;
     const hasShapes = shapes.length > 0;
+    // The schema-version ledger (plan 200). The snapshot the drift gate diffs is
+    // embedded verbatim so the DO can append it to `__lunora_schema_history` on
+    // cold start, keyed by its content hash — reverting a schema re-links to the
+    // existing row instead of appending a duplicate. Embedding costs a few KB of
+    // bundle for a typical schema; recomputing it in the DO instead would need a
+    // SECOND snapshot builder over the runtime `SchemaLike`, and two builders
+    // would eventually disagree with the gate. Omitted entirely when no snapshot
+    // is supplied, so the generated output is byte-identical to before.
+    const schemaSnapshotJson = schemaSnapshot === undefined ? "" : serializeSchemaSnapshot(schemaSnapshot);
+    const schemaSnapshotConst =
+        schemaSnapshot === undefined
+            ? ""
+            : `
+/** Structural schema snapshot + its content hash, recorded in the shard's \`__lunora_schema_history\` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.stringify(hashSchemaSnapshot(schemaSnapshot))}, json: ${JSON.stringify(schemaSnapshotJson)} };
+`;
+    const snapshotArgument = schemaSnapshot === undefined ? "" : ", schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT";
     const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
     // New Cloudflare-capability helpers, mirroring `emitAiFragments`. `kv` /
     // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
@@ -4608,7 +4637,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesDa
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${flagsOverrides.constant}${shapeReadRegistryConst}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
+${schemaSnapshotConst}${flagsOverrides.constant}${shapeReadRegistryConst}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -5015,7 +5044,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false });
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
             this.migrated = true;
         }
 

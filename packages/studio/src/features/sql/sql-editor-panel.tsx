@@ -15,7 +15,10 @@ import { recordShard } from "../../lib/shard-history";
 import { CellValue } from "../data/data-grid";
 import { ExportMenu } from "../data/grid-features";
 import formatSql from "./format-sql";
+import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
 import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
+import type { SqlDiagnostic } from "./sql-diagnostics";
+import { DiagnosticsOverlay, DiagnosticsRow, EDITOR_TEXT_CLASS } from "./sql-diagnostics-ui";
 import type { HistoryEntry, SavedQuery } from "./sql-query-sidebar";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import { referencedTables, useSqlSchema } from "./sql-schema";
@@ -126,6 +129,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const [pendingBulk, setPendingBulk] = useState<BulkClose | null>(null);
 
     const gutterRef = useRef<HTMLDivElement | null>(null);
+    const overlayRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<HTMLTextAreaElement | null>(null);
     const privateListRef = useRef<HTMLUListElement | null>(null);
     const listboxId = useId();
@@ -173,6 +177,8 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
             setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: value } : query)));
         }
     };
+
+    const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
 
     const autocomplete = useSqlAutocomplete(schema, editorRef, setDraft);
     const {
@@ -305,11 +311,33 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         });
     };
 
-    // Keep the line-number gutter aligned with the textarea's scroll.
+    // Keep the line-number gutter and the diagnostics overlay aligned with the
+    // textarea's scroll. The overlay tracks both axes — a wide statement scrolls
+    // horizontally, and a squiggle that doesn't follow is worse than none.
     const onEditorScroll = (event: React.UIEvent<HTMLTextAreaElement>): void => {
+        const { scrollLeft, scrollTop } = event.currentTarget;
+
         if (gutterRef.current !== null) {
-            gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+            gutterRef.current.scrollTop = scrollTop;
         }
+
+        if (overlayRef.current !== null) {
+            overlayRef.current.scrollTop = scrollTop;
+            overlayRef.current.scrollLeft = scrollLeft;
+        }
+    };
+
+    // Reveal and select a diagnostic's span from the problems row, so a message
+    // like "unknown table `userz`" lands the caret on `userz`.
+    const revealDiagnostic = (diagnostic: SqlDiagnostic): void => {
+        const node = editorRef.current;
+
+        if (node === null || diagnostic.offset === undefined) {
+            return;
+        }
+
+        node.focus();
+        node.setSelectionRange(diagnostic.offset, diagnostic.offset + (diagnostic.length ?? 0));
     };
 
     // Load `sql` into the active tab as a fresh draft, link it to `savedId` (or
@@ -629,40 +657,47 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                 {/* Editor + results workspace — stacked, or split side-by-side. */}
                 <div className={workspaceClass}>
-                    {/* Line-numbered editor pane. */}
-                    <div className="flex min-h-0 min-w-0 flex-1">
-                        <div
-                            aria-hidden="true"
-                            className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
-                            ref={gutterRef}
-                            style={GUTTER_STYLE}
-                        >
-                            {Array.from({ length: lineCount }, (_, index) => (
-                                <div key={index}>{index + 1}</div>
-                            ))}
+                    {/* Line-numbered editor pane, with the diagnostics overlay + problems row. */}
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        <div className="flex min-h-0 min-w-0 flex-1">
+                            <div
+                                aria-hidden="true"
+                                className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
+                                ref={gutterRef}
+                                style={GUTTER_STYLE}
+                            >
+                                {Array.from({ length: lineCount }, (_, index) => (
+                                    <div key={index}>{index + 1}</div>
+                                ))}
+                            </div>
+                            {/* The background lives on the wrapper, not the textarea: the
+                                overlay sits behind the (transparent) textarea, so an opaque
+                                textarea would hide every squiggle. */}
+                            <div className="relative min-w-0 flex-1 bg-background">
+                                <DiagnosticsOverlay diagnostics={diagnostics} draft={draft} scrollRef={overlayRef} />
+                                <textarea
+                                    aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
+                                    aria-autocomplete="list"
+                                    aria-controls={autocompleteState === null ? undefined : listboxId}
+                                    aria-expanded={autocompleteState !== null}
+                                    aria-label={t("SQL query")}
+                                    className={`relative size-full resize-none bg-transparent outline-none ${EDITOR_TEXT_CLASS}`}
+                                    data-testid="sql-input"
+                                    onBlur={onEditorBlur}
+                                    onChange={onDraftChange}
+                                    onKeyDown={onEditorKeyDown}
+                                    onScroll={onEditorScroll}
+                                    onSelect={onEditorSelect}
+                                    placeholder="SELECT * FROM …"
+                                    ref={editorRef}
+                                    role="combobox"
+                                    spellCheck={false}
+                                    value={draft}
+                                />
+                                <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
+                            </div>
                         </div>
-                        <div className="relative min-w-0 flex-1">
-                            <textarea
-                                aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
-                                aria-autocomplete="list"
-                                aria-controls={autocompleteState === null ? undefined : listboxId}
-                                aria-expanded={autocompleteState !== null}
-                                aria-label={t("SQL query")}
-                                className="size-full resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
-                                data-testid="sql-input"
-                                onBlur={onEditorBlur}
-                                onChange={onDraftChange}
-                                onKeyDown={onEditorKeyDown}
-                                onScroll={onEditorScroll}
-                                onSelect={onEditorSelect}
-                                placeholder="SELECT * FROM …"
-                                ref={editorRef}
-                                role="combobox"
-                                spellCheck={false}
-                                value={draft}
-                            />
-                            <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
-                        </div>
+                        <DiagnosticsRow diagnostics={diagnostics} onSelect={revealDiagnostic} />
                     </div>
 
                     {/* Results pane. */}

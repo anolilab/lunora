@@ -49,7 +49,7 @@ import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
 import type { StudioFeaturesResult } from "../lib/admin";
-import { validateDataViewSearch } from "../lib/data-view-params";
+import { validateDataViewSearch, validateSchemaVersionSearch } from "../lib/data-view-params";
 import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -92,6 +92,7 @@ const DeploymentHealthPanel = lazyNamed(() => import("../features/health/deploym
 const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
 const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
 const MigrationsPanel = lazyNamed(() => import("../features/database/migrations"), "MigrationsPanel");
+const SchemaHistoryPanel = lazyNamed(() => import("../features/database/schema-history"), "SchemaHistoryPanel");
 const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
 const FlagsPanel = lazyNamed(() => import("../features/flags/flags-panel"), "FlagsPanel");
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
@@ -1142,7 +1143,23 @@ const buildRouter = ({
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         traces: <TracesPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
-        migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
+        migrations: (
+            <div className="flex min-h-0 flex-1 flex-col gap-8">
+                {/* Schema versions first — what the shape was, and when it changed… */}
+                <div className="flex min-h-[24rem] flex-col gap-2">
+                    <h2 className="text-sm font-medium">Schema versions</h2>
+                    <SchemaHistoryPanel shardKey={initialShardKey} />
+                </div>
+                {/* …then the data migrations that ran alongside those versions. The
+                    two are different things (schema is applied at runtime from
+                    defineSchema; defineMigration is hand-written data movement), so
+                    they are correlated on one page, not merged into one timeline. */}
+                <div className="flex flex-col gap-2">
+                    <h2 className="text-sm font-medium">Data migrations</h2>
+                    <MigrationsPanel initialShardKey={initialShardKey} />
+                </div>
+            </div>
+        ),
         notifications: <NotificationsPanel />,
         organizations: <OrganizationsPanel />,
         permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} schemaEditable={schemaEditable} />,
@@ -1192,6 +1209,18 @@ const buildRouter = ({
                 getParentRoute: () => rootRoute,
                 path: `/${tab}`,
                 validateSearch: validateDataViewSearch,
+            });
+        }
+
+        // The migrations route carries the selected schema VERSION so a specific
+        // diff is a shareable link (Prisma's migrations view does the same for the
+        // same reason: a diff you cannot paste to a colleague is half a feature).
+        if (tab === "migrations") {
+            return createRoute({
+                component: () => panels[tab],
+                getParentRoute: () => rootRoute,
+                path: `/${tab}`,
+                validateSearch: validateSchemaVersionSearch,
             });
         }
 

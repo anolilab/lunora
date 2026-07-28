@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { classifyStatement } from "../../../shared/sql-readonly";
 import type { SqlExec } from "./ctx-db";
 
 /**
@@ -18,104 +19,22 @@ interface SqlConsoleResult {
 const MAX_SQL_ROWS = 1000;
 
 /**
- * A statement is only allowed when it *leads* with a read verb. `EXPLAIN` /
- * `EXPLAIN QUERY PLAN` prefixes are permitted (they describe, never mutate).
- */
-const READONLY_LEAD = /^(?:explain\s+(?:query\s+plan\s+)?)?(?:select|with)\b/iu;
-
-/**
- * Mutating / schema / side-effecting verbs that must not appear ANYWHERE in the
- * statement. This is deliberately broad (defense-in-depth): a `WITH` CTE can
- * front a `DELETE`, and `EXPLAIN` can describe a write, so leading-verb checks
- * alone aren't enough. A benign query that merely mentions one of these words in
- * a string literal is rejected too — an acceptable trade for an admin tool that
- * must never corrupt the doc-store's FTS / aggregate / rank shadow tables.
- */
-const FORBIDDEN_KEYWORD = /\b(?:alter|attach|create|delete|detach|drop|insert|pragma|reindex|replace|truncate|update|vacuum)\b/iu;
-
-/** A single trailing semicolon (allowed); any other `;` marks a multi-statement batch. */
-const TRAILING_SEMICOLON = /;\s*$/u;
-
-/** Unicode whitespace, tested one code point at a time (no backtracking). */
-const WHITESPACE = /\s/u;
-
-/** Index just past a `-- …` line comment at `from` (skips to the newline, left as whitespace). */
-const skipLineComment = (sql: string, from: number): number => {
-    let index = from + 2;
-
-    while (index < sql.length && sql[index] !== "\n") {
-        index += 1;
-    }
-
-    return index;
-};
-
-/** Index just past a block comment at `from`, or `-1` when it never closes. */
-const skipBlockComment = (sql: string, from: number): number => {
-    const close = sql.indexOf("*/", from + 2);
-
-    return close === -1 ? -1 : close + 2;
-};
-
-/**
- * Strip leading whitespace and SQL comments so the read-verb check sees the real
- * first token. A single linear scan rather than one alternation regex: an
- * alternation over whitespace, line comments, and block comments backtracks
- * polynomially against admin-supplied SQL on long runs of unterminated
- * block-comment openers. An unterminated block comment is left in place so the
- * read-verb check rejects it.
- */
-const stripLeading = (sql: string): string => {
-    let index = 0;
-
-    while (index < sql.length) {
-        const char = sql[index];
-
-        if (char !== undefined && WHITESPACE.test(char)) {
-            index += 1;
-        } else if (char === "-" && sql[index + 1] === "-") {
-            index = skipLineComment(sql, index);
-        } else if (char === "/" && sql[index + 1] === "*") {
-            const next = skipBlockComment(sql, index);
-
-            if (next === -1) {
-                break;
-            }
-
-            index = next;
-        } else {
-            break;
-        }
-    }
-
-    return sql.slice(index);
-};
-
-/** Build a tagged LunoraError the runtime serializes with its `status`. */
-const sqlError = (message: string, code: string): Error => new LunoraError(code, message, { status: 400 });
-
-/**
  * Reject anything that isn't a single read-only statement. Throws a 400
  * LunoraError the studio surfaces inline. Enforces: non-empty, a single
  * statement (no `;`-separated batch), a leading `SELECT`/`WITH`/`EXPLAIN`, and no
  * mutating/DDL keyword anywhere.
+ *
+ * The rules themselves live in `shared/sql-readonly.ts` because the studio's SQL
+ * editor lints with the SAME function — a second copy here would drift, and the
+ * drift would show up as an editor that green-lights a statement this gate then
+ * refuses. This wrapper only turns the returned rejection into the tagged error
+ * the runtime serializes.
  */
 const assertReadonly = (query: string): void => {
-    const trimmed = stripLeading(query).trim();
+    const rejection = classifyStatement(query);
 
-    if (trimmed === "") {
-        throw sqlError("the query is empty", "SQL_EMPTY");
-    }
-
-    // Allow a single trailing semicolon; any other `;` means a multi-statement batch.
-    const single = trimmed.replace(TRAILING_SEMICOLON, "");
-
-    if (single.includes(";")) {
-        throw sqlError("only a single statement may be run", "SQL_MULTIPLE_STATEMENTS");
-    }
-
-    if (!READONLY_LEAD.test(single) || FORBIDDEN_KEYWORD.test(single)) {
-        throw sqlError("the SQL editor is read-only — only SELECT / WITH / EXPLAIN queries are allowed", "SQL_NOT_READONLY");
+    if (rejection !== undefined) {
+        throw new LunoraError(rejection.code, rejection.message, { status: 400 });
     }
 };
 
@@ -141,5 +60,131 @@ const runReadonlySql = (sql: SqlExec, query: string): SqlConsoleResult => {
     return { columns, rowCount: all.length, rows, truncated: all.length > MAX_SQL_ROWS };
 };
 
-export { assertReadonly, MAX_SQL_ROWS, runReadonlySql };
-export type { SqlConsoleResult };
+/**
+ * Result of a `__lunora_admin__:lintSql` call: the diagnostics to render, plus
+ * the query plan the statement would use (empty when the statement never got
+ * far enough to be planned).
+ */
+interface SqlLintResult {
+    diagnostics: SqlDiagnostic[];
+    plan: string[];
+}
+
+/** One editor diagnostic; `offset`/`length` index into the query the caller sent. */
+interface SqlDiagnostic {
+    length?: number;
+    message: string;
+    offset?: number;
+    severity: "error" | "warning";
+    source: "gate" | "plan" | "syntax";
+}
+
+/**
+ * SQLite reports a syntax error as `near "tok": syntax error`. The quoted token
+ * is the only location information available, so it is matched back against the
+ * query to produce a span. When the token appears more than once the FIRST
+ * occurrence is used — a guess, but a bounded one, and the message still carries
+ * the token verbatim.
+ */
+const SQLITE_NEAR = /near "([^"]*)": syntax error/iu;
+
+/** A `SCAN &lt;table>` step in a SQLite query plan — a full table scan, no index used. */
+const PLAN_SCAN = /^SCAN (?:TABLE )?([^\s(]+)/u;
+
+/** Rows a SQLite `EXPLAIN QUERY PLAN` returns; only `detail` is rendered. */
+interface PlanRow {
+    detail?: unknown;
+}
+
+/** Locate `token` in `query` for a syntax diagnostic, or leave the span unset. */
+const spanForToken = (query: string, token: string): Pick<SqlDiagnostic, "length" | "offset"> => {
+    if (token === "") {
+        return {};
+    }
+
+    const offset = query.indexOf(token);
+
+    return offset === -1 ? {} : { length: token.length, offset };
+};
+
+/**
+ * Lint a statement without running it: apply the same read-only gate as
+ * {@link runReadonlySql}, then ask SQLite to plan it via `EXPLAIN QUERY PLAN`,
+ * which parses and plans but never executes the underlying statement.
+ *
+ * Gated IDENTICALLY to `runSql` — a statement this refuses to lint is exactly a
+ * statement `runSql` refuses to run. Widening the lint gate "because it does not
+ * execute anything" would turn the linter into a side-effect channel: `EXPLAIN`
+ * of a DDL statement still parses schema, and the keyword denylist is the only
+ * thing keeping a `WITH`-fronted write out.
+ *
+ * Never throws for a bad statement: a rejection or a syntax error is reported as
+ * a diagnostic, because the caller is an editor rendering feedback while the
+ * operator types, not an operator asking for something to happen.
+ */
+const lintReadonlySql = (sql: SqlExec, query: string): SqlLintResult => {
+    const rejection = classifyStatement(query);
+
+    if (rejection !== undefined) {
+        // An empty buffer is the resting state of an editor, not a mistake to
+        // nag about — every other rejection is worth surfacing.
+        const diagnostics: SqlDiagnostic[] =
+            rejection.code === "SQL_EMPTY"
+                ? []
+                : [{ length: rejection.length, message: rejection.message, offset: rejection.offset, severity: "error", source: "gate" }];
+
+        return { diagnostics, plan: [] };
+    }
+
+    let plan: string[];
+
+    try {
+        plan = sql
+            .exec(`EXPLAIN QUERY PLAN ${query}`)
+            .toArray()
+            .map((row) => {
+                const { detail } = row as PlanRow;
+
+                return typeof detail === "string" ? detail : "";
+            })
+            .filter((detail) => detail !== "");
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const near = SQLITE_NEAR.exec(message);
+
+        return {
+            diagnostics: [
+                {
+                    ...(near ? spanForToken(query, near[1] ?? "") : {}),
+                    message,
+                    severity: "error",
+                    source: "syntax",
+                },
+            ],
+            plan: [],
+        };
+    }
+
+    // Plan-derived warnings. `SCAN` (as opposed to `SEARCH`) means SQLite found
+    // no usable index — the same signal the advisor's full-scan attribution
+    // reports, deliberately worded the same way so one concept doesn't get two
+    // names in one UI.
+    const diagnostics: SqlDiagnostic[] = [];
+
+    for (const detail of plan) {
+        const scan = PLAN_SCAN.exec(detail);
+
+        if (scan) {
+            diagnostics.push({
+                message: `full table scan on \`${scan[1] ?? ""}\` — this query reads every row`,
+                severity: "warning",
+                source: "plan",
+            });
+        }
+    }
+
+    return { diagnostics, plan };
+};
+
+export { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql };
+export type { SqlConsoleResult, SqlDiagnostic, SqlLintResult };

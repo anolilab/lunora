@@ -1061,6 +1061,85 @@ deliberately on Cloudflare Workflows — different substrate, not a reuse.
 - **164 has a prerequisite** — formalize the wire protocol as a
   language-independent spec + conformance fixtures before writing the SDK.
 
+## Wave 15 — competitive gap analysis (Prisma Studio, baseline `865a9a4c`, 2026-07-28)
+
+User-requested pass over `packages/studio` vs
+[prisma/studio](https://github.com/prisma/studio) (`@prisma/studio-core`, OSS),
+grounded against that repo's source tree and its normative `Architecture/*.md`
+docs rather than its README. Prisma Studio is a **database** tool with 7 views
+(`table`, `sql`, `schema`, `migrations`, `queries`, `console`, `stream`);
+`@lunora/studio` is a full backend console with ~27 feature areas, so we are a
+superset almost everywhere. The gaps below are the places where their narrower
+scope bought deeper polish.
+
+**Verified non-gaps (excluded).** Schema visualization (`@xyflow/react` diagram +
+export + editor overlay), row virtualization, CSV/JSON/**SQL** export (they do
+CSV/JSON only), column visibility, EXPLAIN, schema-aware SQL autocomplete, saved
+queries, FK traversal, facets, staged edits, cascade preview, row generation,
+shard explorer, mask policies. Their `stream` view is Prisma-Postgres-specific
+(our analog is the logs/subscriptions panels).
+
+| Plan | Title                                                                                                   | Category | Pkg               | Pri | Effort | Risk | Status                        |
+| ---- | ------------------------------------------------------------------------------------------------------- | -------- | ----------------- | --- | ------ | ---- | ----------------------------- |
+| 200  | Studio migration & schema-version visualizer — ledger + diff canvas; the headline gap                   | feat     | do/codegen/studio | P2  | L      | MED  | TODO                          |
+| 201  | Studio SQL editor diagnostics — inline lint before Run, no CodeMirror adoption                          | dx       | studio/do         | P2  | M      | LOW  | TODO                          |
+| 202  | Studio AI layer — one host-supplied `llm` hook (NL→SQL + error correction, NL→filter, chart config)     | feat     | studio            | P3  | L      | MED  | TODO (product decision first) |
+| 203  | Time-ranged statement-level query insights — bucket the metrics we already collect; add p95 + live tail | feat/obs | do/studio         | P2  | M      | LOW  | TODO                          |
+| 204  | Studio operation console — a tape of what Studio itself issued                                          | dx/obs   | studio            | P3  | S–M    | LOW  | TODO                          |
+| 205  | Studio data-grid parity + URL state — pinning, match highlight, typed search, column virtualization     | dx/perf  | studio/do         | P2  | M–L    | LOW  | TODO                          |
+
+### Notes
+
+- **200 is the headline gap and the cheapest big win**, because three of its four
+  pieces already exist: the structural snapshot format and its `safe`/`breaking`
+  diff (`codegen/src/schema-drift.ts`), and the React Flow canvas
+  (`studio/src/features/schema/`). What is missing is **history** — the drift gate
+  keeps exactly one committed baseline at `lunora/.lunora-schema.json` and
+  overwrites it. The plan makes the DO the ledger (a reserved
+  `__lunora_schema_history` table appended by `runShardMigrations`) so the view
+  works in production, and moves the pure diff into top-level `shared/` so
+  codegen and studio can both use it without a dependency edge.
+  **Do not conflate the two ledgers**: `defineMigration` is hand-written _data_
+  migration, schema is applied at runtime from `defineSchema`. The plan shows
+  schema versions on the timeline and correlates data migrations into it.
+- **203's framing was corrected mid-analysis.** The first read said "we have no
+  query insights"; that is wrong. `do/src/query-metrics.ts` already records
+  per-normalized-statement aggregates into `__lunora_metrics_queries`, surfaced
+  via `getMetrics().queryStats` in a "Query insights" tab
+  (`studio/src/features/reports/metrics-panel.tsx:123`). They are **lifetime
+  cumulative counters with a mean and no time axis**, so the real work is
+  time-bucketing (the `function-metrics.ts` `__lunora_metrics_buckets` pattern,
+  applied to statements) plus percentiles and a range selector.
+- **201 carries a design decision worth preserving**: the SQL editor is a plain
+  `<textarea>` with a hand-rolled gutter and autocomplete, not CodeMirror.
+  Adopting CodeMirror to get squiggles would be a bundle-size decision affecting
+  every embedded Studio and would obsolete two working, tested components — the
+  plan renders diagnostics via an overlay + a problems row instead, and makes
+  "adopt CodeMirror" a STOP-and-report, not an improvisation.
+- **202 is the only plan gated on a product decision** (whose model, whose key,
+  what data leaves the machine). Its Phase 0 exists to answer that on paper;
+  Phase 1 must not start first. Studio ships no provider — the `llm` hook is
+  host-supplied and every AI affordance is hidden without it, mirroring how
+  `schemaEditable` already gates the schema-authoring overlay.
+- **204 has a single clean choke point** — every Studio admin call flows through
+  `studio/src/lib/internal.ts` + `hooks/use-admin-query.ts`. It records operation
+  _shapes_ (function, shard, argument summary, duration, outcome), never row
+  payloads, and complements the server-side audit log rather than duplicating it.
+- **205 protects what we already do better** (cascade preview, staged edits,
+  facets, masking, SQL export) as explicit non-goals, and leaves infinite scroll
+  as an open decision to record rather than a gap to close — pagination suits an
+  admin tool, and cargo-culting the other tradeoff would be a regression.
+
+### Recommended execution order
+
+**200** first (largest value, most of the machinery exists). **203** and **205**
+are independent and can run in parallel with it — 203 is mostly server-side
+(`packages/do`), 205 mostly client-side, so they do not collide. **201** after
+205 (both touch Studio UI plumbing; 201 Phase 1 also extracts
+`shared/sql-readonly.ts`, which 202 Phase 1 depends on). **204** any time — it is
+self-contained. **202** last, and only after its Phase 0 decision lands; its
+query-insight recommendations follow-on additionally needs 203's data.
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:

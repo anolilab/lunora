@@ -75,47 +75,7 @@ const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
 const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [
-    {
-        "cacheKey": "nondeterministic_query_mutation:messages:67:Date.now",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in send (messages:67) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "callee": "Date.now",
-            "exportName": "send",
-            "file": "messages",
-            "kind": "mutation",
-            "line": 67
-        },
-        "name": "nondeterministic_query_mutation",
-        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
-        "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:messages:send",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `send` (messages) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "send",
-            "file": "messages",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    }
-];
+const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA: RlsPoliciesResult = {
@@ -148,6 +108,9 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "vectors": false,
     "workflows": false
 };
+
+/** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "6f23fc340f8c517a", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"messages\": {\n      \"fields\": {\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"text\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_created\": {\n          \"fields\": [\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -555,7 +518,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false });
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
             this.migrated = true;
         }
 

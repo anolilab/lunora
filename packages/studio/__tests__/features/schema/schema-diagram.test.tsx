@@ -56,7 +56,7 @@ describe("buildNodes", () => {
     it("builds one databaseSchema node per table, carrying its typed columns and tier", () => {
         expect.assertions(5);
 
-        const nodes = buildNodes(DIAGRAM_TABLES, false);
+        const nodes = buildNodes(DIAGRAM_TABLES, false, {});
         const messages = nodes.find((node) => node.id === "messages");
         const users = nodes.find((node) => node.id === "users");
 
@@ -71,7 +71,7 @@ describe("buildNodes", () => {
     it("marks nodes with loadError when columnsError is set", () => {
         expect.assertions(1);
 
-        const nodes = buildNodes(UNPROBED_TABLES, true);
+        const nodes = buildNodes(UNPROBED_TABLES, true, {});
 
         expect(nodes.every((node) => node.data.loadError === true)).toBe(true);
     });
@@ -290,7 +290,7 @@ describe("exportDiagramAsJson (JSON serialiser)", () => {
         const revokeObjectURL = vi.spyOn(globalThis.URL, "revokeObjectURL").mockReturnValue(undefined);
 
         try {
-            const sampleNodes = buildNodes(DIAGRAM_TABLES, false);
+            const sampleNodes = buildNodes(DIAGRAM_TABLES, false, {});
             const sampleEdges = buildEdges(DIAGRAM_TABLES);
 
             exportDiagramAsJson(sampleNodes, sampleEdges, "test-export.json");
@@ -316,7 +316,7 @@ describe("exportDiagramAsJson (JSON serialiser)", () => {
     it("serialises nodes and edges into a downloadable JSON structure", () => {
         expect.assertions(3);
 
-        const sampleNodes = buildNodes(DIAGRAM_TABLES, false);
+        const sampleNodes = buildNodes(DIAGRAM_TABLES, false, {});
         const sampleEdges = buildEdges(DIAGRAM_TABLES);
 
         vi.spyOn(globalThis.URL, "createObjectURL").mockReturnValue("blob:fake");
@@ -357,7 +357,7 @@ describe("viewportForExport", () => {
     it("returns a zoom value within [0.1, 2]", () => {
         expect.assertions(2);
 
-        const nodes = buildNodes(DIAGRAM_TABLES, false);
+        const nodes = buildNodes(DIAGRAM_TABLES, false, {});
         const { zoom } = viewportForExport(nodes, 1920, 1080, 32);
 
         expect(zoom).toBeGreaterThanOrEqual(0.1);
