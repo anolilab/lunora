@@ -13,7 +13,7 @@
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "node node_modules/@lunora/cli/dist/bin.mjs codegen && tsc --noEmit",
-        "seed": "node scripts/seed.ts",
+        "seed": "node --experimental-strip-types scripts/seed.ts",
         "test": "vitest run"
     },
     "dependencies": {

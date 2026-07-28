@@ -76,7 +76,7 @@ export const buildTriagePrompt = (incident: TriageIncident, issues: ReadonlyArra
         "",
         FENCE,
         `Incident: ${clampField(incident.title)}`,
-        `Kind: ${incident.kind}${incident.container === undefined ? "" : ` (container: ${clampField(incident.container)})`}`,
+        `Kind: ${incident.kind}${incident.container == null ? "" : ` (container: ${clampField(incident.container)})`}`,
         `Occurrences: ${String(incident.count)}`,
         "",
         "Related errors from the same container:",
