@@ -2175,6 +2175,12 @@ importers:
       magic-string:
         specifier: ^1.1.0
         version: 1.1.0
+      mysql2:
+        specifier: '*'
+        version: 3.23.1(@types/node@26.1.1)
+      pg:
+        specifier: '*'
+        version: 8.22.0
       react:
         specifier: 19.2.8
         version: 19.2.8
