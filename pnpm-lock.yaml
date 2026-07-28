@@ -926,6 +926,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../../packages/errors
       '@lunora/fingerprint':
         specifier: workspace:*
         version: link:../../packages/fingerprint

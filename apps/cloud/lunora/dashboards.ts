@@ -1,4 +1,3 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { DashboardPanel } from "../src/telemetry/dashboards";
@@ -6,7 +5,8 @@ import { validatePanels } from "../src/telemetry/dashboards";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * User-defined custom dashboards (Tier 2 observability) — Grafana-style saved
@@ -138,9 +138,9 @@ export const get = query
 
 /** Create a named dashboard (owners/admins). Starts with the given panels (usually none). */
 export const create = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
         panels: v.optional(v.array(panel)),
     })
@@ -170,10 +170,10 @@ export const create = mutation
  * a rename and a panel edit are independent calls.
  */
 export const update = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
         id: v.id("dashboards"),
-        name: v.optional(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
+        name: v.optional(boundedString(LIMITS.name)),
         organizationId: v.id("organizations"),
         panels: v.optional(v.array(panel)),
     })
@@ -201,7 +201,7 @@ export const update = mutation
 
 /** Delete a dashboard (owners/admins), org-checked. */
 export const remove = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("dashboards"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"dashboards">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);

@@ -1,11 +1,11 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { isSafeWebhookUrl } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Alert rules + fired alerts — the Cloud Observability "watches while you sleep"
@@ -61,15 +61,15 @@ export const rules = query
 
 /** Create an alert rule (owners/admins). New rules start enabled. */
 export const createRule = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
         channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         // Metric targets only: how the window value is compared to `threshold`. Default `gt`.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
-        destination: v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } }),
+        destination: boundedString(LIMITS.url),
         // Metric targets only: optional function-path scope for the window.
-        functionPath: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        functionPath: v.optional(boundedString(LIMITS.token)),
+        name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
         target: v.union(
             v.literal("issue"),
@@ -132,7 +132,7 @@ export const createRule = mutation
 
 /** Enable or disable a rule (owners/admins). */
 export const setRuleEnabled = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ enabled: v.boolean(), id: v.id("alertRules"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { enabled, id, organizationId } }): Promise<Id<"alertRules">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -144,7 +144,7 @@ export const setRuleEnabled = mutation
 
 /** Delete a rule (owners/admins). Past fired alerts are retained. */
 export const deleteRule = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("alertRules"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"alertRules">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -169,9 +169,9 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
  * close the cross-org IDOR on a shared-key call.
  */
 export const markDelivered = mutation
-    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
+    .use(dbRateLimit("machine"))
     .input({
-        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        deployKey: boundedString(LIMITS.token),
         ids: v.array(v.id("alerts")),
         organizationId: v.id("organizations"),
     })

@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { IncidentsSection } from "../client/IncidentsSection";
 import type { OrgId } from "../client/types";
-import { preload } from "../ssr/loader";
+import { sectionLoader } from "./-section-loader";
 
 const IncidentsSectionRoute = (): ReactElement => {
     const { organizationId } = Route.useParams();
@@ -14,15 +14,11 @@ const IncidentsSectionRoute = (): ReactElement => {
 };
 
 /**
- * `incidents` tab. The section's primary query is resolved on the edge as the
- * signed-in user, so the table is in the first byte; `usePreloadedQuery` inside
- * the section takes it live over the WebSocket once mounted.
+ * `incidents` tab. Preloads the **entitlement gate**, not the table — so the paid/unpaid
+ * decision is server-rendered and there is no upsell flash. The list itself is
+ * gated behind that entitlement and still arrives client-side.
  */
 export const Route = createFileRoute("/_authed/orgs/$organizationId/incidents")({
     component: IncidentsSectionRoute,
-    loader: async ({ params }) => {
-        return {
-            preloaded: await preload(api.billing.entitlements, { organizationId: params.organizationId as OrgId }),
-        };
-    },
+    loader: sectionLoader(api.billing.entitlements),
 });

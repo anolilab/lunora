@@ -1,5 +1,5 @@
 import { usePreloadedQuery } from "@lunora/react";
-import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
@@ -17,6 +17,15 @@ interface OrgFlags {
     suspendedReason?: string;
 }
 
+/**
+ * Why an organization is suspended, keyed by `suspendedReason`. A lookup rather than
+ * a ternary so a third reason is one entry, not a nested conditional.
+ */
+const SUSPENSION_DETAIL: Record<string, string> = {
+    default: " — spend cap reached. Raise the cap or upgrade your plan to restore service.",
+    dunning: " — payment failed. Update your billing details to restore service.",
+};
+
 /** Suspension / pending-deletion banners (GAPS.md C1/C2/D3). */
 const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
     if (org.suspendedAt === undefined && org.deletionRequestedAt === undefined) {
@@ -28,9 +37,7 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
             {org.suspendedAt === undefined ? null : (
                 <div className="callout error" role="alert">
                     This organization is suspended
-                    {org.suspendedReason === "dunning"
-                        ? " — payment failed. Update your billing details to restore service."
-                        : " — spend cap reached. Raise the cap or upgrade your plan to restore service."}
+                    {SUSPENSION_DETAIL[org.suspendedReason ?? ""] ?? SUSPENSION_DETAIL.default}
                 </div>
             )}
             {org.deletionRequestedAt === undefined ? null : (
@@ -48,11 +55,6 @@ const OrganizationLayout = (): ReactElement => {
     const organizationList = usePreloadedQuery(organizations);
     const navigate = useNavigate();
     const palette = useCommandPalette();
-
-    // The active tab is the last path segment — derived from the URL rather than
-    // tracked, so a deep link and a click are indistinguishable.
-    const pathname = useRouterState({ select: (state) => state.location.pathname });
-    const activeTab = pathname.split("/").pop() ?? "projects";
 
     const org = organizationList.find((candidate) => candidate._id === organizationId);
 
@@ -96,7 +98,11 @@ const OrganizationLayout = (): ReactElement => {
 
             <nav className="tabs">
                 {TABS.map((entry) => (
-                    <Link className={entry.id === activeTab ? "tab active" : "tab"} key={entry.id} params={{ organizationId }} to={entry.to}>
+                    // `activeProps` is the router's own active-match test. Deriving it
+                    // from `location.pathname` needed a `useRouterState` subscription
+                    // plus string surgery whose `?? "projects"` fallback could never
+                    // fire — `"/orgs/x/".split("/").pop()` is `""`, not `undefined`.
+                    <Link activeProps={{ className: "tab active" }} className="tab" key={entry.id} params={{ organizationId }} to={entry.to}>
                         {entry.label}
                     </Link>
                 ))}

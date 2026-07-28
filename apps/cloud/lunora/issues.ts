@@ -1,9 +1,7 @@
-import { dbRateLimit } from "@lunora/ratelimit";
-
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
 
 /**
  * Grouped application errors — the read/triage surface for the Cloud
@@ -41,7 +39,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
 /** Resolve or reopen an issue (owners/admins). */
 export const setStatus = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("issues"), organizationId: v.id("organizations"), status: issueStatus })
     .mutation(async ({ ctx: context, args: { id, organizationId, status } }): Promise<Id<"issues">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);

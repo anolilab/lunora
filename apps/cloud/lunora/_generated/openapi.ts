@@ -110,15 +110,9 @@ export const openApiSpec: Record<string, unknown> = {
                                                     }
                                                 ]
                                             },
-                                            "destination": {
-                                                "type": "string"
-                                            },
-                                            "functionPath": {
-                                                "type": "string"
-                                            },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "destination": {},
+                                            "functionPath": {},
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -356,9 +350,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "ids": {
                                                 "items": {
                                                     "description": "Id<\"alerts\">",
@@ -635,17 +627,13 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "action": {
-                                                "type": "string"
-                                            },
+                                            "action": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "target": {
-                                                "type": "string"
-                                            }
+                                            "target": {}
                                         },
                                         "required": [
                                             "action",
@@ -706,20 +694,14 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "cancelUrl": {
-                                                "type": "string"
-                                            },
+                                            "cancelUrl": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "priceId": {
-                                                "type": "string"
-                                            },
-                                            "successUrl": {
-                                                "type": "string"
-                                            }
+                                            "priceId": {},
+                                            "successUrl": {}
                                         },
                                         "required": [
                                             "cancelUrl",
@@ -851,9 +833,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "returnUrl": {
-                                                "type": "string"
-                                            }
+                                            "returnUrl": {}
                                         },
                                         "required": [
                                             "organizationId",
@@ -914,12 +894,8 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "body": {
-                                                "type": "string"
-                                            },
-                                            "signature": {
-                                                "type": "string"
-                                            }
+                                            "body": {},
+                                            "signature": {}
                                         },
                                         "required": [
                                             "body",
@@ -1187,18 +1163,12 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "branch": {
-                                                "type": "string"
-                                            },
-                                            "commitSha": {
-                                                "type": "string"
-                                            },
+                                            "branch": {},
+                                            "commitSha": {},
                                             "installationId": {
                                                 "type": "number"
                                             },
-                                            "repository": {
-                                                "type": "string"
-                                            }
+                                            "repository": {}
                                         },
                                         "required": [
                                             "branch",
@@ -1317,9 +1287,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -1598,9 +1566,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "dashboards"
                                             },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -1670,9 +1636,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -1750,9 +1714,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                     }
                                                 ]
                                             },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -1904,18 +1866,12 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "encryptedSecret": {
                                                 "additionalProperties": false,
                                                 "properties": {
-                                                    "ciphertext": {
-                                                        "type": "string"
-                                                    },
-                                                    "iv": {
-                                                        "type": "string"
-                                                    }
+                                                    "ciphertext": {},
+                                                    "iv": {}
                                                 },
                                                 "required": [
                                                     "ciphertext",
@@ -1923,9 +1879,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 ],
                                                 "type": "object"
                                             },
-                                            "hashedKey": {
-                                                "type": "string"
-                                            },
+                                            "hashedKey": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -2063,9 +2017,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "key": {
-                                                "type": "string"
-                                            }
+                                            "key": {}
                                         },
                                         "required": [
                                             "key"
@@ -2125,9 +2077,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "id": {
                                                 "description": "Id<\"deployments\">",
                                                 "type": "string",
@@ -2262,27 +2212,15 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "adminToken": {
-                                                "type": "string"
-                                            },
-                                            "adminTokenCiphertext": {
-                                                "type": "string"
-                                            },
-                                            "adminTokenIv": {
-                                                "type": "string"
-                                            },
-                                            "branch": {
-                                                "type": "string"
-                                            },
+                                            "adminToken": {},
+                                            "adminTokenCiphertext": {},
+                                            "adminTokenIv": {},
+                                            "branch": {},
                                             "cronSpecs": {
-                                                "items": {
-                                                    "type": "string"
-                                                },
+                                                "items": {},
                                                 "type": "array"
                                             },
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "kind": {
                                                 "anyOf": [
                                                     {
@@ -2309,12 +2247,8 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "projects"
                                             },
-                                            "runtimeVersion": {
-                                                "type": "string"
-                                            },
-                                            "scriptName": {
-                                                "type": "string"
-                                            }
+                                            "runtimeVersion": {},
+                                            "scriptName": {}
                                         },
                                         "required": [
                                             "kind",
@@ -2447,9 +2381,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "scriptName": {
-                                                "type": "string"
-                                            }
+                                            "scriptName": {}
                                         },
                                         "required": [
                                             "scriptName"
@@ -2509,9 +2441,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "id": {
                                                 "description": "Id<\"deployments\">",
                                                 "type": "string",
@@ -2582,9 +2512,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "alias": {
-                                                "type": "string"
-                                            }
+                                            "alias": {}
                                         },
                                         "required": [
                                             "alias"
@@ -2644,12 +2572,8 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "bundleHash": {
-                                                "type": "string"
-                                            },
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "bundleHash": {},
+                                            "deployKey": {},
                                             "id": {
                                                 "description": "Id<\"deployments\">",
                                                 "type": "string",
@@ -2691,9 +2615,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                     }
                                                 ]
                                             },
-                                            "url": {
-                                                "type": "string"
-                                            }
+                                            "url": {}
                                         },
                                         "required": [
                                             "id",
@@ -2754,9 +2676,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "hostname": {
-                                                "type": "string"
-                                            },
+                                            "hostname": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -2770,9 +2690,7 @@ export const openApiSpec: Record<string, unknown> = {
                                             "redirectStatusCode": {
                                                 "type": "number"
                                             },
-                                            "redirectTo": {
-                                                "type": "string"
-                                            }
+                                            "redirectTo": {}
                                         },
                                         "required": [
                                             "hostname",
@@ -2974,9 +2892,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "customHostnameId": {
-                                                "type": "string"
-                                            },
+                                            "customHostnameId": {},
                                             "id": {
                                                 "description": "Id<\"domains\">",
                                                 "type": "string",
@@ -3121,9 +3037,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "hostname": {
-                                                "type": "string"
-                                            }
+                                            "hostname": {}
                                         },
                                         "required": [
                                             "hostname"
@@ -3591,9 +3505,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "token": {
-                                                "type": "string"
-                                            }
+                                            "token": {}
                                         },
                                         "required": [
                                             "token"
@@ -3653,9 +3565,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "email": {
-                                                "type": "string"
-                                            },
+                                            "email": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -3991,9 +3901,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "lines": {
                                                 "items": {},
                                                 "type": "array"
@@ -4003,9 +3911,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "scriptName": {
-                                                "type": "string"
-                                            }
+                                            "scriptName": {}
                                         },
                                         "required": [
                                             "deployKey",
@@ -4074,9 +3980,7 @@ export const openApiSpec: Record<string, unknown> = {
                                             "from": {
                                                 "type": "number"
                                             },
-                                            "functionPath": {
-                                                "type": "string"
-                                            },
+                                            "functionPath": {},
                                             "levels": {
                                                 "items": {},
                                                 "type": "array"
@@ -4089,18 +3993,12 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "scriptName": {
-                                                "type": "string"
-                                            },
-                                            "search": {
-                                                "type": "string"
-                                            },
+                                            "scriptName": {},
+                                            "search": {},
                                             "to": {
                                                 "type": "number"
                                             },
-                                            "traceId": {
-                                                "type": "string"
-                                            }
+                                            "traceId": {}
                                         },
                                         "required": [
                                             "organizationId",
@@ -4166,9 +4064,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "userId": {
-                                                "type": "string"
-                                            }
+                                            "userId": {}
                                         },
                                         "required": [
                                             "organizationId",
@@ -4454,9 +4350,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "deploymentId": {
                                                 "description": "Id<\"deployments\">",
                                                 "type": "string",
@@ -4741,12 +4635,8 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "cells"
                                             },
-                                            "jurisdiction": {
-                                                "type": "string"
-                                            },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "jurisdiction": {},
+                                            "name": {},
                                             "plan": {
                                                 "anyOf": [
                                                     {
@@ -4763,9 +4653,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                     }
                                                 ]
                                             },
-                                            "slug": {
-                                                "type": "string"
-                                            }
+                                            "slug": {}
                                         },
                                         "required": [
                                             "name",
@@ -4826,9 +4714,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "slug": {
-                                                "type": "string"
-                                            }
+                                            "slug": {}
                                         },
                                         "required": [
                                             "slug"
@@ -4944,9 +4830,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -5076,9 +4960,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "repository": {
-                                                "type": "string"
-                                            }
+                                            "repository": {}
                                         },
                                         "required": [
                                             "repository"
@@ -5138,23 +5020,15 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "framework": {
-                                                "type": "string"
-                                            },
-                                            "githubRepo": {
-                                                "type": "string"
-                                            },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "framework": {},
+                                            "githubRepo": {},
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "slug": {
-                                                "type": "string"
-                                            }
+                                            "slug": {}
                                         },
                                         "required": [
                                             "name",
@@ -5285,9 +5159,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "projects"
                                             },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -5424,9 +5296,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "environment": {
                                                 "anyOf": [
                                                     {
@@ -5583,9 +5453,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "ciphertext": {
-                                                "type": "string"
-                                            },
+                                            "ciphertext": {},
                                             "environment": {
                                                 "anyOf": [
                                                     {
@@ -5606,12 +5474,8 @@ export const openApiSpec: Record<string, unknown> = {
                                                     }
                                                 ]
                                             },
-                                            "iv": {
-                                                "type": "string"
-                                            },
-                                            "name": {
-                                                "type": "string"
-                                            },
+                                            "iv": {},
+                                            "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -5690,9 +5554,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "sessionId": {
-                                                "type": "string"
-                                            }
+                                            "sessionId": {}
                                         },
                                         "required": [
                                             "organizationId",
@@ -5820,9 +5682,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "deploymentId": {
                                                 "description": "Id<\"deployments\">",
                                                 "type": "string",
@@ -5907,9 +5767,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "traceId": {
-                                                "type": "string"
-                                            }
+                                            "traceId": {}
                                         },
                                         "required": [
                                             "organizationId",
@@ -5975,9 +5833,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "traceId": {
-                                                "type": "string"
-                                            }
+                                            "traceId": {}
                                         },
                                         "required": [
                                             "organizationId",
@@ -6049,9 +5905,7 @@ export const openApiSpec: Record<string, unknown> = {
                                             "from": {
                                                 "type": "number"
                                             },
-                                            "functionPath": {
-                                                "type": "string"
-                                            },
+                                            "functionPath": {},
                                             "limit": {
                                                 "type": "number"
                                             },
@@ -6337,9 +6191,7 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "deployKey": {
-                                                "type": "string"
-                                            },
+                                            "deployKey": {},
                                             "deploymentId": {
                                                 "description": "Id<\"deployments\">",
                                                 "type": "string",

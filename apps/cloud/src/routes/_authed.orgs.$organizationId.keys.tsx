@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { DeployKeysSection } from "../client/DeployKeysSection";
 import type { OrgId } from "../client/types";
-import { preload } from "../ssr/loader";
+import { sectionLoader } from "./-section-loader";
 
 const DeployKeysSectionRoute = (): ReactElement => {
     const { organizationId } = Route.useParams();
@@ -13,16 +13,8 @@ const DeployKeysSectionRoute = (): ReactElement => {
     return <DeployKeysSection organizationId={organizationId as OrgId} preloaded={preloaded} />;
 };
 
-/**
- * `keys` tab. The section's primary query is resolved on the edge as the
- * signed-in user, so the table is in the first byte; `usePreloadedQuery` inside
- * the section takes it live over the WebSocket once mounted.
- */
+/** `keys` tab — see `-section-loader.ts` for how its data is server-rendered. */
 export const Route = createFileRoute("/_authed/orgs/$organizationId/keys")({
     component: DeployKeysSectionRoute,
-    loader: async ({ params }) => {
-        return {
-            preloaded: await preload(api.deploy_keys.list, { organizationId: params.organizationId as OrgId }),
-        };
-    },
+    loader: sectionLoader(api.deploy_keys.list),
 });

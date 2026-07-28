@@ -4,21 +4,23 @@ import type { ReactElement } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { LogsSection } from "../client/LogsSection";
 import type { OrgId } from "../client/types";
-import { preload } from "../ssr/loader";
+import { sectionLoader } from "./-section-loader";
 
 const LogsSectionRoute = (): ReactElement => {
     const { organizationId } = Route.useParams();
     const { preloaded } = Route.useLoaderData();
     const { traceId } = Route.useSearch();
 
-    return <LogsSection focusTraceId={traceId} organizationId={organizationId as OrgId} preloaded={preloaded} />;
+    // `key` on the trace id so a change to `?traceId=` remounts the section.
+    // `focusTraceId` is consumed as a one-shot `useState` seed inside, which only
+    // re-runs on mount — and the router remounts on a *route* change, not a
+    // search-param change. Without this, navigating from
+    // `/orgs/x/logs?traceId=A` to `/orgs/x/logs` (clicking the tab drops the
+    // search) left the previous trace filter on screen contradicting the URL.
+    return <LogsSection focusTraceId={traceId} key={traceId ?? ""} organizationId={organizationId as OrgId} preloaded={preloaded} />;
 };
 
-/**
- * `logs` tab. The section's primary query is resolved on the edge as the
- * signed-in user, so the table is in the first byte; `usePreloadedQuery` inside
- * the section takes it live over the WebSocket once mounted.
- */
+/** `logs` tab — see `-section-loader.ts` for how its data is server-rendered. */
 export const Route = createFileRoute("/_authed/orgs/$organizationId/logs")({
     component: LogsSectionRoute,
     validateSearch: (search: Record<string, unknown>): { traceId?: string } => {
@@ -26,9 +28,5 @@ export const Route = createFileRoute("/_authed/orgs/$organizationId/logs")({
             traceId: typeof search.traceId === "string" ? search.traceId : undefined,
         };
     },
-    loader: async ({ params }) => {
-        return {
-            preloaded: await preload(api.projects.listByOrg, { organizationId: params.organizationId as OrgId }),
-        };
-    },
+    loader: sectionLoader(api.projects.listByOrg),
 });

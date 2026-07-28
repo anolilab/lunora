@@ -1,5 +1,4 @@
 import { fingerprintError } from "@lunora/fingerprint";
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { AlertChannel, AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
@@ -8,7 +7,8 @@ import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
 import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Telemetry ingest for the Cloud Observability pipeline (superlog model). The
@@ -280,9 +280,9 @@ export const upsertIncident = async (
  * under the unique `(org, hash)` index).
  */
 export const ingest = mutation
-    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
+    .use(dbRateLimit("ingest"))
     .input({
-        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        deployKey: boundedString(LIMITS.token),
         deploymentId: v.optional(v.id("deployments")),
         events: v.array(telemetryEvent),
         observations: v.optional(v.array(observationInput)),
@@ -498,7 +498,7 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
  * key before delegating to the deploy-key-authorized ingest. SYSTEM only.
  */
 export const orgForDeployKey = internalQuery
-    .input({ deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
+    .input({ deployKey: boundedString(LIMITS.token) })
     .query(async ({ ctx: context, args }): Promise<{ organizationId: Id<"organizations"> } | null> => {
         const organizationId = await resolveDeployKeyOrg(context, args.deployKey);
 
