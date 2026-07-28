@@ -2,7 +2,7 @@ import { LunoraClient } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { createRootRouteWithContext, HeadContent, Link, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -48,9 +48,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
             <div className="callout">
                 <h1>404</h1>
                 <p>This page could not be found.</p>
-                <a className="link" href="/">
+                <Link className="link" to="/">
                     Back to organizations
-                </a>
+                </Link>
             </div>
         </main>
     ),

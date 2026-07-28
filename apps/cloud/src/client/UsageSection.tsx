@@ -7,14 +7,7 @@ import { includedUsageFor } from "../billing/overage";
 
 import type { SectionProps } from "./tabs";
 import { formatDate, formatNumber } from "./format";
-
-/** Epoch ms for the first instant of the current UTC month. */
-/** Start of the current UTC billing month — shared with the `usage` route loader so SSR and client agree on the period. */
-export const monthStart = (): number => {
-    const now = new Date();
-
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-};
+import { monthStart } from "./usage-period";
 
 const formatBytes = (bytes: number): string => {
     const units = ["B", "KB", "MB", "GB", "TB"];

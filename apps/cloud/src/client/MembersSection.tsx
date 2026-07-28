@@ -54,8 +54,7 @@ export const MembersSection = ({ organizationId, preloaded }: SectionProps<Retur
                 <h3>Add member</h3>
                 <form
                     className="inline-form"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
 
                         void (async () => {
