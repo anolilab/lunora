@@ -24,6 +24,7 @@ import { importCommand } from "./commands/import";
 import { infoCommand } from "./commands/info";
 import { initCommand } from "./commands/init";
 import { insightsCommand } from "./commands/insights";
+import { introspectCommand } from "./commands/introspect";
 import { linkCommand } from "./commands/link";
 import { logsCommand } from "./commands/logs";
 import { mcpCommand } from "./commands/mcp";
@@ -151,6 +152,7 @@ const CLI_COMMANDS = [
     exportCommand,
     importCommand,
     seedCommand,
+    introspectCommand,
     backupCommand,
     verifyCommand,
     infoCommand,

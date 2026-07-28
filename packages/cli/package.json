@@ -104,6 +104,18 @@
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
+    "peerDependencies": {
+        "mysql2": "*",
+        "pg": "*"
+    },
+    "peerDependenciesMeta": {
+        "mysql2": {
+            "optional": true
+        },
+        "pg": {
+            "optional": true
+        }
+    },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
     }

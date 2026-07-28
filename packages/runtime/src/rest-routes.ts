@@ -19,6 +19,7 @@
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { methodGuard } from "./method-guard";
+import { applyRestCache } from "./rest-cache";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -130,6 +131,11 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
     for (const entry of restSurfaceFromRegistry(functions)) {
         // A query is reachable via GET or POST; a mutation/action via POST only.
         const allowed = entry.kind === "query" ? ["GET", "POST"] : ["POST"];
+        // Read straight off the registry: the surface descriptor is the shared
+        // path/method contract with the OpenAPI emitter and deliberately carries
+        // no response policy. `entry.functionPath` came out of this same map, so
+        // the lookup cannot miss.
+        const cache = (functions[entry.functionPath] as RestRegistryEntry).expose?.cache;
 
         routes[entry.path] = async (
             request: Request,
@@ -168,7 +174,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
 
             const shardKey = readShardKey(url, request);
 
-            return invoke({
+            const response = await invoke({
                 args,
                 env,
                 functionPath: entry.functionPath,
@@ -176,6 +182,12 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
                 ...(shardKey === undefined ? {} : { shardKey }),
                 ...(context?.waitUntil === undefined ? {} : { waitUntil: (promise: Promise<unknown>) => context.waitUntil?.(promise) }),
             });
+
+            // Applied AFTER dispatch so the effective `Cache-Control` can account
+            // for the real status (an error is never cached) and for whether the
+            // caller presented credentials (a credentialed exchange is forced
+            // `private`, see `rest-cache`).
+            return applyRestCache(response, cache, request);
         };
     }
 

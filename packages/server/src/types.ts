@@ -5,6 +5,8 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+import type { RestCachePolicy } from "../../../shared/rest-surface";
+
 // Cache the namespace proxies and the per-function reference objects so that
 // `api.foo.bar` returns the *same* object on every access. React hooks
 // (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
@@ -489,6 +491,31 @@ interface X402ProcedureConfig {
 }
 
 /**
+ * HTTP caching for an exposed REST endpoint, declared as
+ * `.expose({ rest: true, cache: { scope: "public", maxAge: 60 } })`. The runtime
+ * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers, and a
+ * `cache.tag` is purgeable through `ctx.cache.purge({ tags: [...] })`.
+ *
+ * This is NOT equivalent to `httpRoute(...).cacheControl()`, which writes whatever
+ * value the author passes with no credential downgrade. That is the unguarded
+ * escape hatch; this is the guarded surface.
+ *
+ * Caching a procedure whose result depends on the caller is how a REST cache
+ * turns into a data leak, so `scope` is enforced at runtime rather than trusted:
+ * a request that carries credentials (an `Authorization` header or any `Cookie`)
+ * is ALWAYS answered `private`, even under `scope: "public"` — see
+ * {@link https://developer.mozilla.org/docs/Web/HTTP/Headers/Cache-Control MDN}
+ * for what `private` forbids. So a per-user response can never be stored in a
+ * shared/edge cache, and the worst a mis-declared `scope` can cost is a missed
+ * cache hit. `scope: "public"` additionally emits `Vary: authorization, cookie`
+ * so an intermediary can't hand a stored anonymous variant to a signed-in caller.
+ *
+ * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
+ * `mutation` / `action` is `POST`-only) that produced a 2xx.
+ */
+type RestCacheConfig = RestCachePolicy;
+
+/**
  * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
  * modifier (plan 167). Marks a procedure as deliberately published over the
  * public REST surface: the runtime mints a `/_lunora/rest/&lt;namespace>/&lt;fn>` route
@@ -497,6 +524,9 @@ interface X402ProcedureConfig {
  * — a procedure without this tag is unreachable over REST.
  */
 interface ExposeConfig {
+    /** Opt this endpoint's responses into HTTP caching. Omit to leave them uncached. */
+    readonly cache?: RestCacheConfig;
+
     /** Publish this procedure over the public REST surface. */
     readonly rest?: boolean;
 }
@@ -2128,6 +2158,7 @@ export type {
     RegisteredQuery,
     RegisteredStream,
     RelationDefinition,
+    RestCacheConfig,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,

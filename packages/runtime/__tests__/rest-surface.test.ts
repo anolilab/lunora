@@ -216,4 +216,112 @@ describe("createWorker — opt-in public REST surface", () => {
         expect(kept).toHaveLength(1);
         await expect(kept[0]).resolves.toBe("sent");
     });
+
+    describe("declared response caching (.expose({ cache }))", () => {
+        // `list` is cacheable and public; `send` declares a cache that must never
+        // apply, because a mutation is POST-only.
+        const cachingFunctions: WorkerOptions["functions"] = {
+            "messages:list": { expose: { cache: { maxAge: 60, scope: "public", tag: "messages" }, rest: true }, kind: "query" },
+            "messages:plain": { expose: { rest: true }, kind: "query" },
+            "messages:send": { expose: { cache: { maxAge: 60, scope: "public" }, rest: true }, kind: "mutation" },
+        };
+
+        it("answers an anonymous GET with the declared shared-cache policy", async () => {
+            expect.assertions(3);
+
+            const { namespace } = echoShard();
+            const worker = createWorker({ functions: cachingFunctions, shardDO: namespace });
+
+            const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+
+            expect(response.headers.get("cache-control")).toBe("public, max-age=60");
+            expect(response.headers.get("cache-tag")).toBe("messages");
+            expect(response.headers.get("vary")).toBe("authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
+        });
+
+        it("varies on the shard-key header, which selects which rows the caller sees", async () => {
+            expect.assertions(1);
+
+            const { namespace } = echoShard();
+            const worker = createWorker({ functions: cachingFunctions, shardDO: namespace });
+
+            const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+
+            // The query-string form is already in the URL; the header form is not,
+            // so without this one URL would map to every shard's body.
+            expect(response.headers.get("vary")).toContain("x-lunora-shard-key");
+        });
+
+        it("downgrades to private once the caller presents credentials, so a per-user body never reaches a shared cache", async () => {
+            expect.assertions(1);
+
+            const { namespace } = echoShard();
+            const worker = createWorker({ functions: cachingFunctions, shardDO: namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/rest/messages/list", { headers: { authorization: "Bearer user-token" } }), // secret-scanner:allow -- fake test fixture, not a real credential
+                {},
+                fakeContext,
+            );
+
+            expect(response.headers.get("cache-control")).toBe("private, max-age=60");
+        });
+
+        it("never caches a POST exchange, even when the procedure declares a cache", async () => {
+            expect.assertions(2);
+
+            const { namespace } = echoShard();
+            const worker = createWorker({ functions: cachingFunctions, shardDO: namespace });
+
+            const mutation = await worker.fetch(
+                new Request("https://app.example/_lunora/rest/messages/send", {
+                    body: JSON.stringify({ text: "hi" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(mutation.headers.get("cache-control")).toBeNull();
+
+            // Same procedure reached as a POST-bodied query — still not cacheable.
+            const query = await worker.fetch(
+                new Request("https://app.example/_lunora/rest/messages/list", {
+                    body: JSON.stringify({}),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(query.headers.get("cache-control")).toBeNull();
+        });
+
+        it("leaves an endpoint that declares no cache completely untouched", async () => {
+            expect.assertions(2);
+
+            const { namespace } = echoShard();
+            const worker = createWorker({ functions: cachingFunctions, shardDO: namespace });
+
+            const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/plain"), {}, fakeContext);
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get("cache-control")).toBeNull();
+        });
+
+        it("does not cache a rejected request (authorization denied)", async () => {
+            expect.assertions(2);
+
+            const { namespace } = echoShard();
+            const authorizeShard = vi.fn<() => Promise<boolean>>(async () => false);
+            const worker = createWorker({ authorizeShard, functions: cachingFunctions, shardDO: namespace });
+
+            const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+
+            expect(response.status).toBe(403);
+            expect(response.headers.get("cache-control")).toBeNull();
+        });
+    });
 });

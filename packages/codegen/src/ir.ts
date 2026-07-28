@@ -254,6 +254,19 @@ export interface SchemaIR {
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }
 
+/**
+ * Statically-read mirror of `@lunora/server`'s `RestCacheConfig`. Every field is
+ * optional because discovery only records literals it could actually read off the
+ * `.expose({ cache: … })` object.
+ */
+export interface ExposeCacheIR {
+    maxAge?: number;
+    scope?: "private" | "public";
+    staleWhileRevalidate?: number;
+    tag?: string;
+    vary?: string;
+}
+
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
@@ -264,8 +277,13 @@ export interface FunctionIR {
      * OpenAPI emitter describes it as a real `/_lunora/rest/&lt;namespace>/&lt;fn>` path
      * (the single source of truth the runtime router also derives from). Absent →
      * RPC-only (the default; not on the REST surface).
+     *
+     * `cache` mirrors the `RestCacheConfig` the runtime turns into response
+     * headers, so the emitted spec can document the `Cache-Control` a caller will
+     * actually observe. Only statically-readable literal fields are carried; a
+     * computed value is simply absent (the spec under-documents rather than lies).
      */
-    expose?: { rest?: boolean };
+    expose?: { cache?: ExposeCacheIR; rest?: boolean };
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
