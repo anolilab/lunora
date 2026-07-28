@@ -41,7 +41,7 @@ export default createConfig(
                         "Request",
                         "Response",
                         "ReadableStream",
-                        // Browser globals used by the hosted-studio SPA (src/client).
+                        // Browser globals used by the hosted studio (src/client, src/routes).
                         "localStorage",
                         "sessionStorage",
                         "navigator",

@@ -24,10 +24,14 @@ export const getRouter = () => {
     return createTanStackRouter({
         context: { queryClient },
         defaultPreload: "intent",
+        // Long enough that the hover which triggered the preload actually gets to
+        // use it. With the previous `defaultPreloadStaleTime: 0` every preloaded
+        // match was stale on arrival, so hovering the 19-tab bar fired a
+        // server-function round trip per tab and discarded all of them. Session
+        // freshness is not a factor here — the gate is `_authed`'s `beforeLoad`,
+        // not loader data.
+        defaultPreloadStaleTime: 10_000,
         routeTree,
-        // The dashboard is session-gated per route, so a stale preloaded loader
-        // result must not outlive a sign-out.
-        defaultPreloadStaleTime: 0,
     });
 };
 

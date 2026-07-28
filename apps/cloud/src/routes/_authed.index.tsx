@@ -27,10 +27,12 @@ const OrganizationsPage = (): ReactElement => {
  */
 export const Route = createFileRoute("/_authed/")({
     component: OrganizationsPage,
+    // `Promise.all`, not two sequential awaits: the queries are independent, and on a
+    // client navigation each `preload` is its own server-function round trip — so
+    // serializing them made the page wait for one after the other.
     loader: async () => {
-        return {
-            cells: await preload(api.cells.list, {}),
-            organizations: await preload(api.organizations.list, {}),
-        };
+        const [cells, organizations] = await Promise.all([preload(api.cells.list, {}), preload(api.organizations.list, {})]);
+
+        return { cells, organizations };
     },
 });

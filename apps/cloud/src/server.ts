@@ -649,7 +649,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         adminToken: env.LUNORA_ADMIN_TOKEN,
         // Dispatch better-auth's `/api/auth/*` routes inside the worker so the
-        // studio SPA + the control plane share an origin.
+        // studio and the control plane share an origin.
         authAdmin: auth ? createAuthAdmin(auth) : undefined,
         authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
         // Code-first crons (lunora/crons.ts): the cleanup-expired-previews job

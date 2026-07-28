@@ -45,7 +45,9 @@ const AuthedLayout = (): ReactElement => {
  */
 export const Route = createFileRoute("/_authed")({
     beforeLoad: async ({ location }) => {
-        return { session: await requireSession(location.pathname) };
+        // `href`, not `pathname`: the search string is part of what the visitor asked
+        // for (a `?traceId=` deep link), and dropping it returned them to the bare tab.
+        return { session: await requireSession(location.href) };
     },
     component: AuthedLayout,
 });

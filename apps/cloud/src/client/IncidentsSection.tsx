@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
@@ -7,13 +7,8 @@ import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
 import { CrossTabLink } from "./CrossTabLink";
-import type { OrgId } from "./types";
 
-interface IncidentsSectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
-}
+import type { SectionProps } from "./tabs";
 
 /** The structured investigation result the runner produces (mirrors the query view). */
 interface InvestigationView {
@@ -77,7 +72,7 @@ const InvestigationPanel = ({ onDismiss, result, title }: { onDismiss: () => voi
  * structured result — summary, root-cause hypothesis, suggested remediation,
  * confidence, and related-trace links — which is also persisted on the incident.
  */
-export const IncidentsSection = ({ organizationId, preloaded }: IncidentsSectionProps): ReactElement => {
+export const IncidentsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.billing.entitlements>>): ReactElement => {
     const client = useLunora();
     const entitlements = usePreloadedQuery(preloaded);
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
