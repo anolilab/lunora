@@ -86,7 +86,7 @@ export { CLOUDFLARE_CAPABILITIES } from "./capabilities";
 export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
 
 // Scheduler host
-export type { ScheduledJob, ScheduleOptions, SchedulerHost } from "./scheduler-host";
+export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
 
 // Shard directory
 export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardStub, TwoStepShardDirectory } from "./shard-directory";

@@ -17,9 +17,10 @@
  * which is where it belongs on this target anyway.
  */
 
-import type { ScheduledJob, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
 
 import createScheduler from "./create-scheduler";
+import type { ScheduleRecord } from "./types";
 
 /** What the Cloudflare scheduler host needs from the Worker's environment. */
 interface SchedulerHostOptions {
@@ -74,11 +75,44 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
         originUrl: options.originUrl,
     });
 
+    /**
+     * Project a `ScheduleRecord` onto the neutral status shape.
+     *
+     * `attempts` is absent until the first failure — the DO only writes it in
+     * `recordRetry()` — so it reads as `0`, which is what "not yet retried"
+     * means to a caller. A record targeting a workflow has no `functionPath`;
+     * its `workflow` name is the dispatch target and is reported as such rather
+     * than as an empty string.
+     */
+    const toStatus = (record: ScheduleRecord): ScheduledJobStatus => {
+        return {
+            attempts: record.attempts ?? 0,
+            functionPath: record.functionPath ?? record.workflow ?? "",
+            id: record.id,
+            scheduledFor: record.scheduledFor,
+        };
+    };
+
     return {
         cancel: async (id) => {
             const { cancelled } = await scheduler.cancel(id);
 
             return cancelled;
+        },
+
+        deadLetter: {
+            list: async () => {
+                const records = await scheduler.dead();
+
+                return records.map((record) => toStatus(record));
+            },
+            requeue: async (id) => scheduler.deadRetry(id),
+        },
+
+        list: async () => {
+            const records = await scheduler.list();
+
+            return records.map((record) => toStatus(record));
         },
 
         schedule: async (functionPath, args, scheduleOptions) => {
