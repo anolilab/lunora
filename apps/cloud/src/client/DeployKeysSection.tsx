@@ -77,8 +77,7 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
                 ) : null}
                 <form
                     className="inline-form"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
 
                         void (async () => {

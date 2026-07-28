@@ -81,8 +81,7 @@ export const SecretsSection = ({ organizationId, preloaded }: SectionProps<Retur
                     <h3>Set secret</h3>
                     <form
                         className="inline-form"
-                        onSubmit={(event) => {
-                            event.preventDefault();
+                        action={() => {
                             setError(null);
                             setPending(true);
 

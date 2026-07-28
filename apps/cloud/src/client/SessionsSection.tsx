@@ -122,6 +122,13 @@ export const SessionsSection = ({ organizationId, preloaded }: SectionProps<Retu
                                     onClick={() => {
                                         setSessionId(session.sessionId === sessionId ? "" : session.sessionId);
                                     }}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                            event.preventDefault();
+                                            setSessionId(session.sessionId === sessionId ? "" : session.sessionId);
+                                        }
+                                    }}
+                                    tabIndex={0}
                                 >
                                     <td className="trace-id">{session.sessionId.slice(0, 16)}</td>
                                     <td>{session.turnCount}</td>

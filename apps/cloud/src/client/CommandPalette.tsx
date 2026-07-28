@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { PaletteCommand } from "./use-command-palette";
 
@@ -37,27 +37,44 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
         }
     };
 
+    // A native <dialog> opened with showModal(), rather than a div with
+    // role="dialog": the platform then owns the focus trap (tab cannot escape to
+    // the page behind), the top layer, the backdrop, and Escape-to-close. The
+    // hand-rolled version had none of those — keyboard users could tab straight out
+    // of the palette into the obscured page underneath.
+    const dialogRef = useRef<HTMLDialogElement>(null);
+
+    useEffect(() => {
+        const dialog = dialogRef.current;
+
+        dialog?.showModal();
+
+        return () => {
+            dialog?.close();
+        };
+    }, []);
+
     return (
-        <div
-            className="palette-overlay"
-            onClick={onClose}
-            onKeyDown={(event) => {
-                if (event.key === "Escape") {
+        <dialog
+            aria-label="Command palette"
+            className="palette"
+            onCancel={(event) => {
+                // The browser's Escape handling would remove the dialog from the DOM
+                // behind React's back; close through the owner instead so `open` state
+                // stays the source of truth.
+                event.preventDefault();
+                onClose();
+            }}
+            onClick={(event) => {
+                // ::backdrop clicks land on the dialog element itself, so a hit that is
+                // not inside the panel is a backdrop hit — the old overlay behaviour.
+                if (event.target === dialogRef.current) {
                     onClose();
                 }
             }}
-            role="presentation"
+            ref={dialogRef}
         >
-            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/click-events-have-key-events -- the click handler only stops overlay-close propagation; keyboard flow lives on the input */}
-            <div
-                aria-label="Command palette"
-                aria-modal="true"
-                className="palette"
-                onClick={(event) => {
-                    event.stopPropagation();
-                }}
-                role="dialog"
-            >
+            <div className="palette-panel">
                 <input
                     aria-label="Search commands"
                     // eslint-disable-next-line jsx-a11y/no-autofocus -- a command palette exists to receive keyboard input the instant it opens
@@ -114,7 +131,7 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
                 </ul>
                 <div className="palette-hint muted">↑↓ navigate · ↵ run · esc close</div>
             </div>
-        </div>
+        </dialog>
     );
 };
 
