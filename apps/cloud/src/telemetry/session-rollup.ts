@@ -66,7 +66,7 @@ export const foldSessions = (spans: ReadonlyArray<SessionSpan>, limit: number): 
     for (const span of spans) {
         const { sessionId } = span;
 
-        if (sessionId === undefined || sessionId === "") {
+        if (sessionId == null || sessionId === "") {
             continue;
         }
 
@@ -80,7 +80,7 @@ export const foldSessions = (spans: ReadonlyArray<SessionSpan>, limit: number): 
                 errorCount: span.level === "error" ? 1 : 0,
                 firstSeen: span.startedAt,
                 lastSeen: span.endedAt,
-                models: span.model === undefined || span.model === "" ? [] : [span.model],
+                models: span.model == null || span.model === "" ? [] : [span.model],
                 promptTokens,
                 sessionId,
                 totalTokens: promptTokens + completionTokens,
@@ -98,7 +98,7 @@ export const foldSessions = (spans: ReadonlyArray<SessionSpan>, limit: number): 
         existing.completionTokens += completionTokens;
         existing.totalTokens += promptTokens + completionTokens;
 
-        if (span.model !== undefined && span.model !== "" && !existing.models.includes(span.model)) {
+        if (span.model != null && span.model !== "" && !existing.models.includes(span.model)) {
             existing.models.push(span.model);
         }
     }
