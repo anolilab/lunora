@@ -78,6 +78,7 @@ interface LunoraPluginOptions {
     projectRoot?: string;
     schemaDir?: string;
     studio?: boolean;
+    target?: string;
     validateWrangler?: boolean;
 }
 ```
@@ -121,6 +122,7 @@ interface ResolvedLunoraPluginOptions {
     projectRoot: string;
     schemaDir: string;
     studio: boolean;
+    target: string;
     validateWrangler: boolean;
 }
 ```

@@ -1138,6 +1138,18 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | undefined;
 ```
 
+### `platformMatrixIds` (const)
+
+```ts
+const platformMatrixIds: () => ReadonlyArray<string>;
+```
+
+### `readProjectTarget` (const)
+
+```ts
+const readProjectTarget: (projectRoot: string) => string | undefined;
+```
+
 ### `redact` (const)
 
 ```ts
@@ -1148,6 +1160,12 @@ const redact: (value: string) => string;
 
 ```ts
 const refreshCodegenProject: (project: Project, lunoraDirectory: string) => void;
+```
+
+### `resolveCodegenTarget` (const)
+
+```ts
+const resolveCodegenTarget: (projectRoot: string, explicit?: string) => string;
 ```
 
 ### `runCodegen` (const)

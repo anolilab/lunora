@@ -69,7 +69,14 @@ export { default as LunoraReporter } from "./lunora-reporter";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
-export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "./project-config";
+export {
+    interpretRemote,
+    LUNORA_CONFIG_FILE,
+    readProjectRemotePreference,
+    readProjectTarget,
+    resolveProjectTarget,
+    resolveTargetOrThrow,
+} from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";

@@ -5,8 +5,10 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveTargetOrError } from "../../util/deploy-target";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import type { CodegenOptions } from "./index";
 
 /** Cloudflare caps a Worker at 3 Cron Triggers (distinct cron expressions). */
@@ -19,12 +21,14 @@ interface CodegenCommandOptions {
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
     logger: Logger;
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    target?: string;
 }
 
 interface CodegenCommandResult {
     advisories: ReadonlyArray<{ detail: string; level: string; name: string; remediation: string }>;
     cronTriggers: ReadonlyArray<string>;
-    /** Set when the run aborted on an invalid `--format` before codegen ran. */
+    /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
     error?: string;
     outputDirectory: string;
 }
@@ -44,7 +48,25 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         return { advisories: [], cronTriggers: [], error: formatError, outputDirectory: "" };
     }
 
-    const result = runCodegen({ apiSpec: options.apiSpec, projectRoot, wranglerVariables: collectWranglerSecretVariables(projectRoot) });
+    // Validated here because codegen resolves no driver of its own — an
+    // unregistered name would otherwise emit the full Cloudflare surface
+    // un-gated and exit 0.
+    const resolvedTarget = resolveTargetOrError(projectRoot, options.target);
+
+    if (resolvedTarget.target === undefined) {
+        options.logger.error(resolvedTarget.error ?? "unknown deploy target");
+
+        return { advisories: [], cronTriggers: [], error: resolvedTarget.error ?? "unknown deploy target", outputDirectory: "" };
+    }
+
+    const { target } = resolvedTarget;
+
+    const result = runCodegen({
+        apiSpec: options.apiSpec,
+        projectRoot,
+        target,
+        wranglerVariables: collectWranglerSecretVariables(projectRoot),
+    });
     const commandResult: CodegenCommandResult = {
         advisories: result.advisories.map((advisory) => {
             return {
@@ -70,16 +92,10 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
     }
 
-    // Platform-portability diagnostics: `ctx.*` features the deploy target does
-    // not support (omitted from the emitted surface) or an unknown target.
-    // Empty on the default Cloudflare target, so this stays silent there.
-    if (result.platformDiagnostics.length > 0) {
-        const count = result.platformDiagnostics.length;
-        const lines = result.platformDiagnostics.map(
-            (diagnostic) => `  [${diagnostic.level.toUpperCase()}] ${diagnostic.name} — ${diagnostic.message}\n      ↳ ${diagnostic.remediation}`,
-        );
+    const platformError = reportPlatformDiagnostics(result.platformDiagnostics, logger);
 
-        logger.warn(`${count.toString()} platform ${count === 1 ? "diagnostic" : "diagnostics"}:\n${lines.join("\n")}`);
+    if (platformError !== undefined) {
+        commandResult.error = platformError;
     }
 
     // Distinct cron expressions map 1:1 to wrangler `triggers.crons`; Cloudflare
@@ -101,7 +117,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
 
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({ cwd, logger, options }) => {
-    const result = runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, format: options.format, logger });
+    const result = runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, format: options.format, logger, target: options.target });
 
     return { code: result.error === undefined ? 0 : 1 };
 });

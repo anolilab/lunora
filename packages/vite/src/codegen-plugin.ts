@@ -138,7 +138,7 @@ const reconcileWranglerExtras = (
  * behaviour.
  */
 const runCodegenSafely = (
-    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
+    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir" | "target">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
     overlay?: OverlayCallbacks,
     project?: Project,
@@ -157,6 +157,7 @@ const runCodegenSafely = (
             lunoraDirectory: options.schemaDir,
             project,
             projectRoot: options.projectRoot,
+            target: options.target,
             wranglerVariables: collectWranglerSecretVariables(options.projectRoot),
         });
 
@@ -169,6 +170,22 @@ const runCodegenSafely = (
             const line = advisoryLine(advisory.level, advisory.name, advisory.detail, advisory.remediation);
 
             if (advisory.level === "ERROR") {
+                logger.error(line);
+            } else {
+                logger.warn(line);
+            }
+        }
+
+        // Platform-portability diagnostics: a `ctx.*` surface the target cannot
+        // provide, or a target with no registered capability matrix. Surfaced
+        // here for the same reason the CLI surfaces them — without this a
+        // `vite build` against a mis-declared target emits the default surface,
+        // prints nothing, and exits 0, which is the Vite-first path around the
+        // guard the CLI already has.
+        for (const diagnostic of result.platformDiagnostics) {
+            const line = advisoryLine(diagnostic.level === "error" ? "ERROR" : "WARN", diagnostic.name, diagnostic.message, diagnostic.remediation);
+
+            if (diagnostic.level === "error") {
                 logger.error(line);
             } else {
                 logger.warn(line);

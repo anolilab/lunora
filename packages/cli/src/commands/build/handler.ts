@@ -21,6 +21,14 @@ interface BuildCommandOptions {
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
     spawner?: Spawner;
+
+    /**
+     * Deploy target the artifact is built for. Defaults to `"target"` in
+     * `lunora.json`, then `"cloudflare"`. `build` is the artifact half of the
+     * `lunora build` → `lunora deploy --prebuilt` CI split, so without this that
+     * split can only ever produce a default-target artifact.
+     */
+    target?: string;
 }
 
 /**
@@ -40,6 +48,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<DeployComm
         logger: options.logger,
         outDir: outDirectory,
         spawner: options.spawner,
+        target: options.target,
     });
 
     if (result.code === 0) {
@@ -57,6 +66,7 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async 
         format: options.format,
         logger,
         outDir: options.outDir,
+        target: options.target,
     });
 
     return { code: result.code };

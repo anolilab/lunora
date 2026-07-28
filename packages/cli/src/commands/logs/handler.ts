@@ -25,7 +25,7 @@ interface LogsCommandOptions {
     spawner?: Spawner;
     /** Filter by invocation status: `ok`, `error`, or `canceled` (forwarded as `--status`). */
     status?: string;
-    /** Deploy target whose tail command to run. Defaults to `"cloudflare"`. */
+    /** Deploy target whose tail command to run. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
     target?: string;
 
     /**
@@ -130,6 +130,7 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
         logger,
         search: options.search,
         status: options.status,
+        target: options.target,
         temporary: options.temporary === true,
         worker: argument[0],
     });

@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const verifyCommand: Command = {
     description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
@@ -18,6 +19,7 @@ const verifyCommand: Command = {
     options: [
         { description: "Treat breaking schema drift as a warning instead of a failure", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         {
             description: "Probe this deployment's /_lunora/health endpoint (off by default; keeps verify offline-safe)",
@@ -37,5 +39,6 @@ export type VerifyOptions = CreateOptions<{
     "api-spec": string | undefined;
     format: string | undefined;
     "health-url": string | undefined;
+    target: string | undefined;
     typecheck: boolean | undefined;
 }>;

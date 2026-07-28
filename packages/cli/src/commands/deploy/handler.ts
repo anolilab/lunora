@@ -31,6 +31,7 @@ import { autoLinkFromDeployOutput } from "../../util/auto-link";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
+import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
@@ -136,7 +137,8 @@ interface DeployCommandOptions {
     spawner?: Spawner;
 
     /**
-     * Deploy target. Defaults to `"cloudflare"`, which selects the wrangler
+     * Deploy target. Falls back to `"target"` in `lunora.json`, then
+     * `"cloudflare"`, which selects the wrangler
      * toolchain — i.e. today's behavior for every project. An unregistered name
      * throws rather than falling back, so a typo can never ship the app to the
      * wrong provider.
@@ -379,8 +381,14 @@ const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArr
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined, target: string): Promise<void> => {
     try {
+        // Resolved for its side effect: reject an unregistered target before
+        // reconciling a config shaped for the wrong provider. `prepare` routes
+        // its provisioning through `DeployDriver.provision`; deploy still
+        // reconciles inline, so this is the narrower equivalent guard.
+        resolveDeployDriver(target);
+
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
 
@@ -487,13 +495,13 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
 };
 
 /** Generate + `wrangler secret put` each mintable key (sequential; stops on first failure). Returns true on full success. */
-const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, keys: ReadonlyArray<string>): Promise<boolean> => {
+const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, keys: ReadonlyArray<string>, target: string): Promise<boolean> => {
     const { logger } = options;
     const spawner = options.spawner ?? defaultSpawner;
     const manager = detectPackageManager(cwd);
     const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
 
-    const { toolchain } = resolveDeployDriver(options.target);
+    const { toolchain } = resolveDeployDriver(target);
 
     if (toolchain === undefined) {
         logger.error("deploy target has no command-line toolchain; cannot push secrets");
@@ -539,7 +547,7 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
  * secret list can't be read — we proceed rather than guess. Any pushing happens
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
-const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean): Promise<string | undefined> => {
+const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, target: string): Promise<string | undefined> => {
     if (options.dryRun === true || options.preview === true) {
         return undefined;
     }
@@ -593,7 +601,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     if (
         await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
     ) {
-        await pushMintableSecrets(cwd, options, mintable);
+        await pushMintableSecrets(cwd, options, mintable, target);
 
         return undefined;
     }
@@ -724,7 +732,13 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
  * success (the deploy needs its schema snapshot for the drift gate), or an
  * `{ error }` message on failure.
  */
-const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSpec: ApiSpec | undefined): { error?: string; result?: CodegenResult } => {
+const runCodegenStep = (
+    cwd: string,
+    interactive: boolean,
+    logger: Logger,
+    apiSpec: ApiSpec | undefined,
+    target: string,
+): { error?: string; result?: CodegenResult } => {
     let codegenSpinner: Spinner | undefined;
 
     if (interactive) {
@@ -735,7 +749,7 @@ const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSp
     }
 
     try {
-        const result = runCodegen({ apiSpec, projectRoot: cwd });
+        const result = runCodegen({ apiSpec, projectRoot: cwd, target });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
@@ -946,7 +960,7 @@ const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Pr
  * caller via {@link execArgsFor}. Extracted from {@link executeDeploy} to keep
  * its cognitive complexity within budget.
  */
-const buildDeployCommand = (cwd: string, options: DeployCommandOptions): ToolchainCommand => {
+const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: string): ToolchainCommand => {
     // Class-B composition: bundle the `src/worker.ts` wrapper (which the
     // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
     const composedEntry = resolveComposedWorkerEntry(cwd);
@@ -976,7 +990,7 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions): Toolcha
     // The target's own CLI decides the flags; this command only says what it
     // wants done. Logging stays here because it is the CLI's voice, not the
     // driver's.
-    const driver = resolveDeployDriver(options.target);
+    const driver = resolveDeployDriver(target);
     const request = {
         dryRun: options.dryRun,
         entry: composedEntry,
@@ -1014,10 +1028,29 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
+    // Resolved ONCE, and before anything writes. Deploy rewrites `_generated/*`
+    // and may mutate `wrangler.jsonc` well before it reaches the wrangler step,
+    // so validating at the point of driver use would leave those side effects
+    // behind on an unknown target. Resolving here also means `lunora.json`'s
+    // `target` reaches the driver, not just the `--target` flag.
+    const resolvedTarget = resolveTargetOrError(cwd, options.target);
+
+    if (resolvedTarget.target === undefined) {
+        const message = resolvedTarget.error ?? "unknown deploy target";
+
+        // Logged here, not just returned: the caller only prints `error` in
+        // `--format json` mode, so a bare return exits 1 in silence.
+        options.logger.error(message);
+
+        return { code: 1, descriptor: undefined, error: message, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    const { target } = resolvedTarget;
+
     let codegen: CodegenResult | undefined;
 
     if (!options.skipCodegen) {
-        const codegenStep = runCodegenStep(cwd, interactive, options.logger, options.apiSpec);
+        const codegenStep = runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target);
 
         if (codegenStep.error !== undefined) {
             return {
@@ -1064,7 +1097,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
@@ -1097,7 +1130,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // Non-interactive (CI): a missing required secret aborts rather than shipping
     // a worker that will crash. Best-effort detection — skips dry-run/preview and
     // stays quiet when the worker can't be queried yet (first deploy / not authed).
-    const secretAbort = await offerMissingSecrets(cwd, options, interactive);
+    const secretAbort = await offerMissingSecrets(cwd, options, interactive, target);
 
     if (secretAbort !== undefined) {
         options.logger.error(secretAbort);
@@ -1110,7 +1143,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // existing links are never clobbered and subsequent deploys keep full TTY output.
     const shouldAutoLink = !isJsonFormat(options.format) && options.dryRun !== true && options.preview !== true && readLinkedProject(cwd) === undefined;
 
-    const deployCommand = buildDeployCommand(cwd, options);
+    const deployCommand = buildDeployCommand(cwd, options, target);
     const exec = execArgsFor(detectPackageManager(cwd), deployCommand.tool, deployCommand.args);
     const descriptor: SpawnDescriptor = {
         args: exec.args,
@@ -1206,6 +1239,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        target: options.target,
         temporary: options.temporary === true,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     });

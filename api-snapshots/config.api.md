@@ -689,6 +689,7 @@ type LunoraLineLevel = "error" | "info" | "warn";
 ```ts
 interface LunoraProjectConfig {
     remote?: unknown;
+    target?: unknown;
 }
 ```
 
@@ -1686,6 +1687,12 @@ const readProjectDependencyNames: (root: string) => ReadonlySet<string>;
 const readProjectRemotePreference: (projectRoot: string) => RemotePreference;
 ```
 
+### `readProjectTarget` (const)
+
+```ts
+const readProjectTarget: (projectRoot: string) => string | undefined;
+```
+
 ### `readWranglerJsonc` (const)
 
 ```ts
@@ -1722,10 +1729,22 @@ const requiredSecrets: (packageNames: ReadonlyArray<string>) => SecretEntry[];
 const resolveDeployDriver: (target?: string) => DeployDriver;
 ```
 
+### `resolveProjectTarget` (const)
+
+```ts
+const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
+```
+
 ### `resolveRemoteEnabled` (const)
 
 ```ts
 const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
+```
+
+### `resolveTargetOrThrow` (const)
+
+```ts
+const resolveTargetOrThrow: (projectRoot: string, explicit?: string) => string;
 ```
 
 ### `scaffoldPolicyFile` (const)

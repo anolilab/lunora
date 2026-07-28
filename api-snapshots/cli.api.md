@@ -172,6 +172,7 @@ interface DevCommandOptions {
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
+    target?: string;
     workerPort?: number;
 }
 ```

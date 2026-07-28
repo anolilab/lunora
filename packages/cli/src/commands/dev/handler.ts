@@ -32,7 +32,9 @@ import {
     readProjectRemotePreference,
     readWranglerJsonc,
     resolveDeployDriver,
+    resolveProjectTarget,
     resolveRemoteEnabled,
+    resolveTargetOrThrow,
     streamContainerLogs,
     updateDevServerState,
 } from "@lunora/config";
@@ -120,6 +122,8 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     /** Disable the embedded studio server. */
     studio?: boolean;
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    target?: string;
     /** `wrangler dev` port. */
     workerPort?: number;
 }
@@ -320,7 +324,9 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
             // `wrangler.jsonc` — check its own `dev.ip` first.
             const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
-            const devCommand = resolveDeployDriver().toolchain?.dev({
+            // The toolchain is the target's, not always wrangler's — resolving from the
+            // project keeps a non-default target from shelling out to the wrong CLI.
+            const devCommand = resolveDeployDriver(resolveProjectTarget(cwd)).toolchain?.dev({
                 configPath: DEV_WRANGLER_CONFIG,
                 extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
             });
@@ -853,13 +859,13 @@ const startStudioBestEffort = async (
  * owns the ongoing watch, but there's a startup race. Best-effort + a no-op for
  * every single-process flavor. A failure is surfaced but non-fatal.
  */
-const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger): void => {
+const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger, target: string): void => {
     if (plan.sidecar === undefined) {
         return;
     }
 
     try {
-        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd });
+        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd, target });
     } catch (error: unknown) {
         logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
     }
@@ -875,6 +881,13 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const plan = await buildDevPlan(options);
     const { logger } = options;
     const cwd = plan.wrangler.cwd ?? process.cwd();
+    // Resolved for every flavor, not just the ones that run the codegen watcher:
+    // the `vite` and `framework-worker` flavors have `codegenEnabled === false`,
+    // so gating on it accepted `--target` and then used it nowhere — while
+    // `lunora codegen --target <same typo>` exited 1. Resolving here also puts
+    // the failure before the dev-vars prompt and the start-record claim, rather
+    // than after them.
+    const target = resolveTargetOrThrow(cwd, options.target);
     // Register the remote temp-config disposer up front so it's torn down on
     // every exit path — including a throw during startup below (the `finally`).
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
@@ -934,7 +947,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         if (plan.codegenEnabled) {
-            handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
+            handles.codegen = (options.startCodegen ?? startCodegenWatch)({
+                apiSpec: options.apiSpec,
+                logger,
+                projectRoot: cwd,
+                target,
+            });
         }
 
         handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
@@ -946,7 +964,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             logger.warn(plan.frameworkHint);
         }
 
-        ensureSidecarGenerated(plan, options, cwd, logger);
+        ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
         const worker = spawn(plan.wrangler, logger);
@@ -1034,6 +1052,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         port: options.port,
         remote,
         studio: options.studio === false ? false : undefined,
+        target: options.target,
         workerPort: options.workerPort,
     });
 });

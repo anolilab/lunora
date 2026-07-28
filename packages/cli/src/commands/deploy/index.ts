@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const deployCommand: Command = {
     description: "Codegen, validate wrangler, then wrangler deploy",
@@ -21,6 +22,7 @@ const deployCommand: Command = {
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
+        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         {
@@ -69,6 +71,7 @@ export type DeployOptions = CreateOptions<{
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    target: string | undefined;
     temporary: boolean | undefined;
     "update-schema-baseline": boolean | undefined;
 }>;

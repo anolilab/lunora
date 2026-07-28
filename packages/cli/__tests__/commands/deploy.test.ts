@@ -91,6 +91,44 @@ describe("lunora deploy", () => {
     });
 
     describe("lunora deploy", () => {
+        describe("deploy target", () => {
+            it("rejects an unregistered target declared in lunora.json", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, "lunora.json"), `{ "target": "clouflare" }`, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                // Deploy used to read only the `--target` flag, so a typo in the
+                // committed config failed `codegen`/`prepare`/`dev` and shipped
+                // fine from here — the one command where the fallback matters.
+                expect(result.code).toBe(1);
+                expect(result.error).toMatch(/unknown deploy target "clouflare"/);
+
+                // And it must abort BEFORE spawning wrangler: the resolution
+                // happens up front so nothing is written or published first.
+                expect(calls).toHaveLength(0);
+            });
+
+            it("lets --target override lunora.json", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, "lunora.json"), `{ "target": "clouflare" }`, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "cloudflare" });
+
+                expect(result.code).toBe(0);
+            });
+        });
+
         it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
             expect.assertions(5);
 

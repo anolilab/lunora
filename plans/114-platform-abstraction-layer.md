@@ -235,6 +235,18 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
   imports).
 - `@lunora/cli`: `deploy`/`dev` route through the driver; `--target`/config
   field selects it (default `cloudflare`, so zero behavior change).
+- **Done.** `lunora.json` gains a `target` key beside `remote`; `--target` is
+  declared on `codegen`, `dev`, `prepare`, `deploy`, and `logs`, its help text
+  generated from the driver registry. `resolveProjectTarget(projectRoot,
+explicit)` is the single resolution point — flag, then config, then default.
+  One point on purpose: codegen tailors the emitted `ctx.*` surface to a target
+  while deploy picks the driver that ships it, and resolving those separately
+  lets them disagree. The Vite plugin resolves the same way, so `vite build`
+  and `lunora deploy` agree without configuring each.
+- An unregistered target is **rejected, never defaulted** — all five commands
+  resolve through `resolveTargetOrThrow`, including codegen, which resolves no
+  driver of its own and would otherwise emit the full Cloudflare surface
+  un-gated for a nonexistent target and exit 0.
 
 ### 5.4 Conformance suite — `@lunora/platform-conformance` (M)
 
@@ -293,6 +305,18 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
 
 - `lunora.config` (or codegen options) gains `target: "cloudflare" | …`
   (default `"cloudflare"`; absent = today's output, byte-identical goldens).
+- **Done**, and reachable — but the first attempt wired 5 of ~9 places and the
+  claim that every call site passed a target was wrong. `runCodegen` now
+  resolves the target itself from `lunora.json` when the caller passes none, so
+  a missed call site emits the project's surface rather than the default one
+  silently. The reader lives in `@lunora/codegen` (config depends on codegen,
+  not the reverse) and `@lunora/config` delegates to it.
+- Error-level diagnostics (`platform_unknown_target`,
+  `platform_unsupported_feature`) **fail the command**. Both are declared
+  `level: "error"` because each drops or misdirects an emitted surface; printing
+  them as warnings with exit 0 was the root cause the target validation had been
+  patching around. Surfaced in `codegen`, `prepare`, the dev watcher, and the
+  Vite plugin — the last of which had never read `platformDiagnostics` at all.
 - Codegen consumes the target's `PlatformCapabilities`: ctx surfaces for
   unsupported features are omitted from emitted types with a diagnostic
   (`platform_unsupported_feature`, advisor-style, pointing at the matrix);
