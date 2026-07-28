@@ -18,6 +18,7 @@ const addCommand: Command = {
     examples: [
         ["lunora add auth", "Add authentication (asks which provider)"],
         ["lunora add auth --provider clerk", "Add Clerk auth without prompting"],
+        ["lunora add auth-ui", "Add copy-in auth screens for your framework (auto-detected)"],
         ["lunora add email", "Add transactional email (Cloudflare Email Workers + dev mail catcher)"],
         ["lunora add storage", "Add the R2 storage registry item (asks for the bucket name)"],
         ["lunora add storage --bucket my-app-uploads", "Add storage with a bucket name, no prompt"],

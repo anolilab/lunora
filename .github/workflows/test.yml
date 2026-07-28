@@ -28,6 +28,7 @@
             "packages": "${{ steps.changes.outputs.packages }}"
             "e2e": "${{ steps.changes.outputs.e2e }}"
             "codecov": "${{ steps.changes.outputs.codecov }}"
+            "templates": "${{ steps.changes.outputs.templates }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -240,11 +241,67 @@
                   "path": "tests/e2e/playwright-report"
                   "retention-days": 7
 
+    # Scaffold every template, install it, add the auth-ui payload, build, and
+    # typecheck the copied screens. Slow (a real `pnpm install` per template) so it
+    # is path-gated, but it is the only gate that covers two things nothing else
+    # does: that a `lunora init` scaffold still installs at all, and that the
+    # copy-in auth-ui payload compiles against a meta-framework's own tsconfig
+    # (no template imports `lunora/auth-ui/**`, so a build alone tree-shakes it
+    # away before a compiler sees it).
+    "templates":
+        "name": "Template scaffold matrix"
+        "if": "needs.files-changed.outputs.templates == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 60
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "templates"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The matrix packs `packages/*/dist` into tarballs and shells out to
+            # `packages/cli/dist/bin.mjs`, so every publishable package must be
+            # built first.
+            # `build:packages:prod`, not `build:packages`. The matrix packs
+            # `dist/` into tarballs, and the plain `build` target is a packem
+            # *development* build that keeps `react/jsx-dev-runtime` — a Next
+            # production prerender then dies with `jsxDEV is not a function`.
+            # Users install the production build, so that is what to test.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Run the template scaffold matrix"
+              "run": "pnpm run test:templates"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
     # Single required check: green when every dependent job passed or was
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "e2e"]
+        "needs": ["files-changed", "test", "test-workerd", "e2e", "templates"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

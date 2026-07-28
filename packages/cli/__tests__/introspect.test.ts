@@ -204,6 +204,15 @@ describe("emitIntrospection — hostile catalog identifiers", () => {
         ],
     };
 
+    /*
+     * 60s, not the 30s default. This builds a full TypeScript program per emitted
+     * file — three `new Project()` + `getPreEmitDiagnostics()` round trips, which
+     * loads the default libs and runs the real checker each time. That is ~290ms
+     * on an idle machine and ~1.3s under v8 coverage, but CI's node-22.15 leg runs
+     * `test:affected:coverage` over 74 files concurrently, and under that
+     * contention it reproducibly blew past 30s while the no-coverage leg
+     * (node-24.11) passed. The assertion is unchanged; only the budget is.
+     */
     it("emits syntactically valid TypeScript even when every identifier is hostile", () => {
         // schema.ts plus one procedure module per table.
         expect.assertions(3);
@@ -219,7 +228,7 @@ describe("emitIntrospection — hostile catalog identifiers", () => {
                 source.getPreEmitDiagnostics().filter((d) => d.getCategory() === DiagnosticCategory.Error && d.getCode() >= 1000 && d.getCode() < 2000),
             ).toEqual([]);
         }
-    });
+    }, 60_000);
 
     it("escapes characters that stay dangerous once the emitted file travels", () => {
         expect.assertions(3);

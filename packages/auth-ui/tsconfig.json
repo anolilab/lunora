@@ -1,0 +1,33 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        // The Angular port uses TS decorators, and Angular's JIT compiler (which
+        // the Angular test project relies on) reads legacy decorator metadata.
+        // Being in this program is also how the test transform learns to emit
+        // them rather than standard decorators.
+        "experimentalDecorators": true,
+        "types": ["node"]
+        // No `outDir`/`rootDir`: this package is a source-of-truth synced into the
+        // registry (never built/published), so `lint:types` is `tsc --noEmit` only —
+        // neither is load-bearing. Mirrors packages/react/tsconfig.json.
+    },
+    "include": ["src/**/*", "__tests__/**/*"],
+    // This program covers `core/`, `react/` and `angular/` (plain `.ts` with
+    // inline templates). Each other port has its own config, because a program
+    // holds one `jsx`/`jsxImportSource` pair and SFCs need their own compilers:
+    // `tsconfig.solid.json` (tsc), `tsconfig.vue.json` (vue-tsc), and
+    // `tsconfig.svelte.json` (svelte-check). `lint:types` runs all four, so
+    // every line that ships to a user is type-checked here.
+    "exclude": [
+        "src/vue/**",
+        "src/svelte/**",
+        "src/solid/**",
+        // Their tests too: an included test importing an excluded port would pull
+        // it straight back into the program.
+        "__tests__/vue/**",
+        "__tests__/svelte/**",
+        "__tests__/solid/**"
+    ]
+}

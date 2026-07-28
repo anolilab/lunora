@@ -1,0 +1,273 @@
+---
+title: Auth UI
+description: Copy-in sign-in, settings, and organization screens for React, Vue, Svelte, Solid, and Angular — the code lands in your project and you own it.
+---
+
+`@lunora/auth` gives you the server half of authentication. Auth UI gives you the
+screens: sign in/up, forgot/reset password, magic link, email OTP, two-factor
+(verify _and_ setup), account & security settings, and organizations — for all
+five base frameworks.
+
+They are not a dependency. One command copies the code into your project, and
+from that moment it is your code:
+
+```bash
+lunora add auth-ui
+```
+
+The framework is detected from your `package.json` (`@lunora/react` → React,
+`@lunora/vue` → Vue, and so on, falling back to a plain `react`/`next`
+dependency), and the base [`auth`](/docs/concepts/authentication) server item is
+pulled in automatically if you haven't added it yet.
+
+## What lands in your project
+
+```
+lunora/auth-ui/
+  core/         framework-agnostic flow controllers (the logic)
+  react/        the views: cards, <AuthUIProvider>, useController
+  client.ts     your better-auth client — the seam you edit
+  styles.css    minimal CSS on the Lunora design tokens (no Tailwind)
+```
+
+`core/` is plain TypeScript — a small external store per flow, holding the
+fields, validation, pending state, and error mapping. The framework folder is a
+thin binding over it. You will spend your time in the views; the controllers are
+there when you want to build a screen the cards don't cover.
+
+## Wire it up
+
+Import the stylesheet once, then wrap your auth routes in the provider. Pass your
+router in through `nav` (and optionally `Link`) so navigation stays client-side —
+one component set serves Next, react-router, TanStack Start, and Astro islands:
+
+```tsx
+import { useNavigate } from "react-router";
+
+import { authClient } from "./lunora/auth-ui/client";
+import { AuthUIProvider, SignInCard } from "./lunora/auth-ui/react";
+import "./lunora/auth-ui/styles.css";
+
+function SignInPage() {
+    const navigate = useNavigate();
+
+    return (
+        <AuthUIProvider
+            authClient={authClient}
+            nav={{ navigate: (to) => navigate(to), replace: (to) => navigate(to, { replace: true }) }}
+            redirects={{ afterSignIn: "/app", afterSignOut: "/" }}
+            social={["github"]}
+        >
+            <SignInCard />
+        </AuthUIProvider>
+    );
+}
+```
+
+`nav` is optional and falls back to a `location`-based adapter, which is fine for
+a plain SPA and wrong for anything with a router — a full page load on every
+sign-in. Pass it.
+
+Social buttons render only for the providers you list in `social`, and only work
+once the matching provider is configured server-side.
+
+### Provider options
+
+| Prop              | What it does                                                                      |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `authClient`      | Your better-auth client, from `lunora/auth-ui/client.ts`. Required.               |
+| `nav` / `Link`    | Router bridge for redirects and internal links.                                   |
+| `redirects`       | `afterSignIn`, `afterSignOut`, and the route hosting your sign-in screen.         |
+| `social`          | OAuth providers to render buttons for, e.g. `["github", "google"]`.               |
+| `basePath`        | Where better-auth is mounted. Defaults to `/api/auth`.                            |
+| `localization`    | Partial overrides for every string the cards render.                              |
+| `onSessionChange` | Fires after any successful auth mutation — refresh your app's session state here. |
+| `onError`         | Observes failures; the card still shows the error itself.                         |
+| `plugins`         | Force an optional flow on or off; detected from your client by default.           |
+| `theme`           | Retint the cards from config — see [Making them yours](#making-them-yours).       |
+
+`onSessionChange` matters more than it looks. A same-origin cookie sign-in
+changes no token, so `useAuth` has nothing to react to — wire this to whatever
+re-resolves your identity and the rest of the app follows the sign-in.
+
+## The cards
+
+Auth flows, from `lunora/auth-ui/react`:
+
+`SignInCard`, `SignUpCard`, `ForgotPasswordCard`, `ResetPasswordCard`,
+`MagicLinkCard`, `EmailOtpCard`, `TwoFactorCard`.
+
+Account & security, for a signed-in user:
+
+`ProfileCard`, `ChangeEmailCard`, `ChangePasswordCard`, `SessionsCard` (list and
+revoke other sessions), `PasskeysCard` (list, add, remove), `TwoFactorSetupCard`
+(password → TOTP URI + backup codes → verify → enabled), `DeleteAccountCard`,
+`SignOutButton`.
+
+Organizations:
+
+`OrganizationsCard` (list, create, switch, delete), `MembersCard` (members and
+pending invitations: invite, change role, remove, cancel), and
+`OrganizationSettingsCard` (rename the active org, edit its slug and logo).
+
+Each is independent — mount the ones you want, on the routes you want. There is
+no router, layout, or shell imposed on you.
+
+`TwoFactorSetupCard` renders the `otpauth://` URI and the backup codes as text
+rather than pulling in a QR library. If you want a QR code, render one from the
+URI with whatever library you already ship.
+
+## Enabling the optional flows
+
+Magic link, email OTP, two-factor, passkeys, and organizations each need two
+halves. The server half is a registry item or a better-auth plugin; the client
+half is a toggle in `lunora/auth-ui/client.ts`:
+
+```ts
+import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
+import { createAuthClient } from "better-auth/react";
+
+export const authClient = createLunoraAuthClient(createAuthClient, {
+    plugins: {
+        emailOtp: true,
+        magicLink: true,
+        organization: true,
+        passkey: true,
+        twoFactor: true,
+    },
+});
+```
+
+`createLunoraAuthClient` assembles the client plugin set from those toggles so
+you don't hand-list deep imports, and defaults `baseURL` to the current origin.
+You pass `createAuthClient` in because the variant has to match your UI
+framework. (Prefer to own that call yourself? `lunoraAuthPlugins` returns just
+the plugin array.) For the server side, run `lunora add auth-magic-link` or
+`lunora add auth-otp`, and see
+[`@lunora/auth/plugins`](/docs/packages/auth/plugins) for the rest.
+
+**That file is the only place you declare a flow.** The cards read the plugin
+set off your client, so a card whose flow is off renders nothing rather than
+failing at call time — and says why in the console during development. Override
+the detection either way with the provider's `plugins` prop.
+
+## The other frameworks
+
+Same controllers, same class names, same stylesheet; only the binding differs.
+
+```ts
+// Vue — a plugin, plus <AuthUIProvider> if you'd rather scope it
+import { createAuthUI } from "./lunora/auth-ui/vue";
+
+createApp(App).use(createAuthUI({ authClient })).mount("#app");
+```
+
+```svelte
+<!-- Svelte 5 — components from lunora/auth-ui/svelte -->
+<script lang="ts">
+    import { authClient } from "./lunora/auth-ui/client";
+    import { AuthUIProvider, SignInCard } from "./lunora/auth-ui/svelte";
+</script>
+
+<AuthUIProvider {authClient}>
+    <SignInCard />
+</AuthUIProvider>
+```
+
+Solid mirrors the React API exactly (`AuthUIProvider`, the same card names, with
+`createController` in place of `useController`). Angular ships standalone signal
+components — `provideAuthUI({ authClient })` in `app.config.ts`, then
+`SignInCardComponent` and friends with `lunora-*` selectors:
+
+```ts
+import { provideAuthUI } from "./lunora/auth-ui/angular";
+
+export const appConfig: ApplicationConfig = {
+    providers: [provideAuthUI({ authClient })],
+};
+```
+
+## Meta-frameworks
+
+The cards are client components in every framework — they hold form state and
+call better-auth from event handlers. What differs per meta-framework is the
+router you hand to `nav`, and where the client boundary sits.
+
+| Framework                     | Item              | `nav` comes from                                              |
+| ----------------------------- | ----------------- | ------------------------------------------------------------- |
+| Next (App Router)             | `auth-ui-react`   | `useRouter()` from `next/navigation`; `Link` from `next/link` |
+| React Router (framework mode) | `auth-ui-react`   | `useNavigate()` from `react-router`                           |
+| TanStack Start (React)        | `auth-ui-react`   | `useRouter()` from `@tanstack/react-router`                   |
+| TanStack Start (Solid)        | `auth-ui-solid`   | `useRouter()` from `@tanstack/solid-router`                   |
+| Astro                         | `auth-ui-react`   | none needed — see below                                       |
+| Nuxt                          | `auth-ui-vue`     | `useRouter()` from `vue-router`                               |
+| SvelteKit                     | `auth-ui-svelte`  | `goto` from `$app/navigation`                                 |
+| Analog                        | `auth-ui-angular` | Angular's `Router`                                            |
+
+Three things are worth knowing before you wire one up.
+
+**Next.js.** The React views already carry `"use client"`, so you can render a
+card straight from a server component — no wrapper needed.
+
+**Pointing at a different auth origin.** Leave it alone and the client uses the
+current origin, which is right whenever the Worker is same-origin with your app —
+the default in every template. To override, `lunora/auth-ui/client.ts` reads
+`VITE_AUTH_URL` under Vite (Nuxt, SvelteKit, Astro, TanStack Start, Analog) and
+falls back to `NEXT_PUBLIC_AUTH_URL` / `PUBLIC_AUTH_URL` from `process.env` on
+bundlers that are not Vite. Set whichever your framework inlines.
+
+**Astro.** Each `client:*` directive creates its own island with its own React
+root, and context does not cross islands. Put `<AuthUIProvider>` and the cards in
+one component and hydrate that:
+
+```astro
+---
+import SignIn from "../components/SignIn"; // renders <AuthUIProvider><SignInCard /></AuthUIProvider>
+---
+
+<SignIn client:load />
+```
+
+Hydrating `AuthUIProvider` and a card as two separate islands throws
+`useAuthUI must be used inside <AuthUIProvider />`.
+
+**SSR.** Every card renders its empty state on the server and fills in on the
+client — the settings and organization cards fetch on mount, so a server-rendered
+page shows their loading state. That is intended: session-dependent markup should
+not be in the SSR payload. Nothing reads `window` or `document` at module scope,
+so no card needs a `<ClientOnly>` / `client:only` escape hatch.
+
+**React Native / Expo is not supported.** The screens render DOM elements and a
+stylesheet; Metro has nothing to mount them into. `lunora add auth-ui` detects a
+React Native project and refuses rather than copying them in. The server half
+(`lunora add auth`) and the better-auth Expo bridge
+(`@lunora/react-native/auth`) both work — build the screens with React Native
+primitives against that same client.
+
+## Making them yours
+
+Restyle `styles.css` — it reads the same design tokens as the rest of Lunora, so
+changing your token values moves the auth screens with everything else. Override
+copy through the provider's `localization` prop, or stop being precious about it
+and edit the cards directly. That is what "you own it" means.
+
+To retint just the auth screens without touching CSS, use `theme`. It receives
+the defaults and returns what you want changed:
+
+```tsx
+<AuthUIProvider authClient={authClient} theme={(defaults) => ({ ...defaults, primary: "#5b21b6", radius: "1rem" })}>
+```
+
+Only what you actually change is emitted, as custom properties on the cards —
+so every token you leave alone keeps inheriting from your app.
+
+Re-running `lunora add auth-ui` three-way merges upstream changes into your copy.
+Where a file you edited also changed upstream, you get a `.new` file next to it
+instead of a clobbered screen.
+
+## See also
+
+- [Authentication](/docs/concepts/authentication) — `ctx.auth`, the server half these screens talk to.
+- [@lunora/auth](/docs/packages/auth) — full server configuration.
+- [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, organization, admin, 2FA.
+- [Row-level security](/docs/concepts/rls) — turning the resulting identity into per-row authorization.

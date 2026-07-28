@@ -20,6 +20,7 @@
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",
+        "@lunora/auth-ui": "workspace:*",
         "@lunora/bindings": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/db": "workspace:*",

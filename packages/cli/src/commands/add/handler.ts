@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { findWranglerFile } from "@lunora/config";
 import { basename, join } from "@visulima/path";
@@ -13,7 +13,17 @@ import { runAddCommand } from "../registry";
 import type { RegistryManifest } from "../registry/types";
 import { deriveDatabaseName, promptDatabaseName, sanitizeDatabaseName, withAuthDatabaseName } from "./auth-database";
 import type { FeatureItem, NormalizedFeature } from "./features";
-import { AUTH_PROVIDER_OPTIONS, DEFAULT_AUTH_ITEM, EMAIL_ITEM, normalizeFeature, promptAuthProvider } from "./features";
+import {
+    AUTH_PROVIDER_OPTIONS,
+    AUTH_UI_OPTIONS,
+    DEFAULT_AUTH_ITEM,
+    DEFAULT_AUTH_UI_ITEM,
+    detectAuthUiItem,
+    EMAIL_ITEM,
+    isReactNativeProject,
+    normalizeFeature,
+    promptAuthProvider,
+} from "./features";
 import type { AddOptions } from "./index";
 import { MAIL_DESTINATION_PROMPT, resolveTypedDestination, withMailDestination } from "./mail";
 import { deriveBucketName, promptBucketName, sanitizeBucketName, withStorageBucketName } from "./storage";
@@ -68,6 +78,45 @@ const providerToItem = (provider: string): FeatureItem | undefined => {
     );
 
     return match?.value;
+};
+
+/** Read the project's merged (deps + devDeps) dependency map; `{}` if unreadable. */
+const readProjectDependencies = (cwd: string): Record<string, string> => {
+    try {
+        const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as {
+            dependencies?: Record<string, string>;
+            devDependencies?: Record<string, string>;
+        };
+
+        return { ...pkg.dependencies, ...pkg.devDependencies };
+    } catch {
+        return {};
+    }
+};
+
+/**
+ * Resolve which per-framework auth-UI item to install: auto-detect from the
+ * project's dependencies, else prompt (or take the React default under `--yes`).
+ */
+const resolveAuthUiItem = async (options: AddFeatureOptions): Promise<FeatureItem> => {
+    const cwd = options.cwd ?? process.cwd();
+    const detected = detectAuthUiItem(readProjectDependencies(cwd));
+
+    if (detected !== undefined) {
+        return detected;
+    }
+
+    if (options.yes === true) {
+        options.logger.warn(
+            `add: couldn't detect your framework — using "${DEFAULT_AUTH_UI_ITEM}". Pass a specific item (e.g. \`lunora add auth-ui-vue\`) to override.`,
+        );
+
+        return DEFAULT_AUTH_UI_ITEM;
+    }
+
+    const select = options.promptSelect ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings));
+
+    return (await select("Which framework is your app?", AUTH_UI_OPTIONS, { default: DEFAULT_AUTH_UI_ITEM })) ?? DEFAULT_AUTH_UI_ITEM;
 };
 
 /** Resolve which auth registry item to install: explicit `--provider`, the prompt, or the default. */
@@ -183,6 +232,10 @@ const resolveFeatureItems = async (feature: NormalizedFeature, options: AddFeatu
         return [await resolveAuthItem(options)];
     }
 
+    if (feature.kind === "auth-ui") {
+        return [await resolveAuthUiItem(options)];
+    }
+
     if (feature.kind === "email") {
         return [EMAIL_ITEM];
     }
@@ -211,6 +264,18 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     // Must be inside a Lunora project: a `lunora/` source dir + a wrangler config.
     if (!existsSync(join(cwd, "lunora")) || findWranglerFile(cwd) === undefined) {
         options.logger.error("add: not a Lunora project here (need a lunora/ directory and a wrangler.jsonc). Run `lunora init` first.");
+
+        return { code: 1, items: [] };
+    }
+
+    // Every auth-UI port renders DOM. On React Native the React payload would
+    // install and type-check, then render nothing — so say that instead of
+    // shipping `div`s into a Metro bundle. `auth` (the server half) is
+    // unaffected and `@lunora/react-native/auth` covers the client half.
+    if (feature.kind === "auth-ui" && isReactNativeProject(readProjectDependencies(cwd))) {
+        options.logger.error(
+            "add: auth-ui has no React Native port — the screens render DOM elements and a stylesheet, which Metro has nothing to mount. Build the screens with React Native primitives against the same better-auth client (`@lunora/react-native/auth`); `lunora add auth` still installs the server half.",
+        );
 
         return { code: 1, items: [] };
     }

@@ -1,12 +1,11 @@
-import { adminClient, organizationClient, twoFactorClient } from "@lunora/auth/plugins/client";
+import { lunoraAuthPlugins } from "@lunora/auth/plugins/client";
 import { createAuthClient } from "better-auth/react";
 
 /**
- * Browser-side counterpart to the server's `createAuth(...)` call. Each plugin
- * loaded on the server must have its matching `*Client` here (re-exported from
- * `@lunora/auth/plugins/client`) so the client SDK surfaces the matching
- * endpoint helpers (`authClient.organization.*`, `authClient.admin.*`,
- * `authClient.twoFactor.*`).
+ * Browser-side counterpart to the server's `createAuth(...)` call. Instead of
+ * hand-listing every `*Client()` plugin, `lunoraAuthPlugins` assembles the
+ * standard array from feature toggles — keep these in parity with the server
+ * `plugins` passed to `createAuth`.
  *
  * The base URL is the same origin Vite + the Cloudflare Worker share — see
  * `main.tsx` for how the env override is wired.
@@ -19,5 +18,5 @@ import { createAuthClient } from "better-auth/react";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const authClient: any = createAuthClient({
     baseURL: (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin,
-    plugins: [organizationClient(), adminClient(), twoFactorClient()],
+    plugins: lunoraAuthPlugins({ admin: true, organization: true, twoFactor: true }),
 });

@@ -1339,6 +1339,36 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 ## `@lunora/auth/plugins/client`
 
+### `CreateLunoraAuthClientOptions` (interface)
+
+```ts
+interface CreateLunoraAuthClientOptions {
+    [option: string]: unknown;
+    baseURL?: string;
+    extraPlugins?: LunoraAuthClientPlugin[];
+    plugins?: LunoraAuthPluginToggles;
+}
+```
+
+### `LunoraAuthClientPlugin` (type)
+
+```ts
+type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
+```
+
+### `LunoraAuthPluginToggles` (interface)
+
+```ts
+interface LunoraAuthPluginToggles {
+    admin?: boolean;
+    emailOtp?: boolean;
+    magicLink?: boolean;
+    organization?: boolean;
+    passkey?: boolean;
+    twoFactor?: boolean;
+}
+```
+
 ### `adminClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1346,6 +1376,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `anonymousClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `createLunoraAuthClient` (const)
+
+```ts
+const createLunoraAuthClient: <TClient>(createAuthClient: (options: Record<string, unknown>) => TClient, options?: CreateLunoraAuthClientOptions) => TClient;
+```
 
 ### `customSessionClient` (const)
 
@@ -1374,6 +1410,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `lastLoginMethodClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `lunoraAuthPlugins` (const)
+
+```ts
+const lunoraAuthPlugins: (toggles?: LunoraAuthPluginToggles) => LunoraAuthClientPlugin[];
+```
 
 ### `magicLinkClient` (const)
 

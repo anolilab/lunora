@@ -1,0 +1,12 @@
+{
+    // The Vue port, checked by `vue-tsc` (SFC templates need a compiler that
+    // plain `tsc` doesn't have). Its own program for the same reason Solid has
+    // one: `jsx`/`jsxImportSource` is per-program and the main one is React's.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "jsx": "preserve",
+        "types": ["node"]
+    },
+    "include": ["src/vue/**/*", "src/core/**/*", "__tests__/vue/**/*", "__tests__/fake-client.ts"],
+    "exclude": []
+}

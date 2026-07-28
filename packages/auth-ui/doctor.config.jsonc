@@ -1,0 +1,47 @@
+{
+    "ignore": {
+        // This package holds five framework ports of the same screens. Only `src/react/**`
+        // is React; `src/solid/**` is SolidJS, which React Doctor's file globs pick up
+        // because Solid also compiles `.tsx`. Solid's semantics are not React's, so the
+        // React rules reported against it are false by construction:
+        //
+        //   - `react-doctor/rules-of-hooks` — Solid has no hook order to preserve.
+        //     `useAuthUI()` is a context read, safe from any call site, which is exactly
+        //     what `themeStyle()` does.
+        //   - `react-hooks-js/static-components` — Solid components run once, not per
+        //     render, so a component value produced inside one resets no state.
+        //   - `react-doctor/only-export-components` — scoped to React Fast Refresh.
+        //
+        // The Solid port has its own gate: `tsc -p tsconfig.solid.json` (a program holds
+        // one jsx/jsxImportSource pair, so it cannot share React's) plus the render tests
+        // in `__tests__/solid/`.
+        //
+        // `src/vue/**`, `src/svelte/**`, and `src/angular/**` need no entry — React Doctor
+        // does not scan `.vue`/`.svelte`, and the Angular port is plain `.ts`.
+        "files": ["src/solid/**"],
+
+        "overrides": [
+            {
+                // Every framework view here is an entry point of the *registry payload*
+                // (`scripts/sync-auth-ui-registry.mjs` mirrors `src/<fw>/**` into
+                // `registry/auth-ui-<fw>/`), not of a bundle. The dead-code pass starts
+                // from `src/index.ts` — a React-only entry — so all 23 Angular and Svelte
+                // views read as unreachable. They are reachable, from a user's project.
+                "files": ["src/angular/**", "src/svelte/**", "src/vue/**", "src/solid/**"],
+                "rules": ["deslop/unused-file"],
+            },
+            {
+                // The two `useMemo`s here are not the compiler's job. `AuthUIProvider`
+                // takes `localization` / `plugins` / `redirects` / `social` as inline
+                // object literals, so their identity changes on every parent render;
+                // React Compiler's automatic memoization keys on identity and would miss
+                // every time, rebuilding each controller mid-typing (fields blank, resource
+                // cards refetch). The hand-written `configKey` / `themeKey` key on the
+                // JSON *value* instead, which is strictly stronger than what the compiler
+                // can infer. Deleting them reintroduces the bug this file was written to fix.
+                "files": ["src/react/provider.tsx"],
+                "rules": ["react-doctor/react-compiler-no-manual-memoization"],
+            },
+        ],
+    },
+}

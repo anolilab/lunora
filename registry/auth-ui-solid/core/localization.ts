@@ -1,0 +1,191 @@
+/**
+ * Default user-facing strings for the auth UI, overridable per-app via the
+ * provider's `localization` prop. Kept framework-agnostic (plain object) so every
+ * port shares one string table. Field validation messages and flow copy live here
+ * so a consumer can translate without editing component source.
+ *
+ * Keys are sorted alphabetically (lint enforces it), so they don't group by
+ * flow — search for the string you want to change rather than scanning for a
+ * section.
+ */
+interface Localization {
+    activeBadge: string;
+    backToSignIn: string;
+    backupCodes: string;
+    cancel: string;
+    changeEmail: string;
+    changeEmailSent: string;
+    changePassword: string;
+    changePasswordDone: string;
+    codeLabel: string;
+    confirmPasswordLabel: string;
+    createOrganization: string;
+    currentPasswordLabel: string;
+    currentSession: string;
+    deleteAccount: string;
+    deleteAccountWarning: string;
+    emailInvalid: string;
+    emailLabel: string;
+    emailOtp: string;
+    emailOtpSent: string;
+    emailRequired: string;
+    forgotPassword: string;
+    forgotPasswordLink: string;
+    forgotPasswordSent: string;
+    genericError: string;
+    haveAccount: string;
+    invitations: string;
+    inviteEmailLabel: string;
+    inviteMember: string;
+    magicLink: string;
+    magicLinkSent: string;
+    members: string;
+    nameLabel: string;
+    nameRequired: string;
+    newEmailLabel: string;
+    newPasswordLabel: string;
+    noAccount: string;
+    noOrganizations: string;
+    organizationLogo: string;
+    organizationName: string;
+    organizationNameRequired: string;
+    organizations: string;
+    organizationSaved: string;
+    organizationSettings: string;
+    organizationSlug: string;
+    organizationSlugRequired: string;
+    otpRequired: string;
+    passkeyAdd: string;
+    passkeyName: string;
+    passkeyRename: string;
+    passkeys: string;
+    passkeysEmpty: string;
+    passkeyUnnamed: string;
+    passwordLabel: string;
+    passwordMismatch: string;
+    passwordRequired: string;
+    passwordTooShort: string;
+    profile: string;
+    profileSaved: string;
+    remove: string;
+    resetPassword: string;
+    resetPasswordDone: string;
+    revoke: string;
+    revokeOthers: string;
+    roleLabel: string;
+    saveChanges: string;
+    sendNewCode: string;
+    sessions: string;
+    sessionsEmpty: string;
+    signIn: string;
+    signInFailed: string;
+    signOut: string;
+    signUp: string;
+    signUpFailed: string;
+    switchOrganization: string;
+    twoFactor: string;
+    twoFactorDisable: string;
+    twoFactorEnable: string;
+    twoFactorEnabled: string;
+    twoFactorFailed: string;
+    twoFactorScan: string;
+    twoFactorSetup: string;
+    /** Fallback when a session has neither a user-agent nor an IP. */
+    unknownDevice: string;
+}
+
+const DEFAULT_LOCALIZATION: Localization = {
+    activeBadge: "Active",
+    backToSignIn: "Back to sign in",
+    backupCodes: "Save these backup codes somewhere safe:",
+    cancel: "Cancel",
+    changeEmail: "Change email",
+    changeEmailSent: "Check your new inbox to confirm the change.",
+    changePassword: "Change password",
+    changePasswordDone: "Your password has been changed.",
+    codeLabel: "Verification code",
+    confirmPasswordLabel: "Confirm password",
+    createOrganization: "Create organization",
+    currentPasswordLabel: "Current password",
+    currentSession: "This device",
+    deleteAccount: "Delete account",
+    deleteAccountWarning: "This permanently deletes your account and cannot be undone.",
+    emailInvalid: "Enter a valid email address.",
+    emailLabel: "Email",
+    emailOtp: "Email me a code",
+    emailOtpSent: "We emailed you a one-time code.",
+    emailRequired: "Email is required.",
+    forgotPassword: "Reset password",
+    forgotPasswordLink: "Forgot your password?",
+    forgotPasswordSent: "If that email exists, a reset link is on its way.",
+    genericError: "Something went wrong. Please try again.",
+    haveAccount: "Already have an account? Sign in",
+    invitations: "Pending invitations",
+    inviteEmailLabel: "Email to invite",
+    inviteMember: "Invite member",
+    magicLink: "Email me a link",
+    magicLinkSent: "Check your email for a sign-in link.",
+    members: "Members",
+    nameLabel: "Name",
+    nameRequired: "Name is required.",
+    newEmailLabel: "New email",
+    newPasswordLabel: "New password",
+    noAccount: "Don't have an account? Sign up",
+    noOrganizations: "You're not in any organization yet.",
+    organizationLogo: "Logo URL",
+    organizationName: "Organization name",
+    organizationNameRequired: "Organization name is required.",
+    organizations: "Organizations",
+    organizationSaved: "Organization settings saved.",
+    organizationSettings: "Organization settings",
+    organizationSlug: "Slug",
+    organizationSlugRequired: "Slug is required.",
+    otpRequired: "Enter the code we sent you.",
+    passkeyAdd: "Add a passkey",
+    passkeyName: "Passkey name",
+    passkeyRename: "Rename",
+    passkeys: "Passkeys",
+    passkeysEmpty: "No passkeys registered yet.",
+    passkeyUnnamed: "Unnamed passkey",
+    passwordLabel: "Password",
+    passwordMismatch: "Passwords do not match.",
+    passwordRequired: "Password is required.",
+    passwordTooShort: "Password must be at least 8 characters.",
+    profile: "Profile",
+    profileSaved: "Your profile has been updated.",
+    remove: "Remove",
+    resetPassword: "Set new password",
+    resetPasswordDone: "Your password has been updated. You can sign in now.",
+    revoke: "Revoke",
+    revokeOthers: "Sign out other sessions",
+    roleLabel: "Role",
+    saveChanges: "Save changes",
+    sendNewCode: "Use a different email",
+    sessions: "Active sessions",
+    sessionsEmpty: "No other active sessions.",
+    signIn: "Sign in",
+    signInFailed: "Could not sign you in. Check your details and try again.",
+    signOut: "Sign out",
+    signUp: "Create account",
+    signUpFailed: "Could not create your account. Try again.",
+    switchOrganization: "Switch",
+    twoFactor: "Verify",
+    twoFactorDisable: "Disable 2FA",
+    twoFactorEnable: "Enable 2FA",
+    twoFactorEnabled: "Two-factor authentication is on.",
+    twoFactorFailed: "That code is not valid. Try again.",
+    twoFactorScan: "Scan this with your authenticator app, then enter the 6-digit code.",
+    twoFactorSetup: "Two-factor authentication",
+    unknownDevice: "Unknown device",
+};
+
+/** Merge a caller's partial overrides over the defaults. */
+const resolveLocalization = (overrides?: Partial<Localization>): Localization => {
+    return {
+        ...DEFAULT_LOCALIZATION,
+        ...overrides,
+    };
+};
+
+export type { Localization };
+export { DEFAULT_LOCALIZATION, resolveLocalization };
