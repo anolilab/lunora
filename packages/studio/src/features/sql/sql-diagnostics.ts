@@ -18,14 +18,14 @@
  * `WITH` clause, subquery sources, and the reserved `__lunora_*` / `sqlite_*`
  * tables are never flagged.
  *
- * No SQL parser: everything works off a literal/comment-masked copy of the
- * statement, so offsets map back to the operator's text exactly. Scans use
- * `matchAll` rather than hand-reset `lastIndex` loops — a module-scoped `/g`
- * regex carries mutable state, and one forgotten reset is a nondeterministic
- * miss no test would catch.
+ * No SQL parser: the lexical reading (masking, CTE names, alias resolution)
+ * comes from `sql-context.ts`, which the autocomplete shares, so offsets map
+ * back to the operator's text exactly and both features agree on what a
+ * qualifier means.
  */
 import { classifyStatement } from "../../../../../shared/sql-readonly";
 import type { SqlSchema } from "./sql-autocomplete";
+import { sqlContextOf } from "./sql-context";
 
 /** Where a diagnostic came from, so the UI can group and the tests can assert. */
 type DiagnosticSource = "gate" | "plan" | "schema" | "syntax";
@@ -47,133 +47,11 @@ const INTERNAL_TABLE = /^(?:__lunora|sqlite_)/iu;
 /** A `FROM`/`JOIN` source: the keyword, then the table identifier (subqueries start with `(` and don't match). */
 const FROM_SOURCE = /\b(?:from|join)\s+([a-z_][\w$]*)/giu;
 
-/** A `FROM`/`JOIN` source plus an optional alias (`AS x` or bare `x`), used to resolve qualifiers. */
-const SOURCE_WITH_ALIAS = /\b(?:from|join)\s+([a-z_][\w$]*)(?:\s+(?:as\s+)?([a-z_][\w$]*))?/giu;
-
-/** A CTE name bound by `WITH name AS (` / `, name AS (`. */
-const CTE_BINDING = /(?:\bwith\s+(?:recursive\s+)?|,\s*)([a-z_][\w$]*)\s+as\s*\(/giu;
-
 /** A qualified column reference: `qualifier.column`. */
 const QUALIFIED_COLUMN = /\b([a-z_][\w$]*)\.([a-z_][\w$]*)/giu;
 
 /** SQL keywords that can legally follow `FROM`/`JOIN` and are not table names. */
 const NOT_A_TABLE = new Set(["lateral", "select"]);
-
-/** Keywords that can appear where an alias would, and must not be read as one. */
-const NOT_AN_ALIAS = new Set([
-    "cross",
-    "full",
-    "group",
-    "having",
-    "inner",
-    "join",
-    "left",
-    "limit",
-    "offset",
-    "on",
-    "order",
-    "right",
-    "union",
-    "using",
-    "where",
-    "window",
-]);
-
-/** Every character except a newline — newlines survive masking so line geometry is unchanged. */
-const NON_NEWLINE = /[^\n]/gu;
-
-/**
- * The end index of the non-code run starting at `from`, or `-1` when `from` is
- * ordinary code. Split out of {@link maskNonCode} so the scanner is one small
- * decision per construct rather than one deeply-nested loop.
- */
-const nonCodeRunEnd = (sql: string, from: number): number => {
-    const char = sql[from];
-
-    if (char === "'" || char === '"') {
-        let end = from + 1;
-
-        while (end < sql.length && sql[end] !== char) {
-            end += 1;
-        }
-
-        // +1 to include the closing quote; an unterminated literal runs to the end.
-        return Math.min(end + 1, sql.length);
-    }
-
-    if (char === "-" && sql[from + 1] === "-") {
-        const newline = sql.indexOf("\n", from);
-
-        return newline === -1 ? sql.length : newline;
-    }
-
-    if (char === "/" && sql[from + 1] === "*") {
-        const close = sql.indexOf("*/", from + 2);
-
-        return close === -1 ? sql.length : close + 2;
-    }
-
-    return -1;
-};
-
-/**
- * Blank out string literals and comments, preserving length so every offset
- * still lines up with the original text. Without this, a `'-- not a comment'`
- * literal or a commented-out `DELETE` would be linted as live code.
- */
-const maskNonCode = (sql: string): string => {
-    let out = "";
-    let index = 0;
-
-    while (index < sql.length) {
-        const end = nonCodeRunEnd(sql, index);
-
-        if (end === -1) {
-            out += sql.slice(index, index + 1);
-            index += 1;
-        } else {
-            out += sql.slice(index, end).replaceAll(NON_NEWLINE, " ");
-            index = end;
-        }
-    }
-
-    return out;
-};
-
-/** Every name bound by a `WITH` clause, lowercased — these are valid sources but not real tables. */
-const cteNames = (masked: string): Set<string> => {
-    const names = new Set<string>();
-
-    for (const match of masked.matchAll(CTE_BINDING)) {
-        names.add((match[1] ?? "").toLowerCase());
-    }
-
-    return names;
-};
-
-/**
- * Map every qualifier that can stand for a table — the table's own name, plus
- * any alias bound in a `FROM`/`JOIN` — to the table it resolves to. Lowercased
- * on both sides, because SQL identifiers are matched case-insensitively here.
- */
-const qualifierTargets = (masked: string, known: Set<string>): Map<string, string> => {
-    const targets = new Map<string, string>();
-
-    for (const match of masked.matchAll(SOURCE_WITH_ALIAS)) {
-        const table = (match[1] ?? "").toLowerCase();
-        const alias = (match[2] ?? "").toLowerCase();
-
-        if (known.has(table)) {
-            targets.set(table, table);
-
-            if (alias !== "" && !NOT_AN_ALIAS.has(alias)) {
-                targets.set(alias, table);
-            }
-        }
-    }
-
-    return targets;
-};
 
 /** Flag `FROM`/`JOIN` sources that are neither a known table, a CTE, nor an internal table. */
 const unknownTableDiagnostics = (masked: string, known: Set<string>, ctes: Set<string>): SqlDiagnostic[] => {
@@ -256,12 +134,11 @@ const lintDraft = (draft: string, schema: SqlSchema): SqlDiagnostic[] => {
         return [{ length: rejection.length, message: rejection.message, offset: rejection.offset, severity: "error", source: "gate" }];
     }
 
-    const masked = maskNonCode(draft);
+    const { ctes, masked, targets } = sqlContextOf(draft, schema.tables);
     const known = new Set(schema.tables.map((table) => table.toLowerCase()));
-    const ctes = cteNames(masked);
 
-    return [...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, qualifierTargets(masked, known))];
+    return [...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, targets)];
 };
 
-export { lintDraft, maskNonCode };
+export { lintDraft };
 export type { DiagnosticSource, SqlDiagnostic };

@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useMemo, useState } from "react";
+import { createContext, use, useMemo, useRef, useState } from "react";
 
 /** How a caller wants the console opened. */
 interface OpenConsoleOptions {
@@ -60,33 +60,39 @@ export const OperationConsoleProvider = ({ children }: { readonly children: Reac
         shown: "all",
     });
 
+    /*
+     * Actions live in a ref, not a memo, so their identities NEVER change. `StudioLayoutShell`'s
+     * keydown effect depends on `toggle`; folding the actions into a `[state]`
+     * memo would give it a new identity on every open/close and tear down and
+     * re-register the window listener each time. Every setter is an updater
+     * function, so none of them needs to close over the current state.
+     */
+    const actionsRef = useRef<Omit<OperationConsoleValue, "focusSeq" | "open" | "shown">>({
+        close: (): void => {
+            setState((current) => {
+                return { ...current, open: false };
+            });
+        },
+        openConsole: (options?: OpenConsoleOptions): void => {
+            setState({ focusSeq: options?.seq, open: true, shown: options?.errorsOnly === true ? "errors" : "all" });
+        },
+        setShown: (shown: ConsoleShown): void => {
+            setState((current) => {
+                return { ...current, shown };
+            });
+        },
+        toggle: (): void => {
+            // Toggling from the keyboard clears any prior focus and filter: the
+            // operator is asking for the tape, not for the entry some earlier
+            // error pinned.
+            setState((current) => {
+                return { focusSeq: undefined, open: !current.open, shown: "all" };
+            });
+        },
+    });
+
     const value = useMemo<OperationConsoleValue>(() => {
-        return {
-            close: () => {
-                setState((current) => {
-                    return { ...current, open: false };
-                });
-            },
-            focusSeq: state.focusSeq,
-            open: state.open,
-            openConsole: (options?: OpenConsoleOptions) => {
-                setState({ focusSeq: options?.seq, open: true, shown: options?.errorsOnly === true ? "errors" : "all" });
-            },
-            setShown: (shown: ConsoleShown) => {
-                setState((current) => {
-                    return { ...current, shown };
-                });
-            },
-            shown: state.shown,
-            toggle: () => {
-                // Toggling from the keyboard clears any prior focus and filter: the
-                // operator is asking for the tape, not for the entry some earlier
-                // error pinned.
-                setState((current) => {
-                    return { focusSeq: undefined, open: !current.open, shown: "all" };
-                });
-            },
-        };
+        return { ...actionsRef.current, focusSeq: state.focusSeq, open: state.open, shown: state.shown };
     }, [state]);
 
     return <OperationConsoleContext value={value}>{children}</OperationConsoleContext>;

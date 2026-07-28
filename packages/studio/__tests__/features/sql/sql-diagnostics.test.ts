@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { SqlSchema } from "../../../src/features/sql/sql-autocomplete";
+import { suggestionsFor } from "../../../src/features/sql/sql-autocomplete";
+import { maskNonCode } from "../../../src/features/sql/sql-context";
 import type { SqlDiagnostic } from "../../../src/features/sql/sql-diagnostics";
-import { lintDraft, maskNonCode } from "../../../src/features/sql/sql-diagnostics";
+import { lintDraft } from "../../../src/features/sql/sql-diagnostics";
 import { toSpans } from "../../../src/features/sql/sql-diagnostics-ui";
 
 const schema: SqlSchema = {
@@ -142,6 +144,32 @@ describe("lintDraft — unknown columns", () => {
 
         // `where` must not be bound as an alias for `messages`.
         expect(lintDraft("SELECT messages.body FROM messages WHERE id = 1", schema)).toStrictEqual([]);
+    });
+});
+
+describe("shared alias resolution", () => {
+    it("completes an aliased qualifier's columns — the whole point of sharing the resolver", () => {
+        expect.assertions(2);
+
+        // Before the extraction the autocomplete read the bare word before the
+        // dot, so `m.` resolved to a table named "m" and completed NOTHING, while
+        // the linter (correctly) understood `m` as `messages`.
+        const value = "SELECT m. FROM messages m";
+        const caret = "SELECT m.".length;
+
+        const labels = suggestionsFor(value, caret, schema).map((suggestion) => suggestion.label);
+
+        expect(labels).toContain("body");
+        expect(labels).toContain("authorId");
+    });
+
+    it("still resolves an unaliased table qualifier", () => {
+        expect.assertions(1);
+
+        const value = "SELECT messages. FROM messages";
+        const labels = suggestionsFor(value, "SELECT messages.".length, schema).map((suggestion) => suggestion.label);
+
+        expect(labels).toContain("body");
     });
 });
 

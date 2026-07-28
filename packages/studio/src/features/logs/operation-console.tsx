@@ -196,5 +196,3 @@ export const OperationConsole = ({
         </section>
     );
 };
-
-export { useOperationLog };

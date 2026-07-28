@@ -209,13 +209,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const isValidTableSnapshot = (value: unknown): value is TableSnapshot =>
     isRecord(value) && isRecord(value.fields) && isRecord(value.indexes) && isRecord(value.relations) && typeof value.shardMode === "string";
 
-/** Outcome of parsing snapshot JSON: the snapshot, an explanation of why it is unusable, or neither (absent). */
-interface SnapshotParseOutcome {
-    /** Set when content was present but malformed. The caller decides whether that is fatal. */
-    error?: string;
-    /** Set when content parsed into a structurally valid snapshot. */
-    snapshot?: SchemaSnapshot;
-}
+/**
+ * Outcome of parsing snapshot JSON — three states, stated as three rather than
+ * encoded in two optional fields, so each caller's policy reads as an exhaustive
+ * switch instead of a chain of `!== undefined` guards.
+ *
+ * `absent` is a legitimate "no baseline yet" (a first capture); `invalid` is
+ * content that is present but unusable, which the CLI treats as fatal and the
+ * Studio renders as an unreadable ledger row. Same parse, two policies.
+ */
+type SnapshotParseOutcome =
+    { readonly status: "absent" } | { readonly error: string; readonly status: "invalid" } | { readonly snapshot: SchemaSnapshot; readonly status: "ok" };
 
 /**
  * Parse snapshot JSON without deciding what a failure means.
@@ -229,7 +233,7 @@ interface SnapshotParseOutcome {
  */
 const parseSnapshotJson = (content: string | undefined): SnapshotParseOutcome => {
     if (content === undefined || content.trim() === "") {
-        return {};
+        return { status: "absent" };
     }
 
     let parsed: unknown;
@@ -237,16 +241,19 @@ const parseSnapshotJson = (content: string | undefined): SnapshotParseOutcome =>
     try {
         parsed = JSON.parse(content);
     } catch (error: unknown) {
-        return { error: `baseline is not valid JSON: ${error instanceof Error ? error.message : String(error)}` };
+        return { error: `baseline is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, status: "invalid" };
     }
 
     if (!isRecord(parsed) || parsed.version !== SCHEMA_SNAPSHOT_VERSION || !isRecord(parsed.tables)) {
-        return { error: `baseline is malformed or written by an incompatible version (expected version ${String(SCHEMA_SNAPSHOT_VERSION)})` };
+        return {
+            error: `baseline is malformed or written by an incompatible version (expected version ${String(SCHEMA_SNAPSHOT_VERSION)})`,
+            status: "invalid",
+        };
     }
 
     for (const [name, table] of Object.entries(parsed.tables)) {
         if (!isValidTableSnapshot(table)) {
-            return { error: `baseline table "${name}" has an invalid structure` };
+            return { error: `baseline table "${name}" has an invalid structure`, status: "invalid" };
         }
     }
 
@@ -265,6 +272,7 @@ const parseSnapshotJson = (content: string | undefined): SnapshotParseOutcome =>
             tables: parsed.tables as Record<string, TableSnapshot>,
             version: SCHEMA_SNAPSHOT_VERSION,
         },
+        status: "ok",
     };
 };
 

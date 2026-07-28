@@ -230,10 +230,8 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 
         setLiveError(undefined);
 
-        // One tape entry per CHANNEL (see `operation-log.ts`): the open is
-        // recorded here, each push only bumps its counter, and the teardown below
-        // closes it. Recording an entry per push would evict the whole tape within
-        // seconds of opening a live data-browser view.
+        // One tape entry per CHANNEL: opened here, counted on each push, closed
+        // in the teardown below (see `operation-log.ts`).
         const seq = operationLog.startSubscription(path, args, shardKey);
 
         const unsubscribe = client.subscribe(

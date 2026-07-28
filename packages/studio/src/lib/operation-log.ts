@@ -191,11 +191,7 @@ class OperationLog {
         return this.append(functionPath, args, shardKey, "call", "pending");
     }
 
-    /**
-     * Record an opening live subscription. One entry per CHANNEL, not per push —
-     * a live data-browser view pushes on every write-flush, and an entry each
-     * would evict the whole tape within seconds of opening it.
-     */
+    /** Record an opening live subscription. See {@link OperationEntry.pushes} for why one entry per channel. */
     public startSubscription(functionPath: string, args: Record<string, unknown>, shardKey: string): number {
         return this.append(functionPath, args, shardKey, "subscription", "live");
     }

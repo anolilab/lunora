@@ -20,6 +20,13 @@
  * The classifier returns a rejection *value* rather than throwing, because the
  * browser half needs an offset to underline and the server half needs an error
  * code to serialize. Callers add their own error type.
+ *
+ * The comment scanner below is a near-twin of the one in the studio's
+ * `features/sql/sql-context.ts`, and that duplication is deliberate: this file is
+ * inlined into `@lunora/do`, which must stay free of studio feature modules, and
+ * `shared/` may only import other zero-dependency `shared/` files. If a third
+ * consumer appears, promote the scanner to its own `shared/` module rather than
+ * pointing this one at the studio.
  */
 
 /** Why a statement was rejected. Mirrors the codes the DO serializes to the client. */

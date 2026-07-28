@@ -126,11 +126,11 @@ class SchemaSnapshotParseError extends LunoraError {
 const parseSchemaSnapshot = (content: string | undefined): SchemaSnapshot | undefined => {
     const outcome = parseSnapshotJson(content);
 
-    if (outcome.error !== undefined) {
+    if (outcome.status === "invalid") {
         throw new SchemaSnapshotParseError(outcome.error);
     }
 
-    return outcome.snapshot;
+    return outcome.status === "ok" ? outcome.snapshot : undefined;
 };
 
 /** The decision the pre-deploy gate returns. */

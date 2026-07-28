@@ -130,8 +130,16 @@ const buildSchemaDiffModel = (before: SchemaSnapshot | undefined, after: SchemaS
     return { breakingCount: changes.filter((change) => change.severity === "breaking").length, changes, tables };
 };
 
-/** Parse a ledger row's stored snapshot JSON, or `undefined` when it is absent/corrupt. */
-const snapshotFromJson = (json: string | undefined): SchemaSnapshot | undefined => parseSnapshotJson(json).snapshot;
+/**
+ * Parse a ledger row's stored snapshot JSON, or `undefined` when it is absent or
+ * corrupt. The Studio's policy for an unreadable row is to render nothing for it
+ * — only the CLI gate treats a malformed snapshot as fatal.
+ */
+const snapshotFromJson = (json: string | undefined): SchemaSnapshot | undefined => {
+    const outcome = parseSnapshotJson(json);
+
+    return outcome.status === "ok" ? outcome.snapshot : undefined;
+};
 
 export { buildSchemaDiffModel, snapshotFromJson };
 export type { DiffTable, FieldStatus, SchemaDiffModel, TableStatus };

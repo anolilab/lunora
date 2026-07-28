@@ -123,6 +123,21 @@ it is already scoped as plan 205 Phase 2. Left there rather than duplicated.
   diagnostic is emitted today) but fixed, with a regression test.
 - The four hand-reset `lastIndex` scan loops became `matchAll`, and the
   diagnostic-source label became an exhaustive record.
+- **Two incompatible alias resolvers merged.** `sql-autocomplete.ts` resolved a
+  `tbl.` qualifier by reading the word behind the caret, which cannot see aliases
+  at all — `SELECT m.| FROM messages m` completed nothing — while the new linter
+  built a correct alias map. Both now read `features/sql/sql-context.ts`, so the
+  two features cannot disagree about what a qualifier means and the autocomplete
+  gains alias-aware column completion. Pinned by a test.
+
+## Behavioural change worth knowing
+
+The editor now sends the draft to the worker ~600ms after every typing pause, to
+be planned by `EXPLAIN QUERY PLAN`. It is admin-gated, capability-optional, and
+the statement is never executed — but an exploratory query the operator never
+runs now leaves the browser, which it did not before. Called out here because it
+is invisible in the UI; if that trade is unwanted, the server pass can be made
+opt-in without touching the client-side gate diagnostics.
 
 ## Non-goals
 
