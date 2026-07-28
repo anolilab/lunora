@@ -1,11 +1,11 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeTelemetryKey } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Tenant runtime logs (GAPS.md B2) — full log management. The dispatch-namespace
@@ -171,12 +171,12 @@ const matchesSearch = (row: TenantLogRow, needle: string): boolean => {
  * rejected outright.
  */
 export const ingest = mutation
-    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
+    .use(dbRateLimit("ingest"))
     .input({
-        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        deployKey: boundedString(LIMITS.token),
         lines: v.array(logEntry),
         organizationId: v.id("organizations"),
-        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        scriptName: boundedString(LIMITS.name),
     })
     .mutation(async ({ ctx: context, args: { deployKey, lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
         await authorizeTelemetryKey(context, organizationId, deployKey);
@@ -198,7 +198,7 @@ export const ingest = mutation
  * (e.g. a superseded/destroyed release the tail lags behind). SYSTEM only.
  */
 export const orgForScript = internalQuery
-    .input({ scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }) })
+    .input({ scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { scriptName } }): Promise<{ organizationId: Id<"organizations"> } | null> => {
         const { page } = await context.db.deployments.findMany({ where: { scriptName } });
         const row = (page as unknown as { organizationId: Id<"organizations"> }[])[0];
@@ -217,7 +217,7 @@ export const ingestInternal = internalMutation
     .input({
         lines: v.array(logEntry),
         organizationId: v.id("organizations"),
-        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        scriptName: boundedString(LIMITS.name),
     })
     .mutation(async ({ ctx: context, args: { lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
         if (lines.length > MAX_BATCH) {
@@ -242,14 +242,14 @@ export const list = query
     .input({
         afterCreatedAt: v.optional(v.number()),
         from: v.optional(v.number()),
-        functionPath: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        functionPath: v.optional(boundedString(LIMITS.token)),
         levels: v.optional(v.array(logLevel)),
         limit: v.optional(v.number()),
         organizationId: v.id("organizations"),
-        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
-        search: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        scriptName: boundedString(LIMITS.name),
+        search: v.optional(boundedString(LIMITS.token)),
         to: v.optional(v.number()),
-        traceId: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        traceId: v.optional(boundedString(LIMITS.id)),
     })
     .query(async ({ ctx: context, args }): Promise<TenantLogView[]> => {
         await assertMember(context, args.organizationId);

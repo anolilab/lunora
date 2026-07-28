@@ -1,4 +1,3 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { highestPlan } from "../src/billing/plans";
@@ -8,7 +7,8 @@ import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
 
@@ -146,7 +146,7 @@ export const adminTarget = query
  * bearer-gated control-plane endpoint. Unknown scripts resolve to `free`.
  */
 export const planForScript = query
-    .input({ scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }) })
+    .input({ scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string }> => {
         const { page } = await context.db.deployments.findMany({ where: { scriptName } });
         const deployment = (page as unknown as DeploymentRow[])[0];
@@ -188,29 +188,25 @@ export const listByProject = query
  * separately and reports progress back through `updateStatus`.
  */
 export const create = mutation
-    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
+    .use(dbRateLimit("provision"))
     .input({
         // Tenant admin token the platform set on the worker (for the admin proxy).
         // Sealed at the edge before it reaches here: the encrypted fields are the
         // norm; `adminToken` (plaintext) is only the no-master-key dev fallback.
-        adminToken: v.optional(v.string().check((value) => value.length <= 1024, { message: "must be at most 1_024 characters", schema: { maxLength: 1024 } })),
-        adminTokenCiphertext: v.optional(
-            v.string().check((value) => value.length <= 4096, { message: "must be at most 4_096 characters", schema: { maxLength: 4096 } }),
-        ),
-        adminTokenIv: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
-        branch: v.optional(v.string().check((value) => value.length <= 255, { message: "must be at most 255 characters", schema: { maxLength: 255 } })),
+        adminToken: v.optional(boundedString(LIMITS.sealedToken)),
+        adminTokenCiphertext: v.optional(boundedString(LIMITS.cipher)),
+        adminTokenIv: v.optional(boundedString(LIMITS.id)),
+        branch: v.optional(boundedString(LIMITS.gitRef)),
         // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
-        cronSpecs: v.optional(
-            v.array(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
-        ),
+        cronSpecs: v.optional(v.array(boundedString(LIMITS.name))),
         // CI deploy path: a valid deploy key authorizes in lieu of a member session.
-        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        deployKey: v.optional(boundedString(LIMITS.token)),
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         // @lunora/runtime version bundled into this release (fleet-upgrade planner input, GAPS.md E4).
-        runtimeVersion: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
-        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        runtimeVersion: v.optional(boundedString(LIMITS.id)),
+        scriptName: boundedString(LIMITS.name),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number }> => {
         let createdBy: string;
@@ -283,9 +279,9 @@ export const create = mutation
  * the deploy key (CI) or an owner/admin member session.
  */
 export const activate = mutation
-    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
+    .use(dbRateLimit("machine"))
     .input({
-        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, id } }): Promise<void> => {
@@ -322,9 +318,9 @@ export const activate = mutation
  * active deployment is marked `superseded`.
  */
 export const rollback = mutation
-    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
+    .use(dbRateLimit("machine"))
     .input({
-        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
         organizationId: v.id("organizations"),
     })
@@ -375,7 +371,7 @@ export const rollback = mutation
  * pointer was never set (pre-blue/green rows).
  */
 export const routeForAlias = query
-    .input({ alias: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }) })
+    .input({ alias: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { alias } }): Promise<{ scriptName: string } | null> => {
         const { page } = await context.db.deployments.findMany({ where: { alias } });
         const rows = page as unknown as DeploymentRow[];
@@ -472,10 +468,10 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
  * here instead (deploy key or org membership).
  */
 export const updateStatus = mutation
-    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
+    .use(dbRateLimit("machine"))
     .input({
-        bundleHash: v.optional(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
-        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        bundleHash: v.optional(boundedString(LIMITS.name)),
+        deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
         status: v.union(
             v.literal("queued"),
@@ -487,7 +483,7 @@ export const updateStatus = mutation
             v.literal("failed"),
             v.literal("destroyed"),
         ),
-        url: v.optional(v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } })),
+        url: v.optional(boundedString(LIMITS.url)),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
         const existing = (await context.db.get(id)) as DeploymentRow | null;

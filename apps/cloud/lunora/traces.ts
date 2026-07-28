@@ -1,5 +1,3 @@
-import { dbRateLimit } from "@lunora/ratelimit";
-
 import type { SpanObservation } from "../src/telemetry/otlp";
 import type { TelemetryStoreEnv } from "../src/telemetry/store";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
@@ -9,7 +7,8 @@ import { foldObservationTraces } from "../src/telemetry/trace-tree";
 import type { Id } from "./_generated/dataModel.js";
 import { action, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Traces over stored **observations** (spans) — the real-duration Traces model
@@ -88,7 +87,7 @@ export const list = query
         deploymentId: v.optional(v.id("deployments")),
         errorOnly: v.optional(v.boolean()),
         from: v.optional(v.number()),
-        functionPath: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        functionPath: v.optional(boundedString(LIMITS.token)),
         limit: v.optional(v.number()),
         minDurationMs: v.optional(v.number()),
         organizationId: v.id("organizations"),
@@ -136,7 +135,7 @@ export const list = query
  * with the hot {@link list} rollups (deduping by `traceId`, hot wins). Members only.
  */
 export const listArchived = action
-    .use(dbRateLimit(RATE_LIMITS, "archive", { key: callerKey }))
+    .use(dbRateLimit("archive"))
     .input({
         from: v.number(),
         limit: v.optional(v.number()),
@@ -197,7 +196,7 @@ const toSpanView = (span: ObservationRow | SpanObservation): SpanView => {
 export const get = query
     .input({
         organizationId: v.id("organizations"),
-        traceId: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        traceId: boundedString(LIMITS.id),
     })
     .query(async ({ ctx: context, args }): Promise<SpanView[]> => {
         await assertMember(context, args.organizationId);
@@ -224,10 +223,10 @@ export const get = query
  * returns spans.
  */
 export const getArchived = action
-    .use(dbRateLimit(RATE_LIMITS, "archive", { key: callerKey }))
+    .use(dbRateLimit("archive"))
     .input({
         organizationId: v.id("organizations"),
-        traceId: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        traceId: boundedString(LIMITS.id),
     })
     .action(async ({ ctx: context, args }): Promise<SpanView[]> => {
         await assertMember(context, args.organizationId);

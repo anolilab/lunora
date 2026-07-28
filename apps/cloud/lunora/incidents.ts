@@ -1,5 +1,4 @@
 import { generateText } from "@lunora/ai";
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { EvidenceLogRow, EvidenceSpanRow, GeneratePort, InvestigationIncident, InvestigationResult } from "../src/telemetry/investigation";
@@ -11,7 +10,7 @@ import type { ActionCtx as ActionContext } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
 
 /**
  * Higher-level incidents (crash-loop / OOM / error-spike) opened from container
@@ -65,7 +64,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
 /** Resolve or reopen an incident (owners/admins). Resolving stamps `closedAt`. */
 export const setStatus = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("incidents"), organizationId: v.id("organizations"), status: incidentStatus })
     .mutation(async ({ ctx: context, args: { id, organizationId, status } }): Promise<Id<"incidents">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -132,7 +131,7 @@ const relatedIssues = async (context: ActionContext, organizationId: Id<"organiz
  *   because each call spends real inference budget. The tightest limit in the app.
  */
 export const triage = action
-    .use(dbRateLimit(RATE_LIMITS, "ai", { key: callerKey }))
+    .use(dbRateLimit("ai"))
     .input({ id: v.id("incidents"), organizationId: v.id("organizations") })
     .action(async ({ ctx: context, args: { id, organizationId } }): Promise<{ summary: string }> => {
         await assertMember(context, organizationId, ["owner", "admin", "member"]);
@@ -238,7 +237,7 @@ const gatherEvidence = async (context: ActionContext, organizationId: Id<"organi
  * telemetry is fenced + clamped as untrusted data.
  */
 export const investigate = action
-    .use(dbRateLimit(RATE_LIMITS, "ai", { key: callerKey }))
+    .use(dbRateLimit("ai"))
     .input({ id: v.id("incidents"), organizationId: v.id("organizations") })
     .action(async ({ ctx: context, args: { id, organizationId } }): Promise<InvestigationView> => {
         await assertMember(context, organizationId, ["owner", "admin", "member"]);

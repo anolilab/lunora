@@ -1,6 +1,5 @@
 import type { Subscription } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
-import { dbRateLimit } from "@lunora/ratelimit";
 
 import { evaluateDunning } from "../src/billing/dunning";
 import type { QuotaResource } from "../src/billing/plans";
@@ -8,7 +7,8 @@ import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Billing (CLOUD-PLAN.md §4) on `@lunora/payment`. The org id is the payment
@@ -40,12 +40,12 @@ interface SubscriptionRow {
  * only. Returns the redirect URL the studio sends the browser to.
  */
 export const checkout = action
-    .use(dbRateLimit(RATE_LIMITS, "billing", { key: callerKey }))
+    .use(dbRateLimit("billing"))
     .input({
-        cancelUrl: v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } }),
+        cancelUrl: boundedString(LIMITS.url),
         organizationId: v.id("organizations"),
-        priceId: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
-        successUrl: v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } }),
+        priceId: boundedString(LIMITS.name),
+        successUrl: boundedString(LIMITS.url),
     })
     .action(async ({ ctx: context, args: { cancelUrl, organizationId, priceId, successUrl } }): Promise<{ url: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -63,10 +63,10 @@ export const checkout = action
 
 /** Open the provider billing portal for the org (owners/admins only). */
 export const portal = action
-    .use(dbRateLimit(RATE_LIMITS, "billing", { key: callerKey }))
+    .use(dbRateLimit("billing"))
     .input({
         organizationId: v.id("organizations"),
-        returnUrl: v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } }),
+        returnUrl: boundedString(LIMITS.url),
     })
     .action(async ({ ctx: context, args: { organizationId, returnUrl } }): Promise<{ url: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -121,10 +121,10 @@ export const subscription = query
  * verification + store write happen where `ctx.payments` exists.
  */
 export const processWebhook = action
-    .use(dbRateLimit(RATE_LIMITS, "webhook", { key: callerKey }))
+    .use(dbRateLimit("webhook"))
     .input({
-        body: v.string().check((value) => value.length <= 262_144, { message: "must be at most 262_144 characters", schema: { maxLength: 262_144 } }),
-        signature: v.string().check((value) => value.length <= 512, { message: "must be at most 512 characters", schema: { maxLength: 512 } }),
+        body: boundedString(LIMITS.webhookBody),
+        signature: boundedString(LIMITS.signature),
     })
     .action(async ({ ctx: context, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/billing/webhook", {

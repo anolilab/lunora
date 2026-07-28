@@ -1,17 +1,12 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { ReturnOf } from "@lunora/client";
 import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
-import type { OrgId } from "./types";
 
-interface BillingSectionProps {
-    organizationId: OrgId;
-    /** The section's primary query, resolved by its route loader on the edge. */
-    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
-}
+import type { SectionProps } from "./tabs";
 
 /**
  * Billing tab (§4). Reads the org's resolved entitlements and webhook-synced
@@ -20,7 +15,7 @@ interface BillingSectionProps {
  * to the provider). Price ids are environment config; entered here rather than
  * hardcoded in the client.
  */
-export const BillingSection = ({ organizationId, preloaded }: BillingSectionProps): ReactElement => {
+export const BillingSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.billing.entitlements>>): ReactElement => {
     const client = useLunora();
     const entitlements = usePreloadedQuery(preloaded);
     const subscriptions = useQuery(api.billing.subscription, { organizationId });
