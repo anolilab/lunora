@@ -7,7 +7,7 @@ import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
@@ -188,7 +188,7 @@ export const listByProject = query
  * separately and reports progress back through `updateStatus`.
  */
 export const create = mutation
-    .use(dbRateLimit("provision"))
+    .use(rateLimit("provision"))
     .input({
         // Tenant admin token the platform set on the worker (for the admin proxy).
         // Sealed at the edge before it reaches here: the encrypted fields are the
@@ -279,7 +279,7 @@ export const create = mutation
  * the deploy key (CI) or an owner/admin member session.
  */
 export const activate = mutation
-    .use(dbRateLimit("machine"))
+    .use(rateLimit("machine"))
     .input({
         deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
@@ -318,7 +318,7 @@ export const activate = mutation
  * active deployment is marked `superseded`.
  */
 export const rollback = mutation
-    .use(dbRateLimit("machine"))
+    .use(rateLimit("machine"))
     .input({
         deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
@@ -468,7 +468,7 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
  * here instead (deploy key or org membership).
  */
 export const updateStatus = mutation
-    .use(dbRateLimit("machine"))
+    .use(rateLimit("machine"))
     .input({
         bundleHash: v.optional(boundedString(LIMITS.name)),
         deployKey: v.optional(boundedString(LIMITS.token)),
