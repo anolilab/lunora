@@ -72,6 +72,29 @@ describe("svelte flow gate", () => {
     });
 });
 
+describe("svelte PasswordStrength", () => {
+    it("re-derives the checklist as the password is typed", async () => {
+        expect.assertions(4);
+
+        const { container } = render(Harness, { props: { authClient: bareClient().client, card: "sign-up", nav: fakeNav() } });
+
+        // Nothing to show for an empty field.
+        expect(container.querySelector(".lunora-auth-strength")).toBeNull();
+
+        await fireEvent.input(screen.getByLabelText("Password"), { target: { value: "short" } });
+
+        const unmet = container.querySelector(".lunora-auth-strength__item") as HTMLElement;
+
+        expect(unmet.className).not.toContain("lunora-auth-strength__item--met");
+        expect(unmet.textContent).toContain("At least 8 characters");
+
+        // `$derived`, not a one-time read, so the same node flips to met.
+        await fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+
+        expect((container.querySelector(".lunora-auth-strength__item") as HTMLElement).className).toContain("lunora-auth-strength__item--met");
+    });
+});
+
 describe("svelte theme", () => {
     it("applies only the changed tokens to the card", () => {
         expect.assertions(2);

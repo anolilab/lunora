@@ -601,3 +601,62 @@
 .lunora-auth-actions > .lunora-auth-button--secondary {
     flex: 1;
 }
+
+/* ── Password strength + username availability ──────────────────────────── */
+
+.lunora-auth-strength {
+    margin: -0.5rem 0 1rem;
+}
+
+.lunora-auth-strength__bar {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--muted, hsl(228 16% 93%));
+    overflow: hidden;
+}
+
+.lunora-auth-strength__fill {
+    display: block;
+    height: 100%;
+    background: var(--foreground, hsl(240 14% 10%));
+    transition: width 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lunora-auth-strength__fill {
+        transition: none;
+    }
+}
+
+.lunora-auth-strength__list {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    color: var(--muted-foreground, hsl(235 9% 42%));
+    font-size: 0.75rem;
+}
+
+/*
+ * A met rule changes colour *and* its leading glyph (✓ vs ○), so the state does
+ * not depend on colour alone.
+ */
+.lunora-auth-strength__item--met {
+    color: var(--success, hsl(160 60% 28%));
+}
+
+.lunora-auth-availability {
+    margin: -0.5rem 0 1rem;
+    font-size: 0.75rem;
+    color: var(--muted-foreground, hsl(235 9% 42%));
+}
+
+.lunora-auth-availability--taken {
+    color: var(--destructive, hsl(0 72% 45%));
+}
+
+.lunora-auth-availability--available {
+    color: var(--success, hsl(160 60% 28%));
+}

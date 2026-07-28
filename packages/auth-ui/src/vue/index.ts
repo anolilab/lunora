@@ -39,9 +39,11 @@ export { default as AuthLink } from "./AuthLink.vue";
 export { default as ErrorToaster } from "./ErrorToaster.vue";
 export { default as Field } from "./Field.vue";
 export { default as FormBanner } from "./FormBanner.vue";
+export { default as PasswordStrength } from "./PasswordStrength.vue";
 export { default as Skeleton } from "./Skeleton.vue";
 export { default as SocialButtons } from "./SocialButtons.vue";
 export { default as SubmitButton } from "./SubmitButton.vue";
+export { default as UsernameAvailability } from "./UsernameAvailability.vue";
 
 // Auth cards.
 export { default as AnonymousButton } from "./AnonymousButton.vue";

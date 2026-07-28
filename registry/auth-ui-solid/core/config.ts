@@ -12,6 +12,7 @@ import { PLUGIN_ID_TO_FLOW } from "./discovery";
 import { derivePluginFlags, FLOW_NAMES } from "./flow-gate";
 import type { Localization } from "./localization";
 import { resolveLocalization } from "./localization";
+import type { PasswordPolicy } from "./password-policy";
 import type { ThemeTokens } from "./theme";
 import { resolveThemeVariables } from "./theme";
 import type { AnyAuthClient, AuthClient } from "./types";
@@ -115,8 +116,30 @@ interface AuthUIConfig {
      * the client-side registration when the endpoint isn't mounted.
      */
     discover?: boolean;
+
+    /**
+     * Password rules, meant to mirror what your server enforces. Left unset it
+     * is better-auth's own default (8–128, no composition rules); set it to
+     * whatever `emailAndPassword` is configured with so the form and the server
+     * agree. See `password-policy.ts`.
+     */
+
+    /**
+     * How a forgotten password is recovered.
+     *
+     * `"link"` (the default) posts to `/request-password-reset`, which needs
+     * `emailAndPassword.sendResetPassword` server-side. `"otp"` uses the
+     * `emailOTP` plugin instead — a *different endpoint with a different
+     * payload*. An app configured for one and asking for the other gets "Reset
+     * password isn't enabled", which names neither the cause nor the fix.
+     *
+     * Explicit rather than inferred: both can be configured at once, and only
+     * the app knows which flow it means to offer.
+     */
+    forgotPassword?: { method?: "link" | "otp" };
     localization?: Partial<Localization>;
     nav: NavAdapter;
+
     /** Surfaced to `onError`; the flow still sets `formError` for display. */
     onError?: (error: unknown) => void;
 
@@ -127,6 +150,18 @@ interface AuthUIConfig {
      * trigger `useAuth` on its own.
      */
     onSessionChange?: () => void;
+
+    /** Organization UI options. Server-derived sub-features are separate. */
+    organization?: {
+        /**
+         * Show the slug field when creating or editing an organization.
+         * Defaults to true. Turn it off for apps that don't put the slug in a
+         * URL — it is an implementation detail there, and the create form
+         * derives one from the name anyway.
+         */
+        showSlug?: boolean;
+    };
+    password?: PasswordPolicy;
     plugins?: PluginFlags;
     redirects?: RedirectConfig;
 
@@ -152,12 +187,15 @@ interface ControllerContext {
     basePath: string;
     /** Whether the password form renders. Server-derived when discovery answers. */
     credentials: boolean;
+    /** Which password-reset transport the app uses; see the config field of the same name. */
+    forgotPasswordMethod: "link" | "otp";
     localization: Localization;
     nav: NavAdapter;
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
     /** Organization sub-features, server-derived when discovery answers. */
-    organization: { roles: boolean; teams: boolean };
+    organization: { roles: boolean; showSlug: boolean; teams: boolean };
+    password: PasswordPolicy;
     plugins: Required<PluginFlags>;
     redirects: Required<RedirectConfig>;
     /** Whether the sign-up card offers to create an account. */
@@ -274,11 +312,17 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         avatar: { maxSize: config.avatar?.maxSize ?? DEFAULT_AVATAR_MAX_SIZE, upload: config.avatar?.upload },
         basePath: config.basePath ?? DEFAULT_BASE_PATH,
         credentials: discovered?.emailAndPassword ?? true,
+        forgotPasswordMethod: config.forgotPassword?.method ?? "link",
         localization: resolveLocalization(config.localization),
         nav: config.nav,
         onError: config.onError,
         onSessionChange: config.onSessionChange,
-        organization: { roles: discovered?.organization.roles ?? false, teams: discovered?.organization.teams ?? false },
+        organization: {
+            roles: discovered?.organization.roles ?? false,
+            showSlug: config.organization?.showSlug ?? true,
+            teams: discovered?.organization.teams ?? false,
+        },
+        password: config.password ?? {},
         plugins: resolvePlugins(config.authClient, config.plugins, discovered),
         redirects: resolveRedirects(config.redirects),
         signUp: discovered?.signUp ?? true,

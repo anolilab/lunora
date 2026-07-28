@@ -2,6 +2,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
+import { readFieldPrefill } from "./prefill";
 import { resolveAfterSignIn } from "./redirect-to";
 import type { FormController } from "./types";
 import { email as validateEmail, password as validatePassword, required } from "./validators";
@@ -12,9 +13,11 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
     createFormController<SignUpField>(context, {
         fallbackError: (localization) => localization.signUpFailed,
         fields: {
-            email: { validate: (value, _values, localization) => validateEmail(value, localization) },
-            name: { validate: (value, _values, localization) => required(value, localization.nameRequired) },
-            password: { validate: (value, _values, localization) => validatePassword(value, localization) },
+            // Seeded from `?email=` when a link supplied one — an invitee should
+            // not have to retype the address they were invited as.
+            email: { initial: readFieldPrefill("email") ?? "", validate: (value, _values, localization) => validateEmail(value, localization) },
+            name: { initial: readFieldPrefill("name") ?? "", validate: (value, _values, localization) => required(value, localization.nameRequired) },
+            password: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
         },
         sessionChanging: true,
         submit: async (values, context_) => {

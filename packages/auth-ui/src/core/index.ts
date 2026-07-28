@@ -47,7 +47,7 @@ export type {
 } from "./invitations";
 export { createAcceptInvitationController, createUserInvitationsController } from "./invitations";
 export { passkeyLabel, providerLabel, ROLE_OPTIONS, sessionLabel, slugify } from "./labels";
-export { LAST_LOGIN_METHOD_COOKIE, readLastLoginMethod } from "./last-login-method";
+export { LAST_LOGIN_METHOD_COOKIE, LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, LAST_METHOD_PASSKEY, readLastLoginMethod } from "./last-login-method";
 export type { Localization } from "./localization";
 export { DEFAULT_LOCALIZATION, resolveLocalization } from "./localization";
 export type { MagicLinkField } from "./magic-link";
@@ -69,6 +69,8 @@ export type { OrganizationSettingsField, OrganizationSettingsOptions } from "./o
 export { createOrganizationSettingsController } from "./organization-settings";
 export type { PasskeysActions, PasskeysController } from "./passkeys";
 export { createPasskeysController } from "./passkeys";
+export type { PasswordPolicy, PasswordRequirement } from "./password-policy";
+export { DEFAULT_PASSWORD_POLICY, passwordRequirements, passwordScore, validatePassword } from "./password-policy";
 export type {
     PhoneForgotPasswordField,
     PhoneResetPasswordField,
@@ -84,11 +86,14 @@ export {
     createPhoneSignInController,
     createPhoneVerifyController,
 } from "./phone-number";
+export { lockedPrefill, PREFILLABLE, readFieldPrefill } from "./prefill";
 export type { ProfileField, ProfileOptions } from "./profile";
 export { createProfileController } from "./profile";
 export { isSafeRedirect, readRedirectTo, resolveAfterSignIn } from "./redirect-to";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
 export { createResetPasswordController } from "./reset-password";
+export type { ResetPasswordOtpField } from "./reset-password-otp";
+export { createResetPasswordOtpController } from "./reset-password-otp";
 export type { SessionActions, SessionController, SessionState } from "./session";
 export { createSessionController, userInitials, userLabel } from "./session";
 export { signOut } from "./session-actions";
@@ -142,6 +147,14 @@ export type {
 } from "./types";
 export type { SetUsernameField, UsernameSignInField } from "./username";
 export { createSetUsernameController, createUsernameSignInController } from "./username";
+export type {
+    AvailabilityStatus,
+    UsernameAvailabilityActions,
+    UsernameAvailabilityController,
+    UsernameAvailabilityOptions,
+    UsernameAvailabilityState,
+} from "./username-availability";
+export { createUsernameAvailabilityController } from "./username-availability";
 export { email, MIN_PASSWORD_LENGTH, password, required } from "./validators";
 export type { ResendVerificationField, VerifyEmailActions, VerifyEmailController, VerifyEmailOptions, VerifyEmailState } from "./verify-email";
 export { createResendVerificationController, createVerifyEmailController } from "./verify-email";

@@ -4,6 +4,7 @@ import { inject, provide, shallowRef } from "vue";
 import type { AuthUIConfig, AvatarConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig, ViewPaths } from "../core/config";
 import type { DiscoveredConfig } from "../core/discovery";
 import type { Localization } from "../core/localization";
+import type { PasswordPolicy } from "../core/password-policy";
 import type { AnyAuthClient } from "../core/types";
 import { DEFAULT_BASE_PATH, resolveContext } from "../core/config";
 import { defaultNav } from "../core/default-nav";
@@ -55,6 +56,8 @@ interface AuthUIProviderProps {
     nav?: NavAdapter;
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
+    /** Password rules, mirrored from your server's `emailAndPassword` config. */
+    password?: PasswordPolicy;
     plugins?: PluginFlags;
     redirects?: RedirectConfig;
     /** OAuth providers to render social buttons for (server-side config required). */
@@ -119,6 +122,7 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
                 nav: handlers.nav,
                 onError: handlers.onError,
                 onSessionChange: handlers.onSessionChange,
+                password: config.password,
                 plugins: config.plugins,
                 redirects: config.redirects,
                 social: config.social,

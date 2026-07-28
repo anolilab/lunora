@@ -203,6 +203,8 @@ interface AuthClient {
         deny: (input: { userCode: string }) => Promise<AuthResponse<{ success?: boolean }>>;
     };
     emailOtp: {
+        /** The `emailOTP` plugin's own password reset — see `forgot-password.ts`. */
+        resetPassword: (input: { email: string; otp: string; password: string }) => Promise<AuthResponse<{ status?: boolean }>>;
         sendVerificationOtp: (input: {
             email: string;
             type: "email-verification" | "forget-password" | "sign-in";
@@ -210,6 +212,8 @@ interface AuthClient {
     };
     forgetPassword: (input: { email: string; redirectTo?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
     getSession: () => Promise<AuthResponse<SessionData>>;
+    /** The `username` plugin's availability probe. */
+    isUsernameAvailable: (input: { username: string }) => Promise<AuthResponse<{ available?: boolean }>>;
     /** Core account linking (`/list-accounts`, `/link-social`, `/unlink-account`). */
     linkSocial: (input: { callbackURL?: string; provider: string }) => Promise<AuthResponse<{ redirect?: boolean; url?: string }>>;
     listAccounts: () => Promise<AuthResponse<AuthAccount[]>>;

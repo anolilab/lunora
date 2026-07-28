@@ -31,6 +31,7 @@
         nav,
         onError,
         onSessionChange,
+        password,
         plugins,
         redirects,
         social,
@@ -94,6 +95,7 @@
             onSessionChange: (): void => {
                 onSessionChange?.();
             },
+            password,
             plugins,
             redirects,
             social,

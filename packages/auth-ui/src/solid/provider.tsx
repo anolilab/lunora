@@ -123,6 +123,7 @@ const AuthUIProvider = (props: AuthUIProviderProps): JSX.Element => {
                 nav: handlers.nav,
                 onError: handlers.onError,
                 onSessionChange: handlers.onSessionChange,
+                password: props.password,
                 plugins: props.plugins,
                 redirects: props.redirects,
                 social: props.social,

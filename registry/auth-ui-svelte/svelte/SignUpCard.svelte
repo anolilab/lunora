@@ -8,6 +8,7 @@
     import { controllerStore } from "./controller-store";
     import Field from "./Field.svelte";
     import FormBanner from "./FormBanner.svelte";
+    import PasswordStrength from "./PasswordStrength.svelte";
     import SocialButtons from "./SocialButtons.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
@@ -81,6 +82,7 @@
             }}
             type="password"
         />
+        <PasswordStrength value={$form.fields.password.value} />
         <SubmitButton pending={$form.status === "submitting"}>{t.signUp}</SubmitButton>
     </form>
     {#snippet footer()}

@@ -37,9 +37,11 @@ export { default as AuthDivider } from "./AuthDivider.svelte";
 export { default as AuthLink } from "./AuthLink.svelte";
 export { default as Field } from "./Field.svelte";
 export { default as FormBanner } from "./FormBanner.svelte";
+export { default as PasswordStrength } from "./PasswordStrength.svelte";
 export { default as Skeleton } from "./Skeleton.svelte";
 export { default as SocialButtons } from "./SocialButtons.svelte";
 export { default as SubmitButton } from "./SubmitButton.svelte";
+export { default as UsernameAvailability } from "./UsernameAvailability.svelte";
 
 // Extras mounted beside the cards rather than inside them.
 export { default as Captcha } from "./Captcha.svelte";

@@ -12,7 +12,7 @@ import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import { createTwoFactorVerifyController } from "../core/two-factor-verify";
-import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
+import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, PasswordStrength, SocialButtons, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 
@@ -177,6 +177,7 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
                     }}
                     type="password"
                 />
+                <PasswordStrength value={state.fields.password.value} />
                 <SubmitButton pending={state.status === "submitting"}>{t.signUp}</SubmitButton>
             </form>
         </AuthCard>

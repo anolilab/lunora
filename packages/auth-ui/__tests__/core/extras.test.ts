@@ -239,3 +239,99 @@ describe("oauth-provider consent", () => {
         expect(controller.getState().error).toBeDefined();
     });
 });
+
+describe("password policy", () => {
+    it("reports only the rules the policy asks for", async () => {
+        expect.assertions(2);
+
+        const { DEFAULT_LOCALIZATION, passwordRequirements } = await import("../../src/core");
+
+        // A checklist should describe what is required here, not everything a
+        // password could theoretically be.
+        expect(passwordRequirements("abc", DEFAULT_LOCALIZATION, {})).toHaveLength(1);
+        expect(passwordRequirements("abc", DEFAULT_LOCALIZATION, { requireDigit: true, requireUppercase: true })).toHaveLength(3);
+    });
+
+    it("keeps the score in step with the checklist", async () => {
+        expect.assertions(2);
+
+        const { DEFAULT_LOCALIZATION, passwordRequirements, passwordScore } = await import("../../src/core");
+        const policy = { requireDigit: true, requireUppercase: true };
+
+        expect(passwordScore(passwordRequirements("abcdefgh", DEFAULT_LOCALIZATION, policy))).toBeCloseTo(1 / 3);
+        expect(passwordScore(passwordRequirements("Abcdefg1", DEFAULT_LOCALIZATION, policy))).toBe(1);
+    });
+
+    it("honours a server-matched minimum instead of a hard-coded one", async () => {
+        expect.assertions(2);
+
+        const { DEFAULT_LOCALIZATION, validatePassword } = await import("../../src/core");
+
+        // A UI minimum that disagrees with the server's either rejects passwords
+        // the server would take, or defers the rejection to a round-trip.
+        expect(validatePassword("abcdef", DEFAULT_LOCALIZATION, { minLength: 6 })).toBeUndefined();
+        expect(validatePassword("abcdef", DEFAULT_LOCALIZATION, { minLength: 12 })).toContain("12");
+    });
+
+    it("rejects an over-long password before the server has to", async () => {
+        expect.assertions(1);
+
+        const { DEFAULT_LOCALIZATION, validatePassword } = await import("../../src/core");
+
+        expect(validatePassword("a".repeat(200), DEFAULT_LOCALIZATION, {})).toContain("128");
+    });
+});
+
+describe("forgot-password transport", () => {
+    const build = async (method?: "link" | "otp") => {
+        const { createForgotPasswordController, resolveContext } = await import("../../src/core");
+        const forgetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const sendVerificationOtp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { emailOtp: { sendVerificationOtp }, forgetPassword, getSession: vi.fn() } as never,
+            forgotPassword: method === undefined ? undefined : { method },
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+        });
+
+        return { controller: createForgotPasswordController(context), forgetPassword, sendVerificationOtp };
+    };
+
+    it("mails a link by default", async () => {
+        expect.assertions(2);
+
+        const { controller, forgetPassword, sendVerificationOtp } = await build();
+
+        controller.actions.setField("email", "ada@example.com");
+        await controller.actions.submit();
+
+        expect(forgetPassword).toHaveBeenCalledTimes(1);
+        expect(sendVerificationOtp).not.toHaveBeenCalled();
+    });
+
+    it("uses the emailOTP endpoint when the app recovers by code", async () => {
+        expect.assertions(2);
+
+        // Calling /request-password-reset in an OTP-configured app answers
+        // "Reset password isn't enabled", which names neither cause nor fix.
+        const { controller, forgetPassword, sendVerificationOtp } = await build("otp");
+
+        controller.actions.setField("email", "ada@example.com");
+        await controller.actions.submit();
+
+        expect(sendVerificationOtp).toHaveBeenCalledWith({ email: "ada@example.com", type: "forget-password" });
+        expect(forgetPassword).not.toHaveBeenCalled();
+    });
+});
+
+describe("url prefill", () => {
+    it("never prefills a password, whatever the URL says", async () => {
+        expect.assertions(2);
+
+        const { readFieldPrefill } = await import("../../src/core");
+
+        // A password in a query string lands in history, in the referrer of
+        // every outbound link, and in any log that records URLs.
+        expect(readFieldPrefill("password")).toBeUndefined();
+        expect(readFieldPrefill("newPassword")).toBeUndefined();
+    });
+});

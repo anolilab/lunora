@@ -29,7 +29,18 @@ export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./orga
 export type { DeviceAuthorizationCardProps } from "./plugin-cards";
 export { AdminUsersCard, BackupCodesCard, DeviceAuthorizationCard, MultiSessionCard, TeamsCard } from "./plugin-cards";
 export type { AuthCardProps, FieldProps } from "./primitives";
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, Skeleton, SocialButtons, SubmitButton } from "./primitives";
+export {
+    AuthCard,
+    AuthDivider,
+    AuthLink,
+    Field,
+    FormBanner,
+    PasswordStrength,
+    Skeleton,
+    SocialButtons,
+    SubmitButton,
+    UsernameAvailability,
+} from "./primitives";
 export type { AuthUIProviderProps } from "./provider";
 export { AuthUIProvider, useAuthUI, useAuthUILink } from "./provider";
 export type { ProfileCardProps, SignOutButtonProps } from "./settings-cards";

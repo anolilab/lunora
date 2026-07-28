@@ -100,6 +100,7 @@ const provideAuthUI = (config: AuthUIAngularConfig): EnvironmentProviders =>
                     onSessionChange: () => {
                         config.onSessionChange?.();
                     },
+                    password: config.password,
                     plugins: config.plugins,
                     redirects: config.redirects,
                     social: config.social,

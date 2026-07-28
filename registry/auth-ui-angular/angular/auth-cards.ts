@@ -30,6 +30,7 @@ import {
     AuthFieldComponent,
     AuthLinkComponent,
     FormBannerComponent,
+    PasswordStrengthComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
 } from "./primitives";
@@ -145,6 +146,7 @@ class SignInCardComponent {
         AuthFieldComponent,
         AuthLinkComponent,
         FormBannerComponent,
+        PasswordStrengthComponent,
         SocialButtonsComponent,
         SubmitButtonComponent,
     ],
@@ -189,6 +191,7 @@ class SignInCardComponent {
                     (changed)="actions.setField('password', $event)"
                     (blurred)="actions.blur('password')"
                 />
+                <lunora-auth-password-strength [value]="state().fields.password.value" />
                 <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signUp }}</lunora-auth-submit-button>
             </form>
             <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.haveAccount }}</lunora-auth-link>

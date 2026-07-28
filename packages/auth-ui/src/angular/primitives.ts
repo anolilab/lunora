@@ -8,7 +8,9 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
 
 import { providerLabel } from "../core/labels";
+import { passwordRequirements, passwordScore } from "../core/password-policy";
 import type { FieldState } from "../core/types";
+import type { AvailabilityStatus } from "../core/username-availability";
 import { injectAuthUI, injectAuthUILink } from "./provider";
 
 /** `{ "--border": "red" }` → `--border:red`, or null when unthemed. */
@@ -240,14 +242,89 @@ class AuthLinkComponent {
     }
 }
 
+/**
+ * The live requirement checklist under a password field.
+ *
+ * A checklist rather than a bare strength bar: "weak" tells someone their
+ * password is unacceptable without telling them what to change. The bar is
+ * derived from the same requirements so the two can never disagree.
+ *
+ * `aria-live="polite"` on the list, because the ticks change as the user types
+ * and a screen reader should hear progress without being interrupted mid-word.
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-auth-password-strength",
+    standalone: true,
+    template: `
+        @if (value() !== "") {
+            <div class="lunora-auth-strength">
+                <div class="lunora-auth-strength__bar">
+                    <span class="lunora-auth-strength__fill" [style.width.%]="fillPercent()"></span>
+                </div>
+                <ul class="lunora-auth-strength__list" aria-live="polite">
+                    @for (requirement of requirements(); track requirement.label) {
+                        <li class="lunora-auth-strength__item" [class.lunora-auth-strength__item--met]="requirement.met">
+                            <span aria-hidden="true">{{ requirement.met ? "✓" : "○" }}</span> {{ requirement.label }}
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+    `,
+})
+class PasswordStrengthComponent {
+    readonly value = input.required<string>();
+
+    private readonly context = injectAuthUI();
+
+    // `computed`, not a field initializer: a signal input cannot be read while
+    // the class is being constructed, and this has to re-derive per keystroke.
+    protected readonly requirements = computed(() => passwordRequirements(this.value(), this.context.localization, this.context.password));
+    protected readonly fillPercent = computed(() => Math.round(passwordScore(this.requirements()) * 100));
+}
+
+/**
+ * Whether a username is free, shown as the user types.
+ *
+ * Advisory only — the check races the submit and the server stays the
+ * authority — so a failed check ("unknown") reads as nothing rather than as a
+ * rejection.
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-auth-username-availability",
+    standalone: true,
+    template: `
+        @if (status() !== "idle" && status() !== "unknown") {
+            <p [class]="'lunora-auth-availability lunora-auth-availability--' + status()" role="status">{{ message() }}</p>
+        }
+    `,
+})
+class UsernameAvailabilityComponent {
+    readonly status = input.required<AvailabilityStatus>();
+
+    protected readonly t = injectAuthUI().localization;
+
+    protected readonly message = computed(() => {
+        if (this.status() === "checking") {
+            return this.t.usernameChecking;
+        }
+
+        return this.status() === "taken" ? this.t.usernameTaken : this.t.usernameAvailable;
+    });
+}
+
 export {
     AuthCardComponent,
     AuthDividerComponent,
     AuthFieldComponent,
     AuthLinkComponent,
     FormBannerComponent,
+    PasswordStrengthComponent,
     serializeThemeVariables,
     SkeletonComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
+    UsernameAvailabilityComponent,
 };

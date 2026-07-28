@@ -112,6 +112,12 @@ interface Localization {
     passwordLabel: string;
     passwordMismatch: string;
     passwordRequired: string;
+    passwordRuleDigit: string;
+    passwordRuleLength: string;
+    passwordRuleLowercase: string;
+    passwordRuleSymbol: string;
+    passwordRuleUppercase: string;
+    passwordTooLong: string;
     passwordTooShort: string;
     phoneLabel: string;
     phoneOtpSent: string;
@@ -155,9 +161,12 @@ interface Localization {
     twoFactorSetup: string;
     /** Fallback when a session has neither a user-agent nor an IP. */
     unknownDevice: string;
+    usernameAvailable: string;
+    usernameChecking: string;
     usernameLabel: string;
     usernameRequired: string;
     usernameSaved: string;
+    usernameTaken: string;
     verifyEmail: string;
     verifyEmailFailed: string;
     verifyEmailNoToken: string;
@@ -270,7 +279,13 @@ const DEFAULT_LOCALIZATION: Localization = {
     passwordLabel: "Password",
     passwordMismatch: "Passwords do not match.",
     passwordRequired: "Password is required.",
-    passwordTooShort: "Password must be at least 8 characters.",
+    passwordRuleDigit: "At least one number",
+    passwordRuleLength: "At least {min} characters",
+    passwordRuleLowercase: "At least one lowercase letter",
+    passwordRuleSymbol: "At least one symbol",
+    passwordRuleUppercase: "At least one uppercase letter",
+    passwordTooLong: "Password must be at most {max} characters.",
+    passwordTooShort: "Password must be at least {min} characters.",
     phoneLabel: "Phone number",
     phoneOtpSent: "We texted you a code.",
     phoneRequired: "Phone number is required.",
@@ -312,9 +327,12 @@ const DEFAULT_LOCALIZATION: Localization = {
     twoFactorScan: "Scan this with your authenticator app, then enter the 6-digit code.",
     twoFactorSetup: "Two-factor authentication",
     unknownDevice: "Unknown device",
+    usernameAvailable: "That username is available.",
+    usernameChecking: "Checking…",
     usernameLabel: "Username",
     usernameRequired: "Username is required.",
     usernameSaved: "Your username has been updated.",
+    usernameTaken: "That username is taken.",
     verifyEmail: "Verify your email",
     verifyEmailFailed: "We couldn't verify that link. Request a new one.",
     verifyEmailNoToken: "This page needs a verification link to work.",

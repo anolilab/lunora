@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient } from "../../src/core";
 import { pushToast, resetToasts } from "../../src/core";
-import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard } from "../../src/react";
+import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, SignUpCard } from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
@@ -92,5 +92,34 @@ describe("consentCard", () => {
         await waitFor(() => {
             expect(screen.getAllByRole("button").map((button) => button.textContent)).toStrictEqual(["Deny", "Allow"]);
         });
+    });
+});
+
+describe("password policy reaches the cards", () => {
+    it("renders the configured rules, not the defaults", async () => {
+        expect.assertions(2);
+
+        // Regression: the policy config existed and `resolveContext` honoured
+        // it, but every provider rebuilt its config field-by-field and dropped
+        // the field — so a configured policy was silently unreachable and the
+        // checklist always showed the default length rule alone.
+        render(
+            <AuthUIProvider
+                authClient={{ getSession: vi.fn(() => Promise.resolve({ data: null, error: null })) }}
+                discover={false}
+                nav={{ navigate: vi.fn(), replace: vi.fn() }}
+                password={{ minLength: 12, requireUppercase: true }}
+            >
+                <SignUpCard />
+            </AuthUIProvider>,
+        );
+
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "abc" } });
+
+        await waitFor(() => {
+            expect(screen.getByText("At least 12 characters")).toBeDefined();
+        });
+
+        expect(screen.getByText("At least one uppercase letter")).toBeDefined();
     });
 });

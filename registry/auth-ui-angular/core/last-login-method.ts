@@ -9,7 +9,28 @@
  *
  * It is *not* an authorization signal, and nothing in this package treats it as
  * one — the cookie is attacker-writable and only ever selects a label.
+ *
+ * # The values it can hold
+ *
+ * better-auth's default resolver records the **OAuth provider id** for a social
+ * callback (`github`, `google`, …) and one of a small set of literals otherwise:
+ * {@link LAST_METHOD_EMAIL} for password sign-in/sign-up,
+ * {@link LAST_METHOD_MAGIC_LINK}, {@link LAST_METHOD_PASSKEY}, and `siwe`.
+ *
+ * That matters because badging only the social buttons — the obvious reading —
+ * makes the feature do nothing for the most common case there is. A `customResolveMethod`
+ * server-side can record anything, so treat an unrecognised value as "no badge"
+ * rather than as an error.
  */
+
+/** Recorded for `/sign-in/email` and `/sign-up/email`. */
+const LAST_METHOD_EMAIL = "email";
+
+/** Recorded for a magic-link verification. */
+const LAST_METHOD_MAGIC_LINK = "magic-link";
+
+/** Recorded for a WebAuthn authentication. */
+const LAST_METHOD_PASSKEY = "passkey";
 
 /** The cookie better-auth's `lastLoginMethod` plugin writes. */
 const LAST_LOGIN_METHOD_COOKIE = "better-auth.last_used_login_method";
@@ -44,4 +65,4 @@ const readLastLoginMethod = (cookieName: string = LAST_LOGIN_METHOD_COOKIE): str
     return undefined;
 };
 
-export { LAST_LOGIN_METHOD_COOKIE, readLastLoginMethod };
+export { LAST_LOGIN_METHOD_COOKIE, LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, LAST_METHOD_PASSKEY, readLastLoginMethod };

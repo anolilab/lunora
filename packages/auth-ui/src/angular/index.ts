@@ -57,9 +57,11 @@ export {
     AuthFieldComponent,
     AuthLinkComponent,
     FormBannerComponent,
+    PasswordStrengthComponent,
     SkeletonComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
+    UsernameAvailabilityComponent,
 } from "./primitives";
 export type { AuthUIAngularConfig, AuthUIAngularContext } from "./provider";
 export { AUTH_UI_CONTEXT, injectAuthUI, injectAuthUIContext, injectAuthUILink, provideAuthUI } from "./provider";

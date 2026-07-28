@@ -6,14 +6,14 @@ import { signInAnonymously } from "../core/anonymous";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import { createTwoFactorVerifyController } from "../core/two-factor-verify";
-import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
+import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, LastUsedBadge, PasswordStrength, SocialButtons, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 
@@ -102,7 +102,13 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
                         type="password"
                     />
                     <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
-                    <SubmitButton pending={pending}>{t.signIn}</SubmitButton>
+                    <SubmitButton pending={pending}>
+                        {t.signIn}
+                        {/* better-auth records a password sign-in as "email", so
+                            without this the badge is invisible for the most
+                            common route there is. */}
+                        {lastUsed === LAST_METHOD_EMAIL ? <LastUsedBadge /> : null}
+                    </SubmitButton>
                 </form>
             ) : null}
         </AuthCard>
@@ -173,6 +179,7 @@ const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactEle
                     }}
                     type="password"
                 />
+                <PasswordStrength value={state.fields.password.value} />
                 <SubmitButton pending={state.status === "submitting"}>{t.signUp}</SubmitButton>
             </form>
         </AuthCard>
@@ -261,6 +268,7 @@ interface MagicLinkCardProps {
 }
 
 const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): ReactElement | null => {
+    const lastUsed = readLastLoginMethod();
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController(createMagicLinkController);
@@ -286,7 +294,10 @@ const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): Re
                     }}
                     type="email"
                 />
-                <SubmitButton pending={state.status === "submitting"}>{t.magicLink}</SubmitButton>
+                <SubmitButton pending={state.status === "submitting"}>
+                    {t.magicLink}
+                    {lastUsed === LAST_METHOD_MAGIC_LINK ? <LastUsedBadge /> : null}
+                </SubmitButton>
             </form>
         </AuthCard>
     );

@@ -156,7 +156,7 @@ const createPhoneResetPasswordController = (context: ControllerContext): FormCon
             confirmPassword: {
                 validate: (value, values, localization) => (value === values.newPassword ? undefined : localization.passwordMismatch),
             },
-            newPassword: { validate: (value, _values, localization) => passwordValidator(value, localization) },
+            newPassword: { validate: (value, _values, localization) => passwordValidator(value, localization, context.password) },
             otp: { validate: (value, _values, localization) => required(value, localization.otpRequired) },
             phoneNumber: { validate: (value, _values, localization) => required(value, localization.phoneRequired) },
         },

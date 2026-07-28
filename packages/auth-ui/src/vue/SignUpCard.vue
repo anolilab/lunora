@@ -6,6 +6,7 @@ import AuthDivider from "./AuthDivider.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
+import PasswordStrength from "./PasswordStrength.vue";
 import { useAuthUIContextRef } from "./provider";
 import SocialButtons from "./SocialButtons.vue";
 import SubmitButton from "./SubmitButton.vue";
@@ -69,6 +70,7 @@ const onSocial = (provider: string): void => {
                 @blur="actions.blur('password')"
                 @change="actions.setField('password', $event)"
             />
+            <PasswordStrength :value="state.fields.password.value" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.signUp }}</SubmitButton>
         </form>
         <template #footer>

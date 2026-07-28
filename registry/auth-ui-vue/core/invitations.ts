@@ -92,7 +92,21 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
                 // Come back to this exact invitation after signing in, rather than
                 // dropping the user on a generic post-login page with no memory of
                 // why they were here.
-                context.nav.replace(`${context.redirects.signIn}?redirectTo=${encodeURIComponent(currentPath())}`);
+                /*
+                 * Carry the invited address through, so the sign-up form seeds
+                 * it (see `prefill.ts`). Retyping it from memory is how an
+                 * invitee ends up creating a *different* account that the
+                 * invitation then doesn't match — a failure that surfaces
+                 * somewhere else entirely.
+                 */
+                const invited = store.get().invitation?.email;
+                const target = new URLSearchParams({ redirectTo: currentPath() });
+
+                if (invited !== undefined && invited !== "") {
+                    target.set("email", invited);
+                }
+
+                context.nav.replace(`${context.redirects.signIn}?${target.toString()}`);
 
                 return;
             }

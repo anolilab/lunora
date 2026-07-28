@@ -2,7 +2,10 @@ import type { JSX } from "solid-js";
 import { createUniqueId, For, Index, Show } from "solid-js";
 
 import { providerLabel } from "../core/labels";
+import type { PasswordRequirement } from "../core/password-policy";
+import { passwordRequirements, passwordScore } from "../core/password-policy";
 import type { FieldState } from "../core/types";
+import type { AvailabilityStatus } from "../core/username-availability";
 import { useAuthUI, useAuthUILink } from "./provider";
 
 /** Card shell: heading, optional description, and body. */
@@ -214,5 +217,75 @@ const AuthDivider = (props: { label?: string }): JSX.Element => (
     </div>
 );
 
+/**
+ * The live requirement checklist under a password field.
+ *
+ * A checklist rather than a bare strength bar: "weak" tells someone their
+ * password is unacceptable without telling them what to change. The bar is
+ * derived from the same requirements so the two can never disagree.
+ *
+ * `aria-live="polite"` on the list, because the ticks change as the user types
+ * and a screen reader should hear progress without being interrupted mid-word.
+ */
+const PasswordStrength = (props: { value: string }): JSX.Element => {
+    const { localization, password } = useAuthUI();
+    // Functions, not values: `props.value` changes on every keystroke, and only
+    // a read inside a tracked scope re-derives the checklist.
+    const requirements = (): ReadonlyArray<PasswordRequirement> => passwordRequirements(props.value, localization, password);
+    const fillWidth = (): string => `${String(Math.round(passwordScore(requirements()) * 100))}%`;
+
+    return (
+        <Show when={props.value !== ""}>
+            <div class="lunora-auth-strength">
+                <div class="lunora-auth-strength__bar">
+                    <span class="lunora-auth-strength__fill" style={{ width: fillWidth() }} />
+                </div>
+                {/*
+                 * `Index` rather than `For`: the policy fixes the rules and their
+                 * order, so a row's identity is its position — what changes as the
+                 * user types is the tick, not the list. `For` would rebuild every
+                 * row on each keystroke, because the requirement objects are
+                 * rebuilt with it.
+                 */}
+                <ul aria-live="polite" class="lunora-auth-strength__list">
+                    <Index each={requirements()}>
+                        {(requirement) => (
+                            <li class={`lunora-auth-strength__item${requirement().met ? " lunora-auth-strength__item--met" : ""}`}>
+                                <span aria-hidden="true">{requirement().met ? "✓" : "○"}</span> {requirement().label}
+                            </li>
+                        )}
+                    </Index>
+                </ul>
+            </div>
+        </Show>
+    );
+};
+
+/**
+ * Whether a username is free, shown as the user types.
+ *
+ * Advisory only — the check races the submit and the server stays the
+ * authority — so a failed check ("unknown") reads as nothing rather than as a
+ * rejection.
+ */
+const UsernameAvailability = (props: { status: AvailabilityStatus }): JSX.Element => {
+    const { localization: t } = useAuthUI();
+    const message = (): string => {
+        if (props.status === "checking") {
+            return t.usernameChecking;
+        }
+
+        return props.status === "taken" ? t.usernameTaken : t.usernameAvailable;
+    };
+
+    return (
+        <Show when={props.status !== "idle" && props.status !== "unknown"}>
+            <p class={`lunora-auth-availability lunora-auth-availability--${props.status}`} role="status">
+                {message()}
+            </p>
+        </Show>
+    );
+};
+
 export type { AuthCardProps, FieldProps };
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, Skeleton, SocialButtons, SubmitButton, themeStyle };
+export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, PasswordStrength, Skeleton, SocialButtons, SubmitButton, themeStyle, UsernameAvailability };

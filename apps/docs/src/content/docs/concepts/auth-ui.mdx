@@ -220,6 +220,42 @@ Without `uiConfig()` mounted, discovery degrades silently and your client's list
 is the only source — exactly the previous behaviour. Override either way with the
 provider's `plugins` prop, or turn discovery off with `discover={false}`.
 
+## Password rules
+
+The rule that matters is your server's — better-auth rejects what it rejects.
+A UI with its own hard-coded minimum is guessing: set it lower and the user is
+told "too short" only after a round-trip; set it higher and you refuse passwords
+the server would have taken. So the policy is config, and you match it to
+`emailAndPassword`:
+
+```tsx
+<AuthUIProvider
+    authClient={authClient}
+    password={{ minLength: 12, requireDigit: true, requireUppercase: true }}
+>
+```
+
+Every password field validates against it, and `<PasswordStrength>` renders the
+live checklist under the sign-up field. It is a checklist rather than a bare
+"weak / strong" bar on purpose — a bar tells someone their password is
+unacceptable without telling them what to change. The bar that _is_ there is
+derived from the same requirements, so the two can never disagree.
+
+Unset, the policy is better-auth's own default: 8–128 characters and no
+composition rules.
+
+## Username availability
+
+With the `username` plugin on, `<SignUpCard>` and `<SetUsernameCard>` check
+availability as the user types, so a taken name surfaces before the submit
+rather than as a failed sign-up with the whole form to re-check.
+
+It is debounced, and a slow answer for an earlier value is discarded rather than
+applied — that out-of-order race is how these end up confidently reporting the
+wrong thing. The result is advisory: the name can still be taken between the
+check and the submit, so the server stays the authority and a failed check never
+blocks a submit on its own.
+
 ## Being an OAuth provider
 
 Everywhere else your app is the OAuth _client_ — the user signs in to you. With
