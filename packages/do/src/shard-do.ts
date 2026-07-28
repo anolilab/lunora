@@ -99,6 +99,7 @@ import {
     summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
+import { explainIssue } from "./issue-explainer";
 import type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./issue-state";
 import { ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, upsertIssueState } from "./issue-state";
 import type { LogEntry } from "./log-buffer";
@@ -6236,6 +6237,10 @@ abstract class ShardDO {
             return this.handleListFlags(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.explainIssue) {
+            return this.handleExplainIssue(args);
+        }
+
         const triaged = await this.handleIssueTriageOp(functionPath, args);
 
         if (triaged !== undefined) {
@@ -6639,6 +6644,31 @@ abstract class ShardDO {
         this.recordAudit("sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
 
         return jsonResponse({ result: { sent } }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:explainIssue` — the Studio Issues panel's opt-in
+     * "Explain in plain language" action. The flow itself lives in
+     * {@link explainIssue} (`./issue-explainer`); this method only supplies the
+     * deployment's `env.AI` binding and records the audit entry. A one-shot async
+     * action (never a subscription read) so the model call fires once per click,
+     * not on every write-flush. Admin-gated by `handleAdminRpc`'s caller.
+     *
+     * Audited whenever the model was actually invoked — including the `ai-error`
+     * and `empty-response` outcomes, which are the ones that matter for spend and
+     * abuse accountability on a billed external call. Only `no-ai-binding` reached
+     * no binding at all and so records nothing.
+     */
+    private async handleExplainIssue(args: Record<string, unknown>): Promise<Response> {
+        const result = await explainIssue((this.env as Record<string, unknown> | undefined)?.["AI"], args);
+
+        if (!result.degraded) {
+            this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
+        } else if (result.reason !== "no-ai-binding") {
+            this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
+        }
+
+        return jsonResponse({ result }, 200);
     }
 
     /**
@@ -8387,7 +8417,7 @@ abstract class ShardDO {
      * identity/args-specific), so only the shared op read is collapsed.
      */
     private readShapeOpRange(sql: SqlExec, table: string, sinceSeq: number, upTo: number, cache?: Map<string, Map<string, CdcChange>>): Map<string, CdcChange> {
-        const key = `${table} ${String(sinceSeq)} ${String(upTo)}`;
+        const key = `${table}\u0000${String(sinceSeq)}\u0000${String(upTo)}`;
         const cached = cache?.get(key);
 
         if (cached !== undefined) {
