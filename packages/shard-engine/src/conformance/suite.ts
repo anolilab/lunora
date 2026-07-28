@@ -498,6 +498,170 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                 }
             });
         });
+
+        /**
+         * The `cb632cd7` guarantee: a live subscription must keep evaluating
+         * under the socket's own verified identity.
+         *
+         * The relay tier is where that is easiest to lose. A cohort multicast
+         * computes ONE delta under the anonymous identity and ships it to every
+         * subscriber — correct only while the shape is identity-blind. A shape
+         * whose `where` reads a claim must instead get a per-socket proxy poke
+         * computed under that socket's identity; misclassifying one as uniform
+         * multicasts one tenant's rows onto another tenant's socket, with no
+         * error anywhere.
+         */
+        describe("RLS identity under live subscription", () => {
+            const OWNER_KEY = "shard-a";
+            /** Identity-blind: every subscriber is owed the same rows. */
+            const OPEN_SHAPE = { args: {}, name: "lobby-messages" };
+            /** Identity-scoped: the `where` reads a claim, so no two subscribers are owed the same rows. */
+            const SCOPED_SHAPE = { args: {}, name: "my-orders" };
+
+            const ownerFor = (sql: SqlExec) => {
+                const posts: Record<string, unknown>[] = [];
+                const resolvedUnder: (undefined | { identity?: Record<string, unknown>; userId?: string })[] = [];
+
+                const stub = {
+                    fetch: (_url: string, init?: { body?: string }) => {
+                        posts.push(JSON.parse(init?.body ?? "{}") as Record<string, unknown>);
+
+                        return Promise.resolve(new Response(undefined, { status: 204 }));
+                    },
+                };
+
+                const host = {
+                    buildShapeDiff: () => [{ id: "r1", op: "upsert", value: {} }],
+                    computeOpLogShapeSeed: () => {
+                        return { baseCheckpoint: undefined, cursor: 10, epoch: "e1", rowsPatch: [] };
+                    },
+                    currentCdcEpoch: () => "e1",
+                    deliverWhisperLocal: () => 0,
+                    doName: () => OWNER_KEY,
+                    env: () => {
+                        return { SHARD: { get: () => stub, getByName: () => stub, idFromName: (id: string) => id } };
+                    },
+                    getWebSockets: () => [],
+                    maskMetadata: () => {
+                        return { columns: [] };
+                    },
+                    nextPokeId: () => "poke-1",
+                    readAttachment: () => {
+                        return {};
+                    },
+                    recordShapePokeFanout: () => {},
+                    resolveShape: (shapeName: string, _args: unknown, identity?: { identity?: Record<string, unknown>; userId?: string }) => {
+                        resolvedUnder.push(identity);
+
+                        return shapeName === SCOPED_SHAPE.name
+                            ? // Reads a claim, so the probe's two identities yield two
+                              // different `effectiveWhere`s and the shape is refused
+                              // the cohort.
+                              { columns: ["id"], effectiveWhere: { org: identity?.identity?.["org"] ?? "anonymous" }, global: false, table: "orders" }
+                            : { columns: ["id"], effectiveWhere: { room: "lobby" }, global: false, table: "messages" };
+                    },
+                    rlsMetadata: () => {
+                        return { policies: [] };
+                    },
+                    shardBinding: () => "SHARD",
+                    // The owner persists its relay set in `__lunora_relays`, so
+                    // this runs on the host under test rather than a double —
+                    // a host whose SQL can't carry the set drops relays on every
+                    // wake and silently stops fanning out.
+                    sql: () => sql,
+                } as unknown as RelayHost;
+
+                const link = createRelayLink(host);
+
+                if (link === undefined) {
+                    throw new Error("expected an owner link for an un-suffixed DO name");
+                }
+
+                return { owner: link, posts, resolvedUnder };
+            };
+
+            const subscribe = async (owner: ReturnType<typeof ownerFor>["owner"], shape: { args: Record<string, unknown>; name: string }): Promise<void> => {
+                await owner.handleControl(
+                    new Request("https://owner.internal/_lunora/relay", {
+                        body: JSON.stringify({
+                            ...shape,
+                            connectionId: "c-alice",
+                            identity: { org: "acme" },
+                            relayIndex: 0,
+                            subId: "s1",
+                            type: "relay_shape_subscribe",
+                            userId: "u1",
+                        }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    }),
+                );
+            };
+
+            it("seeds a subscriber under its own forwarded identity, never the anonymous one", async () => {
+                const { close, host } = factory();
+
+                try {
+                    const { owner, resolvedUnder } = ownerFor(host.sql);
+
+                    await subscribe(owner, SCOPED_SHAPE);
+
+                    // The seed itself has to see the real claims. Resolving it
+                    // anonymously would hand the subscriber a membership it is
+                    // not entitled to on the very first frame — before any poke
+                    // exists to correct it.
+                    expect(resolvedUnder.some((identity) => identity?.userId === "u1" && identity.identity?.["org"] === "acme")).toBe(true);
+                } finally {
+                    close?.();
+                }
+            });
+
+            it("routes an identity-scoped shape to a per-socket poke, not the cohort multicast", async () => {
+                const { close, host } = factory();
+
+                try {
+                    const { owner, posts } = ownerFor(host.sql);
+
+                    await subscribe(owner, SCOPED_SHAPE);
+
+                    posts.length = 0;
+                    await owner.onFlush(new Set(["orders"]), 20);
+
+                    const pokes = posts.filter((post) => post["type"] === "relay_shape_poke");
+
+                    // Addressed to one connection. An unaddressed poke here would
+                    // be a cohort multicast — one tenant's rows fanned out to
+                    // every subscriber of the shape.
+                    expect(pokes.length).toBe(1);
+                    expect(pokes[0]?.["targetConnectionId"]).toBe("c-alice");
+                } finally {
+                    close?.();
+                }
+            });
+
+            it("still multicasts an identity-blind shape to the whole cohort", async () => {
+                const { close, host } = factory();
+
+                try {
+                    const { owner, posts } = ownerFor(host.sql);
+
+                    await subscribe(owner, OPEN_SHAPE);
+
+                    posts.length = 0;
+                    await owner.onFlush(new Set(["messages"]), 20);
+
+                    const pokes = posts.filter((post) => post["type"] === "relay_shape_poke");
+
+                    // Without this the leg above passes on a gate that refuses
+                    // everything — which is safe but silently discards the whole
+                    // multicast optimization.
+                    expect(pokes.length).toBe(1);
+                    expect(pokes[0]?.["targetConnectionId"]).toBeUndefined();
+                } finally {
+                    close?.();
+                }
+            });
+        });
     });
 };
 
