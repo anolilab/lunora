@@ -960,7 +960,11 @@ class RelayMember extends RelayLink {
         let seed: RelayShapeSeed;
 
         try {
-            seed = await response.json();
+            // `json()` is `any`; assert to the wire shape the same way
+            // `handleControl` does for inbound frames. Safe to assert rather
+            // than validate because every field of `RelayShapeSeed` is optional
+            // and the checks below treat a missing one as a seed failure.
+            seed = (await response.json()) as RelayShapeSeed;
         } catch {
             return { code: "RELAY_SEED_FAILED", message: "malformed shape seed from owner" };
         }

@@ -3442,28 +3442,19 @@ export {
     type ColumnMetaLike,
     type DatabaseWriterLike,
     type GeoFilterBuilderLike,
+    type GeoIndexDefinitionLike,
     type IndexDefinitionLike,
+    type IndexRangeBuilderLike,
+    type PaginationOptions,
+    type ReadHook,
+    type SchemaLike,
     type SearchFilterBuilderLike,
+    type SearchIndexDefinitionLike,
+    type ServerDefaultContextLike,
+    type TableDefinitionLike,
+    type TableReaderLike,
     type ValidatorLike,
 } from "./schema-types";
-export type {
-    Clock,
-    CountArgs,
-    CtxDbOptions,
-    GeoIndexDefinitionLike,
-    IdGenerator,
-    IndexRangeBuilderLike,
-    PaginationOptions,
-    ReadHook,
-    SchemaLike,
-    SearchIndexDefinitionLike,
-    ServerDefaultContextLike,
-    SqlCursor,
-    SqlExec,
-    TableDefinitionLike,
-    TableReaderLike,
-    WriteEvent,
-    WriteHook,
-};
+export type { Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook };
 
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";
