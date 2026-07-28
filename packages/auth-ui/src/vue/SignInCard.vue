@@ -8,7 +8,7 @@ import AuthDivider from "./AuthDivider.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SocialButtons from "./SocialButtons.vue";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
@@ -24,23 +24,23 @@ withDefaults(
     },
 );
 
-const context = useAuthUI();
-const t = context.localization;
+const context = useAuthUIContextRef();
+const t = context.value.localization;
 const { actions, state } = useController(createSignInController);
 // Read once at setup rather than from a watcher: it is a cookie, it is there
 // before the first paint, and it only picks a badge.
 const lastUsed = readLastLoginMethod();
 
 const onSocial = (provider: string): void => {
-    void signInWithSocial(context, provider);
+    void signInWithSocial(context.value, provider);
 };
 </script>
 
 <template>
     <!--
-        `context` is read through in the template rather than destructured in
-        setup, so the provider list and the password gate follow server discovery
-        when its answer lands.
+        `context` is the context *ref*, which the template unwraps on every read
+        — so the provider list and the password gate re-evaluate when server
+        discovery answers, rather than being frozen at the value `setup()` saw.
     -->
     <AuthCard :title="t.signIn">
         <SocialButtons :providers="context.social" :lastUsed="context.plugins.lastLoginMethod ? lastUsed : undefined" @select="onSocial" />

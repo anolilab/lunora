@@ -12,18 +12,20 @@ import { createAccountsController, NON_SOCIAL_PROVIDERS } from "../core/accounts
 import { providerLabel } from "../core/labels";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import Skeleton from "./Skeleton.vue";
 import { useController } from "./use-controller";
 
-const context = useAuthUI();
-const t = context.localization;
+// The context *ref*: `linkable` below reads `social`, which discovery fills in,
+// so the computed has to track it rather than close over one snapshot.
+const context = useAuthUIContextRef();
+const t = context.value.localization;
 const { actions, state } = useController(createAccountsController);
 
 const linkable = computed(() => {
     const linked = new Set(state.value.items.map((account) => account.providerId).filter((id): id is string => id !== undefined));
 
-    return context.social.filter((provider) => !linked.has(provider));
+    return context.value.social.filter((provider) => !linked.has(provider));
 });
 
 const onUnlink = (account: AuthAccount): void => {

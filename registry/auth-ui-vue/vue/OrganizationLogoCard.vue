@@ -8,7 +8,7 @@ import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import { createOrganizationLogoController } from "../core/organization-logo";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import { useController } from "./use-controller";
 
 const props = defineProps<{
@@ -16,8 +16,10 @@ const props = defineProps<{
     organizationId?: string;
 }>();
 
-const context = useAuthUI();
-const t = context.localization;
+// The context *ref*, so the template's gate follows a discovered `organization`
+// flag rather than freezing on the value `setup()` saw. See `provider.ts`.
+const context = useAuthUIContextRef();
+const t = context.value.localization;
 // Captured at setup: the controller saves against this one organization, so a
 // different id means a different card, not a new state.
 const organizationId = props.organizationId;

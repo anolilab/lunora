@@ -3,21 +3,26 @@
 //
 // Not <SessionsCard>, which lists this account's sessions across every device.
 // The two are a keystroke apart in better-auth's API and mean opposite things.
+import { computed } from "vue";
+
 import { isFlowEnabled } from "../core/flow-gate";
 import { createDeviceSessionsController } from "../core/multi-session";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import Skeleton from "./Skeleton.vue";
 import { useController } from "./use-controller";
 import UserView from "./UserView.vue";
 
-const context = useAuthUI();
-const t = context.localization;
-// Resolved before the controller is built: a gated-off card must not fire the
-// resource auto-load on mount just to render nothing.
-const enabled = isFlowEnabled(context, "multiSession", "MultiSessionCard");
-const { actions, state } = useController((context_) => createDeviceSessionsController(context_, { autoLoad: enabled }));
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "multiSession", "MultiSessionCard"));
+// Read inside the factory rather than captured: `useController` re-runs it when
+// the discovered context lands, and a gated-off card must not fire the resource
+// auto-load just to render nothing.
+const { actions, state } = useController((context_) => createDeviceSessionsController(context_, { autoLoad: enabled.value }));
 
 // Takes the optional token straight from the row: the template can't narrow,
 // so the guard lives here rather than as a cast at the call site.

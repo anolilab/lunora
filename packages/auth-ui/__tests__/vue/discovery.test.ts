@@ -4,10 +4,12 @@
  * This is the one thing a Vue port can get wrong that React cannot. React
  * re-renders every consumer when the context is rebuilt, so a card's flow gate
  * and a controller's `autoLoad` are re-decided for free. Vue never re-runs a
- * component's `setup()`, so those decisions would stay frozen on the
- * pre-discovery verdict unless the provider re-creates its subtree — which is
- * what these assert, for the gate (`v-if`) and for the auto-load that rides
- * along with it.
+ * component's `setup()`, so those decisions stay frozen on the pre-discovery
+ * verdict unless they are read *through* the context ref — a `computed` gate,
+ * and a controller factory that re-reads it on rebuild. That is what these
+ * assert, for the gate (`v-if`) and for the auto-load that rides along with it,
+ * under both provider forms: the reactive read is what makes `createAuthUI`
+ * (which has no subtree to re-create) behave identically to `<AuthUIProvider>`.
  *
  * Lives in its own file so the module-level request cache in `core/discovery.ts`
  * cannot leak into `cards.test.ts`, which deliberately runs against a deployment
@@ -75,8 +77,8 @@ const renderInProvider = (component: unknown, client: AuthClient): void => {
 
 /**
  * Discovery resolves on the microtask queue; the macrotask turn drains it, and
- * Vue flushes the identity swap — and the subtree rebuild it keys — on the tick
- * after. Deterministic, so the assertions below need no polling.
+ * Vue flushes the identity swap — and the re-render every gate reading it causes
+ * — on the tick after. Deterministic, so the assertions below need no polling.
  */
 const settleDiscovery = async (): Promise<void> => {
     await new Promise((resolve) => {
@@ -175,12 +177,47 @@ describe("vue discovery", () => {
 
         await settleDiscovery();
 
-        /*
-         * `useController` swapped to the discovered context on its own. This is
-         * the half of the fix that survives without a provider component — the
-         * card's `v-if` gate cannot re-run here, which is why `createAuthUI`'s
-         * docblock points discovery users at <AuthUIProvider>.
-         */
+        // `useController` swapped to the discovered context on its own, with no
+        // provider component involved.
         expect(listDeviceSessions).toHaveBeenCalledTimes(2);
+    });
+
+    /*
+     * The case the reactive gates exist for. `createAuthUI` has no component
+     * boundary, so nothing here can remount the card: if the `v-if` were a
+     * boolean read in `setup()` it would still say "on" after the server said
+     * otherwise, and this card would sit on screen driving a plugin the
+     * deployment does not have.
+     */
+    it("drops a gated card on the app-plugin form, which cannot remount it", async () => {
+        expect.assertions(2);
+
+        stubUiConfig([]);
+
+        render(MultiSessionCard, { global: { plugins: [createAuthUI({ authClient: registeredClient().client, nav: fakeNav() })] } });
+
+        expect(screen.getByRole("heading", { name: "Switch account" })).toBeDefined();
+
+        await settleDiscovery();
+
+        expect(screen.queryByRole("heading", { name: "Switch account" })).toBeNull();
+    });
+
+    it("re-decides the auto-load from the gate on the app-plugin form too", async () => {
+        expect.assertions(2);
+
+        stubUiConfig([]);
+
+        const { client, listDeviceSessions } = registeredClient();
+
+        render(MultiSessionCard, { global: { plugins: [createAuthUI({ authClient: client, nav: fakeNav() })] } });
+
+        expect(listDeviceSessions).toHaveBeenCalledTimes(1);
+
+        await settleDiscovery();
+
+        // The rebuilt controller read `autoLoad` off the *current* gate, not the
+        // boolean the factory closed over at setup.
+        expect(listDeviceSessions).toHaveBeenCalledTimes(1);
     });
 });

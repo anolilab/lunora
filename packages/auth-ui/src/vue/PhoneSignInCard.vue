@@ -1,17 +1,21 @@
 <script setup lang="ts">
 // Sign in with a phone number and password.
+import { computed } from "vue";
+
 import { isFlowEnabled } from "../core/flow-gate";
 import { createPhoneSignInController } from "../core/phone-number";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const context = useAuthUI();
-const t = context.localization;
-const enabled = isFlowEnabled(context, "phoneNumber", "PhoneSignInCard");
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "phoneNumber", "PhoneSignInCard"));
 const { actions, state } = useController(createPhoneSignInController);
 </script>
 

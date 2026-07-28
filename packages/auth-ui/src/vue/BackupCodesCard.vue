@@ -4,26 +4,28 @@
 // The new codes are shown once and never again — they are not refetchable by
 // design — so they render inline on success rather than behind a navigation the
 // user might not come back from.
-import { onScopeDispose, shallowRef } from "vue";
+import { computed, onScopeDispose, shallowRef } from "vue";
 
 import { createBackupCodesController } from "../core/backup-codes";
 import { isFlowEnabled } from "../core/flow-gate";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const context = useAuthUI();
-const t = context.localization;
-const enabled = isFlowEnabled(context, "twoFactor", "BackupCodesCard");
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "twoFactor", "BackupCodesCard"));
 /*
  * The codes live on a second store beside the form (see `core/backup-codes.ts`),
  * so this card binds both: the form through `useController`, the codes through
  * their own subscription. `handle.controller.destroy` releases both.
  */
-const handle = createBackupCodesController(context);
+const handle = createBackupCodesController(context.value);
 const { actions, state } = useController(() => handle.controller);
 
 const codes = shallowRef<ReadonlyArray<string>>(handle.getCodes());

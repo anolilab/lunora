@@ -6,7 +6,7 @@ import AuthDivider from "./AuthDivider.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SocialButtons from "./SocialButtons.vue";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
@@ -20,12 +20,14 @@ withDefaults(
     },
 );
 
-const context = useAuthUI();
-const t = context.localization;
+// The context *ref*: the template unwraps it on every read, so the discovered
+// provider list lands without a remount. See `provider.ts`.
+const context = useAuthUIContextRef();
+const t = context.value.localization;
 const { actions, state } = useController(createSignUpController);
 
 const onSocial = (provider: string): void => {
-    void signInWithSocial(context, provider);
+    void signInWithSocial(context.value, provider);
 };
 </script>
 

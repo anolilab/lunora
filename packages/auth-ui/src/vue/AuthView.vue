@@ -14,7 +14,7 @@ import DeviceAuthorizationCard from "./DeviceAuthorizationCard.vue";
 import EmailOtpCard from "./EmailOtpCard.vue";
 import ForgotPasswordCard from "./ForgotPasswordCard.vue";
 import MagicLinkCard from "./MagicLinkCard.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import ResetPasswordCard from "./ResetPasswordCard.vue";
 import SignInCard from "./SignInCard.vue";
 import SignUpCard from "./SignUpCard.vue";
@@ -26,7 +26,10 @@ const props = defineProps<{
     view?: string;
 }>();
 
-const context = useAuthUI();
+// The context *ref*, so `card` below re-runs when discovery answers: a route
+// that fell back to sign-in because a plugin looked absent has to correct itself
+// once the server says otherwise.
+const context = useAuthUIContextRef();
 
 /*
  * Plugin-gated views are checked here rather than left to the card's own gate. A
@@ -35,7 +38,7 @@ const context = useAuthUI();
  * gate for when they are mounted directly.
  */
 const card = computed<Component>(() => {
-    const { plugins, viewPaths } = context;
+    const { plugins, viewPaths } = context.value;
 
     switch (props.view) {
         case viewPaths.acceptInvitation: {

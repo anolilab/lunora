@@ -238,7 +238,9 @@ test("user button closes on an outside click without stealing focus back", async
     // Escape) is left to the jsdom suite: asserting it here would be asserting
     // how a browser blurs on mousedown over a non-focusable element, which is
     // not our behaviour to pin.
-    await page.getByRole("heading", { name: "Profile" }).click();
+    // The open menu overlays the cards directly beneath the trigger, so click
+    // the last one in the column — an element that is genuinely outside it.
+    await page.getByRole("heading", { name: "Delete account" }).click();
 
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
 });

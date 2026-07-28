@@ -130,13 +130,12 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
 
     /*
      * A `shallowRef` holding a whole context, not a reactive context whose fields
-     * are patched: the *identity* is the signal. Vue never re-runs a component's
-     * `setup()`, so a card that resolved `isFlowEnabled(...)` — or a controller's
-     * `autoLoad` — before the server answered would be frozen on the
-     * pre-discovery verdict forever if the same object were merely updated in
-     * place. Swapping the object lets `<AuthUIProvider>` re-create its subtree and
-     * `useController` rebuild its controller, which is what React gets for free by
-     * re-rendering every consumer of a rebuilt context.
+     * are patched: the *identity* is the signal. Swapping the object is what lets
+     * a consumer notice — `useController` rebuilds its controller on it, and a
+     * card's gate is a `computed` over this ref rather than a boolean read in
+     * `setup()`, which Vue never re-runs. Together those are what React gets for
+     * free by re-rendering every consumer of a rebuilt context, and they work the
+     * same under either provider form.
      *
      * Shallow because nothing below the top level is ever mutated, and because
      * `authClient` has to reach better-auth unproxied.
@@ -184,12 +183,12 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
  * auth-UI context every card resolves through {@link useAuthUI}. Mirrors the
  * React `AuthUIProvider` at the app root.
  *
- * One caveat over {@link AuthUIProvider}: there is no component here, so nothing
- * can re-create the tree when discovery answers. Controllers still rebuild (see
- * `use-controller.ts`), but a card's `v-if` gate was resolved in a `setup()` Vue
- * will not run again. Prefer `<AuthUIProvider>` when you rely on discovery to
- * decide which cards exist; with `discover: false`, or with `plugins` stated
- * explicitly, the two forms are equivalent.
+ * Interchangeable with {@link AuthUIProvider}: both publish the same context
+ * ref, and the things discovery can change — a card's `v-if` gate, a controller's
+ * `autoLoad`, the social provider list — are read *through* that ref, so they
+ * re-evaluate when the server answers. Neither form needs a component boundary
+ * to make that happen. Choose between them on scope: this one is app-wide,
+ * `<AuthUIProvider>` scopes the context to a subtree.
  */
 const createAuthUI = (config: AuthUIProviderProps): { install: (app: App) => void } => {
     const context = buildContext(config);
@@ -216,9 +215,14 @@ const provideAuthUI = (config: AuthUIProviderProps): ShallowRef<ControllerContex
 };
 
 /**
- * The context ref from the nearest provider. Prefer {@link useAuthUI}; reach for
- * this only to *react* to the one identity change discovery makes — which is
- * what `use-controller.ts` and `<AuthUIProvider>` do.
+ * The context ref from the nearest provider — use this whenever what you read
+ * has to *follow* the one identity change discovery makes: the plugin flags,
+ * `credentials`, `social`, `organization`. Bound in `<script setup>` the template
+ * unwraps it on every read, so `v-if="context.plugins.passkey"` is reactive
+ * without further ceremony; in script, wrap the read in a `computed`.
+ *
+ * {@link useAuthUI} is the simpler read for everything discovery cannot change —
+ * localization, theme, redirects, `viewPaths`.
  */
 const useAuthUIContextRef = (): ShallowRef<ControllerContext> => {
     const value = inject(AUTH_UI_INJECTION_KEY, undefined);
@@ -232,7 +236,15 @@ const useAuthUIContextRef = (): ShallowRef<ControllerContext> => {
     return value.core;
 };
 
-/** Read the resolved core controller context from the nearest provider. */
+/**
+ * Read the resolved core controller context from the nearest provider, as a
+ * plain object.
+ *
+ * A snapshot taken when the caller's `setup()` ran, which is the right read for
+ * everything server discovery cannot change (localization, theme, redirects,
+ * `viewPaths`) and the wrong one for everything it can — see
+ * {@link useAuthUIContextRef}.
+ */
 const useAuthUI = (): ControllerContext => useAuthUIContextRef().value;
 
 /** Read the optional framework `Link` component from the nearest provider. */

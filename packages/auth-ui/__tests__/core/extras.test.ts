@@ -97,3 +97,48 @@ describe("captchaHeaders", () => {
         expect(captchaHeaders()).toStrictEqual({});
     });
 });
+
+describe("prefill vs the user", () => {
+    it("does not let a late prefill overwrite what the user typed", async () => {
+        expect.assertions(2);
+
+        const { createFormController, resolveContext } = await import("../../src/core");
+
+        let release: (value: { name: string }) => void = () => {};
+        const prefilled = new Promise<{ name: string }>((resolve) => {
+            release = resolve;
+        });
+
+        const context = resolveContext({
+            authClient: { getSession: vi.fn() } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+        });
+
+        const controller = createFormController<"name">(context, {
+            fallbackError: (localization) => localization.genericError,
+            fields: { name: {} },
+            prefill: async () => prefilled,
+            submit: () => Promise.resolve(undefined),
+        });
+
+        // The user types while the session read is still in flight — the exact
+        // ordering that made a saved profile name silently revert.
+        controller.actions.setField("name", "Renamed Tester");
+        release({ name: "stale-from-the-server" });
+        await prefilled;
+
+        expect(controller.getState().fields.name.value).toBe("Renamed Tester");
+
+        // A field they never touched is still seeded, which is the point of prefill.
+        const untouched = createFormController<"name">(context, {
+            fallbackError: (localization) => localization.genericError,
+            fields: { name: {} },
+            prefill: () => Promise.resolve({ name: "from-the-server" }),
+            submit: () => Promise.resolve(undefined),
+        });
+
+        await untouched.actions.load();
+
+        expect(untouched.getState().fields.name.value).toBe("from-the-server");
+    });
+});

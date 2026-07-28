@@ -5,22 +5,27 @@
 // optimistic and none are one click from a row's primary target — impersonation
 // in particular navigates away rather than mutating in place, because the whole
 // app is a different user afterwards.
+import { computed } from "vue";
+
 import type { AuthAdminUser } from "../core/types";
 import { createAdminUsersController } from "../core/admin-users";
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS } from "../core/labels";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import Skeleton from "./Skeleton.vue";
 import { useController } from "./use-controller";
 
-const context = useAuthUI();
-const t = context.localization;
-// Resolved before the controller is built: a gated-off card must not fire the
-// resource auto-load on mount just to render nothing.
-const enabled = isFlowEnabled(context, "admin", "AdminUsersCard");
-const { actions, state } = useController((context_) => createAdminUsersController(context_, { autoLoad: enabled }));
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "admin", "AdminUsersCard"));
+// Read inside the factory rather than captured: `useController` re-runs it when
+// the discovered context lands, and a gated-off card must not fire the resource
+// auto-load just to render nothing.
+const { actions, state } = useController((context_) => createAdminUsersController(context_, { autoLoad: enabled.value }));
 
 // "user" is the role better-auth assigns when none was set, so it heads the list
 // even though it is not one of the invitable roles.

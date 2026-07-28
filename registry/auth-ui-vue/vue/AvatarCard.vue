@@ -7,12 +7,14 @@ import { useTemplateRef } from "vue";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import { useController } from "./use-controller";
 import UserAvatar from "./UserAvatar.vue";
 
-const context = useAuthUI();
-const t = context.localization;
+// The context *ref*, so the template's `avatar.upload` gate re-reads it rather
+// than freezing on the value `setup()` saw. See `provider.ts`.
+const context = useAuthUIContextRef();
+const t = context.value.localization;
 const { actions, state } = useController(createAvatarUploadController);
 const picker = useTemplateRef<HTMLInputElement>("picker");
 

@@ -5,21 +5,34 @@
 // Mount it on the sign-in screen only when signed out; it is an accelerator
 // beside the form, and every reason it declines to appear is normal (see
 // `core/one-tap.ts`).
-import { onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 
 import { promptOneTap } from "../core/one-tap";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 
-const context = useAuthUI();
+const context = useAuthUIContextRef();
+const enabled = computed(() => context.value.plugins.oneTap);
 
-// Once per mount: `setup()` never re-runs in Vue, which is exactly the
-// fire-once behaviour React has to ask for with an empty dependency list —
-// re-prompting on every context change would nag the user.
-onMounted(() => {
-    if (context.plugins.oneTap) {
-        void promptOneTap(context);
+let prompted = false;
+
+const prompt = (): void => {
+    if (prompted || !enabled.value) {
+        return;
     }
-});
+
+    prompted = true;
+    void promptOneTap(context.value);
+};
+
+// On mount rather than during `setup()`: the prompt is a browser handshake, and
+// an SSR pass must not fire it.
+onMounted(prompt);
+/*
+ * And once more if discovery is what turns the flow on — the same re-decision
+ * React gets from `[enabled]`. `prompted` caps it at one prompt per mount either
+ * way; re-prompting on every context change would nag the user.
+ */
+watch(enabled, prompt);
 </script>
 
 <template>

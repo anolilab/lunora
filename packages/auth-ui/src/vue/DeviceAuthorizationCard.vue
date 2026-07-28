@@ -4,12 +4,14 @@
 // A code arriving in the URL prefills the field and never submits: a link that
 // silently grants access to whatever device sent it is exactly what this flow
 // exists to make visible.
+import { computed } from "vue";
+
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import { queryParameter } from "./query-parameter";
 import { useController } from "./use-controller";
 
@@ -18,9 +20,11 @@ const props = defineProps<{
     userCode?: string;
 }>();
 
-const context = useAuthUI();
-const t = context.localization;
-const enabled = isFlowEnabled(context, "deviceAuthorization", "DeviceAuthorizationCard");
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "deviceAuthorization", "DeviceAuthorizationCard"));
 // Captured at setup: it only ever seeds the field, so a later change means a new
 // card rather than a new state.
 const userCode = props.userCode ?? queryParameter("user_code");
