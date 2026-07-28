@@ -23,13 +23,13 @@ interface PanelBodyProps {
 /** A metric-trend widget — the named series' last value, trend badge, and sparkline. */
 const MetricPanelBody = ({ panel, series }: { panel: DashboardPanel; series: MetricSeries[] | undefined }): ReactElement => {
     if (series === undefined) {
-        return <p className="muted">Loading…</p>;
+        return <p className="text-muted-foreground">Loading…</p>;
     }
 
     const match = series.find((candidate) => candidate.name === panel.config.metricName);
 
     if (match === undefined) {
-        return <p className="muted">No data for {panel.config.metricName ?? "this metric"} in this window.</p>;
+        return <p className="text-muted-foreground">No data for {panel.config.metricName ?? "this metric"} in this window.</p>;
     }
 
     return (
@@ -46,19 +46,19 @@ const MetricPanelBody = ({ panel, series }: { panel: DashboardPanel; series: Met
 /** A single-stat widget — one big number reduced from the named series. */
 const StatPanelBody = ({ panel, series }: { panel: DashboardPanel; series: MetricSeries[] | undefined }): ReactElement => {
     if (series === undefined) {
-        return <p className="muted">Loading…</p>;
+        return <p className="text-muted-foreground">Loading…</p>;
     }
 
     const value = statValue(series, panel);
 
     if (value === undefined) {
-        return <p className="muted">No data for {panel.config.metricName ?? "this metric"} in this window.</p>;
+        return <p className="text-muted-foreground">No data for {panel.config.metricName ?? "this metric"} in this window.</p>;
     }
 
     return (
         <div className="dash-stat">
             <span className="dash-stat-value">{formatValue(value)}</span>
-            <span className="muted">{panel.config.metricName}</span>
+            <span className="text-muted-foreground">{panel.config.metricName}</span>
         </div>
     );
 };
@@ -74,8 +74,12 @@ const ShortcutPanelBody = ({ panel }: PanelBodyProps): ReactElement => {
 
     return (
         <div className="dash-shortcut">
-            <p className="muted">{panel.config.filter ? <code>{panel.config.filter}</code> : `Open the ${tab} tab.`}</p>
-            <Link className="link" params={{ organizationId }} to={tab === "logs" ? "/orgs/$organizationId/logs" : "/orgs/$organizationId/traces"}>
+            <p className="text-muted-foreground">{panel.config.filter ? <code>{panel.config.filter}</code> : `Open the ${tab} tab.`}</p>
+            <Link
+                className="text-primary underline-offset-4 hover:underline"
+                params={{ organizationId }}
+                to={tab === "logs" ? "/orgs/$organizationId/logs" : "/orgs/$organizationId/traces"}
+            >
                 Open {tab} →
             </Link>
         </div>

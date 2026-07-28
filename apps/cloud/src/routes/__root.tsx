@@ -7,7 +7,6 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import authUiCss from "../../lunora/auth-ui/styles.css?url";
-import appCss from "../client/styles.css?url";
 import themeCss from "../client/theme.css?url";
 
 interface RouterContext {
@@ -43,7 +42,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         return {
             links: [
                 { href: themeCss, rel: "stylesheet" },
-                { href: appCss, rel: "stylesheet" },
                 // The copy-in auth UI ships plain CSS that reads the same design
                 // tokens via `var(--token, fallback)`, so it inherits Night/Ivory
                 // without Tailwind. Loaded after the theme so the tokens exist.
@@ -53,11 +51,11 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         };
     },
     notFoundComponent: () => (
-        <main className="content">
-            <div className="callout">
+        <main className="mx-auto w-full max-w-3xl px-6 py-16">
+            <div className="rounded-lg border bg-muted/30 p-4 text-sm">
                 <h1>404</h1>
                 <p>This page could not be found.</p>
-                <Link className="link" to="/">
+                <Link className="text-primary underline-offset-4 hover:underline" to="/">
                     Back to organizations
                 </Link>
             </div>

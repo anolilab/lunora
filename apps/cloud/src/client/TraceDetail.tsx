@@ -41,7 +41,7 @@ export const TraceWaterfall = ({ onSelect, rows, selectedSpanId }: TraceWaterfal
                 <div className="trace-wmeta" style={{ paddingLeft: `${String(row.depth * 16)}px` }}>
                     {row.kind === "generation" ? <span className="trace-gen-badge">gen</span> : null}
                     {row.functionPath ? <span className="log-fn">{row.functionPath}</span> : <span className="trace-msg">{row.name}</span>}
-                    <span className="muted"> {formatMs(row.durationMs)}</span>
+                    <span className="text-muted-foreground"> {formatMs(row.durationMs)}</span>
                     {row.kind === "generation" ? (
                         <span className="trace-gen-meta">
                             {row.model ?? "generation"}
