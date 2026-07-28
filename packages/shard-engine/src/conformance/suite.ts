@@ -18,42 +18,71 @@
  *
  * # What a host has to hand over
  *
- * Only a {@link ShardHost}. Everything else is built here, which is the point:
- * if the engine's guarantees can be reproduced from the contract alone, the
- * contract is sufficient. Anything that turns out to need a provider API is a
- * porting blocker, and this suite is where it surfaces.
+ * Two `@lunora/platform` contracts and nothing else: a {@link ShardHost} and a
+ * {@link SocketHost}. Everything above them — the store, the relay tier — is
+ * assembled here, which is the point: if the engine's guarantees can be
+ * reproduced from the contracts alone, the contracts are sufficient. Anything
+ * that turns out to need a provider API is a porting blocker, and this suite is
+ * where it surfaces.
  *
  * ```ts
  * import { describe, expect, it } from "vitest";
  * import { defineEngineContractSuite } from "@lunora/shard-engine/conformance";
  *
- * defineEngineContractSuite("my-host", createMyShardHost, { describe, expect, it });
+ * defineEngineContractSuite("my-host", createMyHost, { describe, expect, it });
  * ```
  */
-import type { ShardHost } from "@lunora/platform";
+import type { ShardHost, SocketHandle, SocketHost } from "@lunora/platform";
 
-import type { SchemaLike, ValidatorLike } from "../schema-types";
 import type { SqlExec } from "../ctx-db";
-import { createShardCtxDb, runShardMigrations } from "../ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../ctx-db";
+import { relayName } from "../relay";
+import type { RelayHost } from "../relay-hub";
+import { createRelayLink } from "../relay-hub";
+import type { SchemaLike, ValidatorLike } from "../schema-types";
 import { ConflictError } from "../transaction";
+import type { ShardSocketLike, SocketAttachment } from "../types";
 
 /** Vitest's globals, injected so a host can wrap each body (e.g. `runInDurableObject`). */
-export interface EngineVitestApi {
+interface EngineVitestApi {
     describe: (name: string, body: () => void) => void;
     expect: (actual: unknown) => {
         rejects: { toBeInstanceOf: (ctor: unknown) => Promise<void>; toThrow: (matcher?: unknown) => Promise<void> };
         toBe: (expected: unknown) => void;
+        toBeInstanceOf: (ctor: unknown) => void;
         toBeUndefined: () => void;
         toStrictEqual: (expected: unknown) => void;
     };
     it: (name: string, body: () => Promise<void> | void) => void;
 }
 
-/** Builds a fresh {@link ShardHost} per test. Must be isolated — tables persist otherwise. */
-export type EngineHostFactory = () => { close?: () => void; host: ShardHost };
+/**
+ * Builds a fresh host per test. Must be isolated — tables and accepted sockets
+ * persist otherwise.
+ */
+type EngineHostFactory = () => {
+    close?: () => void;
 
-const column = (kind: string, meta: Record<string, unknown> = {}): ValidatorLike =>
-    ({ _meta: { column: { notNull: true, ...meta } }, kind }) as unknown as ValidatorLike;
+    /**
+     * Mint a raw socket for {@link SocketHost.accept}. Optional: what a socket
+     * actually is differs per host (Cloudflare needs a live `WebSocketPair` end), so
+     * the neutral suite can't know; defaults to an opaque object.
+     */
+    createSocket?: () => unknown;
+    host: ShardHost;
+
+    /**
+     * Read back the frames a socket was sent, oldest first. Required: every
+     * delivery guarantee below is stated in terms of what arrived, and a host
+     * that can't report that can't be proven to deliver at all.
+     */
+    readFrames: (socket: SocketHandle) => string[];
+    sockets: SocketHost;
+};
+
+const column = (kind: string, meta: Record<string, unknown> = {}): ValidatorLike => {
+    return { _meta: { column: { notNull: true, ...meta } }, kind };
+};
 
 /**
  * Register the engine contract suite for one host.
@@ -61,7 +90,7 @@ const column = (kind: string, meta: Record<string, unknown> = {}): ValidatorLike
  * @param factory Builds an isolated host per test.
  * @param vitest Injected `describe`/`expect`/`it`.
  */
-export const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vitest: EngineVitestApi): void => {
+const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vitest: EngineVitestApi): void => {
     const { describe, expect, it } = vitest;
 
     describe(`engine contract: ${name}`, () => {
@@ -107,14 +136,14 @@ export const defineEngineContractSuite = (name: string, factory: EngineHostFacto
 
                     runShardMigrations(sql, schema);
 
-                    const db = createShardCtxDb({ schema, sql });
+                    const database = createShardContextDatabase({ schema, sql });
 
-                    await db.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
+                    await database.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
 
                     // The trigger patches the row mid-flight, so this update's CAS
                     // matches nothing. A host whose SQL cannot report `changes()`
                     // silently loses the whole guarantee, which is why it is here.
-                    await expect(db.patch("i1", { title: "second" })).rejects.toBeInstanceOf(ConflictError);
+                    await expect(database.patch("i1", { title: "second" })).rejects.toBeInstanceOf(ConflictError);
                 } finally {
                     close?.();
                 }
@@ -129,14 +158,14 @@ export const defineEngineContractSuite = (name: string, factory: EngineHostFacto
 
                     runShardMigrations(sql, schema);
 
-                    const db = createShardCtxDb({ schema, sql });
+                    const database = createShardContextDatabase({ schema, sql });
 
-                    await db.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
+                    await database.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
 
                     let raised: unknown;
 
                     try {
-                        await db.patch("i1", { title: "second" });
+                        await database.patch("i1", { title: "second" });
                     } catch (error) {
                         raised = error;
                     }
@@ -163,12 +192,12 @@ export const defineEngineContractSuite = (name: string, factory: EngineHostFacto
 
                     runShardMigrations(sql, schema);
 
-                    const db = createShardCtxDb({ schema, sql });
+                    const database = createShardContextDatabase({ schema, sql });
 
-                    await db.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
+                    await database.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
 
                     try {
-                        await db.patch("i1", { title: "second" });
+                        await database.patch("i1", { title: "second" });
                     } catch {
                         // expected — asserted above
                     }
@@ -180,10 +209,10 @@ export const defineEngineContractSuite = (name: string, factory: EngineHostFacto
                     // (`version`) and the losing one landed not at all (`title`).
                     // Checking only `title` would pass on a host that dropped
                     // both writes.
-                    const doc = (await db.get("i1")) as Record<string, unknown> | undefined;
+                    const stored = (await database.get("i1")) as Record<string, unknown> | undefined;
 
-                    expect(doc?.["title"]).toBe("first");
-                    expect(doc?.["version"]).toBe(99);
+                    expect(stored?.["title"]).toBe("first");
+                    expect(stored?.["version"]).toBe(99);
                 } finally {
                     close?.();
                 }
@@ -231,14 +260,14 @@ export const defineEngineContractSuite = (name: string, factory: EngineHostFacto
 
                     runShardMigrations(sql, schema);
 
-                    const db = createShardCtxDb({ schema, sql });
+                    const database = createShardContextDatabase({ schema, sql });
 
-                    await db.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
+                    await database.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
 
                     let raised: unknown;
 
                     try {
-                        await db.patch("i1", { title: "second" });
+                        await database.patch("i1", { title: "second" });
                     } catch (error) {
                         raised = error;
                     }
@@ -253,5 +282,224 @@ export const defineEngineContractSuite = (name: string, factory: EngineHostFacto
                 }
             });
         });
+
+        describe("shape-poke ordering", () => {
+            const OWNER_KEY = "shard-a";
+            const SHAPE = { args: {}, name: "messages" };
+
+            /**
+             * Accept a subscribed socket through the host under test.
+             *
+             * Going through the host's own `accept` is load-bearing, not setup
+             * noise: the relay keys its per-socket memos on the handle the host
+             * issues, so a locally-minted socket would miss every memo lookup —
+             * silently, since a miss is indistinguishable from "not subscribed".
+             */
+            const acceptSubscriber = (sockets: SocketHost, createSocket: (() => unknown) | undefined, connectionId: string, subId: string): SocketHandle =>
+                sockets.accept(createSocket?.() ?? {}, { connectionId, shapes: { [subId]: SHAPE } } satisfies Partial<SocketAttachment>);
+
+            /**
+             * A {@link RelayHost} over the host under test, with a stub owner
+             * answering each seed from `seeds` in order.
+             *
+             * Every member the poke path must NOT reach throws rather than
+             * returning a benign default — so a host (or a refactor) that starts
+             * routing pokes through the op-log fails loudly here instead of
+             * quietly passing on work the relay tier is supposed to avoid.
+             */
+            const relayFor = (sockets: SocketHost, seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>) => {
+                let pokeId = 0;
+                let seedIndex = 0;
+                const unreachable = (member: string) => () => {
+                    throw new Error(`the relay poke path must not reach RelayHost.${member}`);
+                };
+
+                // Only a `relay_shape_subscribe` draws a seed. The relay also
+                // posts `relay_attach` here (it announces itself before its
+                // first seed), and answering that from the same queue would
+                // shift every socket onto the wrong cursor — which is precisely
+                // the state these legs are trying to distinguish.
+                const ownerStub = {
+                    fetch: (_url: string, init?: { body?: string }) => {
+                        const frame = JSON.parse(init?.body ?? "{}") as { type?: string };
+
+                        if (frame.type !== "relay_shape_subscribe") {
+                            return Promise.resolve(new Response(undefined, { status: 204 }));
+                        }
+
+                        const seed = seeds[seedIndex];
+
+                        seedIndex += 1;
+
+                        if (seed === undefined) {
+                            throw new Error("the relay asked for more seeds than this fixture supplies");
+                        }
+
+                        return Promise.resolve(Response.json(seed));
+                    },
+                };
+
+                // `idFromName` + `get` are the pair the relay tier probes for
+                // before it will address a sibling at all; `getByName` is the
+                // faster path it prefers when present.
+                const namespace = {
+                    get: () => ownerStub,
+                    getByName: () => ownerStub,
+                    idFromName: (id: string) => id,
+                };
+
+                const host = {
+                    buildShapeDiff: unreachable("buildShapeDiff"),
+                    computeOpLogShapeSeed: unreachable("computeOpLogShapeSeed"),
+                    currentCdcEpoch: unreachable("currentCdcEpoch"),
+                    deliverWhisperLocal: unreachable("deliverWhisperLocal"),
+                    doName: () => relayName(OWNER_KEY, 0),
+                    env: () => {
+                        return { SHARD: namespace };
+                    },
+                    getWebSockets: () => sockets.getSockets() as unknown as ShardSocketLike[],
+                    maskMetadata: unreachable("maskMetadata"),
+                    nextPokeId: () => {
+                        pokeId += 1;
+
+                        return `poke-${String(pokeId)}`;
+                    },
+                    readAttachment: (ws: ShardSocketLike) => ws.deserializeAttachment?.() as SocketAttachment,
+                    recordShapePokeFanout: () => {},
+                    resolveShape: unreachable("resolveShape"),
+                    rlsMetadata: unreachable("rlsMetadata"),
+                    shardBinding: () => "SHARD",
+                    sql: unreachable("sql"),
+                } as unknown as RelayHost;
+
+                const link = createRelayLink(host);
+
+                if (link === undefined) {
+                    throw new Error("expected a relay link for a `…::relay::N` name");
+                }
+
+                return link;
+            };
+
+            const pokeRequest = (body: Record<string, unknown>): Request =>
+                new Request("https://relay.internal/_lunora/relay", {
+                    body: JSON.stringify(body),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                });
+
+            const seedSocket = async (relay: ReturnType<typeof relayFor>, handle: SocketHandle, subId: string): Promise<void> => {
+                const outcome = await relay.seedRelayShape(handle, subId, SHAPE, { identity: undefined, userId: undefined });
+
+                if (outcome !== "ok") {
+                    throw new Error(`seed failed: ${JSON.stringify(outcome)}`);
+                }
+            };
+
+            const poke = (overrides: Record<string, unknown> = {}): Request =>
+                pokeRequest({
+                    ...SHAPE,
+                    checkpoint: 20,
+                    epoch: "e1",
+                    fromCursor: 10,
+                    rowsPatch: [{ id: "r1", op: "upsert", value: { title: "hello" } }],
+                    type: "relay_shape_poke",
+                    ...overrides,
+                });
+
+            it("frames a poke as pokeStart → pokePart per shape → pokeEnd, under one poke id", async () => {
+                const { close, createSocket, readFrames, sockets } = factory();
+
+                try {
+                    const relay = relayFor(sockets, [{ cursor: 10, epoch: "e1", frames: [] }]);
+                    const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
+
+                    await seedSocket(relay, alice, "s1");
+                    await relay.handleControl(poke());
+
+                    const parsed = readFrames(alice).map((frame) => JSON.parse(frame) as Record<string, unknown>);
+
+                    // Ordering is the contract, not an implementation detail: the
+                    // client buffers parts and applies them atomically at
+                    // `pokeEnd`, so a part arriving outside its start/end pair —
+                    // or under a different poke id — lands on the wrong baseline.
+                    expect(parsed.map((frame) => frame["type"])).toStrictEqual(["pokeStart", "pokePart", "pokeEnd"]);
+                    expect(new Set(parsed.map((frame) => frame["pokeId"])).size).toBe(1);
+                    expect(parsed[1]?.["shapeId"]).toBe("s1");
+                    expect(parsed[2]?.["checkpoint"]).toBe(20);
+                } finally {
+                    close?.();
+                }
+            });
+
+            it("delivers a poke only to sockets whose cursor matches, and advances them past it", async () => {
+                const { close, createSocket, readFrames, sockets } = factory();
+
+                try {
+                    // Bob seeded mid-flush, at an earlier cursor than the poke's
+                    // `fromCursor` — the case the memo gate exists for.
+                    const relay = relayFor(sockets, [
+                        { cursor: 10, epoch: "e1", frames: [] },
+                        { cursor: 7, epoch: "e1", frames: [] },
+                    ]);
+                    const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
+                    const bob = acceptSubscriber(sockets, createSocket, "c-bob", "s2");
+
+                    await seedSocket(relay, alice, "s1");
+                    await seedSocket(relay, bob, "s2");
+
+                    await relay.handleControl(poke());
+
+                    expect(readFrames(alice).length).toBe(3);
+
+                    // Bob is skipped rather than caught up: applying a `(10, 20]`
+                    // delta to a socket sitting at 7 would silently swallow
+                    // everything in `(7, 10]`, leaving it permanently wrong with
+                    // no error anywhere.
+                    expect(readFrames(bob).length).toBe(0);
+
+                    // Re-delivering the SAME poke is the resume case: Alice's memo
+                    // advanced to 20, so the poke no longer matches her and she
+                    // must not double-apply it.
+                    await relay.handleControl(poke());
+
+                    expect(readFrames(alice).length).toBe(3);
+                } finally {
+                    close?.();
+                }
+            });
+
+            it("skips a socket whose cursor matches under a different CDC epoch", async () => {
+                const { close, createSocket, readFrames, sockets } = factory();
+
+                try {
+                    const relay = relayFor(sockets, [{ cursor: 10, epoch: "e1", frames: [] }]);
+                    const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
+
+                    await seedSocket(relay, alice, "s1");
+
+                    // Same cursor number, different timeline. Cursors restart at an
+                    // epoch change, so matching on the number alone would apply a
+                    // new timeline's delta to an old timeline's baseline — the
+                    // epoch is what makes the memo unambiguous.
+                    await relay.handleControl(poke({ epoch: "e2" }));
+
+                    expect(readFrames(alice).length).toBe(0);
+
+                    // …and the guard is the epoch specifically, not a blanket
+                    // refusal: the same poke on the seeded epoch still lands.
+                    // Without this the leg above would pass on a relay that had
+                    // stopped delivering entirely.
+                    await relay.handleControl(poke());
+
+                    expect(readFrames(alice).length).toBe(3);
+                } finally {
+                    close?.();
+                }
+            });
+        });
     });
 };
+
+export { defineEngineContractSuite };
+export type { EngineHostFactory, EngineVitestApi };

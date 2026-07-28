@@ -1,42 +1,33 @@
+import { createReferenceHost } from "@lunora/platform/conformance";
 import { describe, expect, it } from "vitest";
 
 import { defineEngineContractSuite } from "../src/conformance";
-import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * The engine contract suite, run against a `node:sqlite`-backed `ShardHost`.
+ * The engine contract suite, run against `@lunora/platform`'s reference host.
  *
  * This is the reference run: it proves the suite is executable and that the
- * engine's guarantees hold on the simplest possible host. The Cloudflare run
- * lives in `@lunora/do`'s workerd project, where a real Durable Object supplies
- * the host — same suite, different `factory`.
- */
-
-/**
- * The minimum `ShardHost` these legs touch.
+ * engine's guarantees hold on the simplest conforming host. Reusing the
+ * platform TCK's reference host rather than a local double is deliberate —
+ * anything the engine needs that the reference host lacks is a gap in the
+ * contracts*, and this is where it shows up. A bespoke double would paper over
+ * exactly that.
  *
- * Deliberately not a full host: the suite should need only what it asserts, so
- * a gap shows up as a missing member rather than as a passing test that never
- * exercised the seam.
+ * The Cloudflare run lives in `@lunora/do`'s workerd project, where a real
+ * Durable Object supplies the pair — same suite, different `factory`.
  */
-const referenceHost = () => {
-    const harness = createSqliteExec();
+describe("@lunora/shard-engine/conformance", () => {
+    defineEngineContractSuite(
+        "platform reference host",
+        () => {
+            const host = createReferenceHost();
 
-    return {
-        close: () => {
-            harness.close();
+            if (host.readFrames === undefined) {
+                throw new Error("the reference host must expose `readFrames` — every delivery leg is stated in terms of it");
+            }
+
+            return { close: host.cleanup, createSocket: host.createSocket, host: host.shard, readFrames: host.readFrames, sockets: host.socket };
         },
-        host: {
-            alarms: {
-                delete: () => {},
-                get: () => null,
-                set: () => {},
-            },
-            runSerialized: async <T>(function_: () => Promise<T>): Promise<T> => function_(),
-            sql: harness.sql,
-            transaction: async <T>(function_: () => Promise<T>): Promise<T> => function_(),
-        } as never,
-    };
-};
-
-defineEngineContractSuite("node:sqlite reference", referenceHost, { describe, expect, it } as never);
+        { describe, expect, it },
+    );
+});

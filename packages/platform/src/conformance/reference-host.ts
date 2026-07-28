@@ -49,6 +49,17 @@ interface ConformanceHost {
     kv?: ShardKvStore;
 
     /**
+     * Read back the frames a socket has been sent, oldest first.
+     *
+     * Optional, because not every host can observe its own outbound traffic —
+     * but a host that omits it cannot be asserted against for any *delivery*
+     * guarantee, only for "send did not throw". Since delivery is most of what
+     * the engine does (pokes, deltas, whispers), a host without this is only
+     * partially proven, and the suites say so rather than skipping quietly.
+     */
+    readFrames?: (socket: SocketHandle) => string[];
+
+    /**
      * Re-create a runtime socket from its durable state. Optional: only hosts
      * that can be driven through a recycle from inside a test implement it
      * (see {@link ConformanceHost.simulateRecycle}).
@@ -316,7 +327,11 @@ const createReferenceHost = (): ReferenceHost => {
             deserializeAttachment: () => socket.attachment,
             id: socket.id,
             send: (data) => {
-                socket.received.push(extractArrayBuffer(data));
+                // Keep text as text. `received` has always been typed
+                // `(string | ArrayBuffer)[]`, but encoding unconditionally made
+                // the string arm unreachable — which went unnoticed for as long
+                // as nothing read the buffer back. `readFrames` reads it now.
+                socket.received.push(typeof data === "string" ? data : extractArrayBuffer(data));
             },
             serializeAttachment: (value) => {
                 socket.attachment = value;
@@ -494,6 +509,10 @@ const createReferenceHost = (): ReferenceHost => {
         },
         directory,
         kv,
+        // Text frames only: every Lunora wire frame is JSON, and returning
+        // binary as a lossy string would let a corrupted frame read as a
+        // delivered one.
+        readFrames: (handle: SocketHandle) => (runtimeSockets.get(handle.id)?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
         restoreSocket: (id: string, attachment: unknown) => {
             const socketState: ReferenceSocket = {
                 attachment,

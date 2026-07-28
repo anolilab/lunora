@@ -173,8 +173,6 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
         describe("SocketHost", () => {
             it("accepts a socket and can send/close", async () => {
-                expect.assertions(3);
-
                 const host = await createHost();
                 const handle = host.socket.accept(rawSocket(host), { user: "ada" });
 
@@ -182,6 +180,14 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                 handle.send("hello");
                 expect(host.socket.getSockets().map((socket) => socket.id)).toContain(handle.id);
+
+                // "Did not throw" is not delivery. A host that silently dropped
+                // every frame would pass the rest of this leg while breaking
+                // every subscription on it, so where the frames are observable
+                // at all, assert they arrived.
+                if (host.readFrames !== undefined) {
+                    expect(host.readFrames(handle)).toStrictEqual(["hello"]);
+                }
 
                 // How soon a closed socket leaves `getSockets()` is host-defined
                 // (the reference host is lazy; workerd drops it on the close
