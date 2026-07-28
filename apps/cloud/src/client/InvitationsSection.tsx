@@ -74,8 +74,7 @@ export const InvitationsSection = ({ organizationId, preloaded }: SectionProps<R
                 ) : null}
                 <form
                     className="inline-form"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
                         setPending(true);
 

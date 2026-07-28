@@ -58,8 +58,7 @@ export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<Re
                 </p>
                 <form
                     className="inline-form"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
 
                         void create

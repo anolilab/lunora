@@ -116,8 +116,7 @@ export const AlertsSection = ({ organizationId, preloaded }: SectionProps<Return
                 />
                 <form
                     className="inline-form"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
 
                         const run = async (): Promise<void> => {
