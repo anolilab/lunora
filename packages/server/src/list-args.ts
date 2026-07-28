@@ -77,9 +77,17 @@ const DEFAULT_MAX_ORDER_BY = 8;
  */
 type ListFilterOperators<T> = WhereOperators<T>;
 
+/**
+ * The filter allow-list a caller may declare: a subset of the document's own
+ * columns, each with a validator for that column's type. Constraining the KEYS to
+ * `keyof Doc` is what turns a typo'd or renamed column into a compile error
+ * instead of a predicate that silently never matches.
+ */
+type ListFilterShape<TDocument> = { [K in keyof TDocument & string]?: Validator<TDocument[K]> };
+
 /** The `where` argument: each declared filter column, optionally, as a bare value or an operator object. */
-type ListWhere<F extends Record<string, Validator>> = {
-    [K in keyof F]?: Infer<F[K]> | ListFilterOperators<Infer<F[K]>>;
+type ListWhere<F> = {
+    [K in keyof F]?: Infer<NonNullable<F[K]>> | ListFilterOperators<Infer<NonNullable<F[K]>>>;
 };
 
 /** One `orderBy` entry. `direction` defaults to `"asc"`. */
@@ -89,14 +97,14 @@ interface ListOrderByEntry<O extends string> {
 }
 
 /** The decoded arguments a {@link defineListArgs} endpoint receives. */
-interface ListArgsValue<F extends Record<string, Validator>, O extends string> {
+interface ListArgsValue<F, O extends string> {
     cursor?: null | number | string;
     limit?: number;
     orderBy?: ListOrderByEntry<O>[];
     where?: ListWhere<F>;
 }
 
-interface DefineListArgsConfig<F extends Record<string, Validator>, O extends string> {
+interface DefineListArgsConfig<F, O extends string> {
     /** `limit` applied when the caller omits one. Defaults to 25. */
     readonly defaultLimit?: number;
 
@@ -120,14 +128,14 @@ interface DefineListArgsConfig<F extends Record<string, Validator>, O extends st
 }
 
 /** The validator map handed to `.input()`. Typed precisely so `args` infers end-to-end. */
-interface ListArgsValidators<F extends Record<string, Validator>, O extends string> {
+interface ListArgsValidators<F, O extends string> {
     cursor: ColumnValidator<null | number | string | undefined, null | number | string | undefined>;
     limit: ColumnValidator<number | undefined, number | undefined>;
     orderBy: ColumnValidator<ListOrderByEntry<O>[] | undefined, ListOrderByEntry<O>[] | undefined>;
     where: ColumnValidator<ListWhere<F> | undefined, ListWhere<F> | undefined>;
 }
 
-interface ListArgsSpec<F extends Record<string, Validator>, O extends string> {
+interface ListArgsSpec<TDocument, F, O extends string> {
     /** Spread into `.input(...)` — `{ cursor, limit, orderBy, where }`. */
     readonly args: ListArgsValidators<F, O>;
 
@@ -135,8 +143,12 @@ interface ListArgsSpec<F extends Record<string, Validator>, O extends string> {
      * Translate the decoded arguments into the `findMany` options object:
      * `limit` clamped into `[1, maxLimit]`, `orderBy` reshaped from
      * `{ field, direction }[]` into `ctx.db`'s `{ column: direction }[]`.
+     *
+     * Returns `QueryArgs&lt;Doc>` — bound to the table, not free — so a mismatch
+     * between what this helper declares and what the table actually holds is a
+     * compile error at the `findMany` call site.
      */
-    readonly toQueryArgs: <TDocument>(args: ListArgsValue<F, O>) => QueryArgs<TDocument>;
+    readonly toQueryArgs: (args: ListArgsValue<F, O>) => QueryArgs<TDocument>;
 }
 
 /** Build the operator object accepted alongside a bare value for one filter column. */
@@ -242,69 +254,82 @@ const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<s
  * Declare the filter / sort / page arguments for a list endpoint, plus the
  * translation into `ctx.db.&lt;table>.findMany(...)` options. See the module docs
  * for the shape and the reasoning behind it.
+ *
+ * Curried on the document type: `defineListArgs&lt;Doc&lt;"messages">>()({ … })`. The
+ * extra `()` buys the thing that matters — with `Doc` bound, `filter` keys and
+ * `orderBy` entries are checked against the table's real columns, so a typo or a
+ * column renamed out from under the endpoint is a COMPILE error instead of a
+ * predicate that silently matches nothing. TypeScript has no partial type-argument
+ * inference, so binding `Doc` explicitly while still inferring `F` and `O` from
+ * the config requires the second call.
  */
-const defineListArgs = <F extends Record<string, Validator>, O extends string>(config: DefineListArgsConfig<F, O>): ListArgsSpec<F, O> => {
-    const defaultLimit = normalizeBound(config.defaultLimit, DEFAULT_LIMIT);
-    const maxLimit = normalizeBound(config.maxLimit, DEFAULT_MAX_LIMIT);
-    const maxInValues = normalizeBound(config.maxInValues, DEFAULT_MAX_IN_VALUES);
-    const maxOrderBy = normalizeBound(config.maxOrderBy, DEFAULT_MAX_ORDER_BY);
+const defineListArgs =
+    <TDocument>() =>
+    <F extends ListFilterShape<TDocument>, O extends keyof TDocument & string>(config: DefineListArgsConfig<F, O>): ListArgsSpec<TDocument, F, O> => {
+        const defaultLimit = normalizeBound(config.defaultLimit, DEFAULT_LIMIT);
+        const maxLimit = normalizeBound(config.maxLimit, DEFAULT_MAX_LIMIT);
+        const maxInValues = normalizeBound(config.maxInValues, DEFAULT_MAX_IN_VALUES);
+        const maxOrderBy = normalizeBound(config.maxOrderBy, DEFAULT_MAX_ORDER_BY);
 
-    const filterable = new Set(Object.keys(config.filter));
-    const whereShape: Record<string, Validator> = {};
+        const filterable = new Set(Object.keys(config.filter));
+        const whereShape: Record<string, Validator> = {};
 
-    for (const [field, validator] of Object.entries(config.filter)) {
-        whereShape[field] = v.optional(v.union(validator, operatorsValidator(validator, maxInValues)));
-    }
+        for (const [field, validator] of Object.entries(config.filter) as [string, Validator][]) {
+            whereShape[field] = v.optional(v.union(validator, operatorsValidator(validator, maxInValues)));
+        }
 
-    // With no sortable columns declared the `field` slot must be unsatisfiable —
-    // `v.union` requires at least one member, and any literal sentinel would
-    // itself be an accepted value, so refute unconditionally instead.
-    const sortable = new Set<string>(config.orderBy);
-    const fieldValidator: Validator =
-        config.orderBy.length === 0
-            ? v.string().check(() => false, { message: "no sortable columns are declared for this endpoint" })
-            : v.union(...config.orderBy.map((field) => v.literal(field)));
+        // With no sortable columns declared the `field` slot must be unsatisfiable —
+        // `v.union` requires at least one member, and any literal sentinel would
+        // itself be an accepted value, so refute unconditionally instead.
+        const sortable = new Set<string>(config.orderBy);
+        const fieldValidator: Validator =
+            config.orderBy.length === 0
+                ? v.string().check(() => false, { message: "no sortable columns are declared for this endpoint" })
+                : v.union(...config.orderBy.map((field) => v.literal(field)));
 
-    const args = {
-        // A number is accepted because the REST router JSON-parses query-string
-        // values, so an all-digit cursor arrives as one; `toQueryArgs` restores it
-        // to the string `ctx.db` expects.
-        cursor: v.optional(v.union(v.string(), v.number(), v.null())),
-        limit: v.optional(v.number()),
-        orderBy: v.optional(
-            v.array(
-                v.object({
-                    direction: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
-                    field: fieldValidator,
-                }),
+        const args = {
+            // A number is accepted because the REST router JSON-parses query-string
+            // values, so an all-digit cursor arrives as one; `toQueryArgs` restores it
+            // to the string `ctx.db` expects.
+            cursor: v.optional(v.union(v.string(), v.number(), v.null())),
+            limit: v.optional(v.number()),
+            orderBy: v.optional(
+                v.array(
+                    v.object({
+                        direction: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
+                        field: fieldValidator,
+                    }),
+                ),
             ),
-        ),
-        where: v.optional(v.object(whereShape)),
-    } as unknown as ListArgsValidators<F, O>;
+            where: v.optional(v.object(whereShape)),
+        } as unknown as ListArgsValidators<F, O>;
 
-    const toQueryArgs = <TDocument>(value: ListArgsValue<F, O>): QueryArgs<TDocument> => {
-        // Re-check `field` against the allow-list rather than trusting that the
-        // validator ran: `toQueryArgs` is an exported function and nothing stops a
-        // caller handing it an unparsed object.
-        const orderBy = value.orderBy
-            ?.filter((entry) => sortable.has(entry.field))
-            .slice(0, maxOrderBy)
-            .map((entry) => ({ [entry.field]: entry.direction ?? "asc" }) as OrderBy<TDocument>);
+        const toQueryArgs = (value: ListArgsValue<F, O>): QueryArgs<TDocument> => {
+            // Re-check `field` against the allow-list rather than trusting that the
+            // validator ran: `toQueryArgs` is an exported function and nothing stops a
+            // caller handing it an unparsed object.
+            const orderBy = value.orderBy
+                ?.filter((entry) => sortable.has(entry.field))
+                .slice(0, maxOrderBy)
+                // Cast is unavoidable: a computed key widens to `{ [x: string]: … }`,
+                // which TS cannot narrow back to `OrderBy<Doc>` on its own. `field` is
+                // already constrained to `keyof Doc` and re-checked against `sortable`.
+                .map((entry) => ({ [entry.field]: entry.direction ?? "asc" }) as OrderBy<TDocument>);
 
-        // Same reasoning as `orderBy` above: rebuilt from the allow-list rather
-        // than trusted, because this function is reachable without the validator.
-        const where = value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable) as QueryArgs<TDocument>["where"]);
+            // Same reasoning as `orderBy` above: rebuilt from the allow-list rather
+            // than trusted, because this function is reachable without the validator.
+            const where = value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable) as QueryArgs<TDocument>["where"]);
 
-        return {
-            ...(value.cursor === undefined ? {} : { cursor: typeof value.cursor === "number" ? String(value.cursor) : value.cursor }),
-            limit: clampLimit(value.limit, defaultLimit, maxLimit),
-            ...(orderBy === undefined || orderBy.length === 0 ? {} : { orderBy }),
-            ...(where === undefined ? {} : { where }),
+            return {
+                ...(value.cursor === undefined ? {} : { cursor: typeof value.cursor === "number" ? String(value.cursor) : value.cursor }),
+                limit: clampLimit(value.limit, defaultLimit, maxLimit),
+                ...(orderBy === undefined || orderBy.length === 0 ? {} : { orderBy }),
+                ...(where === undefined ? {} : { where }),
+            };
         };
-    };
 
-    return { args, toQueryArgs };
-};
+        return { args, toQueryArgs };
+    };
 
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere };
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_IN_VALUES, DEFAULT_MAX_LIMIT, DEFAULT_MAX_ORDER_BY, defineListArgs, normalizeBound, sanitizeWhere };

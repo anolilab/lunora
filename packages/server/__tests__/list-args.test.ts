@@ -4,13 +4,60 @@ import { describe, expect, it } from "vitest";
 import { parseValidatorMap } from "../src/functions";
 import { clampLimit, defineListArgs } from "../src/list-args";
 
-const spec = defineListArgs({
+/** Stand-in for a generated `Doc&lt;"messages">`; binding it is what makes typos compile errors. */
+interface Message {
+    _creationTime: number;
+    authorId: string;
+    score: number;
+    status: string;
+}
+
+const spec = defineListArgs<Message>()({
     filter: { authorId: v.string(), score: v.number(), status: v.string() },
     orderBy: ["_creationTime", "score"],
 });
 
 /** Parse a raw argument object through the declared validator map, exactly as a procedure's `.input()` does. */
 const parse = (raw: Record<string, unknown>): Record<string, unknown> => parseValidatorMap(spec.args as never, raw, "args");
+
+describe("defineListArgs — Doc binding (compile-time)", () => {
+    it("rejects a filter column that isn't on the document", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error -- `madeUpColumn` is not a key of Message; before the Doc
+        // binding this compiled and produced a filter that could never match.
+        const bad = defineListArgs<Message>()({ filter: { madeUpColumn: v.string() }, orderBy: [] });
+
+        expect(bad.args).toBeDefined();
+    });
+
+    it("rejects an orderBy field that isn't on the document", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error -- "createdAt" does not exist on Message (it is `_creationTime`).
+        const bad = defineListArgs<Message>()({ filter: {}, orderBy: ["createdAt"] });
+
+        expect(bad.args).toBeDefined();
+    });
+
+    it("rejects a validator whose type contradicts the column", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error -- `score` is a number on Message, so a string validator
+        // would decode into a predicate the column can never satisfy.
+        const bad = defineListArgs<Message>()({ filter: { score: v.string() }, orderBy: [] });
+
+        expect(bad.args).toBeDefined();
+    });
+
+    it("accepts the columns the document really has", () => {
+        expect.assertions(1);
+
+        const good = defineListArgs<Message>()({ filter: { score: v.number(), status: v.string() }, orderBy: ["_creationTime"] });
+
+        expect(Object.keys(good.args).toSorted((a, b) => a.localeCompare(b))).toEqual(["cursor", "limit", "orderBy", "where"]);
+    });
+});
 
 describe("defineListArgs — argument shape", () => {
     it("accepts a bare value as an equality predicate", () => {
@@ -69,7 +116,7 @@ describe("defineListArgs — toQueryArgs", () => {
         expect.assertions(2);
 
         expect(spec.toQueryArgs({ limit: 5000 }).limit).toBe(100);
-        expect(defineListArgs({ filter: {}, maxLimit: 10, orderBy: [] }).toQueryArgs({ limit: 5000 }).limit).toBe(10);
+        expect(defineListArgs<Message>()({ filter: {}, maxLimit: 10, orderBy: [] }).toQueryArgs({ limit: 5000 }).limit).toBe(10);
     });
 
     it("floors a fractional limit and lifts a non-positive one to 1", () => {
@@ -115,7 +162,7 @@ describe("defineListArgs — toQueryArgs", () => {
 });
 
 describe("defineListArgs — no sortable columns declared", () => {
-    const fixed = defineListArgs({ filter: {}, orderBy: [] });
+    const fixed = defineListArgs<Message>()({ filter: {}, orderBy: [] });
 
     it("refuses every orderBy field, including any sentinel-looking value", () => {
         expect.assertions(2);
@@ -166,9 +213,9 @@ describe("defineListArgs — toQueryArgs hardening", () => {
     it("normalizes a nonsensical configured bound rather than emitting an out-of-contract limit", () => {
         expect.assertions(3);
 
-        expect(defineListArgs({ filter: {}, maxLimit: 0, orderBy: [] }).toQueryArgs({ limit: 50 }).limit).toBe(1);
-        expect(defineListArgs({ filter: {}, maxLimit: 10.9, orderBy: [] }).toQueryArgs({ limit: 50 }).limit).toBe(10);
-        expect(defineListArgs({ filter: {}, defaultLimit: Number.NaN, orderBy: [] }).toQueryArgs({}).limit).toBe(25);
+        expect(defineListArgs<Message>()({ filter: {}, maxLimit: 0, orderBy: [] }).toQueryArgs({ limit: 50 }).limit).toBe(1);
+        expect(defineListArgs<Message>()({ filter: {}, maxLimit: 10.9, orderBy: [] }).toQueryArgs({ limit: 50 }).limit).toBe(10);
+        expect(defineListArgs<Message>()({ filter: {}, defaultLimit: Number.NaN, orderBy: [] }).toQueryArgs({}).limit).toBe(25);
     });
 });
 
@@ -183,7 +230,7 @@ describe("defineListArgs — request-cost bounds", () => {
     it("honours a custom maxInValues", () => {
         expect.assertions(1);
 
-        const tight = defineListArgs({ filter: { status: v.string() }, maxInValues: 2, orderBy: [] });
+        const tight = defineListArgs<Message>()({ filter: { status: v.string() }, maxInValues: 2, orderBy: [] });
 
         expect(() => parseValidatorMap(tight.args as never, { where: { status: { in: ["a", "b", "c"] } } }, "args")).toThrow(ValidationError);
     });
@@ -191,7 +238,7 @@ describe("defineListArgs — request-cost bounds", () => {
     it("caps how many orderBy entries reach the query", () => {
         expect.assertions(1);
 
-        const wide = defineListArgs({ filter: {}, maxOrderBy: 2, orderBy: ["a", "b", "c"] });
+        const wide = defineListArgs<{ a: number; b: number; c: number }>()({ filter: {}, maxOrderBy: 2, orderBy: ["a", "b", "c"] });
 
         expect(wide.toQueryArgs({ orderBy: [{ field: "a" }, { field: "b" }, { field: "c" }] }).orderBy).toHaveLength(2);
     });

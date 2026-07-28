@@ -188,10 +188,12 @@ filtering, sorting, and paging are spelled — and the generated OpenAPI describ
 them without special-casing.
 
 ```ts
-const listMessages = defineListArgs({
+import type { Doc } from "./_generated/dataModel";
+
+const listMessages = defineListArgs<Doc<"messages">>()({
     filter: { authorId: v.id("users"), status: v.string() },
     orderBy: ["_creationTime", "status"],
-    // defaultLimit: 25, maxLimit: 100
+    // defaultLimit: 25, maxLimit: 100, maxInValues: 100, maxOrderBy: 8
 });
 
 export const list = c.query
@@ -203,6 +205,13 @@ export const list = c.query
 Callers get `where`, `orderBy`, `cursor`, and `limit`. `where` accepts either a
 bare value (equality) or the operator object mirroring the `ctx.db` `where` DSL
 (`{ gte, lt, in, contains, isNull, … }`).
+
+The extra `()` is what binds the table's document type. With `Doc` bound, `filter`
+keys, `orderBy` entries, and each validator's type are checked against the table's
+real columns — so a typo, or a column renamed out from under the endpoint, is a
+**compile error** rather than a predicate that silently matches nothing.
+TypeScript has no partial type-argument inference, so binding `Doc` while still
+inferring the rest from the config needs the second call.
 
 Three constraints are deliberate:
 

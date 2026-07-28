@@ -268,7 +268,7 @@ interface DefineIdentityOptions {
 ### `DefineListArgsConfig` (interface)
 
 ```ts
-interface DefineListArgsConfig<F extends Record<string, Validator>, O extends string> {
+interface DefineListArgsConfig<F, O extends string> {
     readonly defaultLimit?: number;
     readonly filter: F;
     readonly maxInValues?: number;
@@ -831,16 +831,16 @@ type LifecycleHandler = (context: MutationCtx, event: LifecycleEvent) => Promise
 ### `ListArgsSpec` (interface)
 
 ```ts
-interface ListArgsSpec<F extends Record<string, Validator>, O extends string> {
+interface ListArgsSpec<TDocument, F, O extends string> {
     readonly args: ListArgsValidators<F, O>;
-    readonly toQueryArgs: <TDocument>(args: ListArgsValue<F, O>) => QueryArgs$2<TDocument>;
+    readonly toQueryArgs: (args: ListArgsValue<F, O>) => QueryArgs$2<TDocument>;
 }
 ```
 
 ### `ListArgsValidators` (interface)
 
 ```ts
-interface ListArgsValidators<F extends Record<string, Validator>, O extends string> {
+interface ListArgsValidators<F, O extends string> {
     cursor: ColumnValidator<null | number | string | undefined, null | number | string | undefined>;
     limit: ColumnValidator<number | undefined, number | undefined>;
     orderBy: ColumnValidator<ListOrderByEntry<O>[] | undefined, ListOrderByEntry<O>[] | undefined>;
@@ -851,7 +851,7 @@ interface ListArgsValidators<F extends Record<string, Validator>, O extends stri
 ### `ListArgsValue` (interface)
 
 ```ts
-interface ListArgsValue<F extends Record<string, Validator>, O extends string> {
+interface ListArgsValue<F, O extends string> {
     cursor?: null | number | string;
     limit?: number;
     orderBy?: ListOrderByEntry<O>[];
@@ -877,8 +877,8 @@ interface ListOrderByEntry<O extends string> {
 ### `ListWhere` (type)
 
 ```ts
-type ListWhere<F extends Record<string, Validator>> = {
-    [K in keyof F]?: Infer<F[K]> | ListFilterOperators<Infer<F[K]>>;
+type ListWhere<F> = {
+    [K in keyof F]?: Infer<NonNullable<F[K]>> | ListFilterOperators<Infer<NonNullable<F[K]>>>;
 };
 ```
 
@@ -2533,7 +2533,7 @@ const defineIdentity: <A extends ValidatorMap>(claims: InferValidatorMap<A> exte
 ### `defineListArgs` (const)
 
 ```ts
-const defineListArgs: <F extends Record<string, Validator>, O extends string>(config: DefineListArgsConfig<F, O>) => ListArgsSpec<F, O>;
+const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O extends keyof TDocument & string>(config: DefineListArgsConfig<F, O>) => ListArgsSpec<TDocument, F, O>;
 ```
 
 ### `defineMigration` (const)

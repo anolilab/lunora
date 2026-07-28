@@ -96,6 +96,28 @@ describe("applyAdditiveEdit", () => {
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "ghost", validator: "v.string()" }))).toBe("unknown-table");
     });
 
+    it("marks a new table .global() with the requested backend", () => {
+        expect.assertions(2);
+
+        const text = textOf(applyAdditiveEdit(SCHEMA, { global: { backend: "hyperdrive" }, kind: "addTable", table: "invoices" }));
+
+        expect(text).toContain('.global({ backend: "hyperdrive" })');
+        // And the parser reads it back — `.global({ … })` used to look non-global.
+        expect(parseSchema(text)).toMatchObject({ tables: expect.arrayContaining([expect.objectContaining({ global: true, name: "invoices" })]) });
+    });
+
+    it("emits a bare .global() when no backend is named", () => {
+        expect.assertions(1);
+
+        expect(textOf(applyAdditiveEdit(SCHEMA, { global: {}, kind: "addTable", table: "invoices" }))).toContain(".global()");
+    });
+
+    it("refuses a backend outside the allow-list", () => {
+        expect.assertions(1);
+
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { global: { backend: "sqlite" as never }, kind: "addTable", table: "invoices" }))).toBe("invalid-identifier");
+    });
+
     it("rejects a validator that is not a v.* expression (code injection)", () => {
         expect.assertions(3);
 

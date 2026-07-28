@@ -11,7 +11,8 @@ import { connect, dialectFromUrl } from "./connect";
 import type { EmittedFile } from "./emit";
 import { emitIntrospection } from "./emit";
 import type { IntrospectOptions } from "./index";
-import type { SqlDialect } from "./model";
+import { mergeIntoSchema } from "./merge";
+import type { IntrospectedDatabase, SqlDialect } from "./model";
 import { readDatabase } from "./read-database";
 
 interface IntrospectCommandOptions {
@@ -82,6 +83,61 @@ const writeEmittedFile = async (file: EmittedFile, directory: string, options: I
 };
 
 /**
+ * Narrow the introspected tables to what `--tables` asked for, reporting any name
+ * that matched nothing — a typo would otherwise vanish silently and the run would
+ * look successful while skipping the table the user actually wanted.
+ */
+const selectTables = (database: IntrospectedDatabase, options: IntrospectCommandOptions): IntrospectedDatabase["tables"] => {
+    const requested = options.tables;
+
+    if (requested === undefined || requested.length === 0) {
+        return database.tables;
+    }
+
+    for (const name of requested) {
+        if (!database.tables.some((table) => table.name === name)) {
+            options.logger.warn(`--tables: no table named "${name}" exists in this schema — skipped.`);
+        }
+    }
+
+    return database.tables.filter((table) => requested.includes(table.name));
+};
+
+/**
+ * Fold an introspected database into a `schema.ts` that already exists, rather
+ * than overwriting it. Returns `true` when the file was rewritten.
+ */
+const mergeExistingSchema = async (
+    schemaPath: string,
+    database: IntrospectedDatabase,
+    dialect: SqlDialect,
+    options: IntrospectCommandOptions,
+): Promise<boolean> => {
+    const merged = mergeIntoSchema(readFileSync(schemaPath, "utf8"), database, dialect);
+
+    for (const warning of merged.warnings) {
+        options.logger.warn(warning);
+    }
+
+    if (merged.text === undefined) {
+        options.logger.info("lunora/schema.ts is already up to date with the database.");
+
+        return false;
+    }
+
+    if (options.dryRun === true) {
+        options.logger.info(`would merge ${String(merged.applied)} addition(s) into lunora/schema.ts`);
+
+        return false;
+    }
+
+    await writeFile(schemaPath, merged.text, "utf8");
+    options.logger.info(`merged ${String(merged.applied)} addition(s) into lunora/schema.ts`);
+
+    return true;
+};
+
+/**
  * Read an existing database and scaffold `lunora/schema.ts` (plus per-table
  * procedure modules) from it. Read-only against the source database; never
  * overwrites an existing file without `--force`.
@@ -112,16 +168,7 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
         }
     }
 
-    const selected =
-        options.tables === undefined || options.tables.length === 0 ? database.tables : database.tables.filter((table) => options.tables?.includes(table.name));
-
-    // A typo in `--tables` would otherwise vanish silently, and the run would look
-    // like it succeeded while quietly skipping the table the user actually wanted.
-    for (const requested of options.tables ?? []) {
-        if (!database.tables.some((table) => table.name === requested)) {
-            options.logger.warn(`--tables: no table named "${requested}" exists in this schema — skipped.`);
-        }
-    }
+    const selected = selectTables(database, options);
 
     if (selected.length === 0) {
         options.logger.error("no tables found to introspect — check --schema and --tables.");
@@ -136,8 +183,20 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
 
     const directory = join(cwd, "lunora");
     const written: string[] = [];
+    const schemaPath = join(directory, "schema.ts");
 
-    for (const file of files) {
+    // A schema already on disk is the developer's file, not ours. Rather than
+    // refusing (or clobbering under --force), fold newly-discovered tables,
+    // columns, and indexes into it as additive edits, preserving their formatting
+    // and everything they've changed since the first run.
+    const merging = existsSync(schemaPath) && options.force !== true;
+    const remaining = merging ? files.filter((file) => file.path !== "schema.ts") : files;
+
+    if (merging && (await mergeExistingSchema(schemaPath, { ...database, tables: selected }, dialect, options))) {
+        written.push("schema.ts");
+    }
+
+    for (const file of remaining) {
         // Sequential on purpose: the log lines are the command's progress output
         // and interleaving them would make the report unreadable.
         // eslint-disable-next-line no-await-in-loop -- ordered console output

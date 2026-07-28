@@ -481,8 +481,18 @@ lunora introspect --no-procedures --force          # schema only, overwrite
 ```
 
 The command is **read-only against the source database** — it queries
-`information_schema` (and `pg_index` on Postgres) and never writes. It also
-refuses to overwrite an existing file unless you pass `--force`.
+`information_schema` (and `pg_index` on Postgres) and never writes.
+
+**Re-runs merge, they don't clobber.** The first run writes a whole
+`lunora/schema.ts`; after that the file is yours, and a second run folds only
+what's new — tables, columns, indexes — into it as additive edits, preserving
+your formatting, comments, and any validator you tightened. That goes through the
+same ts-morph editor the Studio schema editor uses, so two of its rules apply: a
+column added to a table that already exists lands `v.optional(...)` (a required
+one needs a backfill migration), and names that aren't bare identifiers are
+reported and skipped. Nothing is ever removed — a column dropped upstream stays,
+because deleting it would drop rows. Pass `--force` to overwrite instead of merge,
+and `--dry-run` to see the plan first.
 
 What it emits is a **starting point you own**, not a build artifact: review it
 before shipping. Specifically:

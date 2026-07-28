@@ -148,7 +148,9 @@ describe("emitIntrospection — procedure modules", () => {
 
         const posts = emitIntrospection(database, emitOptions).files.find((file) => file.path === "posts.ts");
 
-        expect(posts?.contents).toContain("defineListArgs({");
+        // Curried on the table's Doc, so a stale column in the scaffold is a
+        // compile error rather than a filter that silently never matches.
+        expect(posts?.contents).toContain('defineListArgs<Doc<"posts">>()({');
         expect(posts?.contents).toContain("export const list = c.query");
         expect(posts?.contents).toContain("export const get = c.query");
     });
@@ -219,14 +221,41 @@ describe("emitIntrospection — hostile catalog identifiers", () => {
         }
     });
 
+    it("escapes characters that stay dangerous once the emitted file travels", () => {
+        expect.assertions(3);
+
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [
+                    {
+                        columns: [{ arrayDepth: 0, dataType: "text", name: "a", nullable: false }],
+                        indexes: [],
+                        // `</script>` would close a host script block if the generated
+                        // file is ever inlined into HTML; U+2028 is a line terminator.
+                        name: "x</script>y\u2028z",
+                        primaryKey: [],
+                    },
+                ],
+            },
+            emitOptions,
+        );
+        const schema = result.files.find((file) => file.path === "schema.ts")?.contents ?? "";
+
+        expect(schema).not.toContain("</script>");
+        expect(schema).toContain(String.raw`\u003C`);
+        expect(schema).toContain(String.raw`\u2028`);
+    });
+
     it("escapes the payload rather than emitting it raw", () => {
         expect.assertions(2);
 
         const schema = emitIntrospection(hostile, emitOptions).files.find((file) => file.path === "schema.ts");
         const contents = schema?.contents ?? "";
 
-        // Every occurrence of the injected quote is backslash-escaped.
-        expect(contents).toContain(String.raw`evil\"); process.exit(1); //`);
+        // The injected quote is backslash-escaped, and the `//` that would have
+        // started a comment is now \u002F-escaped too.
+        expect(contents).toContain(String.raw`evil\"); process.exit(1); \u002F\u002F`);
         expect(contents).toContain(String.raw`v.id("other\"")`);
     });
 

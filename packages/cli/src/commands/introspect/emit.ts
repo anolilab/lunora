@@ -54,6 +54,23 @@ const LEADING_DIGITS = /^\d+/;
 const PATH_UNSAFE = /[^\w-]/g;
 
 /**
+ * Characters `JSON.stringify` leaves raw that are still unsafe once the emitted
+ * source travels: `&lt;` / `>` / `/` can close a host `&lt;/script>` if the file is
+ * ever inlined into HTML (a code viewer, a docs page), and U+2028 / U+2029 are
+ * line terminators that older tooling treats as breaking the literal. Their
+ * escaped forms denote the identical string, so this costs nothing.
+ */
+const LITERAL_UNSAFE = /[\u003C\u003E\u002F\u2028\u2029]/g;
+
+const LITERAL_UNSAFE_ESCAPES: Readonly<Record<string, string>> = {
+    "\u002F": String.raw`\u002F`,
+    "\u2028": String.raw`\u2028`,
+    "\u2029": String.raw`\u2029`,
+    "\u003C": String.raw`\u003C`,
+    "\u003E": String.raw`\u003E`,
+};
+
+/**
  * Emit `value` as a TypeScript string literal.
  *
  * EVERY identifier read out of the source database must go through this. Table,
@@ -61,10 +78,12 @@ const PATH_UNSAFE = /[^\w-]/g;
  * both Postgres and MySQL, so they can contain `"`, `\`, or a newline — and the
  * output of this emitter is TypeScript the developer subsequently runs. Splicing
  * a raw name into a quoted literal is a code-injection hole, not a cosmetic bug.
- * `JSON.stringify` escapes quotes, backslashes, and control characters, and its
- * output is a valid TS string literal.
+ *
+ * `JSON.stringify` handles quotes, backslashes, and control characters;
+ * {@link LITERAL_UNSAFE} covers the rest, so the result is safe both as TypeScript
+ * and in any downstream context the generated file gets embedded in.
  */
-const literal = (value: string): string => JSON.stringify(value);
+const literal = (value: string): string => JSON.stringify(value).replaceAll(LITERAL_UNSAFE, (character) => LITERAL_UNSAFE_ESCAPES[character] ?? character);
 
 /** Quote an object key when it isn't a bare JS identifier, so a `user-id` column still emits valid source. */
 const key = (name: string): string => (IDENTIFIER.test(name) ? name : literal(name));
@@ -284,9 +303,10 @@ const procedureSource = (
  */
 import { defineListArgs, v } from "${options.serverImport}";
 
+import type { Doc } from "./_generated/dataModel";
 import { c } from "./_generated/server";
 
-const ${name}List = defineListArgs({
+const ${name}List = defineListArgs<Doc<${literal(table.name)}>>()({
     // Only index-backed columns are published as filterable, so a caller cannot
     // reach a column you did not choose to expose. Note that \`contains\` and the
     // negative operators still scan — narrow this list, and review it, before
