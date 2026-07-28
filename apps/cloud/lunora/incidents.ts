@@ -154,7 +154,7 @@ export const triage = action
         // incident and its issue from one `group.hash`, and `issues` is unique on
         // (org, hash), so a hash lookup can only ever return this incident's own
         // mirror row — i.e. the incident restated back to the model.
-        const related = incident.container === undefined ? [] : await relatedIssues(context, organizationId, incident.container, incident.hash);
+        const related = incident.container == null ? [] : await relatedIssues(context, organizationId, incident.container, incident.hash);
 
         const { text } = await generateText({
             maxOutputTokens: TRIAGE_MAX_OUTPUT_TOKENS,

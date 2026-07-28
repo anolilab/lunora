@@ -67,7 +67,7 @@ interface SessionTurnView {
 }
 
 /** Keep only the generation turns that carry a session id (the ones the fold groups). */
-const isSessionTurn = (row: SessionObservationRow): boolean => row.kind === "generation" && row.sessionId !== undefined && row.sessionId !== "";
+const isSessionTurn = (row: SessionObservationRow): boolean => row.kind === "generation" && row.sessionId != null && row.sessionId !== "";
 
 /**
  * Recent LLM sessions, newest-active first, folded from the generation span
