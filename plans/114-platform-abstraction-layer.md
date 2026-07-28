@@ -305,9 +305,18 @@ explicit)` is the single resolution point — flag, then config, then default.
 
 - `lunora.config` (or codegen options) gains `target: "cloudflare" | …`
   (default `"cloudflare"`; absent = today's output, byte-identical goldens).
-- **Done**, and reachable: every `runCodegen` call site (the `codegen` command,
-  `prepare`, the `dev` watcher, and the Vite plugin) now passes a resolved
-  target. See §5.3 for the shared resolution + validation.
+- **Done**, and reachable — but the first attempt wired 5 of ~9 places and the
+  claim that every call site passed a target was wrong. `runCodegen` now
+  resolves the target itself from `lunora.json` when the caller passes none, so
+  a missed call site emits the project's surface rather than the default one
+  silently. The reader lives in `@lunora/codegen` (config depends on codegen,
+  not the reverse) and `@lunora/config` delegates to it.
+- Error-level diagnostics (`platform_unknown_target`,
+  `platform_unsupported_feature`) **fail the command**. Both are declared
+  `level: "error"` because each drops or misdirects an emitted surface; printing
+  them as warnings with exit 0 was the root cause the target validation had been
+  patching around. Surfaced in `codegen`, `prepare`, the dev watcher, and the
+  Vite plugin — the last of which had never read `platformDiagnostics` at all.
 - Codegen consumes the target's `PlatformCapabilities`: ctx surfaces for
   unsupported features are omitted from emitted types with a diagnostic
   (`platform_unsupported_feature`, advisor-style, pointing at the matrix);
