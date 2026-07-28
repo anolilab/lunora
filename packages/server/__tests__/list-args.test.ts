@@ -240,8 +240,8 @@ describe("defineListArgs — request-cost bounds", () => {
 
         // This is the path that exists BECAUSE toQueryArgs is reachable without
         // `.input()`, so the cap has to hold here too or it protects nothing.
-        // Mapper uses its index so eslint keeps `Array.from` (a `.fill()` rewrite types as `unknown[]`).
-        const args = spec.toQueryArgs({ where: { status: { in: Array.from({ length: 5000 }, (_, index) => String(index)) } } });
+        // eslint-disable-next-line e18e/prefer-array-fill -- the `.fill("x")` rewrite infers `unknown[]`, so the mapped form is the one that type-checks
+        const args = spec.toQueryArgs({ where: { status: { in: Array.from({ length: 5000 }, () => "x") } } });
         const predicate = (args.where as { status: { in: string[] } }).status;
 
         expect(predicate.in).toHaveLength(100);
