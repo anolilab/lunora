@@ -195,7 +195,14 @@ interface MetricRetentionRow {
 /** Delete exact metric points past retention. SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - METRIC_POINT_RETENTION_MS;
-    const { page } = await context.db.metricPoints.findMany({});
+    // `findMany({})` returns ONE page (capped at 1000) and the age filter used to run
+    // in memory afterwards, so once the table exceeded that cap the page filled with
+    // rows the sweep did not want and the genuinely stale ones were never reached —
+    // the prune silently stopped making progress while reporting success. Ordering
+    // ASCENDING by the retention column puts the oldest rows, i.e. exactly the
+    // candidates, at the head of every page. The column is `v.number()` (never NULL),
+    // so no row can sort ahead of them.
+    const { page } = await context.db.metricPoints.findMany({ orderBy: [{ at: "asc" }] });
     const stale = (page as unknown as MetricRetentionRow[]).filter((row) => row.at < cutoff);
 
     for (const row of stale) {
