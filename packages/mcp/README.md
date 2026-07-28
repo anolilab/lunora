@@ -34,7 +34,12 @@
 
 ---
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Lunora app to AI agents. It registers tools for introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`, `lunora_get_function_schema`) and invoking its functions (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC.
+[Model Context Protocol](https://modelcontextprotocol.io) servers for Lunora, in two flavours:
+
+- **Deployment** (the main entry) — exposes a deployed Lunora app to AI agents: introspection tools (`lunora_list_functions`, `lunora_list_tables`, `lunora_get_function_schema`) and invocation tools (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC. Needs an admin token.
+- **Documentation** ([`@lunora/mcp/docs`](#documentation-server)) — exposes the framework's _docs_ so an agent writing Lunora code can look up the real API instead of guessing. Credential-free, and safe to host publicly; Lunora runs it at `https://lunora.sh/mcp`.
+
+Most users never install this package directly — `lunora mcp install` wires both servers into their editor. See [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli).
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -71,6 +76,8 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 ```sh
 npm install @lunora/mcp
 ```
+
+Paid MCP tools (`createPaidMcpServer`) additionally need the optional peer [`@lunora/x402`](https://www.npmjs.com/package/@lunora/x402); it is loaded lazily, so installs that never charge for a tool don't pay for its dependency tree.
 
 ```sh
 yarn add @lunora/mcp
@@ -136,6 +143,72 @@ Enable it with two env vars (or the matching `createLunoraMcpServer` options):
 Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an optional `threadKey` (reuse to continue a conversation; omit to start a new thread), and an optional `title`. The tool starts a durable run and awaits it up to the timeout budget; if the run outlasts the budget it returns a pending result whose `threadKey` you feed to the generic `lunora_agent_status` tool to poll for the final answer.
 
 Runs are **owner-scoped** to the identity the configured token resolves to. Grant a **least-privilege** token mapped to a bot identity so an agent's threads stay isolated per deployment — never the admin token.
+
+## Resources and annotations
+
+Both servers implement MCP **tools**; the documentation server additionally exposes every page as an MCP **resource** (`lunora-docs:/docs/…`, `text/markdown`), so a client can enumerate and attach a page directly instead of the model having to guess a search query first.
+
+Every tool carries **annotations** — `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` and a human-facing `title` — so a client can badge the read-only surface and confirm before a write. They are hints; the actual guarantee is still made at dispatch, where a write tool is refused unless writes are enabled.
+
+## Documentation server
+
+`@lunora/mcp/docs` is a second, independent surface: it serves **published documentation**, not a deployment. No credentials, no writes, no `@lunora/client` — and no Node built-ins, so it runs unchanged on Workers, Netlify/Vercel functions, Deno, and Bun.
+
+| Tool                 | Description                                                           |
+| -------------------- | --------------------------------------------------------------------- |
+| `lunora_search_docs` | Search the docs; returns matching pages and sections with their URLs. |
+| `lunora_get_doc`     | Return one page in full, as Markdown.                                 |
+| `lunora_list_docs`   | List every page with its title and description.                       |
+
+The tools read a `DocsIndex`, which has two implementations. A docs site wires up its own in-process index and mounts the server as an HTTP route:
+
+```ts
+import { createDocsMcpFetchHandler } from "@lunora/mcp/docs";
+
+const handle = createDocsMcpFetchHandler({ index: myDocsIndex });
+
+// e.g. in a Worker: export default { fetch: handle }
+```
+
+Anything else reads a published site over HTTP:
+
+```ts
+import { createDocsMcpServer, createRemoteDocsIndex } from "@lunora/mcp/docs";
+
+const server = createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
+```
+
+Point a client at the hosted endpoint with no install at all:
+
+```sh
+claude mcp add --transport http lunora-docs https://lunora.sh/mcp
+```
+
+### Hosting it safely
+
+`createDocsMcpFetchHandler` screens each request before the transport sees it, because this surface is meant to be public and unauthenticated:
+
+- **Bodies are capped** (128 KiB by default; override with `maxRequestBytes`).
+- **JSON-RPC batches are refused.** The stateless transport buffers a whole batch's replies into one response, so a single small request carrying thousands of `tools/call` messages would amplify into hundreds of megabytes out, with no session to rate-limit against. A docs client gains nothing from batching.
+- `lunora_search_docs` bounds its `query`, and `lunora_list_docs` caps how many pages it serialises.
+
+## Local development server
+
+`createLocalMcpServer` / `connectLocalStdio` compose the docs tools, the deployment tools, and any extra tools a host supplies into one stdio server — this is what `lunora mcp serve` runs.
+
+```ts
+import { connectLocalStdio } from "@lunora/mcp";
+
+await connectLocalStdio({
+    // Consulted per tool call, so a dev server started later is picked up
+    // without reconnecting.
+    deployment: () => readMyDevServer(),
+    docs: { baseUrl: "https://lunora.sh" },
+    extraTools: myLocalTools,
+});
+```
+
+The deployment tools are advertised even when the resolver currently returns nothing — MCP clients cache the tool list, so a surface that appeared only when the dev server happened to be up would stay invisible for the rest of the session. Calling one with nothing running returns an actionable error instead.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

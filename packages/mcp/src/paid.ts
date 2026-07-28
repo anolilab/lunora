@@ -22,8 +22,6 @@
  * ```
  */
 import { LunoraError } from "@lunora/errors";
-import type { ChargeMiddleware, X402ChargeConfig, X402Price } from "@lunora/x402/charge";
-import { createChargeMiddleware } from "@lunora/x402/charge";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -33,6 +31,44 @@ import { serveStateless } from "./http";
 import type { ToolInputSchema, ToolResult } from "./tools";
 
 /** A tool handler: receives the call's `arguments` bag, returns an MCP tool result. */
+
+/**
+ * The x402 vocabulary this module needs, declared here rather than imported.
+ *
+ * The x402 package is an optional peer, and a type import from its `charge`
+ * entry puts its `.d.ts` back into this package's build graph:
+ * a consumer that never installs x402 never builds it either, so the dts bundler
+ * looks for a `dist/` that does not exist and fails. That is not hypothetical —
+ * it broke the docs site build, which runs a filtered build over the docs app and its dependency closure
+ * and therefore never builds x402.
+ *
+ * Declaring them locally is safe because this module never *inspects* a charge
+ * config; it forwards it whole to `createChargeMiddleware`. The index signature
+ * keeps a real charge config assignable as x402 grows fields.
+ */
+
+/** Mirrors x402's `X402Price` — a decimal string like `"$0.05"`, or a number. */
+type X402Price = number | string;
+
+/** Mirrors x402's charge config with the per-tool price omitted. */
+interface X402ChargeSettings {
+    /** Network this resource settles on. */
+    readonly network: string;
+    /** Everything else x402 accepts, forwarded untouched. */
+    readonly [key: string]: unknown;
+
+    /** Payout wallet(s), per network family. */
+    readonly recipient: { readonly evm?: string; readonly svm?: string };
+}
+
+/** Mirrors `ChargeMiddleware` — the one method this module calls. */
+interface ChargeMiddleware {
+    handle: (request: Request, runHandler: () => Promise<Response>, deps?: unknown) => Promise<Response>;
+}
+
+/** The factory `@lunora/x402/charge` exports, as this module uses it. */
+type CreateChargeMiddleware = (config: X402ChargeSettings & { price: X402Price }, context: { resource: string }) => Promise<ChargeMiddleware>;
+
 type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> | ToolResult;
 
 /** Registration shape for a free tool. */
@@ -54,7 +90,7 @@ interface RegisterPaidToolOptions extends RegisterToolOptions {
 }
 
 /** x402 settlement vocabulary shared by every paid tool (network, recipient, facilitator); price is per-tool. */
-type PaidMcpChargeConfig = Omit<X402ChargeConfig, "price">;
+type PaidMcpChargeConfig = X402ChargeSettings;
 
 /** Config for `createPaidMcpServer`. */
 interface PaidMcpServerConfig {
@@ -81,6 +117,33 @@ interface RegisteredTool {
 }
 
 /** Default server identity when the caller doesn't supply one. */
+
+/**
+ * Load the x402 charge factory on first use.
+ *
+ * `@lunora/x402` is an OPTIONAL peer dependency, kept behind a dynamic import so
+ * it stays out of the module graph until a paid tool is actually priced. A
+ * static import would put its dependency tree — viem, the Solana kit, the x402
+ * packages, tens of megabytes — into every install of every consumer of this
+ * package, including `@lunora/cli`, which never charges for anything. A missing
+ * install is reported as the actionable "install this" rather than as a bare
+ * module-resolution failure.
+ */
+const loadChargeMiddleware = async (): Promise<CreateChargeMiddleware> => {
+    try {
+        // Cast at this one boundary: the module is resolved at runtime only, so
+        // its real types are deliberately absent from this build.
+        const loaded = (await import("@lunora/x402/charge")) as unknown as { createChargeMiddleware: CreateChargeMiddleware };
+
+        return loaded.createChargeMiddleware;
+    } catch (error: unknown) {
+        throw new LunoraError(
+            "INTERNAL",
+            `paid MCP tools need the optional peer "@lunora/x402" — install it alongside @lunora/mcp to charge for tools (${error instanceof Error ? error.message : String(error)})`,
+        );
+    }
+};
+
 const DEFAULT_SERVER_INFO = { name: "lunora-paid-mcp", version: "0.0.0" } as const;
 
 /** The MCP method that invokes a tool — the only method a price gate applies to. */
@@ -184,13 +247,22 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         let pending = middlewareByTool.get(name);
 
         if (pending === undefined) {
-            pending = createChargeMiddleware({ ...config.charge, price }, { resource: name }).catch((error: unknown) => {
-                // Don't cache a failed init — let the next request retry.
-                middlewareByTool.delete(name);
+            // `@lunora/x402` is an OPTIONAL peer, imported only when a paid tool
+            // is actually charged. A static import would put its dependency tree
+            // (viem, the Solana kit, the x402 packages — tens of megabytes) into
+            // every install of every consumer of this package, including the CLI,
+            // which never charges anything.
+            const built: Promise<ChargeMiddleware> = loadChargeMiddleware()
+                .then(async (create) => create({ ...config.charge, price }, { resource: name }))
+                .catch((error: unknown): never => {
+                    // Don't cache a failed init — let the next request retry.
+                    middlewareByTool.delete(name);
 
-                throw error;
-            });
-            middlewareByTool.set(name, pending);
+                    throw error;
+                });
+
+            pending = built;
+            middlewareByTool.set(name, built);
         }
 
         return pending;

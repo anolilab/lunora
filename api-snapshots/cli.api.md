@@ -76,7 +76,8 @@ const COMMANDS: readonly [
     "view",
     "docs",
     "registry",
-    "rules"
+    "rules",
+    "mcp"
 ];
 ```
 
