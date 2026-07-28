@@ -46,8 +46,8 @@ export const MetricsSection = ({ organizationId }: MetricsSectionProps): ReactEl
                     <div className="flex flex-col gap-1.5">
                         <CardTitle>Metrics</CardTitle>
                         <CardDescription>
-                            Trend of each <code className="font-mono text-xs">ctx.metrics.*</code> measurement over the selected window — exact per-bucket values
-                            from the hot store, updated live as new measurements arrive.
+                            Trend of each <code className="font-mono text-xs">ctx.metrics.*</code> measurement over the selected window — exact per-bucket
+                            values from the hot store, updated live as new measurements arrive.
                         </CardDescription>
                     </div>
                     <TimeRangePicker />

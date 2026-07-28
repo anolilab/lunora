@@ -178,8 +178,7 @@ export const OrganizationsSheet = ({ onOpenChange, open, organizations, orgId }:
                         <div className="flex-1 overflow-y-auto px-4 pb-4">
                             <FieldForm
                                 className="max-w-none"
-                                onSubmit={(event) => {
-                                    event.preventDefault();
+                                action={() => {
                                     setError(null);
 
                                     void (async () => {

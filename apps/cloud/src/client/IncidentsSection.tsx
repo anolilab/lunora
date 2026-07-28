@@ -3,11 +3,16 @@ import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
 import { CrossTabLink } from "./CrossTabLink";
-
+import { formatDateTime } from "./format";
+import { COLUMN_LABEL, FormError, StatusBadge, Upsell } from "./section-ui";
 import type { SectionProps } from "./tabs";
 
 /** The structured investigation result the runner produces (mirrors the query view). */
@@ -28,39 +33,77 @@ const KIND_LABELS: Record<"crash_loop" | "error_spike" | "oom", string> = {
     oom: "Out of memory",
 };
 
+/** How sure the runner is → the tone its chip carries. Colour tints the value, not the row. */
+const CONFIDENCE_TONE = {
+    high: "success",
+    low: "danger",
+    medium: "warning",
+} as const;
+
+/** The investigate button's label for a row: in-flight → already-run → never-run. */
+const investigateLabel = (busy: boolean, investigated: boolean): string => {
+    if (busy) {
+        return "Investigating…";
+    }
+
+    return investigated ? "Re-investigate" : "Investigate";
+};
+
+/** One labelled block of the investigation: mono-uppercase label over its prose. */
+const Finding = ({ children, label }: { children: string; label: string }): ReactElement => (
+    <div className="grid gap-1">
+        <span className={`${COLUMN_LABEL} text-muted-foreground`}>{label}</span>
+        <p className="m-0 text-sm">{children}</p>
+    </div>
+);
+
 /**
  * The rendered investigation panel — summary, root-cause hypothesis, suggested
  * remediation, a confidence + provenance badge, and cross-tab links to the
  * related traces (the shared `CrossTabLink` deep-link, same as Issues/Logs).
+ *
+ * It leads with the summary at reading size because that sentence is the answer;
+ * the structured findings below it are labelled in the mono voice so the panel
+ * reads as an instrument report rather than a paragraph.
  */
 const InvestigationPanel = ({ onDismiss, result, title }: { onDismiss: () => void; result: InvestigationView; title: string }): ReactElement => (
-    <div className="callout">
-        <p>
-            <strong>Investigation — {title}</strong> <span className="badge">{result.by === "llm" ? "AI" : "heuristic"}</span>{" "}
-            <span className="badge">confidence: {result.confidence}</span>
-        </p>
-        <p>{result.summary}</p>
-        <p>
-            <strong>Likely root cause:</strong> {result.rootCauseHypothesis}
-        </p>
-        <p>
-            <strong>Suggested remediation:</strong> {result.suggestedRemediation}
-        </p>
-        <p className="muted">{result.evidenceNote}</p>
-        {result.relatedTraceIds.length > 0 ? (
-            <p>
-                <strong>Related traces:</strong>{" "}
-                {result.relatedTraceIds.map((traceId) => (
-                    <CrossTabLink key={traceId} target="traces" traceId={traceId} variant="inline">
-                        {traceId.slice(0, 8)}
-                    </CrossTabLink>
-                ))}
-            </p>
-        ) : null}
-        <button className="link" onClick={onDismiss} type="button">
-            Dismiss
-        </button>
-    </div>
+    <Card>
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-1.5">
+                <span className={`${COLUMN_LABEL} text-muted-foreground`}>Investigation</span>
+                <CardTitle>{title}</CardTitle>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+                <StatusBadge tone={result.by === "llm" ? "info" : "neutral"}>{result.by === "llm" ? "AI" : "heuristic"}</StatusBadge>
+                <StatusBadge tone={CONFIDENCE_TONE[result.confidence]}>confidence: {result.confidence}</StatusBadge>
+                <Button onClick={onDismiss} size="sm" variant="ghost">
+                    Dismiss
+                </Button>
+            </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+            {/* The panel's primary layer: the one sentence that answers "what happened". */}
+            <p className="m-0 text-base leading-relaxed">{result.summary}</p>
+
+            <Finding label="Likely root cause">{result.rootCauseHypothesis}</Finding>
+            <Finding label="Suggested remediation">{result.suggestedRemediation}</Finding>
+
+            {result.relatedTraceIds.length > 0 ? (
+                <div className="grid gap-1.5">
+                    <span className={`${COLUMN_LABEL} text-muted-foreground`}>Related traces</span>
+                    <span className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                        {result.relatedTraceIds.map((traceId) => (
+                            <CrossTabLink key={traceId} target="traces" traceId={traceId} variant="inline">
+                                {traceId.slice(0, 8)}
+                            </CrossTabLink>
+                        ))}
+                    </span>
+                </div>
+            ) : null}
+
+            <p className="text-muted-foreground m-0 text-xs">{result.evidenceNote}</p>
+        </CardContent>
+    </Card>
 );
 
 /**
@@ -71,6 +114,13 @@ const InvestigationPanel = ({ onDismiss, result, title }: { onDismiss: () => voi
  * read-only evidence bundle (related error spans + correlated logs) and returns a
  * structured result — summary, root-cause hypothesis, suggested remediation,
  * confidence, and related-trace links — which is also persisted on the incident.
+ *
+ * Hierarchy: an incident's magnitude is what triages it, so the EVENT COUNT is the
+ * one value rendered at size and in mono — data as the visual. The title is the
+ * row's identity at reading size; open/resolved and the kind are chips that tint
+ * the value, never the row; container and last-seen stay tertiary in the muted mono
+ * voice. When an investigation is open it becomes the page's primary object and
+ * sits above the grid.
  */
 export const IncidentsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.billing.entitlements>>): ReactElement => {
     const client = useLunora();
@@ -121,88 +171,95 @@ export const IncidentsSection = ({ organizationId, preloaded }: SectionProps<Ret
     };
 
     if (gated) {
-        return (
-            <section className="card">
-                <h3>Incidents</h3>
-                <p className="muted">Incident tracking is a Pro feature — upgrade your plan to enable Observability.</p>
-            </section>
-        );
+        return <Upsell title="Incidents">Incident tracking is a Pro feature — upgrade your plan to enable Observability.</Upsell>;
     }
 
     return (
-        <section className="card">
-            <h3>Incidents</h3>
-            {error ? (
-                <p className="error" role="alert">
-                    {error}
-                </p>
-            ) : null}
+        <div className="flex flex-col gap-6">
             {investigation ? (
                 <InvestigationPanel
                     onDismiss={() => {
                         setInvestigation(null);
                     }}
-
                     result={investigation.result}
                     title={investigation.title}
                 />
             ) : null}
-            <AsyncList
-                empty="No incidents — container crash-loops and OOMs will appear here."
-                render={(rows) => (
-                    <table className="table">
-                        <thead>
-                            <tr>
-                                <th>Last seen</th>
-                                <th>Incident</th>
-                                <th>Kind</th>
-                                <th>Container</th>
-                                <th>Events</th>
-                                <th>Status</th>
-                                <th>Investigation</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rows.map((incident) => (
-                                <tr key={incident._id}>
-                                    <td className="muted">{new Date(incident.lastSeen).toLocaleString()}</td>
-                                    <td>{incident.title}</td>
-                                    <td>{KIND_LABELS[incident.kind]}</td>
-                                    <td className="muted">{incident.container ?? "—"}</td>
-                                    <td>
-                                        <span className="badge">{incident.count}</span>
-                                    </td>
-                                    <td>{incident.status}</td>
-                                    <td>
-                                        <button
-                                            className="link"
-                                            disabled={busyId === incident._id}
-                                            onClick={() => {
-                                                runInvestigation(incident._id, incident.title);
-                                            }}
-                                            type="button"
-                                        >
-                                            {busyId === incident._id ? "Investigating…" : incident.investigatedAt ? "Re-investigate" : "Investigate"}
-                                        </button>
-                                        {incident.investigation ? (
-                                            <button
-                                                className="link"
-                                                onClick={() => {
-                                                    setInvestigation({ result: incident.investigation as InvestigationView, title: incident.title });
-                                                }}
-                                                type="button"
-                                            >
-                                                View
-                                            </button>
-                                        ) : null}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                )}
-                rows={incidents}
-            />
-        </section>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Incidents</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                    <FormError message={error} />
+                    <AsyncList
+                        empty="No incidents — container crash-loops and OOMs will appear here."
+                        render={(rows) => (
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className={COLUMN_LABEL}>Last seen</TableHead>
+                                        <TableHead className={COLUMN_LABEL}>Incident</TableHead>
+                                        <TableHead className={COLUMN_LABEL}>Kind</TableHead>
+                                        <TableHead className={COLUMN_LABEL}>Container</TableHead>
+                                        <TableHead className={COLUMN_LABEL}>Events</TableHead>
+                                        <TableHead className={COLUMN_LABEL}>Status</TableHead>
+                                        <TableHead className={COLUMN_LABEL}>Investigation</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {rows.map((incident) => (
+                                        <TableRow key={incident._id}>
+                                            <TableCell className="text-muted-foreground w-[13rem] font-mono text-xs whitespace-nowrap">
+                                                {formatDateTime(incident.lastSeen)}
+                                            </TableCell>
+                                            <TableCell className="font-medium">{incident.title}</TableCell>
+                                            <TableCell>
+                                                <StatusBadge>{KIND_LABELS[incident.kind]}</StatusBadge>
+                                            </TableCell>
+                                            <TableCell className="text-muted-foreground font-mono text-xs">{incident.container ?? "—"}</TableCell>
+                                            {/* The one value shown at size: how many times this fired is what triages it. */}
+                                            <TableCell className="font-mono text-base tabular-nums">{incident.count}</TableCell>
+                                            <TableCell>
+                                                <StatusBadge tone={incident.status === "resolved" ? "success" : "danger"}>{incident.status}</StatusBadge>
+                                            </TableCell>
+                                            <TableCell>
+                                                <span className="flex items-center gap-1">
+                                                    <Button
+                                                        disabled={busyId === incident._id}
+                                                        onClick={() => {
+                                                            runInvestigation(incident._id, incident.title);
+                                                        }}
+                                                        size="sm"
+                                                        variant="ghost"
+                                                    >
+                                                        {investigateLabel(busyId === incident._id, incident.investigatedAt !== undefined)}
+                                                    </Button>
+                                                    {incident.investigation ? (
+                                                        <Button
+                                                            onClick={() => {
+                                                                setInvestigation({
+                                                                    result: incident.investigation as InvestigationView,
+                                                                    title: incident.title,
+                                                                });
+                                                            }}
+                                                            size="sm"
+                                                            variant="ghost"
+                                                        >
+                                                            View
+                                                        </Button>
+                                                    ) : null}
+                                                </span>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        )}
+                        rows={incidents}
+                    />
+                </CardContent>
+            </Card>
+        </div>
     );
 };

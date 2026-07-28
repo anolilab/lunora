@@ -105,8 +105,7 @@ export const SecretsSection = ({ organizationId, preloaded }: SecretsSectionProp
                     </CardHeader>
                     <CardContent>
                         <FieldForm
-                            onSubmit={(event) => {
-                                event.preventDefault();
+                            action={() => {
                                 setError(null);
                                 setPending(true);
 

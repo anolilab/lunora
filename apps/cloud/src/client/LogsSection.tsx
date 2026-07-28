@@ -3,16 +3,42 @@ import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
+import { formatTime } from "./format";
+import { COLUMN_LABEL, Field } from "./section-ui";
+import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { ProjectId } from "./types";
-import type { SectionProps } from "./tabs";
 
 /** The seven-tier `ctx.log` severity ramp, ordered least→most severe for the filter chips. */
 type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 
 const ALL_LEVELS: ReadonlyArray<LogLevel> = ["trace", "debug", "info", "log", "warn", "error", "fatal"];
+
+/**
+ * Severity → the colour the LINE carries. Tints the value, never a row
+ * background: a console stays a console, and the ramp is the same one the
+ * legacy stylesheet used (fatal/error red, warn amber, trace/debug receded,
+ * info/log at full contrast).
+ */
+const LEVEL_CLASS: Record<LogLevel, string> = {
+    debug: "text-muted-foreground",
+    error: "text-destructive",
+    fatal: "text-destructive",
+    info: "",
+    log: "",
+    trace: "text-muted-foreground",
+    warn: "text-warning",
+};
+
+/** Widest severity word in {@link ALL_LEVELS} — pads the column so lines stay aligned. */
+const LEVEL_WIDTH = 5;
 
 /** Render a structured fields bag as compact, space-joined `key=value` pairs. */
 const renderFields = (fields: Record<string, unknown>): string =>
@@ -28,12 +54,22 @@ const renderFields = (fields: Record<string, unknown>): string =>
  * by severity (chips) and free-text search (message / function / field values);
  * both push to the server-side `logs.list`. The query is live, so the view tails
  * on its own — no polling.
+ *
+ * Hierarchy: the console IS the screen, so it is the one element rendered at size
+ * — a tall mono block on a surface step (mechanical honesty: a log viewer should
+ * look like a log viewer). The toolbar (search + severity chips) is secondary
+ * supporting chrome, and everything on a line except the message — timestamp,
+ * severity word, function path, fields, trace link — is tertiary mono at reduced
+ * contrast, so the eye lands on the message first and the severity colour second.
  */
 export const LogsSection = ({ focusTraceId, organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const { from, to } = useTimeRange();
     const projects = usePreloadedQuery(preloaded);
-    const [projectId, setProjectId] = useState<ProjectId | "">("");
-    const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
+    // Plain `string`, not `ProjectId | ""`: Base UI's Select is generic over its value
+    // and a branded union makes that inference collapse to the empty-string literal.
+    // The brand is reapplied at the query boundary, which is where it means something.
+    const [projectId, setProjectId] = useState("");
+    const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip");
     const [scriptName, setScriptName] = useState("");
     const [levels, setLevels] = useState<Set<LogLevel>>(new Set());
     const [search, setSearch] = useState("");
@@ -78,114 +114,142 @@ export const LogsSection = ({ focusTraceId, organizationId, preloaded }: Section
     };
 
     return (
-        <div className="stack">
-            <section className="card">
-                <div className="metrics-head">
-                    <h3>Runtime logs</h3>
-                    <TimeRangePicker />
-                </div>
-                <label htmlFor="logs-project">
-                    Project
-                    <select
-                        id="logs-project"
-                        onChange={(event) => {
-                            setProjectId(event.target.value as ProjectId);
-                            setScriptName("");
-                        }}
-                        value={projectId}
-                    >
-                        <option value="">Select a project…</option>
-                        {(projects ?? []).map((project) => (
-                            <option key={project._id} value={project._id}>
-                                {project.name}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-
-                {projectId ? (
-                    <label htmlFor="logs-deployment">
-                        Deployment
-                        <select
-                            id="logs-deployment"
-                            onChange={(event) => {
-                                setScriptName(event.target.value);
+        <div className="flex flex-col gap-6">
+            <Card>
+                <CardHeader>
+                    <CardTitle>Runtime logs</CardTitle>
+                    <CardDescription>
+                        Console output your deployments emitted through <code className="font-mono text-xs">ctx.log</code>, tailed live over the selected
+                        window.
+                    </CardDescription>
+                    <CardAction>
+                        <TimeRangePicker />
+                    </CardAction>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4 sm:flex-row sm:gap-6">
+                    <Field htmlFor="logs-project" label="Project">
+                        <Select
+                            onValueChange={(value) => {
+                                setProjectId(value ?? "");
+                                setScriptName("");
                             }}
-                            value={scriptName}
+                            value={projectId}
                         >
-                            <option value="">Select a deployment…</option>
-                            {(deployments ?? []).map((deployment) => (
-                                <option key={deployment._id} value={deployment.scriptName}>
-                                    {deployment.scriptName} ({deployment.status})
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                ) : null}
-            </section>
+                            <SelectTrigger className="w-full sm:w-64" id="logs-project">
+                                <SelectValue placeholder="Select a project…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectGroup>
+                                    {(projects ?? []).map((project) => (
+                                        <SelectItem key={project._id} value={project._id}>
+                                            {project.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectGroup>
+                            </SelectContent>
+                        </Select>
+                    </Field>
+
+                    {projectId ? (
+                        <Field htmlFor="logs-deployment" label="Deployment">
+                            <Select
+                                onValueChange={(value) => {
+                                    setScriptName(value ?? "");
+                                }}
+                                value={scriptName}
+                            >
+                                <SelectTrigger className="w-full sm:w-72" id="logs-deployment">
+                                    <SelectValue placeholder="Select a deployment…" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectGroup>
+                                        {(deployments ?? []).map((deployment) => (
+                                            <SelectItem key={deployment._id} value={deployment.scriptName}>
+                                                <span className="font-mono">{deployment.scriptName}</span>
+                                                <span className="text-muted-foreground">{deployment.status}</span>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectGroup>
+                                </SelectContent>
+                            </Select>
+                        </Field>
+                    ) : null}
+                </CardContent>
+            </Card>
 
             {scriptName ? (
-                <section className="card">
-                    {traceFilter ? (
-                        <div className="log-trace-filter">
-                            Filtering by trace <code>{traceFilter.slice(0, 12)}</code>
-                            <button
-                                className="cross-tab-link"
-                                onClick={() => {
-                                    setTraceFilter(undefined);
+                <Card>
+                    <CardHeader className="gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                                aria-label="Search logs"
+                                className="w-full sm:w-80"
+                                onChange={(event) => {
+                                    setSearch(event.target.value);
                                 }}
-                                type="button"
-                            >
-                                clear
-                            </button>
+                                placeholder="Search message, function, or field values…"
+                                type="search"
+                                value={search}
+                            />
+                            {/* Segmented severity filter: active = inverted, inactive = hairline outline. */}
+                            <div aria-label="Severity" className="flex flex-wrap gap-1" role="group">
+                                {ALL_LEVELS.map((level) => (
+                                    <Button
+                                        aria-pressed={levels.has(level)}
+                                        className={`${COLUMN_LABEL} px-2`}
+                                        key={level}
+                                        onClick={() => {
+                                            toggleLevel(level);
+                                        }}
+                                        size="xs"
+                                        type="button"
+                                        variant={levels.has(level) ? "default" : "outline"}
+                                    >
+                                        {level}
+                                    </Button>
+                                ))}
+                            </div>
                         </div>
-                    ) : null}
-                    <div className="log-toolbar">
-                        <input
-                            aria-label="Search logs"
-                            className="log-search"
-                            onChange={(event) => {
-                                setSearch(event.target.value);
-                            }}
-                            placeholder="Search message, function, or field values…"
-                            type="search"
-                            value={search}
-                        />
-                        <div className="log-levels" role="group">
-                            {ALL_LEVELS.map((level) => (
-                                <button
-                                    aria-pressed={levels.has(level)}
-                                    className={`log-chip log-chip-${level}${levels.has(level) ? " active" : ""}`}
-                                    key={level}
-                                    onClick={() => {
-                                        toggleLevel(level);
-                                    }}
-                                    type="button"
-                                >
-                                    {level}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
 
-                    <pre className="log-view">
-                        {(logs ?? []).map((entry, index) => (
-                            <span className={`log-line log-line-${entry.level}`} key={`${String(entry.createdAt)}-${String(index)}`}>
-                                <span className="log-time">[{new Date(entry.createdAt).toLocaleTimeString()}]</span>{" "}
-                                <span className={`log-badge log-badge-${entry.level}`}>{entry.level}</span>{" "}
-                                {entry.functionPath ? <span className="log-fn">{entry.functionPath}</span> : null} {entry.message}
-                                {entry.fields ? <span className="log-fields"> {renderFields(entry.fields)}</span> : null}
-                                {entry.traceId ? (
-                                    <CrossTabLink target="traces" traceId={entry.traceId} variant="inline">
-                                        trace={entry.traceId.slice(0, 8)}
-                                    </CrossTabLink>
-                                ) : null}
-                                {"\n"}
-                            </span>
-                        ))}
-                        {logs?.length === 0 ? "No matching log lines in the retention window." : null}
-                    </pre>
-                </section>
+                        {traceFilter ? (
+                            <div className="text-muted-foreground flex items-center gap-2 font-mono text-[11px]">
+                                <span className={COLUMN_LABEL}>Trace filter</span>
+                                <span className="text-foreground">{traceFilter.slice(0, 12)}</span>
+                                <Button
+                                    onClick={() => {
+                                        setTraceFilter(undefined);
+                                    }}
+                                    size="xs"
+                                    type="button"
+                                    variant="ghost"
+                                >
+                                    Clear
+                                </Button>
+                            </div>
+                        ) : null}
+                    </CardHeader>
+                    <CardContent>
+                        {/* The screen's primary layer: the stream itself, at size, on one surface step. */}
+                        <pre className="bg-muted/40 max-h-[36rem] overflow-auto p-4 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">
+                            {(logs ?? []).map((entry, index) => (
+                                <span className={`block ${LEVEL_CLASS[entry.level]}`} key={`${String(entry.createdAt)}-${String(index)}`}>
+                                    <span className="text-muted-foreground">{formatTime(entry.createdAt)}</span>{" "}
+                                    {/* The severity word inherits the line's tint — it IS the signal. */}
+                                    <span>{entry.level.toUpperCase().padEnd(LEVEL_WIDTH)}</span>{" "}
+                                    {entry.functionPath ? <span className="text-muted-foreground">{entry.functionPath}</span> : null} {entry.message}
+                                    {entry.fields ? <span className="text-muted-foreground"> {renderFields(entry.fields)}</span> : null}
+                                    {entry.traceId ? (
+                                        <CrossTabLink target="traces" traceId={entry.traceId} variant="inline">
+                                            trace={entry.traceId.slice(0, 8)}
+                                        </CrossTabLink>
+                                    ) : null}
+                                </span>
+                            ))}
+                            {logs === undefined ? <span className={`${COLUMN_LABEL} text-muted-foreground`}>[Loading…]</span> : null}
+                            {logs?.length === 0 ? <span className="text-muted-foreground">No matching log lines in the retention window.</span> : null}
+                        </pre>
+                    </CardContent>
+                </Card>
             ) : null}
         </div>
     );
