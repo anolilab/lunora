@@ -1,48 +1,25 @@
-import { createFileRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
-import { authClient } from "../client/auth-client";
 import { requireSession } from "../ssr/loader";
 
-const AuthedLayout = (): ReactElement => {
-    const { session } = Route.useRouteContext();
-    const navigate = useNavigate();
-
-    return (
-        <div className="app">
-            <header className="topbar">
-                <Link className="brand" to="/">
-                    Lunora Cloud
-                </Link>
-                <div className="topbar-right">
-                    <span className="muted">{session.user.email}</span>
-                    <button
-                        className="link"
-                        onClick={() => {
-                            void authClient.signOut().then(() => navigate({ to: "/login" }));
-                        }}
-                        type="button"
-                    >
-                        Sign out
-                    </button>
-                </div>
-            </header>
-            <main className="content">
-                <Outlet />
-            </main>
-        </div>
-    );
-};
-
 /**
- * Pathless layout for every signed-in screen — the former `App.tsx` shell.
+ * Pathless layout for every signed-in screen.
  *
- * The session gate lives in `beforeLoad`, so it runs **on the server** before any
- * markup is produced: an anonymous visitor is redirected to `/login` with a 302
- * rather than rendering a shell and flashing a login form after hydration (the
- * behaviour of the old `authClient.useSession()` check). The resolved user is
- * returned into the route context so the topbar renders server-side too.
+ * It renders nothing but the `Outlet`. Since the Luna + Aurora redesign the chrome
+ * — top bar, account menu, sign-out, theme toggle — belongs to `DashboardLayout`,
+ * which each screen mounts itself along with its own sidebar contents. Keeping the
+ * old `.app`/`.topbar` markup here too would wrap that shell in a second, redundant
+ * header.
+ *
+ * The session gate stays, and stays in `beforeLoad`, so it runs **on the server**
+ * before any markup is produced: an anonymous visitor gets a 302 to `/login` rather
+ * than a shell that flashes a login form after hydration. The resolved user is
+ * returned into the route context, so child screens render the account menu
+ * server-side.
  */
+const AuthedLayout = (): ReactElement => <Outlet />;
+
 export const Route = createFileRoute("/_authed")({
     beforeLoad: async ({ location }) => {
         // `href`, not `pathname`: the search string is part of what the visitor asked
