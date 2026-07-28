@@ -18,14 +18,128 @@ const REST_PATH_PREFIX = "/_lunora/rest";
 type RestFunctionKind = "action" | "mutation" | "query";
 
 /**
+ * Request headers whose presence means the response may be caller-specific.
+ *
+ * `Authorization` covers bearer/basic auth, `Cookie` covers session cookies, and
+ * `Cf-Access-Jwt-Assertion` covers Cloudflare Access — which
+ * `@lunora/cloudflare-access` reads BEFORE its cookie, so a service-token or
+ * machine client presents the header and no cookie. Omitting it would classify
+ * those callers as anonymous.
+ *
+ * This list is not, and cannot be, exhaustive: `resolveIdentity` receives the
+ * whole `Request` and an app may authenticate on anything (`x-api-key`, a signed
+ * query parameter, …). An app doing that must declare its own header names via
+ * {@link RestCachePolicy.credentialHeaders}, or not mark the endpoint
+ * `scope: "public"`.
+ */
+const CREDENTIAL_HEADERS = ["authorization", "cf-access-jwt-assertion", "cookie"] as const;
+
+/**
+ * Headers that select WHICH data a request sees rather than who is asking, and so
+ * must key the cache even though they aren't credentials. `x-lunora-shard-key`
+ * routes to a shard (the query-string form is already in the URL, the header form
+ * is not); `x-d1-bookmark` pins read-your-writes freshness. Without these in
+ * `Vary`, one URL maps to many different bodies.
+ */
+const DATA_SELECTING_HEADERS = ["x-d1-bookmark", "x-lunora-shard-key"] as const;
+
+/**
+ * Declared HTTP caching for an exposed endpoint (`.expose({ cache })`). Lives
+ * here, alongside the path/method contract, for the same reason: the runtime
+ * WRITES these headers and the OpenAPI emitter DESCRIBES them, and the two must
+ * not be able to disagree. Deriving both from {@link cacheControlValue} /
+ * {@link cacheVaryValue} makes "the published spec matches what the runtime
+ * actually sends" structural rather than a hand-kept invariant.
+ */
+interface RestCachePolicy {
+    /**
+     * Extra request headers this app authenticates on, beyond
+     * {@link CREDENTIAL_HEADERS}. Declare these whenever `resolveIdentity` reads
+     * something else (`x-api-key`, a tenant header, …): they join both the
+     * credential check and the emitted `Vary`. Without them, a caller
+     * authenticating that way is treated as anonymous.
+     */
+    readonly credentialHeaders?: ReadonlyArray<string>;
+    readonly maxAge: number;
+    readonly scope: "private" | "public";
+    readonly staleWhileRevalidate?: number;
+    readonly tag?: string;
+    readonly vary?: string;
+}
+
+/** Every header name that must be treated as identifying for a given policy. */
+const credentialHeadersFor = (policy: RestCachePolicy): string[] => [
+    ...CREDENTIAL_HEADERS,
+    ...(policy.credentialHeaders ?? []).map((name) => name.toLowerCase()),
+];
+
+/**
  * The `.expose({ rest: true })` tag stamped onto a registered procedure (runtime,
  * as `fn.expose`) or discovered from its builder chain (codegen, onto the
  * `FunctionIR`). Presence of `rest === true` is the ONLY thing that opts a
  * procedure into the surface — everything is default-closed.
  */
 interface RestExposure {
+    cache?: RestCachePolicy;
     rest?: boolean;
 }
+
+/** Clamp an author-supplied seconds value to a non-negative integer; a non-finite value degrades to `0` rather than emitting `NaN`. */
+const cacheSeconds = (value: number): number => (Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0);
+
+/**
+ * Merge `Vary` header names case-insensitively, preserving first-seen order and
+ * dropping duplicates. Returns `undefined` when nothing survives.
+ */
+const mergeVary = (...sources: ReadonlyArray<string | undefined>): string | undefined => {
+    const names: string[] = [];
+
+    for (const source of sources) {
+        for (const raw of source?.split(",") ?? []) {
+            const name = raw.trim().toLowerCase();
+
+            if (name !== "" && !names.includes(name)) {
+                names.push(name);
+            }
+        }
+    }
+
+    return names.length === 0 ? undefined : names.join(", ");
+};
+
+/**
+ * The `Cache-Control` value for a policy under an EFFECTIVE scope — which the
+ * runtime narrows per request (a credentialed caller is always `private`) and the
+ * emitter documents as the declared best case. Both go through here, so the
+ * clamping applies identically to the served header and the published example.
+ */
+const cacheControlValue = (policy: RestCachePolicy, effectiveScope: "private" | "public"): string => {
+    const directives = [effectiveScope, `max-age=${String(cacheSeconds(policy.maxAge))}`];
+
+    if (policy.staleWhileRevalidate !== undefined) {
+        directives.push(`stale-while-revalidate=${String(cacheSeconds(policy.staleWhileRevalidate))}`);
+    }
+
+    return directives.join(", ");
+};
+
+/**
+ * The `Vary` value a policy implies. Keyed off the DECLARED scope, not the
+ * effective one: the point is to fence a stored anonymous variant off from
+ * credentialed callers, and that fence has to be present on the anonymous
+ * response itself. {@link DATA_SELECTING_HEADERS} are always included, since they
+ * change the body regardless of scope.
+ *
+ * Treat `Vary` as a courtesy to well-behaved intermediaries, NOT as the safety
+ * mechanism: Cloudflare's own cache honours `Vary` only for `Accept-Encoding`, so
+ * the real protection is the credential downgrade in `@lunora/runtime`'s
+ * `rest-cache`, which never emits `public` for an identified caller in the first
+ * place.
+ */
+const cacheVaryValue = (policy: RestCachePolicy): string | undefined =>
+    policy.scope === "public"
+        ? mergeVary(policy.vary, ...credentialHeadersFor(policy), ...DATA_SELECTING_HEADERS)
+        : mergeVary(policy.vary, ...DATA_SELECTING_HEADERS);
 
 /** One resolved REST endpoint: the transport method + URL path a procedure is reachable at. */
 interface RestSurfaceEntry {
@@ -108,5 +222,18 @@ const describeRestSurface = (
     return entries;
 };
 
-export type { RestExposure, RestFunctionKind, RestSurfaceEntry };
-export { describeRestSurface, REST_PATH_PREFIX, restMethodForKind, restPathForFunction, splitFunctionPath };
+export type { RestCachePolicy, RestExposure, RestFunctionKind, RestSurfaceEntry };
+export {
+    cacheControlValue,
+    cacheSeconds,
+    cacheVaryValue,
+    CREDENTIAL_HEADERS,
+    credentialHeadersFor,
+    DATA_SELECTING_HEADERS,
+    describeRestSurface,
+    mergeVary,
+    REST_PATH_PREFIX,
+    restMethodForKind,
+    restPathForFunction,
+    splitFunctionPath,
+};

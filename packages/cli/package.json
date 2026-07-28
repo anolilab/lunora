@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.120",
+    "version": "1.0.0-alpha.121",
     "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
     "keywords": [
         "agent-skills",
@@ -68,14 +68,14 @@
     "dependencies": {
         "@bomb.sh/tab": "0.0.21",
         "@lunora/bindings": "1.0.0-alpha.12",
-        "@lunora/codegen": "1.0.0-alpha.73",
-        "@lunora/config": "1.0.0-alpha.99",
+        "@lunora/codegen": "1.0.0-alpha.74",
+        "@lunora/config": "1.0.0-alpha.100",
         "@lunora/container": "1.0.0-alpha.16",
         "@lunora/d1": "1.0.0-alpha.48",
         "@lunora/errors": "1.0.0-alpha.8",
-        "@lunora/mcp": "1.0.0-alpha.47",
-        "@lunora/runtime": "1.0.0-alpha.42",
-        "@lunora/seed": "1.0.0-alpha.48",
+        "@lunora/mcp": "1.0.0-alpha.48",
+        "@lunora/runtime": "1.0.0-alpha.43",
+        "@lunora/seed": "1.0.0-alpha.49",
         "@visulima/cerebro": "3.0.0",
         "@visulima/error": "catalog:prod",
         "@visulima/fs": "5.0.5",
@@ -103,6 +103,18 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "mysql2": "*",
+        "pg": "*"
+    },
+    "peerDependenciesMeta": {
+        "mysql2": {
+            "optional": true
+        },
+        "pg": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
