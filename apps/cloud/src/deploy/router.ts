@@ -168,7 +168,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         },
         // PR upsert → server-side preview build (same pipeline, GAPS.md A3).
         onPreviewBuild: (intent) =>
-            context.runMutation<null | { buildId: string; reused: boolean }>(api.builds.recordPush, {
+            context.runMutation<null | { buildId: string; reused: boolean }>(internal.builds.recordPush, {
                 branch: intent.branch,
                 commitSha: intent.commitSha,
                 installationId: intent.installationId,
@@ -176,7 +176,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
             }),
         // default-branch push → record a build (dedup by commit SHA, GAPS.md A3).
         onPush: (intent) =>
-            context.runMutation<null | { buildId: string; reused: boolean }>(api.builds.recordPush, {
+            context.runMutation<null | { buildId: string; reused: boolean }>(internal.builds.recordPush, {
                 branch: intent.branch,
                 commitSha: intent.commitSha,
                 installationId: intent.installationId,
@@ -213,7 +213,7 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
             {
                 authorize: () => Promise.resolve(), // membership is asserted by `adminTarget`
                 recordAudit: async (entry) => {
-                    await context.runMutation(api.audit_log.record, { action: entry.action, organizationId: entry.organizationId });
+                    await context.runMutation(internal.audit_log.record, { action: entry.action, organizationId: entry.organizationId });
                 },
                 resolveTarget: async (organizationId, deploymentId) => {
                     const target = await context.runMutation<(StoredAdminToken & { url: string }) | null>(api.deployments.adminTarget, {
