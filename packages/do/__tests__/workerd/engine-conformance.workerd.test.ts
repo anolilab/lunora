@@ -14,12 +14,11 @@
  * built through the composition root (`createShardPlatform`) rather than the
  * individual adapters — so a wiring mistake in the root fails here too.
  */
+import { createShardPlatform } from "@lunora/platform-cloudflare";
 import type { EngineHostFactory } from "@lunora/shard-engine/conformance";
 import { defineEngineContractSuite } from "@lunora/shard-engine/conformance";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-
-import { createShardPlatform } from "../../src/platform";
 
 /**
  * The `DurableObjectState` of the object the current test body runs inside.

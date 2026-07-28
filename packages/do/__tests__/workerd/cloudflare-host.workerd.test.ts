@@ -30,11 +30,9 @@
  */
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
+import { createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-
-import { createShardDirectory } from "../../src/cloudflare-host";
-import { createShardPlatform } from "../../src/platform";
 
 /**
  * The `DurableObjectState` of the object the current test body is running

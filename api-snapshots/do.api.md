@@ -1330,13 +1330,7 @@ interface ShardDOState {
 
 ### `ShardPlatform` (interface)
 
-```ts
-interface ShardPlatform {
-    kv: ShardKvStore;
-    shard: ShardHost;
-    sockets: SocketHost;
-}
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `ShardRankPageResult` (interface)
 
@@ -1609,21 +1603,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `WorkerPlatform` (interface)
 
-```ts
-interface WorkerPlatform {
-    capabilities: PlatformCapabilities;
-    directory: (binding: string) => ShardDirectory;
-    scheduler?: SchedulerHost;
-}
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `WorkerPlatformOptions` (interface)
 
-```ts
-interface WorkerPlatformOptions {
-    scheduler?: SchedulerHost;
-}
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `WorkflowMetadata` (interface)
 
@@ -1751,9 +1735,7 @@ const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 
 ### `createShardAlarms` (const)
 
-```ts
-const createShardAlarms: (storage: AlarmStorageLike) => ShardAlarms;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `createShardCtxDb` (const)
 
@@ -1761,33 +1743,23 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `createShardDirectory` (const)
 
-```ts
-const createShardDirectory: (namespace: DurableObjectNamespace) => ShardDirectory;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `createShardHost` (const)
 
-```ts
-const createShardHost: (state: DurableObjectState) => ShardHost;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `createShardKvStore` (const)
 
-```ts
-const createShardKvStore: (storage: KvStorageLike) => ShardKvStore;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `createShardPlatform` (const)
 
-```ts
-const createShardPlatform: (state: unknown) => ShardPlatform;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `createSocketHost` (const)
 
-```ts
-const createSocketHost: (state: DurableObjectState) => SocketHost;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `createSystemReader` (const)
 
@@ -1801,9 +1773,7 @@ const createTracer: (deps: TracerDeps) => ContextTracer;
 
 ### `createWorkerPlatform` (const)
 
-```ts
-const createWorkerPlatform: (env: unknown, options?: WorkerPlatformOptions) => WorkerPlatform;
-```
+Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
 ### `decodeCursor` (const)
 

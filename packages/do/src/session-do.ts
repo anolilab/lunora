@@ -36,10 +36,10 @@
  * the unit tests is preserved so plain-object doubles still work.
  */
 import type { ShardAlarms, ShardKvStore } from "@lunora/platform";
+import { createShardAlarms, createShardKvStore } from "@lunora/platform-cloudflare";
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
-import { createShardAlarms, createShardKvStore } from "./cloudflare-host";
 
 /** Default TTL for new sessions (7 days), matching `@lunora/auth`. */
 const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;

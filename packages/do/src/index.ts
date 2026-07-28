@@ -26,9 +26,6 @@ export {
     readAuthMetrics,
     recordAuthEvent,
 } from "./auth-metrics";
-// Cloudflare implementations of the `@lunora/platform` host contracts. These
-// are what `@lunora/platform-cloudflare` will re-export as the default host.
-export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 export type { ContextMetrics, ContextTracer, MetricsDeps, SpanHandle, TraceAnchor, TracerDeps } from "./context-telemetry";
 export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type {
@@ -74,10 +71,6 @@ export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
-// The Cloudflare composition root: every `@lunora/platform` contract assembled
-// from the two lifetimes a Worker has (DO state, worker env).
-export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "./platform";
-export { createShardPlatform, createWorkerPlatform } from "./platform";
 export { serveRelationFanout } from "./relation-fanout";
 export type { LogEventInput } from "./request-log";
 // The search core moved out of this package. It used to be re-exported from
@@ -114,6 +107,13 @@ export type { SqlConsoleResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export type { TtlSweepSpec } from "./ttl-sweep";
 export { selectExpiredIds } from "./ttl-sweep";
+// Cloudflare implementations of the `@lunora/platform` host contracts. These
+// are what `@lunora/platform-cloudflare` will re-export as the default host.
+export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";
+// The Cloudflare composition root: every `@lunora/platform` contract assembled
+// from the two lifetimes a Worker has (DO state, worker env).
+export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
+export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-cloudflare";
 export type { AuditEntry } from "@lunora/shard-engine";
 export type {
     BroadcastDelta,

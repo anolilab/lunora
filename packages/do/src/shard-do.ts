@@ -1,6 +1,7 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import type { ShardHost, SocketHost } from "@lunora/platform";
+import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
     AdvisoryFinding,
     AuditLogResult,
@@ -122,7 +123,6 @@ import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-impor
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
-import { createShardHost, createSocketHost } from "./cloudflare-host";
 import type { CloudflareTracingLike, ContextFetch, ContextMetrics, ContextTracer, SpanCollection, SpanCollector, TraceAnchor } from "./context-telemetry";
 import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";

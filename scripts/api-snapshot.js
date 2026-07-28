@@ -71,7 +71,10 @@ const TIER_1 = [
     "lunora",
     // The platform family: `platform` is contracts-only, so its surface IS the
     // product and drifting it silently is the failure this guard exists to catch.
+    // `platform-cloudflare` is the reference implementation of that surface — the
+    // shape a second target has to match — so it is gated the same way.
     "platform",
+    "platform-cloudflare",
     "shard-engine",
 ];
 
