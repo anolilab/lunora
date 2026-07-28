@@ -95,8 +95,7 @@ export const OrganizationList = ({ onSelect, preloadedCells, preloadedOrganizati
                 ) : null}
                 <form
                     className="form-grid"
-                    onSubmit={(event) => {
-                        event.preventDefault();
+                    action={() => {
                         setError(null);
 
                         if (!cellId) {

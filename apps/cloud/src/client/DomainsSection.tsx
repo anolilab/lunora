@@ -151,8 +151,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                     ) : null}
                     <form
                         className="inline-form"
-                        onSubmit={(event) => {
-                            event.preventDefault();
+                        action={() => {
                             setError(null);
                             setPending(true);
 
