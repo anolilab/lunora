@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createChangeEmailController } from "../core";
+    import { createChangeEmailController } from "../core/change-email";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

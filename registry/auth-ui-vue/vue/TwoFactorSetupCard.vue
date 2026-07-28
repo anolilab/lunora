@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { createTwoFactorSetupController, isFlowEnabled } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createTwoFactorSetupController } from "../core/two-factor-setup";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

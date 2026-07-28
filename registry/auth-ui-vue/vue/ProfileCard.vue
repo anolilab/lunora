@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createProfileController } from "../core";
+import { createProfileController } from "../core/profile";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

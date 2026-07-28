@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createOrganizationSettingsController, isFlowEnabled } from "../core";
+    import { isFlowEnabled } from "../core/flow-gate";
+    import { createOrganizationSettingsController } from "../core/organization-settings";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

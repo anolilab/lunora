@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createProfileController } from "../core";
+    import { createProfileController } from "../core/profile";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

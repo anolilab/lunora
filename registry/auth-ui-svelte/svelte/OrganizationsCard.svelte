@@ -4,7 +4,9 @@
 </script>
 
 <script lang="ts">
-    import { createOrganizationsController, isFlowEnabled, slugify } from "../core";
+    import { isFlowEnabled } from "../core/flow-gate";
+    import { slugify } from "../core/labels";
+    import { createOrganizationsController } from "../core/organization-list";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

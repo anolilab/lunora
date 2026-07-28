@@ -4,7 +4,9 @@
 </script>
 
 <script lang="ts">
-    import { ROLE_OPTIONS, createMembersController, isFlowEnabled } from "../core";
+    import { isFlowEnabled } from "../core/flow-gate";
+    import { ROLE_OPTIONS } from "../core/labels";
+    import { createMembersController } from "../core/members";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

@@ -8,18 +8,41 @@ import { required } from "./validators";
 type ProfileField = "image" | "name";
 
 interface ProfileOptions {
-    /** Prefill from the app's current session (it already has the user). */
+    /**
+     * Seed the fields instead of reading the session. Optional: with neither set
+     * the controller prefills from `getSession` itself.
+     *
+     * Prefer leaving these unset. They are *initial* values, so a caller that
+     * feeds them a live session value — the obvious `defaultName={session.data
+     * ?.user.name}` — rebuilds the controller every time the session object
+     * changes, including the refresh a successful save triggers. The form resets
+     * and the success banner disappears the instant it is earned.
+     */
     initialImage?: string;
     initialName?: string;
 }
 
-const createProfileController = (context: ControllerContext, options: ProfileOptions = {}): FormController<ProfileField> =>
-    createFormController<ProfileField>(context, {
+const createProfileController = (context: ControllerContext, options: ProfileOptions = {}): FormController<ProfileField> => {
+    const seeded = options.initialImage !== undefined || options.initialName !== undefined;
+
+    return createFormController<ProfileField>(context, {
         fallbackError: (localization) => localization.genericError,
         fields: {
             image: { initial: options.initialImage ?? "" },
             name: { initial: options.initialName ?? "", validate: (value, _values, localization) => required(value, localization.nameRequired) },
         },
+        // Read the user the same way `organization-settings.ts` reads the org:
+        // the engine owns the loading flag and seeds both fields in one
+        // transition, so no view ever renders a half-filled form — and no caller
+        // has to thread a session value through a controller dependency.
+        prefill: seeded
+            ? undefined
+            : async (context_) => {
+                  const session = await context_.authClient.getSession();
+                  const user = session.data?.user;
+
+                  return { image: user?.image ?? "", name: user?.name ?? "" };
+              },
         submit: async (values, context_) => {
             const image = values.image.trim();
 
@@ -28,6 +51,7 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
             return { successMessage: context_.localization.profileSaved };
         },
     });
+};
 
 export type { ProfileField, ProfileOptions };
 export { createProfileController };

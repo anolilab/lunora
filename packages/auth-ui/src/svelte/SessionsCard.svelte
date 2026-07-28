@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createSessionsController, sessionLabel } from "../core";
+    import { sessionLabel } from "../core/labels";
+    import { createSessionsController } from "../core/sessions";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

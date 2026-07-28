@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createSignUpController } from "../core";
+    import { createSignUpController } from "../core/sign-up";
     import AuthCard from "./AuthCard.svelte";
     import AuthLink from "./AuthLink.svelte";
     import { useAuthUI } from "./context";

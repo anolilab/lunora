@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createResetPasswordController } from "../core";
+    import { createResetPasswordController } from "../core/reset-password";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

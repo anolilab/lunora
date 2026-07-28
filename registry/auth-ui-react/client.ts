@@ -25,9 +25,33 @@ const AUTH_PLUGINS = {
     twoFactor: true,
 };
 
+/**
+ * Where better-auth is served. Left undefined, the client uses the current
+ * origin, which is right whenever the Worker is same-origin with the app — the
+ * default for every Lunora template.
+ *
+ * Both spellings are read because neither is universal: `import.meta.env` is a
+ * Vite API (Nuxt, SvelteKit, Astro, TanStack Start, Analog), and `process.env`
+ * with a build-time-inlined `NEXT_PUBLIC_`/`PUBLIC_` name is what bundlers that
+ * are not Vite expose. Each access is guarded because referencing the wrong one
+ * is a ReferenceError, not an undefined.
+ */
+const authBaseUrl = (): string | undefined => {
+    const viteEnv = (import.meta as { env?: Record<string, string | undefined> }).env;
+
+    if (viteEnv?.VITE_AUTH_URL) {
+        return viteEnv.VITE_AUTH_URL;
+    }
+
+    if (typeof process !== "undefined" && process.env) {
+        return process.env.NEXT_PUBLIC_AUTH_URL ?? process.env.PUBLIC_AUTH_URL;
+    }
+
+    return undefined;
+};
+
 export const authClient = createLunoraAuthClient(createAuthClient, {
-    // Vite exposes env on import.meta.env; omit to use the current origin.
-    baseURL: (import.meta as { env?: Record<string, string> }).env?.VITE_AUTH_URL,
+    baseURL: authBaseUrl(),
     plugins: AUTH_PLUGINS,
 });
 

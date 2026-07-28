@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createChangePasswordController } from "../core";
+import { createChangePasswordController } from "../core/change-password";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

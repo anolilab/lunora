@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-import { createPasskeysController, isFlowEnabled, passkeyLabel } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { passkeyLabel } from "../core/labels";
+import { createPasskeysController } from "../core/passkeys";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

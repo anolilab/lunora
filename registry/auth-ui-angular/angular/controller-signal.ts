@@ -8,7 +8,8 @@
 import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 
-import type { Controller, ControllerContext } from "../core";
+import type { ControllerContext } from "../core/config";
+import type { Controller } from "../core/types";
 import { injectAuthUI } from "./provider";
 
 /**

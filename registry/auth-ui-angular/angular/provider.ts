@@ -10,8 +10,9 @@ import type { EnvironmentProviders } from "@angular/core";
 import { inject, InjectionToken, makeEnvironmentProviders } from "@angular/core";
 import { LunoraError } from "@lunora/errors";
 
-import type { AuthUIConfig, ControllerContext, NavAdapter } from "../core";
-import { defaultNav, resolveContext } from "../core";
+import type { AuthUIConfig, ControllerContext, NavAdapter } from "../core/config";
+import { resolveContext } from "../core/config";
+import { defaultNav } from "../core/default-nav";
 
 /**
  * The Angular-facing config. Mirrors {@link AuthUIConfig} but makes `nav`

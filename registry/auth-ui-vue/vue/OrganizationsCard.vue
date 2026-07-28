@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, useId } from "vue";
 
-import { createOrganizationsController, isFlowEnabled, slugify } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { slugify } from "../core/labels";
+import { createOrganizationsController } from "../core/organization-list";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";

@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createEmailOtpController, isFlowEnabled } from "../core";
+    import { createEmailOtpController } from "../core/email-otp";
+    import { isFlowEnabled } from "../core/flow-gate";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createTwoFactorSetupController, isFlowEnabled } from "../core";
+    import { isFlowEnabled } from "../core/flow-gate";
+    import { createTwoFactorSetupController } from "../core/two-factor-setup";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

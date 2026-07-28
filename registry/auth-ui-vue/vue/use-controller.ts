@@ -1,7 +1,8 @@
 import type { ShallowRef } from "vue";
 import { onScopeDispose, shallowRef } from "vue";
 
-import type { Controller, ControllerContext } from "../core";
+import type { ControllerContext } from "../core/config";
+import type { Controller } from "../core/types";
 import { useAuthUI } from "./provider";
 
 /**

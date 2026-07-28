@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createResetPasswordController } from "../core";
+import { createResetPasswordController } from "../core/reset-password";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

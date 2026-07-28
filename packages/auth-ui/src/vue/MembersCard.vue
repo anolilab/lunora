@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, useId } from "vue";
 
-import { ROLE_OPTIONS, createMembersController, isFlowEnabled } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { ROLE_OPTIONS } from "../core/labels";
+import { createMembersController } from "../core/members";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";

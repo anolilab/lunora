@@ -1,7 +1,11 @@
 import type { JSX } from "solid-js";
 import { For, Show, createSignal, createUniqueId } from "solid-js";
 
-import { ROLE_OPTIONS, createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled, slugify } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { ROLE_OPTIONS, slugify } from "../core/labels";
+import { createMembersController } from "../core/members";
+import { createOrganizationsController } from "../core/organization-list";
+import { createOrganizationSettingsController } from "../core/organization-settings";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";

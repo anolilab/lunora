@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createChangePasswordController } from "../core";
+    import { createChangePasswordController } from "../core/change-password";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

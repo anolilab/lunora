@@ -6,20 +6,22 @@
 import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
 
-import type { AuthSession, ChangeEmailField, ChangePasswordField, DeleteAccountField, FormActions, FormState, ProfileField, SessionsActions } from "../core";
-import type { ResourceState } from "../core";
-import {
-    createChangeEmailController,
-    createChangePasswordController,
-    createDeleteAccountController,
-    createPasskeysController,
-    createProfileController,
-    createSessionsController,
-    isFlowEnabled,
-    passkeyLabel,
-    sessionLabel,
-    signOut,
-} from "../core";
+import type { ChangeEmailField } from "../core/change-email";
+import type { ChangePasswordField } from "../core/change-password";
+import type { DeleteAccountField } from "../core/delete-account";
+import type { ProfileField } from "../core/profile";
+import type { SessionsActions } from "../core/sessions";
+import type { AuthSession, FormActions, FormState } from "../core/types";
+import type { ResourceState } from "../core/create-resource-controller";
+import { createChangeEmailController } from "../core/change-email";
+import { createChangePasswordController } from "../core/change-password";
+import { createDeleteAccountController } from "../core/delete-account";
+import { isFlowEnabled } from "../core/flow-gate";
+import { passkeyLabel, sessionLabel } from "../core/labels";
+import { createPasskeysController } from "../core/passkeys";
+import { createProfileController } from "../core/profile";
+import { signOut } from "../core/session-actions";
+import { createSessionsController } from "../core/sessions";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent, serializeThemeVariables } from "./primitives";
 import { injectAuthUI } from "./provider";

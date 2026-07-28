@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createDeleteAccountController } from "../core";
+import { createDeleteAccountController } from "../core/delete-account";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

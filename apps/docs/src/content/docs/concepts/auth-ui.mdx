@@ -207,12 +207,14 @@ router you hand to `nav`, and where the client boundary sits.
 Three things are worth knowing before you wire one up.
 
 **Next.js.** The React views already carry `"use client"`, so you can render a
-card straight from a server component — no wrapper needed. The one difference is
-`lunora/auth-ui/client.ts`, which reads `import.meta.env.VITE_AUTH_URL`: that is
-a Vite API, and Next does not populate it. The expression is optional-chained so
-it is harmless (the client falls back to the current origin, which is what you
-want when the Worker is same-origin), but if you do need a different auth origin,
-edit that line to read `process.env.NEXT_PUBLIC_AUTH_URL`.
+card straight from a server component — no wrapper needed.
+
+**Pointing at a different auth origin.** Leave it alone and the client uses the
+current origin, which is right whenever the Worker is same-origin with your app —
+the default in every template. To override, `lunora/auth-ui/client.ts` reads
+`VITE_AUTH_URL` under Vite (Nuxt, SvelteKit, Astro, TanStack Start, Analog) and
+falls back to `NEXT_PUBLIC_AUTH_URL` / `PUBLIC_AUTH_URL` from `process.env` on
+bundlers that are not Vite. Set whichever your framework inlines.
 
 **Astro.** Each `client:*` directive creates its own island with its own React
 root, and context does not cross islands. Put `<AuthUIProvider>` and the cards in

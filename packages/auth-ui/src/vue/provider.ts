@@ -1,8 +1,11 @@
 import type { App, Component, InjectionKey } from "vue";
 import { inject, provide } from "vue";
 
-import type { AuthClient, AuthUIConfig, ControllerContext, Localization, NavAdapter, PluginFlags, RedirectConfig } from "../core";
-import { defaultNav, resolveContext } from "../core";
+import type { AuthUIConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig } from "../core/config";
+import type { Localization } from "../core/localization";
+import type { AuthClient } from "../core/types";
+import { resolveContext } from "../core/config";
+import { defaultNav } from "../core/default-nav";
 
 /**
  * The Vue context carries the resolved core {@link ControllerContext} plus an

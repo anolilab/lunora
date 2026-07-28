@@ -67,6 +67,43 @@ describe("createProfileController", () => {
 
         expect(client.updateUser as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({ image: undefined, name: "Ada Lovelace" });
     });
+
+    it("prefills from the session when the caller seeds nothing", async () => {
+        expect.assertions(3);
+
+        const getSession = vi.fn(() => ok({ user: { image: "https://img.test/a.png", name: "Grace" } }));
+        const client = stubClient({ getSession });
+        const { context } = makeContext(client);
+        const controller = createProfileController(context);
+
+        // The engine owns the loading flag while the session is in flight.
+        expect(controller.getState().loading).toBe(true);
+
+        // Plain throw, not an `expect` — `waitFor` retries its callback, and a
+        // retried assertion would inflate the `expect.assertions` count.
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().fields.name.value).toBe("Grace");
+        expect(controller.getState().fields.image.value).toBe("https://img.test/a.png");
+    });
+
+    it("does not read the session when the caller seeds a value", async () => {
+        expect.assertions(2);
+
+        const getSession = vi.fn(() => ok({ user: { name: "Grace" } }));
+        const client = stubClient({ getSession });
+        const { context } = makeContext(client);
+        const controller = createProfileController(context, { initialName: "Ada" });
+
+        expect(controller.getState().fields.name.value).toBe("Ada");
+        // Seeding is an override, not a default the session then clobbers — a
+        // caller passing a live session value would otherwise fight the prefill.
+        expect(getSession).not.toHaveBeenCalled();
+    });
 });
 
 describe("createChangeEmailController", () => {

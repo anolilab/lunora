@@ -2,8 +2,9 @@ import { LunoraError } from "@lunora/errors";
 import type { Component, Context, JSX } from "solid-js";
 import { createContext, createMemo, useContext } from "solid-js";
 
-import type { AuthUIConfig, ControllerContext } from "../core";
-import { defaultNav, resolveContext } from "../core";
+import type { AuthUIConfig, ControllerContext } from "../core/config";
+import { resolveContext } from "../core/config";
+import { defaultNav } from "../core/default-nav";
 
 /** A framework `Link` component for internal navigation (Solid Router `A`, plain `<a>`, …). */
 type AuthUILink = Component<{ children: JSX.Element; class?: string; href: string }>;

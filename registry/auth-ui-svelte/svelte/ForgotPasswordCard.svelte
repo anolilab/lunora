@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createForgotPasswordController } from "../core";
+    import { createForgotPasswordController } from "../core/forgot-password";
     import AuthCard from "./AuthCard.svelte";
     import AuthLink from "./AuthLink.svelte";
     import { useAuthUI } from "./context";

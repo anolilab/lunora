@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { createMagicLinkController, isFlowEnabled } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createMagicLinkController } from "../core/magic-link";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";

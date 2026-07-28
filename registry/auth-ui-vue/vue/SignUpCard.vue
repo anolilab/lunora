@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createSignUpController } from "../core";
+import { createSignUpController } from "../core/sign-up";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";

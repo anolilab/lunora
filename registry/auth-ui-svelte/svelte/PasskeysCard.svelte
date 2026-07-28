@@ -1,5 +1,7 @@
 <script lang="ts">
-    import { createPasskeysController, isFlowEnabled, passkeyLabel } from "../core";
+    import { isFlowEnabled } from "../core/flow-gate";
+    import { passkeyLabel } from "../core/labels";
+    import { createPasskeysController } from "../core/passkeys";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

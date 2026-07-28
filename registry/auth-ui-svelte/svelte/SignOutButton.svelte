@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
 
-    import { signOut } from "../core";
+    import { signOut } from "../core/session-actions";
     import { useAuthUI } from "./context";
 
     let { children }: { children?: Snippet } = $props();

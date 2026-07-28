@@ -9,17 +9,16 @@ let organizationFieldId = 0;
 import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
 
-import type {
-    AuthOrganization,
-    FormActions,
-    FormState,
-    MembersActions,
-    MembersState,
-    OrganizationSettingsField,
-    OrganizationsActions,
-    ResourceState,
-} from "../core";
-import { ROLE_OPTIONS, createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled, slugify } from "../core";
+import type { ResourceState } from "../core/create-resource-controller";
+import type { MembersActions, MembersState } from "../core/members";
+import type { OrganizationsActions } from "../core/organization-list";
+import type { OrganizationSettingsField } from "../core/organization-settings";
+import type { AuthOrganization, FormActions, FormState } from "../core/types";
+import { isFlowEnabled } from "../core/flow-gate";
+import { ROLE_OPTIONS, slugify } from "../core/labels";
+import { createMembersController } from "../core/members";
+import { createOrganizationsController } from "../core/organization-list";
+import { createOrganizationSettingsController } from "../core/organization-settings";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
 import { injectAuthUI } from "./provider";

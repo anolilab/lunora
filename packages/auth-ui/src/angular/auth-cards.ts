@@ -7,18 +7,20 @@
 import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, input } from "@angular/core";
 
-import type { EmailOtpActions, EmailOtpState, ForgotPasswordField, FormActions, FormState, ResetPasswordField, TwoFactorField } from "../core";
-import {
-    createEmailOtpController,
-    createForgotPasswordController,
-    createMagicLinkController,
-    createResetPasswordController,
-    createSignInController,
-    createSignUpController,
-    createTwoFactorVerifyController,
-    isFlowEnabled,
-    signInWithSocial,
-} from "../core";
+import type { EmailOtpActions, EmailOtpState } from "../core/email-otp";
+import type { ForgotPasswordField } from "../core/forgot-password";
+import type { ResetPasswordField } from "../core/reset-password";
+import type { TwoFactorField } from "../core/two-factor-verify";
+import type { FormActions, FormState } from "../core/types";
+import { createEmailOtpController } from "../core/email-otp";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createForgotPasswordController } from "../core/forgot-password";
+import { createMagicLinkController } from "../core/magic-link";
+import { createResetPasswordController } from "../core/reset-password";
+import { createSignInController } from "../core/sign-in";
+import { createSignUpController } from "../core/sign-up";
+import { signInWithSocial } from "../core/social";
+import { createTwoFactorVerifyController } from "../core/two-factor-verify";
 import { controllerSignal } from "./controller-signal";
 import {
     AuthCardComponent,

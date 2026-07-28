@@ -9,8 +9,9 @@
     import type { Snippet } from "svelte";
     import { untrack } from "svelte";
 
-    import type { AuthUIConfig } from "../core";
-    import { defaultNav, resolveContext } from "../core";
+    import type { AuthUIConfig } from "../core/config";
+    import { resolveContext } from "../core/config";
+    import { defaultNav } from "../core/default-nav";
     import type { AuthUILinkComponent } from "./context";
     import { setAuthUIContext } from "./context";
 

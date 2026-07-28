@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { createSessionsController, sessionLabel } from "../core";
+import { sessionLabel } from "../core/labels";
+import { createSessionsController } from "../core/sessions";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";

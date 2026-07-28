@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createMagicLinkController, isFlowEnabled } from "../core";
+    import { isFlowEnabled } from "../core/flow-gate";
+    import { createMagicLinkController } from "../core/magic-link";
     import AuthCard from "./AuthCard.svelte";
     import AuthLink from "./AuthLink.svelte";
     import { useAuthUI } from "./context";

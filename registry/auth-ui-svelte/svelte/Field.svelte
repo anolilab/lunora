@@ -11,7 +11,7 @@
 </script>
 
 <script lang="ts">
-    import type { FieldState } from "../core";
+    import type { FieldState } from "../core/types";
 
     let {
         autoComplete,

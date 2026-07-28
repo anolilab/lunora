@@ -111,3 +111,85 @@ test("a wrong password surfaces the mapped error on the card", async ({ page }) 
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Channels" })).toBeHidden();
 });
+
+/*
+ * The signed-in half. `?authui=account` swaps the chat view for the account
+ * cards (see `AuthUiAccount.tsx`), which is the only way these reach a browser —
+ * the four specs above sign in and land in chat, and the jsdom suite never makes
+ * a real `/api/auth/*` call.
+ *
+ * Only plugin-free cards are covered: the playground's client is a bare
+ * `createAuthClient`, so passkeys, two-factor and organizations have no server
+ * half here.
+ */
+
+/** Sign up through the API, then land on the account screen with that session. */
+const signInToAccount = async (page: import("@playwright/test").Page, email: string, password: string): Promise<void> => {
+    await signUpViaApi(page, email, password);
+    await page.goto("/?authui=account");
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+};
+
+test("profile card saves a new display name", async ({ page }) => {
+    const email = `authui-profile-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    await fill(page, "Name", "Renamed Tester");
+    await page.locator("form").getByRole("button", { name: "Save changes", exact: true }).click();
+
+    await expect(page.getByText("Your profile has been updated.")).toBeVisible();
+
+    // Survives a reload, so it was persisted rather than only shown optimistically.
+    await page.reload();
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Renamed Tester");
+});
+
+test("change-password card rotates the password and the old one stops working", async ({ page }) => {
+    const email = `authui-changepw-${Date.now()}@lunora.test`;
+    const oldPassword = "test-password-1234"; // gitleaks:allow
+    const newPassword = "test-password-5678"; // gitleaks:allow
+
+    await signInToAccount(page, email, oldPassword);
+
+    await fill(page, "Current password", oldPassword);
+    await fill(page, "New password", newPassword);
+    await fill(page, "Confirm password", newPassword);
+    await page.locator("form").getByRole("button", { name: "Change password", exact: true }).click();
+
+    await expect(page.getByText("Your password has been changed.")).toBeVisible();
+
+    // The rotation was real: the old password no longer signs in.
+    await page.context().clearCookies();
+    await page.goto("/?authui=1");
+    await fill(page, "Email", email);
+    await fill(page, "Password", oldPassword);
+    await submit(page, "Sign in");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Channels" })).toBeHidden();
+});
+
+test("sessions card lists the session and revoking others leaves this one signed in", async ({ page }) => {
+    const email = `authui-sessions-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    const card = page.locator(".lunora-auth-card").filter({ has: page.getByRole("heading", { name: "Active sessions" }) });
+
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Sign out other sessions", exact: true }).click();
+
+    // Revoking *other* sessions must not revoke this one.
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+});
+
+test("sign-out button clears the session and returns to the sign-in card", async ({ page }) => {
+    const email = `authui-signout-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+});

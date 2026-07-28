@@ -1,7 +1,7 @@
 import type { JSX } from "solid-js";
 import { createUniqueId, For, Show } from "solid-js";
 
-import type { FieldState } from "../core";
+import type { FieldState } from "../core/types";
 import { useAuthUI, useAuthUILink } from "./provider";
 
 /** Card shell: heading, optional description, and body. */

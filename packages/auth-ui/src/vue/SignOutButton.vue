@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { signOut } from "../core";
+import { signOut } from "../core/session-actions";
 import { useAuthUI } from "./provider";
 
 const props = defineProps<{

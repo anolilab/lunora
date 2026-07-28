@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { createOrganizationSettingsController, isFlowEnabled } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createOrganizationSettingsController } from "../core/organization-settings";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

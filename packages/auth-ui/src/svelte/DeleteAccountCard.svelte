@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createDeleteAccountController } from "../core";
+    import { createDeleteAccountController } from "../core/delete-account";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";

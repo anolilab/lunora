@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createSignInController, signInWithSocial } from "../core";
+    import { createSignInController } from "../core/sign-in";
+    import { signInWithSocial } from "../core/social";
     import AuthCard from "./AuthCard.svelte";
     import AuthDivider from "./AuthDivider.svelte";
     import AuthLink from "./AuthLink.svelte";

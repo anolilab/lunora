@@ -11,7 +11,8 @@
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
-import type { Controller, ControllerContext } from "../core";
+import type { ControllerContext } from "../core/config";
+import type { Controller } from "../core/types";
 import { useAuthUI } from "./context";
 
 /** What {@link controllerStore} hands back: a live state store plus the actions. */

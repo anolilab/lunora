@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { createEmailOtpController, isFlowEnabled } from "../core";
+import { createEmailOtpController } from "../core/email-otp";
+import { isFlowEnabled } from "../core/flow-gate";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";

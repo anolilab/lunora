@@ -1,7 +1,8 @@
 import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
 
-import { createTwoFactorSetupController, isFlowEnabled } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createTwoFactorSetupController } from "../core/two-factor-setup";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";

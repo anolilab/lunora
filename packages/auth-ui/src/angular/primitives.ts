@@ -7,7 +7,7 @@
  */
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
 
-import type { FieldState } from "../core";
+import type { FieldState } from "../core/types";
 import { injectAuthUI, injectAuthUILink } from "./provider";
 
 /** `{ "--border": "red" }` → `--border:red`, or null when unthemed. */

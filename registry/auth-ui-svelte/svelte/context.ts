@@ -9,7 +9,7 @@
 import type { Component, Snippet } from "svelte";
 import { getContext, setContext } from "svelte";
 
-import type { ControllerContext } from "../core";
+import type { ControllerContext } from "../core/config";
 
 /**
  * A framework `Link` component (SvelteKit's `<a>` wrapper, a custom router link,

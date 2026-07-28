@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
 
-import type { FieldState } from "../core";
+import type { FieldState } from "../core/types";
 
 // A labelled text input wired to a core FieldState. Emits `blur` and `change`
 // (with the next value) so the card forwards them to the controller.

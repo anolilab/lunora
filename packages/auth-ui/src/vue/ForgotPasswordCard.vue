@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createForgotPasswordController } from "../core";
+import { createForgotPasswordController } from "../core/forgot-password";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";

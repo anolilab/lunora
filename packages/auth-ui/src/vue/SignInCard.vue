@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { createSignInController, signInWithSocial } from "../core";
+import { createSignInController } from "../core/sign-in";
+import { signInWithSocial } from "../core/social";
 import AuthCard from "./AuthCard.vue";
 import AuthDivider from "./AuthDivider.vue";
 import AuthLink from "./AuthLink.vue";
