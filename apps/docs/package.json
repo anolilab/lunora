@@ -30,6 +30,8 @@
         "@fuma-comment/react": "catalog:web",
         "@fumadocs/mdx-remote": "catalog:web",
         "@icons-pack/react-simple-icons": "catalog:web",
+        "@lunora/client": "workspace:*",
+        "@lunora/errors": "workspace:*",
         "@lunora/mcp": "workspace:*",
         "@lunora/ratelimit": "workspace:*",
         "@radix-ui/react-icons": "catalog:web",

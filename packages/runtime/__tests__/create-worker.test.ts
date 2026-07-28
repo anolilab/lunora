@@ -1432,6 +1432,35 @@ describe("createWorker — HTTP actions", () => {
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
     });
 
+    it("marks a route's `ctx.run*` as a trusted system dispatch, so `internal` functions are reachable", async () => {
+        expect.assertions(3);
+
+        shard.response = Response.json({ result: "cell_1" });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/v1/cells", async (c) => Response.json({ cellId: await c.var.lunora.runMutation({ __lunoraRef: "cells:register" }, { name: "c" }) })),
+            ),
+            resolveIdentity: () => {
+                return { userId: "user_7" };
+            },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/v1/cells", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+
+        // The whole point: `handleRpc` refuses an `internal` function to any caller
+        // without this flag, so an operator/webhook/ingest route delegating to one
+        // used to fail with FUNCTION_NOT_FOUND surfaced as a 500.
+        expect(shard.calls[0]!.request.headers.get("x-lunora-system")).toBe("1");
+
+        // And it widens visibility ONLY — the caller's identity still rides along,
+        // so RLS and ownership checks inside the function are unchanged.
+        expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBe("user_7");
+    });
+
     it("exposes resolveIdentity on c.var.lunora.auth", async () => {
         expect.assertions(1);
 

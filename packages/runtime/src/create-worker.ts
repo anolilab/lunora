@@ -6,6 +6,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
+import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -200,8 +201,11 @@ interface FunctionRegistryEntry {
      * routing THROUGH the procedure so auth/RLS/validators are enforced. Rides
      * along on the registered function's identity (like `fn.x402` / `fn.rls`), so
      * reading it needs no change to the generated registry shape.
+     *
+     * `cache` is the optional response-caching policy the REST router turns into
+     * `Cache-Control` / `Cache-Tag` / `Vary` headers (see `rest-cache`).
      */
-    expose?: { readonly rest?: boolean };
+    expose?: RestExposure;
 
     /**
      * The generated registry carries `"stream"` alongside query/mutation/action;
@@ -2875,7 +2879,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             const forwarded = new Request("https://shard.internal/rpc", {
                 body: JSON.stringify({ args, functionPath }),
-                headers,
+                // `x-lunora-system` marks this a trusted server-initiated dispatch, so
+                // the shard will run `internal` functions — exactly as on the
+                // scheduler path above, and for the same reason.
+                //
+                // An `httpRouter` handler is app-authored worker code, not a client:
+                // the reference it passes is a literal `internal.foo.bar` from the
+                // app's own source, never a caller-supplied string, and the handler
+                // has already run whatever authorization it requires (the operator
+                // bearer on a cell-register route, a deploy-key lookup on an ingest
+                // route). Without this the route's `ctx.run*` reached the shard as an
+                // ordinary *client* RPC, and `handleRpc` — which refuses internals to
+                // anything lacking this flag — answered FUNCTION_NOT_FOUND, so every
+                // route delegating to an `internal*` function failed with a 500 that
+                // named a function the registry demonstrably contained.
+                //
+                // This widens visibility only. The shard reconstructs identity from
+                // the `x-lunora-*` headers independently of the flag, so the call
+                // still runs under the caller's RLS/ownership context; `headers` is
+                // minted by `resolveForwardContext` from a fixed allowlist that never
+                // copies `x-lunora-system` off the inbound request, so a client cannot
+                // forge it. The external client path (`/_lunora/rpc`, and SSR loaders
+                // that go through it) never passes here and stays gated.
+                headers: { ...headers, "x-lunora-system": "1" },
                 method: "POST",
             });
 
