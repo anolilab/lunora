@@ -240,7 +240,8 @@ describe("defineListArgs — request-cost bounds", () => {
 
         // This is the path that exists BECAUSE toQueryArgs is reachable without
         // `.input()`, so the cap has to hold here too or it protects nothing.
-        const args = spec.toQueryArgs({ where: { status: { in: Array.from({ length: 5000 }).fill("x") } } });
+        // Mapper uses its index so eslint keeps `Array.from` (a `.fill()` rewrite types as `unknown[]`).
+        const args = spec.toQueryArgs({ where: { status: { in: Array.from({ length: 5000 }, (_, index) => String(index)) } } });
         const predicate = (args.where as { status: { in: string[] } }).status;
 
         expect(predicate.in).toHaveLength(100);
