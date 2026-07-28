@@ -16,10 +16,14 @@ export * from "../core";
  * ```
  */
 export { AppearanceCard, AvatarCard, LinkedAccountsCard, SetUsernameCard } from "./account-cards";
+export type { AuthViewProps } from "./auth-view";
+export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps } from "./auth-cards";
-export { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
 export type { OrganizationSettingsCardProps } from "./organization";
 export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./organization";
+export type { DeviceAuthorizationCardProps } from "./plugin-cards";
+export { AdminUsersCard, BackupCodesCard, DeviceAuthorizationCard, MultiSessionCard, TeamsCard } from "./plugin-cards";
 export type { AuthCardProps, FieldProps } from "./primitives";
 export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, Skeleton, SocialButtons, SubmitButton } from "./primitives";
 export type { AuthUIProviderProps } from "./provider";
