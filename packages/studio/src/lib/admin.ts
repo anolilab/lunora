@@ -40,6 +40,7 @@ export const ADMIN_FUNCTIONS = {
     deleteRows: "__lunora_admin__:deleteRows",
     describeTable: "__lunora_admin__:describeTable",
     describeTables: "__lunora_admin__:describeTables",
+    explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
@@ -1150,6 +1151,67 @@ export interface MetricHistorySeries {
 export interface MetricHistoryResult {
     series: MetricHistorySeries[];
 }
+
+/**
+ * Arguments for the opt-in `__lunora_admin__:explainIssue` action, mirroring
+ * `@lunora/do`'s `ExplainIssueArgs`. `sampleMessage` is the representative raw
+ * error text (required); `title`/`culprit` add context from the {@link ErrorIssue}
+ * being explained; `model` overrides the default Workers AI text model. The DO
+ * re-derives the grounded solution from `sampleMessage` itself — it never trusts a
+ * client-supplied hint.
+ *
+ * This and {@link ExplainIssueResult} are hand-mirrored — `@lunora/studio` must not
+ * take a dependency edge on `@lunora/do` — so nothing type-checks the two sides
+ * against each other. Change either shape here and in `packages/do/src/shard-do.ts`
+ * (`ExplainIssueArgs` / `ExplainIssueResult` / `ExplainIssueGrounding` /
+ * `ExplainIssueDegradedReason`) together.
+ */
+export interface ExplainIssueArgs {
+    culprit?: string;
+    model?: string;
+    sampleMessage: string;
+    title?: string;
+}
+
+/**
+ * Why the explainer fell back to the grounded hint alone, mirroring `@lunora/do`'s
+ * `ExplainIssueDegradedReason`. A closed union so the `reason === "no-ai-binding"`
+ * branch in `issues-panel.tsx` stays exhaustively checkable.
+ */
+export type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
+
+/**
+ * The grounding facts both `explainIssue` outcomes carry, mirroring `@lunora/do`'s
+ * `ExplainIssueGrounding`. `groundedId` names the matched catalog solution and is
+ * absent when nothing recognized the message — the studio renders a caveat on
+ * absence. The hint body is not on the wire: the studio derives it from the same
+ * catalog offline, which is the point of the grounded layer.
+ */
+export interface ExplainIssueGrounding {
+    groundedId?: string;
+}
+
+/**
+ * Payload of a `__lunora_admin__:explainIssue` call, mirroring `@lunora/do`'s
+ * `ExplainIssueResult`. A discriminated union on `degraded`: when the app wires an
+ * `AI` binding and the model returns text, `explanation` holds the plain-language
+ * write-up and `model` echoes the model that produced it. Otherwise `reason` says why the AI path degraded — the studio
+ * then falls back to rendering the always-available grounded hint alone.
+ */
+/** The arm returned when no inference happened, or it failed, mirroring `@lunora/do`'s `ExplainIssueDegraded`. */
+export interface ExplainIssueDegraded extends ExplainIssueGrounding {
+    degraded: true;
+    reason: ExplainIssueDegradedReason;
+}
+
+/** The arm returned when the model ran and produced text, mirroring `@lunora/do`'s `ExplainIssueSuccess`. */
+export interface ExplainIssueSuccess extends ExplainIssueGrounding {
+    degraded: false;
+    explanation: string;
+    model: string;
+}
+
+export type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
 
 /**
  * How a deployment binding/var classifies, mirroring `@lunora/do`'s `SettingKind`.

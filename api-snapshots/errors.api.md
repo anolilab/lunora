@@ -9,6 +9,26 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/errors`
 
+### `CLOUDFLARE_PLATFORM_ERRORS` (const)
+
+```ts
+const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError>;
+```
+
+### `CloudflarePlatformError` (interface)
+
+```ts
+interface CloudflarePlatformError {
+    causes: string;
+    code: string;
+    docsUrl: string;
+    family: "1xxx" | "5xx";
+    fix: string;
+    summary: string;
+    title: string;
+}
+```
+
 ### `ERROR_CATALOG` (const)
 
 ```ts
@@ -330,6 +350,18 @@ interface ToErrorBodyResult {
     redacted: boolean;
     status: number;
 }
+```
+
+### `findCloudflarePlatformSolution` (const)
+
+```ts
+const findCloudflarePlatformSolution: (message: string) => Solution | undefined;
+```
+
+### `findIssueSolution` (const)
+
+```ts
+const findIssueSolution: (message: string) => Solution | undefined;
 ```
 
 ### `findSolutionByMessage` (const)

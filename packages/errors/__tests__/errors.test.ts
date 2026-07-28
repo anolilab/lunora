@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    CLOUDFLARE_PLATFORM_ERRORS,
     ERROR_CATALOG,
+    findCloudflarePlatformSolution,
+    findIssueSolution,
     findSolutionByMessage,
     flattenHint,
     invariant,
@@ -254,6 +257,114 @@ describe("catalog message solutions", () => {
         expect(resolveHint({ hint: "explicit" })).toBe("explicit");
         expect(resolveHint({ code: "CONFLICT" })).toBe(ERROR_CATALOG.CONFLICT.hint);
         expect(resolveHint("optimistic concurrency conflict on row")).toBe(ERROR_CATALOG.CONFLICT.hint.join("\n"));
+    });
+});
+
+describe("cloudflare platform errors", () => {
+    it("recognizes a Worker exception via Cloudflare's `Error <code>` phrasing", () => {
+        expect.assertions(5);
+
+        const solution = findCloudflarePlatformSolution("Error 1101: Worker threw exception");
+
+        expect(solution?.id).toBe("cloudflare-error-1101");
+        expect(solution?.header).toBe("Cloudflare Error 1101: Worker threw a JavaScript exception");
+        // The grounded body must carry cause, fix, and the family docs link.
+        expect(solution?.body).toContain("**Likely cause:**");
+        expect(solution?.body).toContain("**Fix:**");
+        expect(solution?.body).toContain("cloudflare-1xxx-errors");
+    });
+
+    it("recognizes the `Error: <code>` colon phrasing", () => {
+        expect.assertions(1);
+
+        expect(findCloudflarePlatformSolution("Error: 522 connecting to origin")?.id).toBe("cloudflare-error-522");
+    });
+
+    it("recognizes a standalone code only when `cloudflare` is also mentioned", () => {
+        expect.assertions(2);
+
+        expect(findCloudflarePlatformSolution("Cloudflare returned 520 from the origin")?.id).toBe("cloudflare-error-520");
+        // A 5xx docs link for the 52x family.
+        expect(findCloudflarePlatformSolution("Cloudflare returned 520 from the origin")?.body).toContain("cloudflare-5xx-errors");
+    });
+
+    it("does not false-match a bare number without Cloudflare context", () => {
+        expect.assertions(2);
+
+        // No `error <code>` phrasing and no `cloudflare` mention → not a platform error.
+        expect(findCloudflarePlatformSolution("expected 520 items in the array")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("retry after 522 ms")).toBeUndefined();
+    });
+
+    it("does not match a code embedded in a longer number", () => {
+        expect.assertions(2);
+
+        // `5200` and `15201` contain `520`/`521` as substrings but not as standalone tokens.
+        expect(findCloudflarePlatformSolution("cloudflare processed 5200 requests")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("cloudflare job 15221 finished")).toBeUndefined();
+    });
+
+    it("prefers an explicit `Error <code>` over a weaker cloudflare-plus-number match", () => {
+        expect.assertions(2);
+
+        // `524` sits earlier in the table than `1102`, so a single-pass scan would
+        // let the incidental "524 ms" win — and ground the explainer in the wrong fix.
+        expect(findCloudflarePlatformSolution("Cloudflare Error 1102: exceeded after 524 ms")?.id).toBe("cloudflare-error-1102");
+        // Without the explicit phrasing, the weak heuristic still applies.
+        expect(findCloudflarePlatformSolution("cloudflare gave up after 524 ms")?.id).toBe("cloudflare-error-524");
+    });
+
+    it("does not match a code that merely prefixes a longer number", () => {
+        expect.assertions(5);
+
+        // `10061`/`10060` are WSAECONNREFUSED / WSAETIMEDOUT — the most common socket
+        // error text in the wild — and both begin with the real Cloudflare code 1006.
+        // Matching them fed "your IP has been banned" into the explainer's grounding.
+        expect(findCloudflarePlatformSolution("Error 10061: connect ECONNREFUSED 127.0.0.1:8787")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error 10060: connection timed out")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error 5200 while parsing")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error 11011: internal")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error: 5221 not found")).toBeUndefined();
+    });
+
+    it("keeps the platform table OFF the wire-facing hint path", () => {
+        expect.assertions(3);
+
+        // `resolveHint` feeds `toErrorBody`, i.e. the envelope of every failed request.
+        // Most catalog codes carry no `hint`, so folding the platform table into the
+        // Lunora-only message finder shipped operator-only zone guidance ("review the
+        // zone's Firewall/WAF and IP Access Rules") to unauthenticated browsers.
+        expect(resolveHint({ code: "BAD_REQUEST", message: "invalid arg for cloudflare tenant 1006" })).toBeUndefined();
+        expect(resolveHint({ message: "Error 524: A timeout occurred" })).toBeUndefined();
+        expect(resolveHint("Error 1102: Worker exceeded resource limits")).toBeUndefined();
+    });
+
+    it("findIssueSolution opts the operator-facing surfaces into the platform table", () => {
+        expect.assertions(3);
+
+        // A Lunora message-solution still takes precedence over the CF fallback.
+        expect(findIssueSolution("defineSchema() not found in schema.ts")?.id).toBe("lunora-schema-missing");
+        expect(findIssueSolution("Error 1102: Worker exceeded resource limits")?.body).toContain("CPU-time");
+        expect(findIssueSolution("Error 524: A timeout occurred")?.body).toContain("did not respond in time");
+    });
+
+    it("every catalog code resolves via its `Error <code>` phrasing", () => {
+        expect.hasAssertions();
+
+        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
+            const solution = findCloudflarePlatformSolution(`Error ${entry.code}`);
+
+            expect(solution?.id).toBe(`cloudflare-error-${entry.code}`);
+        }
+    });
+
+    it("findSolutionByMessage stays Lunora-only", () => {
+        expect.assertions(2);
+
+        expect(findSolutionByMessage("defineSchema() not found in schema.ts")?.id).toBe("lunora-schema-missing");
+        // The platform table is reachable only through `findIssueSolution`, so codegen's
+        // re-exported finder, the Vite overlay, and `toErrorBody` never see it.
+        expect(findSolutionByMessage("Error 1101: boom")).toBeUndefined();
     });
 });
 
