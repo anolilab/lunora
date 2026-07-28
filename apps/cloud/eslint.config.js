@@ -10,6 +10,12 @@ export default createConfig(
             "**/dist/**",
             "**/node_modules/**",
             "**/_generated/**",
+            // TanStack Router codegen output — regenerated on every build, not
+            // hand-authored source. Committed (unlike lunora/_generated) because
+            // nothing regenerates it before `lint:types`, so a clean checkout would
+            // fail on the missing module; that makes ignoring it here the only way
+            // to keep it out of the lint surface. Matches apps/docs.
+            "**/routeTree.gen.ts",
             "**/test-results/**",
             "**/coverage/**",
             "**/.wrangler/**",
