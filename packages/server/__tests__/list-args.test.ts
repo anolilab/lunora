@@ -235,6 +235,22 @@ describe("defineListArgs — request-cost bounds", () => {
         expect(() => parseValidatorMap(tight.args as never, { where: { status: { in: ["a", "b", "c"] } } }, "args")).toThrow(ValidationError);
     });
 
+    it("caps an oversized in-array handed straight to toQueryArgs, not just through the validator", () => {
+        expect.assertions(2);
+
+        // This is the path that exists BECAUSE toQueryArgs is reachable without
+        // `.input()`, so the cap has to hold here too or it protects nothing.
+        const args = spec.toQueryArgs({ where: { status: { in: Array.from({ length: 5000 }).fill("x") } } });
+        const predicate = (args.where as { status: { in: string[] } }).status;
+
+        expect(predicate.in).toHaveLength(100);
+        expect(
+            defineListArgs<Message>()({ filter: { status: v.string() }, maxInValues: 3, orderBy: [] }).toQueryArgs({
+                where: { status: { in: ["a", "b", "c", "d"] } },
+            }).where,
+        ).toEqual({ status: { in: ["a", "b", "c"] } });
+    });
+
     it("caps how many orderBy entries reach the query", () => {
         expect.assertions(1);
 

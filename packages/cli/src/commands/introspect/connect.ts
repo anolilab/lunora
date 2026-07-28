@@ -51,25 +51,24 @@ const LEADING_SLASH = /^\//;
  * install instruction instead of a module-resolution stack trace.
  */
 const loadDriver = (specifier: string, install: string, cwd: string): Record<string, unknown> => {
+    // `noop.cjs` is never read — it only anchors resolution at the project root.
+    const projectRequire = createRequire(join(cwd, "noop.cjs"));
+
     try {
-        // `noop.cjs` is never read — it only anchors resolution at the project root.
-        const projectRequire = createRequire(join(cwd, "noop.cjs"));
-
-        return projectRequire(specifier) as Record<string, unknown>;
-    } catch (error: unknown) {
-        // Only a genuine resolution failure means "not installed". A driver that IS
-        // present but throws while initialising (native binding mismatch, a broken
-        // transitive dep) must surface its own error — telling someone to install a
-        // package they already have sends them down the wrong path entirely.
-        if ((error as { code?: string } | undefined)?.code !== "MODULE_NOT_FOUND") {
-            throw error;
-        }
-
+        projectRequire.resolve(specifier);
+    } catch {
         throw new LunoraError(
             "INTERNAL",
             `\`lunora introspect\` needs the \`${install}\` driver to read this database, and it isn't installed.\n\nInstall it in your project:\n\n    pnpm add -D ${install}`,
         );
     }
+
+    // Resolution and loading are separated deliberately. Checking the thrown error's
+    // `code` would conflate them: a driver that IS installed but whose own nested
+    // dependency is missing also throws `MODULE_NOT_FOUND`, and telling someone to
+    // install a package they already have sends them down entirely the wrong path.
+    // Anything the load itself throws propagates untouched.
+    return projectRequire(specifier) as Record<string, unknown>;
 };
 
 /** Infer the dialect from a connection-string scheme. */

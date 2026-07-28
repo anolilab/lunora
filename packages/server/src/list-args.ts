@@ -206,7 +206,7 @@ const OPERATOR_KEYS = new Set(["contains", "eq", "gt", "gte", "in", "isNull", "l
  * names no operator at all is left alone, so an object-valued column can still be
  * matched by equality.
  */
-const asOperators = (value: unknown): Record<string, unknown> | undefined => {
+const asOperators = (value: unknown, maxInValues: number): Record<string, unknown> | undefined => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         return undefined;
     }
@@ -215,9 +215,17 @@ const asOperators = (value: unknown): Record<string, unknown> | undefined => {
     const operators: Record<string, unknown> = {};
 
     for (const operator of OPERATOR_KEYS) {
-        if (Object.hasOwn(source, operator)) {
-            operators[operator] = source[operator];
+        if (!Object.hasOwn(source, operator)) {
+            continue;
         }
+
+        const operand = source[operator];
+
+        // `in` / `notIn` become one bound parameter per element. `operatorsValidator`
+        // caps them for anything arriving through `.input()`, but this path exists
+        // precisely BECAUSE `toQueryArgs` is reachable without that validator — so
+        // leaving the cap off here would reopen the hole it was added to close.
+        operators[operator] = Array.isArray(operand) ? operand.slice(0, maxInValues) : operand;
     }
 
     return Object.keys(operators).length === 0 ? undefined : operators;
@@ -233,7 +241,7 @@ const asOperators = (value: unknown): Record<string, unknown> | undefined => {
  * — including `__proto__` or `constructor` — has no path into the output at all,
  * and operator objects are reduced to recognised operators only.
  */
-const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<string>): Record<string, unknown> => {
+const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<string>, maxInValues: number): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
 
     for (const field of filterable) {
@@ -242,7 +250,7 @@ const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<s
         }
 
         const value = where[field];
-        const operators = asOperators(value);
+        const operators = asOperators(value, maxInValues);
 
         out[field] = operators ?? value;
     }
@@ -318,7 +326,7 @@ const defineListArgs =
 
             // Same reasoning as `orderBy` above: rebuilt from the allow-list rather
             // than trusted, because this function is reachable without the validator.
-            const where = value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable) as QueryArgs<TDocument>["where"]);
+            const where = value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable, maxInValues) as QueryArgs<TDocument>["where"]);
 
             return {
                 ...(value.cursor === undefined ? {} : { cursor: typeof value.cursor === "number" ? String(value.cursor) : value.cursor }),
