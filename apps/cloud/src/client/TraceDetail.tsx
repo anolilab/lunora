@@ -15,7 +15,7 @@ interface TraceWaterfallProps {
 
 /** The nested span waterfall: a true span timeline (real offsets/durations), indented by depth. */
 export const TraceWaterfall = ({ onSelect, rows, selectedSpanId }: TraceWaterfallProps): ReactElement => (
-    <div className="trace-waterfall">
+    <div className="trace-waterfall" role="listbox">
         {rows.map((row) => (
             <div
                 aria-selected={row.spanId === selectedSpanId}
@@ -28,7 +28,7 @@ export const TraceWaterfall = ({ onSelect, rows, selectedSpanId }: TraceWaterfal
                         onSelect(row.spanId);
                     }
                 }}
-                role="button"
+                role="option"
                 tabIndex={0}
             >
                 <span className="trace-off">+{String(row.offsetMs)}ms</span>

@@ -3,7 +3,8 @@ import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { OrgId } from "../client/types";
-import { monthStart, UsageSection } from "../client/UsageSection";
+import { UsageSection } from "../client/UsageSection";
+import { monthStart } from "../client/usage-period";
 import { preload } from "../ssr/loader";
 
 const UsageSectionRoute = (): ReactElement => {
