@@ -240,6 +240,7 @@ export const builds = sqliteTable("builds", {
     successfulAt: real("successfulAt"),
     failedAt: real("failedAt"),
 }, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
     by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
 }));
 
@@ -252,6 +253,7 @@ export const buildLogs = sqliteTable("buildLogs", {
     line: text("line").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
 }, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
     by_build: index("by_build").on(t.buildId),
 }));
 

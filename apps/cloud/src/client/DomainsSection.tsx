@@ -19,6 +19,9 @@ interface TxtRecord {
  * runs the DNS checks and records the outcome; the list is live, so the
  * verified badge flips on its own. Removing is a direct mutation.
  */
+/** Deadline for the two edge-route calls below; a hung route must not wedge the UI. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export const DomainsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
@@ -28,10 +31,12 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
     const [hostname, setHostname] = useState("");
     const [txtRecord, setTxtRecord] = useState<TxtRecord | null>(null);
     const [pending, setPending] = useState(false);
+    const [verifying, setVerifying] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const verify = (id: string): void => {
         setError(null);
+        setVerifying(id);
 
         const run = async (): Promise<void> => {
             const response = await fetch("/v1/domains/verify", {
@@ -39,6 +44,9 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                 credentials: "include",
                 headers: { "content-type": "application/json" },
                 method: "POST",
+                // Without a deadline a wedged edge route leaves the row spinning forever
+                // with no way back except a reload.
+                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             });
             const payload = (await response.json().catch(() => null)) as { txtOk?: boolean; verified?: boolean } | null;
 
@@ -51,9 +59,13 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
             }
         };
 
-        void run().catch((error_: unknown) => {
-            setError(error_ instanceof Error ? error_.message : "verify failed");
-        });
+        void run()
+            .catch((error_: unknown) => {
+                setError(error_ instanceof Error ? error_.message : "verify failed");
+            })
+            .finally(() => {
+                setVerifying(null);
+            });
     };
 
     return (
@@ -91,12 +103,13 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                                         {domain.verifiedAt ? null : (
                                             <button
                                                 className="link"
+                                                disabled={verifying === domain._id}
                                                 onClick={() => {
                                                     verify(domain._id);
                                                 }}
                                                 type="button"
                                             >
-                                                Verify
+                                                {verifying === domain._id ? "Verifying…" : "Verify"}
                                             </button>
                                         )}
                                         <button
@@ -149,6 +162,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                                     credentials: "include",
                                     headers: { "content-type": "application/json" },
                                     method: "POST",
+                                    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
                                 });
 
                                 if (!response.ok) {
