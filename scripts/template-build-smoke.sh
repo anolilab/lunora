@@ -173,6 +173,7 @@ allowBuilds:
   rs-module-lexer: true
   sharp: true
   unrs-resolver: true
+  vue-demi: true
   workerd: true
   cpu-features: false
   protobufjs: false
@@ -242,17 +243,40 @@ for tname in "${TEMPLATES[@]}"; do
     echo "  ==> install OK"
 
     # -- lunora add auth-ui -------------------------------------------------
-    # Only for React templates: the auth-ui payload is per-framework, and the
-    # point here is that the copy lands and compiles inside a real scaffold —
-    # the CLI's own tests copy into a bare fixture directory that never builds.
-    if [[ -f "$scaffold_dir/package.json" ]] && node -e "
+    # For every template whose framework the CLI can detect — the auth-ui payload
+    # is per-framework, and each of the five ports has to be proven to land and
+    # compile inside a real scaffold. The CLI's own tests copy into a bare fixture
+    # directory that never builds, so this is the only place Vue/Svelte/Solid/
+    # Angular payloads meet their meta-framework's compiler.
+    #
+    # The expected view file mirrors `detectAuthUiItem` in
+    # packages/cli/src/commands/add/features.ts — keep the two in step.
+    authui_view="$(node -e "
         const p = require('$scaffold_dir/package.json');
-        const deps = { ...p.dependencies, ...p.devDependencies };
-        process.exit(deps['@lunora/react'] || deps.react ? 0 : 1);
-    " 2>/dev/null; then
-        echo "  ==> lunora add auth-ui"
+        const d = { ...p.dependencies, ...p.devDependencies };
+        const has = (n) => Object.hasOwn(d, n);
+        // React Native is not a DOM target: the react payload would not work there.
+        if (has('react-native') || has('@lunora/react-native')) process.stdout.write('');
+        else if (has('@lunora/react')) process.stdout.write('react/auth-cards.tsx');
+        else if (has('@lunora/vue')) process.stdout.write('vue/SignInCard.vue');
+        else if (has('@lunora/svelte')) process.stdout.write('svelte/SignInCard.svelte');
+        else if (has('@lunora/solid')) process.stdout.write('solid/auth-cards.tsx');
+        else if (has('@lunora/angular')) process.stdout.write('angular/auth-cards.ts');
+        else if (has('react')) process.stdout.write('react/auth-cards.tsx');
+        else if (has('vue')) process.stdout.write('vue/SignInCard.vue');
+        else if (has('svelte')) process.stdout.write('svelte/SignInCard.svelte');
+        else if (has('solid-js')) process.stdout.write('solid/auth-cards.tsx');
+        else if (has('@angular/core')) process.stdout.write('angular/auth-cards.ts');
+        else process.stdout.write('');
+    " 2>/dev/null || true)"
+
+    if [[ -n "$authui_view" ]]; then
+        echo "  ==> lunora add auth-ui (expecting lunora/auth-ui/$authui_view)"
         authui_log="$RESULTS_DIR/${tname}-auth-ui.log"
-        if ! (cd "$scaffold_dir" && node "$REPO_ROOT/packages/cli/dist/index.mjs" add auth-ui --yes --from "$REPO_ROOT/registry" 2>&1) > "$authui_log"; then
+        # `dist/bin.mjs`, not `dist/index.mjs` — the package's `bin` field. Running
+        # the library entry instead just evaluates a barrel of re-exports and exits
+        # 0 without parsing argv, so the whole step silently did nothing.
+        if ! (cd "$scaffold_dir" && node "$REPO_ROOT/packages/cli/dist/bin.mjs" add auth-ui --yes --from "$REPO_ROOT/registry" 2>&1) > "$authui_log"; then
             echo "  FAIL: lunora add auth-ui failed for $tname (see $authui_log)"
             FAIL+=("$tname(auth-ui)")
             continue
@@ -261,7 +285,7 @@ for tname in "${TEMPLATES[@]}"; do
         # The user-owned copy landed where the item promises…
         for expected in \
             "lunora/auth-ui/core/sign-in.ts" \
-            "lunora/auth-ui/react/auth-cards.tsx" \
+            "lunora/auth-ui/$authui_view" \
             "lunora/auth-ui/client.ts" \
             "lunora/auth-ui/styles.css"; do
             if [[ ! -f "$scaffold_dir/$expected" ]]; then

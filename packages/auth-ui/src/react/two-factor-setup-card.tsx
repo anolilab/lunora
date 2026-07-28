@@ -2,7 +2,8 @@
 
 import type { ReactElement } from "react";
 
-import { createTwoFactorSetupController, isFlowEnabled } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createTwoFactorSetupController } from "../core/two-factor-setup";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";

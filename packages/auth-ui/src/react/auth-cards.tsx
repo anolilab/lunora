@@ -2,17 +2,15 @@
 
 import type { ReactElement } from "react";
 
-import {
-    createEmailOtpController,
-    createForgotPasswordController,
-    createMagicLinkController,
-    createResetPasswordController,
-    createSignInController,
-    createSignUpController,
-    createTwoFactorVerifyController,
-    isFlowEnabled,
-    signInWithSocial,
-} from "../core";
+import { createEmailOtpController } from "../core/email-otp";
+import { isFlowEnabled } from "../core/flow-gate";
+import { createForgotPasswordController } from "../core/forgot-password";
+import { createMagicLinkController } from "../core/magic-link";
+import { createResetPasswordController } from "../core/reset-password";
+import { createSignInController } from "../core/sign-in";
+import { createSignUpController } from "../core/sign-up";
+import { signInWithSocial } from "../core/social";
+import { createTwoFactorVerifyController } from "../core/two-factor-verify";
 import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";

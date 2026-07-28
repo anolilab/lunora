@@ -342,6 +342,12 @@ const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = [
     "rs-module-lexer",
     "sharp",
     "unrs-resolver",
+    // `@lunora/client` → `@visulima/storage-client` → `@tanstack/vue-query` →
+    // `vue-demi`, whose postinstall points its shim at the installed Vue major.
+    // Every scaffold gets it, including `standalone` (which has no UI framework
+    // at all), so leaving it unlisted halted the very first `pnpm install`.
+    // Pure JS and self-swallowing, so it is allowed rather than denied.
+    "vue-demi",
     "workerd",
 ];
 

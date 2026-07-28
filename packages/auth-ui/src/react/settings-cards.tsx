@@ -3,18 +3,15 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import {
-    createChangeEmailController,
-    createChangePasswordController,
-    createDeleteAccountController,
-    createPasskeysController,
-    createProfileController,
-    createSessionsController,
-    isFlowEnabled,
-    passkeyLabel,
-    sessionLabel,
-    signOut,
-} from "../core";
+import { createChangeEmailController } from "../core/change-email";
+import { createChangePasswordController } from "../core/change-password";
+import { createDeleteAccountController } from "../core/delete-account";
+import { isFlowEnabled } from "../core/flow-gate";
+import { passkeyLabel, sessionLabel } from "../core/labels";
+import { createPasskeysController } from "../core/passkeys";
+import { createProfileController } from "../core/profile";
+import { signOut } from "../core/session-actions";
+import { createSessionsController } from "../core/sessions";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";

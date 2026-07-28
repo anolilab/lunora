@@ -3,7 +3,11 @@
 import type { ReactElement } from "react";
 import { useId, useState } from "react";
 
-import { createMembersController, createOrganizationsController, createOrganizationSettingsController, isFlowEnabled, ROLE_OPTIONS, slugify } from "../core";
+import { isFlowEnabled } from "../core/flow-gate";
+import { ROLE_OPTIONS, slugify } from "../core/labels";
+import { createMembersController } from "../core/members";
+import { createOrganizationsController } from "../core/organization-list";
+import { createOrganizationSettingsController } from "../core/organization-settings";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";

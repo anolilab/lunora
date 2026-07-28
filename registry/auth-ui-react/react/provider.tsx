@@ -2,10 +2,12 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect, useMemo, useRef } from "react";
+import { createContext, use, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AuthUIConfig, ControllerContext } from "../core";
-import { defaultNav, resolveContext, resolveThemeVariables } from "../core";
+import { resolveContext } from "../core/config";
+import { defaultNav } from "../core/default-nav";
+import { resolveThemeVariables } from "../core/theme";
 
 /** The React context also carries an optional framework `Link` for internal navigation. */
 interface AuthUIReactContext {
@@ -60,9 +62,15 @@ const AuthUIProvider = ({
         latest.current = { nav, onError, onSessionChange };
     }, [nav, onError, onSessionChange]);
 
-    // `useRef(...).current`, not a `useMemo` with empty deps: only the first
-    // object is kept, and every field reads through `latest` at call time.
-    const handlers = useRef({
+    /*
+     * A lazy `useState` initializer, not `useRef(...).current`: both keep the
+     * first object forever, but reading `.current` during render is a ref read
+     * the React Compiler refuses to optimize around (`react-hooks-js/refs`).
+     * `useState`'s initial value is a plain render-safe value. Nothing ever
+     * calls the setter, so this is a constant; every field reads through
+     * `latest` at call time.
+     */
+    const [handlers] = useState(() => {return {
         nav: {
             navigate: (to: string): void => {
                 (latest.current.nav ?? defaultNav).navigate(to);
@@ -77,7 +85,7 @@ const AuthUIProvider = ({
         onSessionChange: (): void => {
             latest.current.onSessionChange?.();
         },
-    }).current;
+    }});
 
     // `theme` is a function, so its identity is as unstable as the callbacks —
     // key on what it *returns* instead, which is what the cards actually consume.
