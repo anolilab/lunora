@@ -4,6 +4,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -30,7 +31,7 @@ import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
-import { emitRpcEvent } from "./observability";
+import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
@@ -245,7 +246,16 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  * settled. `dispatch` runs only after payment is verified — an unpaid or
  * invalid request never reaches the shard.
  */
-type X402ChargeGate = (request: Request, spec: { functionPath: string; price: number | string }, dispatch: () => Promise<Response>) => Promise<Response>;
+type X402ChargeGate = (
+    request: Request,
+    spec: { functionPath: string; price: number | string },
+    dispatch: () => Promise<Response>,
+    // Mirrors `@lunora/x402`'s `ChargeHandlerDeps` structurally — the runtime
+    // deliberately doesn't import `@lunora/x402` (the gate is injected). The
+    // request's `ctx.waitUntil`, forwarded so the settlement-receipt sink
+    // survives past the response instead of being cancelled when the request ends.
+    deps?: { waitUntil?: (promise: Promise<unknown>) => void },
+) => Promise<Response>;
 
 /**
  * Lists objects in the storage bucket for the admin file browser. Structurally
@@ -503,7 +513,7 @@ interface HealthOptions {
      * includes the (runtime-authored) messages.
      */
     auth?: "admin" | "public";
-    /** Cache the computed report for this many ms so a frequent poller does not re-run every probe. Defaults to `0`. */
+    /** Cache the computed report for this many ms so a frequent poller (or an unauthenticated flood) does not re-run every probe. Defaults to `5000` for the public posture and `0` (no cache) for the bearer-gated admin posture. */
     cacheTtlMs?: number;
     /** Skip the auto-registered D1 / R2 / queue / Hyperdrive binding probes (keep only the DO probe + `probes`). Defaults to `false`. */
     disableBindingProbes?: boolean;
@@ -550,14 +560,32 @@ interface NotifySubscriptionDevice {
  */
 interface NotifySubscriptionStoreLike {
     /**
-     * List every stored subscription. Declared with NO parameter so a concrete
-     * `@lunora/notify` `SubscriptionStore` — whose `list(filter?)` narrows `kind`
-     * to the `"web-push" | "fcm"` union — assigns cleanly under
-     * `strictFunctionTypes` (an extra optional parameter on the source is fine).
-     * The RPC handler applies the `{ kind, userId }` filter in-memory, so no typed
-     * filter needs to cross this dependency-free structural boundary.
+     * List stored subscriptions, optionally narrowed by `filter`. The parameter
+     * type EXACTLY MIRRORS `@lunora/notify`'s `SubscriptionFilter` (the runtime
+     * carries no `@lunora/notify` dependency, so it is re-declared structurally):
+     * an identical shape keeps a concrete `SubscriptionStore` assignable here under
+     * `strictFunctionTypes` (contravariant parameter), while letting the RPC push
+     * `{ kind, userId, limit }` DOWN to the store so a large device table is
+     * filtered + bounded server-side (indexed in the D1 store) instead of
+     * list-all-then-filter-in-memory. `filter` is optional, so an existing caller
+     * that lists everything is unaffected.
      */
-    list: () => Promise<ReadonlyArray<NotifySubscriptionDevice & { keys?: unknown; token?: unknown }>>;
+    list: (filter?: NotifySubscriptionFilter) => Promise<ReadonlyArray<NotifySubscriptionDevice & { keys?: unknown; token?: unknown }>>;
+}
+
+/**
+ * Structural mirror of `@lunora/notify`'s `SubscriptionFilter` — kept byte-for-byte
+ * compatible (same optional fields, same `kind` union) so threading it through
+ * {@link NotifySubscriptionStoreLike} does NOT change that cross-package contract's
+ * assignability. See the note on {@link NotifySubscriptionStoreLike.list}.
+ */
+interface NotifySubscriptionFilter {
+    /** Restrict to a delivery kind. */
+    kind?: "fcm" | "web-push";
+    /** Cap the number of rows returned (a server-side `LIMIT`). */
+    limit?: number;
+    /** Restrict to a single owning user. */
+    userId?: null | string;
 }
 
 interface WorkerOptions {
@@ -1242,6 +1270,17 @@ const buildSinkContext = (environment: unknown, request: Request, waitUntil?: (p
 };
 
 /**
+ * Normalize a `waitUntil`-bearing source — an `ExecutionContext` (RPC), or an
+ * SSR host's `{ waitUntil }` (REST) — into the `{ waitUntil? }` deps shape the
+ * x402 gate expects. Both gate sites forward through this one helper so they
+ * pass an identically-shaped `deps`. Forwarding through the source (rather than
+ * extracting the method) preserves its receiver, and a source without a
+ * `waitUntil` yields `{}` so the gate falls back to fire-and-forget.
+ */
+const forwardWaitUntil = (source?: { waitUntil?: (promise: Promise<unknown>) => void }): { waitUntil?: (promise: Promise<unknown>) => void } =>
+    source?.waitUntil ? { waitUntil: (promise): void => source.waitUntil?.(promise) } : {};
+
+/**
  * Project a dispatch's trace context onto the `ObservabilityEvent` fields that
  * carry it. One helper so the success and failure emits at every dispatch site
  * cannot drift on which of the four they set — the previous hand-copied spreads
@@ -1464,6 +1503,38 @@ const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
  * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
  * DO reconstructs from the `x-lunora-userid` / `x-lunora-identity` headers.
  */
+
+/**
+ * The per-event sink context for an invocation, or `undefined` when the platform
+ * exposes no `waitUntil` (where a network sink falls back to fire-and-forget).
+ *
+ * One helper because both invocation boundaries — the `fetch` flush and
+ * `instrumentTrigger` — need the identical shape, and a divergence would
+ * silently downgrade one of them.
+ */
+const sinkContextFor = (context: ExecutionContextLike): ObservabilitySinkContext | undefined =>
+    context.waitUntil
+        ? {
+              waitUntil: (promise) => {
+                  context.waitUntil?.(promise);
+              },
+          }
+        : undefined;
+
+/**
+ * Name of the queue a consumer batch came from, for the trigger's span name.
+ *
+ * The batch is typed `unknown` at this boundary (the consumer handler is
+ * codegen-built and the worker deliberately doesn't depend on `@lunora/queue`'s
+ * types), so the name is read defensively: a batch without a string `queue`
+ * falls back to a constant rather than stringifying `undefined` into the span
+ * name, which would show up in a collector as a literal `queue:undefined` group.
+ */
+const queueNameOf = (batch: unknown): string => {
+    const name = (batch as { queue?: unknown } | null | undefined)?.queue;
+
+    return typeof name === "string" && name.length > 0 ? name : "unknown";
+};
 
 const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -2530,8 +2601,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
      * Studio Notifications page's read of registered `@lunora/notify` devices.
-     * Default-closed (non-admin bearer → 403 FORBIDDEN); a `{ kind?, userId? }`
-     * filter narrows the read. Reads through `options.notifySubscriptionStore`
+     * Default-closed (non-admin bearer → 403 FORBIDDEN); a `{ kind?, userId?,
+     * limit? }` filter is pushed DOWN to the store (indexed + bounded server-side,
+     * default cap 1000). Reads through `options.notifySubscriptionStore`
      * (bound by codegen from `defineNotify({ store })`); when absent — no notify
      * store configured — returns an empty device list rather than erroring. Every
      * device is projected to strip the Web Push `keys` and FCM `token` delivery
@@ -2548,17 +2620,43 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const rawKind = args?.["kind"];
         const rawUserId = args?.["userId"];
-        const kindFilter = typeof rawKind === "string" && rawKind !== "" ? rawKind : undefined;
+        const rawLimit = args?.["limit"];
+        // Narrow `kind` to the store's union so the typed filter crosses the
+        // structural boundary; a stray value simply means "no kind filter".
+        const kindFilter = rawKind === "fcm" || rawKind === "web-push" ? rawKind : undefined;
         const userIdFilter = typeof rawUserId === "string" && rawUserId !== "" ? rawUserId : undefined;
+        // Default a bound so the admin page never ships an unbounded table; a client
+        // may request a smaller page but not an unbounded one. TRUNCATE FIRST, then
+        // test `> 0`: a fractional request in (0, 1) truncates to 0, which the store
+        // reads as "no LIMIT" (unbounded) — so a truncated-to-nothing limit must fall
+        // back to the default cap, never collapse to 0 and leak the full table.
+        const truncatedLimit = typeof rawLimit === "number" && Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 0;
+        const limit = truncatedLimit > 0 ? Math.min(truncatedLimit, 1000) : 1000;
 
-        const stored = await store.list();
+        // Push `{ kind, userId, limit }` DOWN to the store — filtered + bounded
+        // server-side (indexed in the D1 store), not list-all-then-filter-in-memory.
+        const stored = await store.list({ kind: kindFilter, limit, userId: userIdFilter });
 
         const subscriptions: NotifySubscriptionDevice[] = stored
-            // Apply the `{ kind, userId }` filter in-memory (the store surface is
-            // filter-free) …
-            .filter((device) => (kindFilter === undefined || device.kind === kindFilter) && (userIdFilter === undefined || device.userId === userIdFilter))
-            // … then strip delivery secrets (`keys`, `token`) — the browser only
-            // needs the endpoint / kind / owner / timestamps + last-send status.
+            // Defense-in-depth: `{ kind, userId }` are pushed DOWN to `store.list`
+            // above for the indexed perf win, but a store that ignores the filter (a
+            // non-filtering `SubscriptionStore` implementation, or a test double) would
+            // otherwise return everything. Re-apply the same predicate in memory so the
+            // RPC is correct regardless of the store — `null` and absent `userId` both
+            // read as anonymous, matching the store's `userId IS NULL` semantics.
+            .filter((device) => {
+                if (kindFilter !== undefined && device.kind !== kindFilter) {
+                    return false;
+                }
+
+                // `null` and absent `userId` both read as anonymous, matching the
+                // store's `userId IS NULL` semantics (and `userIdFilter`, which is
+                // `null | string`) — a legitimate null site.
+                // eslint-disable-next-line unicorn/no-null -- comparison mirrors the store's `userId IS NULL`
+                return userIdFilter === undefined || (device.userId ?? null) === userIdFilter;
+            })
+            // Strip delivery secrets (`keys`, `token`) — the browser only needs the
+            // endpoint / kind / owner / timestamps + last-send status.
             .map(({ keys: _keys, token: _token, ...device }) => device);
 
         return Response.json({ subscriptions }, { headers: { "content-type": "application/json" }, status: 200 });
@@ -2732,7 +2830,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const namespace = (shardDO as ShardNamespaceLike | undefined) ?? (env as { SHARD?: ShardNamespaceLike } | undefined)?.SHARD;
 
         if (namespace !== undefined) {
-            probes.push(durableObjectProbe("durable-object", namespace, defaultShard));
+            // `durable-object:default` follows the same `kind:key` shape as the
+            // binding probes (`d1:…`, `r2:…`) so the public posture reduces it to
+            // the safe kind `durable-object` via the shared colon rule — the `key`
+            // is the fixed literal `default`, never the operator's `defaultShard`.
+            probes.push(durableObjectProbe("durable-object:default", namespace, defaultShard));
         }
 
         if (options.health?.disableBindingProbes !== true) {
@@ -3214,7 +3316,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 },
                 sinkContext,
-                sampling,
+                // No `sampling` fallback: `emitRpcEvent` ignores it whenever a
+                // settled `decision` is passed, so passing it here would only
+                // mislead a reader into thinking both are live.
+                undefined,
+                // The verdict `beginDispatchTrace` already settled — `trace.sampled`
+                // is the propagated bit (honoring a trusted upstream's sampled-out
+                // `00`), NOT `decision.isTraced`, so the export gate can never
+                // disagree with the `traceparent` we forwarded.
+                { isTraced: trace.sampled, keepErrors: decision.keepErrors },
             );
 
             // The DO's `x-d1-bookmark` header (which lets the client pin reads
@@ -3232,7 +3342,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     ...buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }),
                 },
                 sinkContext,
-                sampling,
+                // See the success path above: `sampling` is dead once a settled
+                // `decision` is passed, so it is omitted here too.
+                undefined,
+                { isTraced: trace.sampled, keepErrors: decision.keepErrors },
             );
             throw error;
         }
@@ -3385,7 +3498,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // presence was already asserted above when `x402Tag` is set, so the
             // `x402Charge` re-check here is only for the type system.
             if (x402Tag && options.x402Charge) {
-                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch);
+                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch, forwardWaitUntil(context));
             }
 
             return dispatch();
@@ -3857,6 +3970,53 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * collected and rethrown together so one failure neither masks the other nor
      * is silently swallowed — the platform sees the cron invocation fail.
      */
+
+    /**
+     * Wrap a NON-`fetch` worker trigger — a queue batch, a cron fire — in the same
+     * telemetry the RPC path gets: its own trace, one SERVER span, and a flush of
+     * the batching sink at the invocation boundary.
+     *
+     * Without this, everything a queue consumer or cron job does is invisible:
+     * `ctx.log`/`ctx.trace` inside the dispatched function still fire, but they
+     * hang off a trace with no root, so a collector shows orphan spans and no
+     * "this cron took 40s" bar to hang them under. Background work is exactly
+     * where you least want a blind spot, since nobody is watching a response time.
+     *
+     * Trigger events are exported WITHOUT the head-sampling ratio. A ratio tuned
+     * for request traffic would hide most fires of a once-an-hour cron — the exact
+     * blind spot this wrapper exists to close — and trigger volume is inherently
+     * low enough that keeping all of them costs nothing.
+     *
+     * The trace is always minted here rather than adopted: a queue message or a
+     * cron controller carries no `traceparent`. Linking a consumer span back to
+     * the producing request is instead the job of `span.addLink`, since parenting
+     * would be wrong — the producer's request is long over by then.
+     */
+    const instrumentTrigger = async <T>(functionPath: string, context: ExecutionContextLike, run: () => Promise<T>): Promise<T> => {
+        const { observability } = options;
+        const startedAt = Date.now();
+        const traceId = otlpRandomHex(16);
+        const spanId = otlpRandomHex(8);
+        const sinkContext = sinkContextFor(context);
+
+        try {
+            const result = await run();
+
+            emitRpcEvent(observability, { durationMs: Date.now() - startedAt, functionPath, ok: true, spanId, traceId }, sinkContext);
+
+            return result;
+        } catch (error) {
+            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - startedAt, error, {}), spanId, traceId }, sinkContext);
+
+            throw error;
+        } finally {
+            // The invocation boundary. A Workers isolate can be frozen the moment
+            // this returns, so a batching sink that has not been told to ship
+            // would simply lose everything it buffered.
+            flushSink(observability, sinkContext);
+        }
+    };
+
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
@@ -3994,7 +4154,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const x402Tag = resolveX402Charge(envelope, options);
 
         if (x402Tag && options.x402Charge) {
-            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch);
+            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch, forwardWaitUntil({ waitUntil }));
         }
 
         return dispatch();
@@ -4249,16 +4409,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return decorateResponse(response, request, resolvedSecurity);
             } catch (error: unknown) {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
+            } finally {
+                // Invocation boundary: ship whatever the (batching) sink buffered
+                // during this request. Registered through `waitUntil` so the export
+                // outlives the response instead of racing isolate teardown.
+                flushSink(options.observability, sinkContextFor(context));
             }
         },
         async queue(batch, env, context) {
             // Forward to the codegen-built push-consumer handler (which routes by
             // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
             // push queues, so re-exporting `queue` unconditionally is harmless.
-            await options.queue?.(batch, env, context);
+            //
+            // Named after the queue so a collector groups consumer invocations per
+            // queue rather than lumping every batch under one span name.
+            await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async () => {
+                await options.queue?.(batch, env, context);
+            });
         },
         async scheduled(controller, env, context) {
-            await handleScheduled(controller, env, context);
+            // Named after the cron EXPRESSION, which is the stable identity of a
+            // trigger — `scheduledTime` varies per fire and would make every run
+            // its own group in a collector.
+            await instrumentTrigger(`cron:${controller.cron}`, context, async () => {
+                await handleScheduled(controller, env, context);
+            });
         },
         serverQuery,
     };

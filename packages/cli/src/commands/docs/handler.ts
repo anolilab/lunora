@@ -19,7 +19,7 @@ interface DocsCommandResult {
     url: string;
 }
 
-const DEFAULT_DOCS_URL = "https://lunora.anolilab.dev/docs";
+const DEFAULT_DOCS_URL = "https://lunora.sh/docs";
 
 /** Strip leading and trailing `/` characters without a backtracking regex. */
 const trimSlashes = (value: string): string => {

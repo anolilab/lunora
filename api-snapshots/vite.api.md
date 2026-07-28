@@ -188,6 +188,12 @@ const buildStudioUrl: (input: {
 const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, hasContainers?: boolean, useUmbrella?: boolean, allowUnauthenticatedShardAccess?: boolean) => string;
 ```
 
+### `checkLunoraProxy` (const)
+
+```ts
+const checkLunoraProxy: (proxy: Record<string, unknown> | undefined, label: string) => string[];
+```
+
 ### `codegenPlugin` (const)
 
 ```ts
@@ -271,6 +277,12 @@ const lunoraSolutionFinders: ReadonlyArray<SolutionFinder>;
 
 ```ts
 const planViteRemoteBindings: (options: PlanViteRemoteOptions) => ViteRemotePlan;
+```
+
+### `proxyCheckPlugin` (const)
+
+```ts
+const proxyCheckPlugin: () => Plugin;
 ```
 
 ### `reconcileWranglerCrons` (const)

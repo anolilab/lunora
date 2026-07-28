@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
 import { createCerebro } from "@visulima/cerebro";
@@ -24,6 +26,7 @@ import { initCommand } from "./commands/init";
 import { insightsCommand } from "./commands/insights";
 import { linkCommand } from "./commands/link";
 import { logsCommand } from "./commands/logs";
+import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
 import { prepareCommand } from "./commands/prepare";
 import { registryCommand } from "./commands/registry/command";
@@ -68,26 +71,62 @@ const COMMANDS = [
     "docs",
     "registry",
     "rules",
+    "mcp",
 ] as const;
 
 type CommandName = (typeof COMMANDS)[number];
 
 /**
- * The CLI version, read from the package's own `package.json` at load time. The
- * bundle lives in `dist/`, so `package.json` sits one directory up; in dev
- * (running `src/` under vitest) it resolves to `packages/cli/package.json`.
- * Falls back to the `0.0.0` dev sentinel when the read fails — which also keeps
- * the update notifier inert in dev/unpublished builds.
+ * How far up to look before giving up. Deep enough for the worst real layout —
+ * a nested `dist/packem_shared/` chunk inside a hoisted `node_modules` — and
+ * shallow enough to stop rather than walk to the filesystem root.
+ */
+const PACKAGE_JSON_SEARCH_DEPTH = 8;
+
+/**
+ * The CLI version, read from the package's own `package.json` at load time.
+ *
+ * It walks up for the manifest rather than resolving a fixed `../package.json`,
+ * because this module's depth is not fixed: from `src/` under vitest the
+ * manifest is one level up, but packem hoists the built module into a hashed
+ * `dist/packem_shared/` chunk where it is two — so the fixed path resolved to a
+ * nonexistent `dist/package.json` and every published build reported `0.0.0`.
+ *
+ * The name check matters: without it the walk would accept the first
+ * `package.json` it met, which in a nested install is some dependency's.
+ *
+ * Falls back to the `0.0.0` dev sentinel, which also keeps the update notifier
+ * quiet rather than comparing against a bogus version.
  */
 const readCliVersion = (): string => {
     try {
-        const parsed: unknown = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-        const version = parsed !== null && typeof parsed === "object" ? (parsed as { version?: unknown }).version : undefined;
+        let directory = dirname(fileURLToPath(import.meta.url));
 
-        return typeof version === "string" && version.length > 0 ? version : "0.0.0";
+        for (let depth = 0; depth < PACKAGE_JSON_SEARCH_DEPTH; depth += 1) {
+            try {
+                const parsed: unknown = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+                const manifest = parsed !== null && typeof parsed === "object" ? (parsed as { name?: unknown; version?: unknown }) : undefined;
+
+                if (manifest?.name === "@lunora/cli" && typeof manifest.version === "string" && manifest.version.length > 0) {
+                    return manifest.version;
+                }
+            } catch {
+                // No (or unreadable) package.json at this level — keep climbing.
+            }
+
+            const parent = dirname(directory);
+
+            if (parent === directory) {
+                break;
+            }
+
+            directory = parent;
+        }
     } catch {
-        return "0.0.0";
+        // Fall through to the sentinel below.
     }
+
+    return "0.0.0";
 };
 
 const VERSION: string = readCliVersion();
@@ -122,6 +161,7 @@ const CLI_COMMANDS = [
     documentationCommand,
     registryCommand,
     rulesCommand,
+    mcpCommand,
 ];
 
 interface RunCliOptions {

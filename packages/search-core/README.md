@@ -1,0 +1,39 @@
+# @lunora/search-core
+
+The full-text search core every Lunora storage backend shares.
+
+**Internal, not published.** It is bundled into its consumers, the way `@lunora/dispatch` is. The search API you write against is `.searchIndex()` in your schema and `.withSearchIndex()` on a query.
+
+Part of the [Lunora](https://github.com/anolilab/lunora) framework.
+
+## Why it exists
+
+Search is implemented twice in Lunora — synchronously over JSON blobs inside a Durable Object, asynchronously over columns on a `.global()` backend — and the two must return the same documents in the same order. Everything that decides **which** documents and **what order** lives here, so neither engine can drift from the other by reimplementing it.
+
+It sits outside both engines because both need it and neither may depend on the other: the schema builder has to stay usable without the Durable Object runtime, and the `.global()` store must not import a Durable Object. Reaching across from `@lunora/do` instead — the shape this replaced — turned two dozen internal contracts into permanent public API of that package purely so the second engine could reuse them.
+
+## Why a package rather than a folder under `shared/`
+
+`shared/` is for tiny, genuinely dependency-free leaf helpers that must not create a dependency edge. This is ~800 lines across five modules with an internal dependency order, its own test suite, and one import of `@lunora/errors` (the query surface's refusals have to carry a code the runtime renders as a 400; a bare `TypeError` surfaces as a 500).
+
+As a package it gets ESLint, its own tests and its own coverage gate. As `private`, being a package costs nothing on npm.
+
+## What is in it
+
+| Module      | Owns                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `languages` | The declared analysis languages and storage strategies — the single source the schema builder and the engines both validate against. |
+| `analyzer`  | What a token _is_: Unicode folding, per-language stopwords, and the versioned profile that makes a change to either detectable.      |
+| `text`      | The indexing side — what a companion stores, and the caps on it.                                                                     |
+| `query`     | The read side — the query surface's guards, the scorer, the ranking, and the paging algebra.                                         |
+| `backfill`  | How far an index has got, and what the next pass should do about it.                                                                 |
+
+## Before changing anything here
+
+**Analysis is stored.** The same analysis must run over a document when it is indexed and over the query when it is searched, forever, or the two stop meeting. That is why `createSearchAnalyzer` carries a `profile` string: it is recorded alongside each companion's backfill progress, so changing a language — or bumping `ANALYZER_VERSION` — is _detected_ and rebuilds the index instead of leaving half of it analyzed the old way.
+
+If you change folding, stopwords, the token-length cap, or (one day) stemming, bump `ANALYZER_VERSION`. Not doing so leaves every existing index half-matching, silently, for the rest of its life.
+
+## License
+
+FSL-1.1-Apache-2.0

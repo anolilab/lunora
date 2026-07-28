@@ -13,6 +13,7 @@ import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
+import { proxyCheckPlugin } from "./proxy-check-plugin";
 import { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin } from "./remote-bindings-plugin";
 import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
@@ -118,6 +119,10 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // `lunora dev --background|stop|status|logs` manage Vite projects too.
         devStatePlugin(resolved),
         agentRulesHintPlugin(resolved),
+        // Catches the two silent dev-proxy misconfigurations (missing `ws: true`,
+        // origin-rewriting `changeOrigin`) that leave live queries permanently
+        // unconnected while HTTP RPC still answers.
+        proxyCheckPlugin(),
     ];
 
     if (resolved.studio) {
@@ -200,6 +205,7 @@ export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
 // here and consumed only there + in tests until a second reader (PLAN4 M4
 // composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
+export { checkLunoraProxy, proxyCheckPlugin } from "./proxy-check-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 // The error→solution rule table itself lives in `@lunora/codegen` (shared with

@@ -1,3 +1,4 @@
+// eslint-disable-next-line e18e/ban-dependencies -- module-replacements@3.1.0 added gray-matter to its "preferred" manifest (suggesting @11ty/gray-matter). We stay on gray-matter deliberately: patches/gray-matter@4.0.3.patch rewrites its removed safeLoad/safeDump onto js-yaml 4, which is what keeps the whole tree off the unmaintained js-yaml 3 (see the js-yaml override in pnpm-workspace.yaml). Swapping the package would drop that patch, so it is a migration, not a lint fix.
 import matter from "gray-matter";
 
 /**

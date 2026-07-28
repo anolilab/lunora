@@ -900,6 +900,68 @@ describe("rls — batch write path", () => {
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
     });
+
+    it("deleteAll gates each row rather than delegating to the writer's uncapped erase", async () => {
+        expect.assertions(3);
+
+        const database = createFakeDatabase([
+            { _id: "d1", ownerId: "u1", table: "documents" },
+            { _id: "d2", ownerId: "u1", table: "documents" },
+        ]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 2 });
+        // Each row went through the single-delete gate...
+        expect(database.calls.filter((call) => call.method === "delete")).toHaveLength(2);
+        // ...and the underlying writer's own `deleteAll` was never called: it loops
+        // its RAW delete, which would bypass every policy.
+        expect(database.calls.some((call) => call.method === "deleteAll")).toBe(false);
+    });
+
+    it("deleteAll denies (FORBIDDEN) when a row fails its policy, before deleting it", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "someone-else", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "delete")).toBe(false);
+    });
+
+    it("deleteAll does not pin the table, so a .global() row still routes to its backend", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        // Pinning `expectedTable` would block the writer's global fallback, making every
+        // delete on a `.global()` table a silent no-op. It costs nothing to omit: the ids
+        // came from this table's own policy-filtered read, and `gateById` still resolves
+        // each row's real table to pick its delete policy.
+        const deletes = database.calls.filter((call) => call.method === "delete");
+
+        expect(deletes).toHaveLength(1);
+        expect(deletes[0]?.args).toBeUndefined();
+    });
+
+    it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.wipeShard());
+
+        // "Erase everything I can see" is not an erasure guarantee — a read policy
+        // hiding rows would silently leave them behind. Account deletion belongs in
+        // an internalMutation.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "delete")).toBe(false);
+    });
 });
 
 describe("rls — write policies returning a WhereInput predicate", () => {

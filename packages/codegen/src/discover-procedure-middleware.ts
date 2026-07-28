@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { ProcedureMiddlewareIR } from "./ir";
+import { argumentNames, procedureArgumentObjects } from "./procedure-argument-objects";
 
 /**
  * Middleware factory names mapped to the protection flag they set. Matched by the
@@ -22,6 +23,44 @@ const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMa
 
 /** Tables whose insert marks a procedure as user/session-creating (captcha-expected). */
 const USER_TABLE_RE = /account|credential|member|passkey|session|user/iu;
+
+/**
+ * True for an argument name that carries an email **address**.
+ *
+ * Separators are folded away and the name is matched on its terminal word, so
+ * `email`, `e_mail`, `userEmail`, `billing_contact_email` and `emailAddress` all
+ * count, while `emailVerified`, `emailOptIn` and `emailTemplateId` — which hold a
+ * flag or an id, not an address `emailGateMiddleware` could select — do not.
+ * Folding first (rather than one regex) keeps snake_case, kebab-case and
+ * camelCase on the same path without a nested quantifier.
+ */
+const isEmailArgumentName = (name: string): boolean => {
+    const folded = name.replaceAll(/[^a-z0-9]/giu, "").toLowerCase();
+
+    return folded.endsWith("email") || folded.endsWith("emailaddress");
+};
+
+/**
+ * Whether the procedure declares an email-shaped argument, or `undefined` when
+ * its argument list can't be read statically (`.input(sharedSchema)`, a spread,
+ * or a factory whose `args` comes from a variable).
+ *
+ * Tri-state on purpose. This feeds `signup_mutation_without_disposable_gating`,
+ * which skips a procedure known to take no email — so collapsing "unreadable"
+ * into `false` would silently clear the lint on a registration that may well
+ * expose one. Unknown stays unknown and the lint keeps firing.
+ */
+const declaresEmailArgument = (call: CallExpression, receiver: TsNode | undefined): boolean | undefined => {
+    const { objects, opaque } = procedureArgumentObjects(call, receiver);
+
+    // A definite hit wins over opacity: finding the argument is enough, whatever
+    // else the declaration hides.
+    if (argumentNames(objects).some((name) => isEmailArgumentName(name))) {
+        return true;
+    }
+
+    return opaque ? undefined : false;
+};
 
 /** The set of protections a builder chain carries. */
 interface Protections {
@@ -333,6 +372,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         exportName: declaration.getName(),
         fanOut,
         file: relativePath,
+        hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
         unboundedAiGeneration,
         usesCaptcha: protections.usesCaptcha,

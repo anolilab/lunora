@@ -47,6 +47,7 @@ import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { tagRlsMiddleware } from "./policy-tag";
+import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
 
 /**
@@ -158,6 +159,9 @@ interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+
+    /** Uncapped, chunked erase of a whole table. The RLS wrapper gates each row like a single delete. */
+    deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
@@ -222,6 +226,15 @@ interface DatabaseWriterLike {
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Whole-shard erase. The RLS wrapper deliberately **fails this closed** rather
+     * than wrapping it — see the wrapper's `wipeShard`.
+     */
+    wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 
 /**
@@ -266,8 +279,8 @@ interface RlsContextIn {
     db: RlsDatabase;
 }
 
-/** Sentinel `WhereInput` that compiles to a vacuously-false predicate. */
-const FALSE_PREDICATE: WhereInput = { OR: [] };
+/** Sentinel `WhereInput` that compiles to a vacuously-false predicate. See `./predicates`. */
+const FALSE_PREDICATE: WhereInput = deny();
 
 /**
  * Well-known key the secure-by-default guard (`@lunora/do`'s `guardWriter`)
@@ -1045,6 +1058,51 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
         delete: (id, expectedTable, options) => gateById(id, "delete", (writer) => writer.delete(id, expectedTable, options), undefined, expectedTable),
 
+        async deleteAll(tableName, options) {
+            // Chunked erase, RLS-honest: rows are resolved through the read-filtered
+            // reader (so a row a policy hides is never touched) and each id is gated
+            // exactly like a single `delete()`. Delegating to the underlying writer's
+            // `deleteAll` would bypass both — it loops its OWN raw `delete`, not this
+            // wrapper's — so this override is load-bearing, not a convenience.
+            const chunkSize = Math.max(1, options?.chunkSize ?? DEFAULT_BATCH_LIMIT);
+            const { baseWhere } = readBase(tableName);
+            let deleted = 0;
+
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- chunked by design: one policy-visible page at a time
+                const resolved = await route(tableName).findMany(tableName, {
+                    baseWhere,
+                    limit: chunkSize,
+                    relationBaseWhere: relationReadFilter,
+                });
+                const ids = resolved.page.map((row) => String(row["_id"]));
+
+                if (ids.length === 0) {
+                    break;
+                }
+
+                for (const id of ids) {
+                    // `expectedTable` is deliberately NOT pinned. Pinning it would block
+                    // the writer's global fallback, so every delete on a `.global()`
+                    // table would be a silent no-op — inflating the count while the rows
+                    // survive. It costs nothing here: these ids came from this table's
+                    // own policy-filtered read, so they are provably its rows, and
+                    // `gateById` still resolves each row's real table and applies that
+                    // table's delete policy. Same reasoning as `deleteWhere`, which hands
+                    // its ids to `deleteMany` unpinned.
+                    // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
+                    await gateById(id, "delete", (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }));
+                    deleted += 1;
+                }
+
+                if (ids.length < chunkSize) {
+                    break;
+                }
+            }
+
+            return { deleted };
+        },
+
         async deleteMany(ids, options, expectedTable) {
             assertBatchLimit(ids.length, options?.limit, "deleteMany");
 
@@ -1383,6 +1441,24 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             const baseWhere = requireUnrestrictedReadBase(tableName, "rankPage");
 
             return route(tableName).rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+        },
+
+        wipeShard() {
+            // Fails closed on purpose. `wipeShard` enumerates the schema's tables,
+            // which this module deliberately cannot see (it matches the writer
+            // structurally, not through `@lunora/do`), so it cannot gate the sweep
+            // per row. And "erase everything I'm allowed to see" is not a meaningful
+            // erasure contract — a read policy hiding rows would silently leave them
+            // behind, which is precisely the guarantee the caller wanted.
+            //
+            // Account deletion is a privileged operation: run it from an
+            // `internalMutation` (no RLS middleware), or erase the specific tables
+            // with `ctx.db.deleteAll(table)`, which IS gated per row.
+            throw new LunoraError(
+                "FORBIDDEN",
+                "ctx.db.wipeShard() is unavailable under rls(): a whole-shard erase can't be policy-gated per row, and erasing only policy-visible rows would silently leave data behind. Run it from an internalMutation, or use ctx.db.deleteAll(table) per table.",
+                { status: 403 },
+            );
         },
 
         // `rankBefore` is the one optional method (the D1 twin omits it).

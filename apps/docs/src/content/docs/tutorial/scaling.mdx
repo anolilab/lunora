@@ -1,0 +1,213 @@
+---
+title: "Tutorial: scaling the chat app"
+description: Take the chat app from one Durable Object to many — shard by channel, put identities in a global table, and keep cross-shard reads off the hot path.
+---
+
+The [realtime chat tutorial](/docs/tutorial/realtime-chat) left you with a
+working app on a single Durable Object. That is the right shape for the first
+80% of an app's life, and this chapter is about the other 20%: what to change
+when one DO is no longer enough, and how to tell when that moment has arrived.
+
+Nothing here is speculative work you should do up front. Read it, then come back
+when the numbers say so.
+
+## Know when to act
+
+A Durable Object holds up to **10 GB of SQLite** and sustains roughly **1 000
+requests per second**. Lunora warns you well before either ceiling: when the
+`__root__` DO crosses 1 GB — 10% of the storage limit — the runtime logs once per
+DO lifetime.
+
+```text
+[@lunora/do] __root__ Durable Object SQLite size is 1075000000 bytes
+(>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a `.shardBy()` migration
+before you hit the wall.
+```
+
+The margin is deliberate: a sharding migration needs runway, and 9 GB of it is
+plenty.
+
+For the throughput side, `lunora insights` is the signal:
+
+```bash
+lunora insights
+```
+
+Write-conflict hot-spots mean writers are contending. Read
+[OCC & atomicity](/docs/concepts/occ) before assuming that means sharding —
+a _persistent_ conflict is often a handler conflicting with itself. But
+contention spread across many callers is exactly what a shard key fixes.
+
+## Step 1 — shard the messages
+
+Our chat has one DO holding every channel's messages. Channels are independent —
+nobody reads two channels in one transaction — which makes `channelId` a natural
+shard key. That is the whole test for a good key: _what set of rows changes
+together?_
+
+The change is one modifier:
+
+```ts title="lunora/schema.ts"
+messages: defineTable({
+    channelId: v.id("channels"),
+    userId: v.id("users"),
+    text: v.string(),
+})
+    .index("by_channel", ["channelId", "_creationTime"])
+    .shardBy("channelId");
+```
+
+Run codegen and every `ctx.db.messages.*` call routes by `channelId`. A chat with
+5 000 active channels now spreads across 5 000 Durable Objects, each with its own
+SQLite, CPU budget, and hibernation timer. Idle channels cost essentially
+nothing.
+
+Your query does not change:
+
+```ts
+export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("desc")
+        .take(50);
+});
+```
+
+It reads one channel, so it addresses one shard, and it is as fast at 5 000
+channels as it was at one.
+
+## Step 2 — put identities in a global table
+
+Sharding by channel raises an immediate question: where do users live? A user is
+not owned by a channel — they appear in many — so `.shardBy("channelId")` is
+wrong for them.
+
+That is what `.global()` is for. The table moves to Cloudflare D1 instead of a
+DO, so it is readable from every shard:
+
+```ts title="lunora/schema.ts"
+users: defineTable({
+    email: v.string(),
+    name: v.string(),
+})
+    .global()
+    .index("by_email", ["email"], { unique: true });
+```
+
+Reads can hit a regional replica, which makes them fast from anywhere; writes go
+through the primary. `@lunora/d1` wraps the Sessions API so a read following your
+own write sees it.
+
+The trade-off is real and worth stating: a mutation touching both a sharded table
+and a `.global()` table is **not** writing both atomically. Treat the global write
+as a step that can fail on its own.
+
+Everything you do not mark stays in `__root__` — app config, feature flags, small
+per-app state — where it is cheap and strongly consistent.
+
+## Step 3 — keep fan-out off the hot path
+
+Here is where a sharded app gets slow if you are not paying attention. This query
+looks harmless:
+
+```ts
+// Every shard. Every time.
+ctx.db.query("messages").order("desc").take(50);
+```
+
+It does not pin a shard, so it becomes a **fan-out**: the query coordinator
+dispatches to every shard and merges the results. At 5 000 channels that is 5 000
+dispatches for 50 rows.
+
+Fan-out is a legitimate tool — a nightly report, an admin view, an aggregate you
+compute on a schedule. It is not something to put behind a user-facing render.
+The fix is usually to make the shard explicit:
+
+```ts
+// One shard.
+ctx.db
+    .query("messages")
+    .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+    .order("desc")
+    .take(50);
+```
+
+When you genuinely need a cross-channel number — "unread count across all my
+channels" — precompute it. Keep a per-user counter updated by the mutation that
+writes the message, and read the counter instead of scanning.
+
+## Step 4 — lock down shard access
+
+Once you shard, the shard key becomes a **client-supplied address**. Without a
+gate, one tenant could ask for another tenant's Durable Object.
+
+Lunora default-denies this: a request naming a shard other than the default, or
+requesting a fan-out, is rejected with `403` unless the worker opts in. A
+single-DO app never names a non-default shard, so this changes nothing until the
+day you shard — and on that day it fails closed rather than open.
+
+Wire `authorizeShard` to gate it, deriving the answer from the **verified**
+identity rather than from anything the caller sent:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    authorizeShard: async (identity, shardKey) => {
+        if (!identity?.userId) {
+            return false;
+        }
+
+        return isMemberOfChannel(identity.userId, shardKey);
+    },
+});
+```
+
+See [Securing shard access](/docs/concepts/sharding#securing-shard-access) for
+the details.
+
+## Step 5 — migrate the data you already have
+
+Adding `.shardBy()` to a table with rows in it is a data migration, not just a
+schema edit: existing rows live in `__root__` and need to move to their shards.
+Do it with the widen-migrate-narrow pattern rather than in one step:
+
+```bash
+lunora migrate create --name shard_messages
+lunora migrate up --prod --url <url> --yes
+lunora migrate status
+```
+
+[Migrations](/docs/concepts/migrations) covers the pattern, and
+[Backups](/docs/concepts/backups) covers what to take before you start. Take the
+snapshot. A sharding migration is exactly the kind of change you want a
+point-in-time recovery for.
+
+## Checking your work
+
+After the migration, confirm the new shape rather than assuming it:
+
+```bash
+lunora insights          # are conflicts gone? is latency down?
+lunora doctor            # is the config still coherent?
+```
+
+The Studio's **Advisors → Performance** page shows the same signal with the fix
+linked, and the **Data** page's shard picker lets you look inside individual
+shards to confirm rows landed where you expected.
+
+## What you learned
+
+- Shard by what changes together, and not before the numbers say to.
+- Cross-tenant data goes `.global()`; everything unmarked stays in `__root__`.
+- A query that does not pin a shard is a fan-out — keep it off user-facing paths.
+- Sharding turns the shard key into an untrusted input, so gate it.
+- Adding a shard key to a populated table is a data migration.
+
+## See also
+
+- [Sharding](/docs/concepts/sharding)
+- [OCC & atomicity](/docs/concepts/occ)
+- [Migrations](/docs/concepts/migrations)
+- [Limits](/docs/limits)
+- [Architecture](/docs/architecture)

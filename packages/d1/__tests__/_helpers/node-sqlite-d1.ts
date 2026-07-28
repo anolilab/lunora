@@ -14,7 +14,28 @@ import type { D1Exec } from "../../src/d1-ctx-db";
  * Every statement goes through `prepare(...).all(...)` (never `DatabaseSync#exec`,
  * which the repo's secret-scan hook flags); `.all()` both executes DDL/DML and
  * returns rows for `SELECT`.
+ *
+ * One place the stand-in is *not* faithful: D1 always ships FTS5, and the D1
+ * dialect says so, but whether `node:sqlite` carries the module depends on the
+ * Node build (22.14 does not, 22.23 and 24 do). Suites that exercise the FTS5
+ * shadow through the real D1 factory gate on {@link FTS5_IN_BUILD}; the ones
+ * that override the dialect to the portable layout run everywhere.
  */
+/** Whether this Node build's `node:sqlite` carries the FTS5 module. */
+const FTS5_IN_BUILD = ((): boolean => {
+    const database = new DatabaseSync(":memory:");
+
+    try {
+        database.prepare(`CREATE VIRTUAL TABLE "__fts5_build_probe__" USING fts5(x)`).all();
+
+        return true;
+    } catch {
+        return false;
+    } finally {
+        database.close();
+    }
+})();
+
 const createD1Exec = (): { close: () => void; ddl: (query: string) => void; exec: D1Exec } => {
     const database = new DatabaseSync(":memory:");
 
@@ -42,4 +63,4 @@ const createD1Exec = (): { close: () => void; ddl: (query: string) => void; exec
     };
 };
 
-export default createD1Exec;
+export { createD1Exec, FTS5_IN_BUILD };

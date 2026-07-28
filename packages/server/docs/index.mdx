@@ -33,7 +33,7 @@ Create a `TableBuilder`. Fluent methods:
 - `.shardBy(field)` — partition by the named field
 - `.source({ binding, query, tenantBy?, idColumn?, map?, columns?, refresh?, mode? })` — materialize this table from an external Postgres/MySQL behind Cloudflare Hyperdrive: a system poll loop reads the (tenant-scoped) slice and lands it in the DO's SQLite, then `defineShape` carries it to clients. Implies `.externallyManaged()`; under `.shardBy()`, `tenantBy` is mandatory (the tenant-isolation boundary, enforced by the `external_source_unscoped` advisor lint)
 - `.index(name, fields, { unique? })` — secondary index
-- `.searchIndex(name, { field, filterFields? })` — full-text index
+- `.searchIndex(name, { field, filterFields?, language?, staged? })` — full-text index over `field` (a dot path reads a nested field); `filterFields` (≤16) are the columns `.eq()` may narrow by inside the search; `language` adds that language's stopwords to the always-on accent folding (`de`/`en`/`es`/`fr`/`it`/`nl`/`pt`); `staged: true` skips the migration-time backfill on a large table; `strategy: "native"` uses the engine's own full-text index where it has one (Postgres `tsvector` + GIN) — faster on large corpora, but the engine ranks, so ordering no longer matches the other backends
 - `.public()` — exempt this table from `.rls("required")` (when secure-by-default is on)
 - `.softDelete({ field? })` — soft delete: `delete()` flips a marker column (default `deletedAt`) instead of removing the row, and list reads hide soft-deleted rows
 
@@ -149,13 +149,27 @@ the shard DO) paired with an optional `client` twin (optimistic, runs in the
 browser). Declared in `lunora/mutators.ts`.
 
 ```ts title="lunora/mutators.ts"
-import { defineMutator, v } from "@lunora/server";
+// Prefer the generated re-export: same runtime, but `ctx` is your project's typed
+// `MutationCtx` (schema-checked `ctx.db`) instead of the untyped base context.
+import { defineMutator, v } from "./_generated/server";
 
 export const sendMessage = defineMutator({
     args: { channelId: v.id("channels"), text: v.string() },
     server: (ctx, { channelId, text }) => ctx.db.insert("messages", { channelId, text, authorId: ctx.auth.userId }),
 });
 ```
+
+Codegen emits each mutator as a typed `api.mutators.<name>` reference, so the
+browser-side twin binds to it (`serverRef: api.mutators.sendMessage`) and infers
+its args from these validators.
+
+Add `owner: "<column>"` to owner-scope the write: the mutator then requires a
+verified identity, rejects a client-supplied owner that disagrees with it, and sets
+the column to the verified value before `server` runs — so the impl never repeats
+an ownership check by hand. It takes the column name rather than a shape's `true`
+because a mutator may write several tables, so there is no single `.ownedBy(field)`
+to read it from. See
+[Owner-scoped writes](/docs/concepts/local-first#owner-scoped-writes).
 
 The `server` impl is the linearization point; its writes append to the op-log
 and poke back to subscribers. The DO is serialized, so there is **no

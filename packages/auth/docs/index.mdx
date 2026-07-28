@@ -125,6 +125,356 @@ Callbacks are served under `/api/auth/callback/<provider>` by
 `handleAuthRequest`. For providers beyond the built-in list, add
 `genericOAuth({ config: [...] })` to `plugins`.
 
+## Enterprise SSO and SCIM provisioning
+
+Two plugins cover what enterprise buyers ask for — sign-in through the customer's own
+identity provider, and user lifecycle driven by their directory.
+
+`scim` ships in the general plugin barrel. **`sso` does not**: it statically imports
+`samlify` for its SAML path (pulling `xml-crypto`, `node-rsa`, and `@xmldom/xmldom`,
+~1.1 MB), and tree-shaking keeps that out of your _bundle_ but not out of your
+_install_. So it lives behind its own subpath as an **optional peer** you install only
+if you want it:
+
+```sh
+pnpm add @better-auth/sso
+```
+
+```ts
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { admin, organization } from "@lunora/auth/plugins";
+import { sso } from "@lunora/auth/plugins/enterprise";
+
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    // The IdP's origin must be trusted before a provider can be registered — see below.
+    trustedOrigins: ["https://acme.okta.com"],
+    plugins: [sso({ domainVerification: { enabled: true } }), admin(), organization()],
+});
+```
+
+SSO runs on any database Lunora supports, D1 included. **SCIM does not** — it needs an
+adapter with native transactions, which rules out D1. See
+[SCIM's database requirement](#scim--directory-driven-provisioning) before planning
+around it.
+
+The tables come for free: `authTables` derives them from the plugin list, so
+`lunora migrate` picks them up with no schema edits — `ssoProvider` for SSO, and seven
+`scim*` tables for provisioning. An app that declares neither plugin gets neither.
+
+### SSO — one provider per email domain
+
+The plugin's real affordance is domain routing: a user types a work email and lands at
+their own IdP without picking anything from a list. Register a provider once per
+customer, keyed by their domain, then let the client resolve it:
+
+```ts
+// Server — as a signed-in admin of the tenant.
+await auth.api.registerSSOProvider({
+    body: {
+        providerId: "acme-oidc",
+        issuer: "https://acme.okta.com",
+        domain: "acme.com",
+        oidcConfig: { clientId: env.ACME_CLIENT_ID, clientSecret: env.ACME_CLIENT_SECRET, scopes: ["openid", "email", "profile"] },
+    },
+    headers,
+});
+
+// Client — `ssoClient` from `@lunora/auth/plugins/enterprise/client`.
+await authClient.signIn.sso({ email: "someone@acme.com", callbackURL: "/dashboard" });
+```
+
+Four things to set deliberately, because the defaults are permissive:
+
+- **`domainVerification` is off by default.** With it off, a `domain` is trusted the
+  moment it is written, so **any signed-in user can register a provider for a domain
+  they do not own** — `/sso/register` is session-authenticated, not admin-gated. Your
+  own login page then redirects that domain's employees to an attacker's IdP. Turning
+  it on gates a provider on proving control of the domain
+  (`/sso/request-domain-verification` + `/sso/verify-domain`). Narrow `providersLimit`
+  too if only staff should register providers at all.
+- **Domain matching is suffix-based.** A provider registered for `com` catches every
+  `.com` address without a more specific provider. Register exact domains.
+- **Registration makes an outbound call.** better-auth fetches the issuer's OIDC
+  discovery document during `registerSSOProvider` — unconditionally, deriving the URL
+  from `issuer` when you don't pass `discoveryEndpoint`. In a Worker that is a
+  subrequest at registration time, so a firewalled IdP fails there, not at sign-in.
+- **`trustedOrigins` is an SSRF gate, not boilerplate.** Discovery URLs are checked for
+  public-routability first (loopback, RFC 1918, link-local, and cloud-metadata hosts
+  like `169.254.169.254` are refused), then against your `trustedOrigins`. A
+  self-hosted IdP needs its origin listed or registration fails
+  `discovery_untrusted_origin`.
+
+What the defaults do _not_ expose: takeover of an existing account. better-auth refuses
+to link an unverified-email identity to an existing user, and an unverified provider is
+never trusted, so the exposure is phishing-redirect and account _creation_, not
+hijacking someone's existing login.
+
+Use `provisionUser` / `organizationProvisioning` to shape the just-in-time account
+(roles, org membership) the first time someone signs in.
+
+### SCIM — directory-driven provisioning
+
+`scim()` serves SCIM 2.0 under `/api/auth/scim/v2/` — `Users`, `Groups`, `Schemas`,
+`ResourceTypes`, and `ServiceProviderConfig` — so an IdP can create, update, and
+deactivate directory users (and sync groups) without anyone signing in.
+
+<Callout type="warn">
+  **SCIM needs a database adapter with native transactions, so it does not run on D1.**
+  The plugin refuses to serve a request otherwise, with `The scim plugin requires a
+  database adapter with native transaction support`.
+
+That rules out `lunoraD1Adapter` and `lunoraAuthAdapter` — both are single-table CRUD
+over `ctx.db` — and D1 itself, whose driver has no interactive transactions at all.
+
+Run SCIM against a transactional database instead. The supported route on Cloudflare
+is Postgres or MySQL through [`@lunora/hyperdrive`](/docs/packages/hyperdrive) — see
+[SCIM on Hyperdrive](#scim-on-hyperdrive) below for the wiring.
+
+SSO has no such constraint and runs fine on D1.
+
+</Callout>
+
+**Connections are declared in code, not minted at runtime.** Each connection carries
+its own bearer credentials, and you hand the IdP the token you configured:
+
+```ts
+scim({
+    connections: [
+        {
+            id: "okta-acme",
+            // `provisioningDomainId` defaults to the connection id — set it when several
+            // connections provision into one tenant boundary.
+            credentials: [
+                { type: "bearer", id: "primary", token: env.SCIM_TOKEN, scopes: ["scim.users.read", "scim.users.write"] },
+                // Keep the outgoing credential listed during a rotation, with an expiry.
+                { type: "bearer", id: "retiring", token: env.SCIM_TOKEN_OLD, expiresAt: new Date("2026-09-01") },
+            ],
+        },
+    ],
+});
+```
+
+That shape is the fix for [GHSA-j8v8-g9cx-5qf4](https://github.com/advisories/GHSA-j8v8-g9cx-5qf4)
+(HIGH), which affected every `@better-auth/scim` before `1.7.0-beta.4`: the old design
+exposed a session-authenticated endpoint that minted connection tokens and stored them
+in plaintext in the database, so any signed-in user could take over another tenant's
+connection. Declaring credentials in config removes both the endpoint and the secret at
+rest — keep your tokens in `ctx.secrets` / `.dev.vars`, never in the source.
+
+Scope each credential to what the IdP actually needs: `scim.users.read`,
+`scim.users.write`, `scim.groups.read`, `scim.groups.write` (omitting `scopes` grants
+all four).
+
+**Two lifecycle semantics that surprise people** — verified against the shipped plugin,
+so this is what it actually does rather than what the SCIM spec might imply:
+
+- **Deactivation does not lock the account.** A `PATCH` of `active: false` is recorded
+  in SCIM's own projection; it does _not_ set `banned` or otherwise stop the user
+  signing in, and loading the `admin` plugin does not change that. If disabling a user
+  in the IdP must revoke access, act on the projection yourself.
+- **`DELETE` unlinks, it does not erase.** It removes the SCIM resource and leaves the
+  underlying account row in place. Treating it as an off-boarding guarantee would be
+  wrong.
+
+Both `PATCH` and `DELETE` answer `204` with no body; re-read the resource with `GET` if
+you need the resulting state.
+
+The IdP drives these endpoints with `PUT`, `PATCH`, and `DELETE`. Lunora's dispatch is
+method-agnostic and runs auth ahead of function routing, so those pass straight
+through. Note that auth routes bypass the runtime's request-body limits — the caps in
+`body-readers.ts` apply to Lunora's own routes, not to `/api/auth/*` — so a very large
+SCIM payload is bounded by the platform, not by Lunora.
+
+### SCIM's database requirement, and `lunoraDoAdapter`
+
+`scim()` refuses to serve unless its adapter exposes **native transactions**, failing
+with `The scim plugin requires a database adapter with native transaction support`. D1
+has none — its driver rejects interactive transactions, and `batch()` cannot substitute
+because SCIM reads-then-conditionally-writes — so `lunoraD1Adapter` and
+`lunoraAuthAdapter` are both refused. There are two ways round it.
+
+**Postgres or MySQL via [Hyperdrive](/docs/packages/hyperdrive)** is the conservative
+option: hand better-auth a kysely dialect with `transaction: true`. Your auth tables
+then live outside Cloudflare's first-party storage, away from `ctx.db`. Walked through
+in [SCIM on Hyperdrive](#scim-on-hyperdrive) below.
+
+**`lunoraDoAdapter`** keeps them on Cloudflare. A Durable Object's storage _does_ have
+real transactions (`state.storage.transaction` — async, atomic, rolled back on throw,
+isolated from concurrent dispatch), so better-auth can run inside an object on its own
+SQLite:
+
+```ts
+// lunora/auth-do.ts — a thin subclass; the base class owns everything else.
+import { LunoraAuthDO } from "@lunora/auth";
+import { admin, scim } from "@lunora/auth/plugins";
+
+export class AuthDO extends LunoraAuthDO {
+    constructor(state: DurableObjectState, env: Env) {
+        super(
+            state,
+            () => ({
+                secret: env.AUTH_SECRET,
+                plugins: [scim({ connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }] }), admin()],
+            }),
+            { internalSecret: env.AUTH_DO_SECRET },
+        );
+    }
+}
+```
+
+`LunoraAuthDO` builds the instance lazily on the first request, **creates its own
+tables**, serves `/api/auth/*`, and answers one internal route the worker uses to
+resolve identity. Then point the builder at it:
+
+```ts
+app.auth({
+    namespace: (env) => env.AUTH_DO,
+    internalSecret: (env) => env.AUTH_DO_SECRET,
+    options: (env) => ({ secret: env.AUTH_SECRET, plugins: [scim({ ... }), admin()] }),
+});
+```
+
+Re-export `AuthDO` from your worker entry and the config layer adds the
+`durable_objects` binding and the `new_sqlite_classes` migration for you. Pass `d1` or
+`namespace`, never both — the builder throws on the ambiguous shape rather than letting
+one silently win, and `namespace` without `internalSecret` throws too (identity
+resolution is gated on that secret and would otherwise fail closed on every request).
+
+### Why the schema is created for you
+
+better-auth's migrator is kysely-only, so `ensureMigrated` cannot target DO storage.
+The object derives its DDL from better-auth's own resolved tables instead — which
+matters more than it sounds: better-auth expresses `unique: true` as a separate
+`CREATE UNIQUE INDEX`, not a column constraint. A materialiser that walks `fields` and
+writes columns produces tables that look correct and **silently accept duplicate
+emails**, duplicate session tokens, and duplicates across all twelve of SCIM's unique
+fields. If you hand-roll this, emit the indexes; or call `authDoSchemaStatements(options)`
+and execute what it returns.
+
+### What DO mode does not give you
+
+`ctx.authApi`, sign-in, sessions, SCIM, and the studio's **audit feed** all work — the
+audit log lives in the object like every other auth table, and the worker reads it back
+through an internal route.
+
+**The studio's auth admin pages do not.** `authAdmin` is a ~30-method surface that reads
+the auth tables directly from the worker, which DO storage does not permit, so it
+reports "not configured" rather than returning empty data.
+
+Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
+Enable better-auth's `session.cookieCache` to serve most of them from the signed cookie
+instead, accepting a staleness window on revocation — the `vis generate lunora-auth-do`
+scaffold turns it on by default for that reason.
+
+### Scaffolding it
+
+```bash
+vis generate lunora-auth-do --name=AuthDO
+```
+
+Writes `lunora/auth-do.ts` and reminds you of the two things the file alone does not do:
+re-export the class from your worker entry (that is what makes the config layer add the
+`durable_objects` binding and the `new_sqlite_classes` migration), and point the builder
+at it.
+
+<Callout type="warn">
+    `lunoraDoAdapter` is `@experimental`, and the trade is architectural rather than cosmetic: `user`, `session` and the SCIM tables live inside **one** Durable
+    Object, so writes serialise through a single object, the object's storage limits apply, and backup/export follows the DO path rather than D1's. Two things
+    it does not do — `ensureMigrated` (better-auth's migrator is kysely-only, so the object materialises its schema from `authTables` itself), and sharding
+    (there is one auth object). Measure it before moving an existing deployment.
+</Callout>
+
+### SCIM on Hyperdrive
+
+SCIM's transaction requirement means its tables live in a real SQL database rather than
+D1. [Hyperdrive](/docs/packages/hyperdrive) is how a Worker reaches one: it pools and
+routes the connection so a Worker isn't opening a fresh TCP session per request.
+
+Note this is a _different_ use of Hyperdrive from `ctx.sql`. `@lunora/hyperdrive`'s
+`ctx.sql` is an action-only escape hatch for querying an existing database; here you are
+giving better-auth a kysely dialect to own its own tables. Only `createHyperdrive`'s
+connection details are shared between the two.
+
+Create the binding, pointed at your database:
+
+```bash
+# Pass the URL through the environment rather than typing it inline — an inline
+# connection string lands in your shell history.
+export LUNORA_AUTH_DATABASE_URL='postgres://…'
+wrangler hyperdrive create lunora-auth --connection-string="$LUNORA_AUTH_DATABASE_URL"
+```
+
+```jsonc
+// wrangler.jsonc
+{
+    "hyperdrive": [{ "binding": "AUTH_DB", "id": "<id from the create command>" }],
+}
+```
+
+Then hand better-auth a kysely dialect over it, with `transaction: true`:
+
+```ts
+import { createAuth } from "@lunora/auth";
+import { admin, scim } from "@lunora/auth/plugins";
+import { createHyperdrive } from "@lunora/hyperdrive";
+import { PostgresDialect } from "kysely";
+import { Pool } from "pg";
+
+const authFor = (env: Env) => {
+    const { connectionString } = createHyperdrive(env.AUTH_DB);
+
+    return createAuth({
+        secret: env.AUTH_SECRET,
+        database: {
+            // `transaction: true` is the whole point — without it the kysely adapter
+            // exposes no transaction and `scim()` refuses to serve.
+            dialect: new PostgresDialect({ pool: new Pool({ connectionString, max: 5 }) }),
+            transaction: true,
+            type: "postgres",
+        },
+        plugins: [scim({ connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }] }), admin()],
+    });
+};
+```
+
+`pg` and `kysely` are app-level installs (`pnpm add pg kysely`), and `pg` needs
+`nodejs_compat` in `compatibility_flags`. Keep `max` small — Hyperdrive is already
+pooling, so a large per-isolate pool just multiplies connections.
+
+Practical notes:
+
+- **Build the auth instance per request, not at module scope.** The pool closes over a
+  binding from `env`, which only exists inside a request.
+- **Apply the schema at deploy time.** `ensureMigrated` is convenient in dev, but on a
+  real Postgres prefer `compileMigrationsSql` output applied as a deploy step, so the
+  first request isn't racing DDL.
+- **This splits your data.** Auth tables live in Postgres while your app's tables stay
+  in Durable Objects / D1, so `ctx.db` joins across the two are not available — resolve
+  identities through `ctx.auth` instead.
+- **SSO can stay on D1.** If you want enterprise SSO without moving your auth tables,
+  run `sso()` on `lunoraD1Adapter` and skip SCIM; only SCIM carries the requirement.
+
+Which to pick: if you already run Postgres, Hyperdrive is less new machinery. If you want
+to stay entirely on Cloudflare and can accept single-object writes for auth, the DO
+adapter avoids a second database. **SSO needs neither** — it has no transaction
+requirement and runs on `lunoraD1Adapter` as usual.
+
+### SAML status
+
+`sso()` supports SAML 2.0 as well, and the module loads in workerd: the
+`LUNORA_WORKERD_TESTS=1` suite boots a worker that imports and constructs the plugin
+(samlify dependency tree included) in the real runtime, and CI runs it.
+
+What is **not** measured is the SAML _code path_: assertion verification runs pure-JS
+RSA, and upstream
+[better-auth#10343](https://github.com/better-auth/better-auth/issues/10343) flags ACS
+as a poor fit for a Worker's CPU budget, proposing a pluggable remote executor.
+
+Treat **OIDC/OAuth2 as the supported mode** and SAML as unverified until that
+measurement exists.
+
 ## Background tasks (waitUntil)
 
 better-auth runs some work _after_ sending the response — most importantly the
@@ -290,5 +640,6 @@ configurable via `retention` and defaults to unbounded.
 ## See also
 
 - [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and the studio dashboard.
+- [@lunora/hyperdrive](/docs/packages/hyperdrive) — the Postgres/MySQL route SCIM needs (D1 has no transactions).
 - [Getting started](/docs/getting-started)
 - [@lunora/server](/docs/packages/server)

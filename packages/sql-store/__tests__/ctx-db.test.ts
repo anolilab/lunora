@@ -56,6 +56,7 @@ const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDialect => {
         ],
         isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
         name,
+        supportsFts5: true,
         supportsReturning: true,
         tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
     };

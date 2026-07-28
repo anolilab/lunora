@@ -84,7 +84,7 @@ The runtime resolves the inbound session and stamps `ctx.auth` on every `query` 
 
 ### Plugins & CAPTCHA
 
-better-auth's plugin factories are re-exported from `@lunora/auth/plugins` (so you don't need better-auth's deep import paths): `admin`, `anonymous`, `bearer`, `captcha`, `createAccessControl`, `customSession`, `deviceAuthorization`, `emailOTP`, `genericOAuth`, `haveIBeenPwned`, `jwt`, `magicLink`, `mcp`, `multiSession`, `oAuthProxy`, `oidcProvider`, `oneTimeToken`, `organization`, `passkey`, `phoneNumber`, `siwe`, `twoFactor`, `username`, and `withMcpAuth`.
+better-auth's plugin factories are re-exported from `@lunora/auth/plugins` (so you don't need better-auth's deep import paths): `admin`, `anonymous`, `bearer`, `captcha`, `createAccessControl`, `customSession`, `deviceAuthorization`, `emailOTP`, `genericOAuth`, `haveIBeenPwned`, `jwt`, `magicLink`, `mcp`, `mcpHandler`, `multiSession`, `oAuthProxy`, `oauthProvider`, `oneTimeToken`, `organization`, `passkey`, `phoneNumber`, `requireMcpAuth`, `scim`, `siwe`, `twoFactor`, and `username`. Enterprise SSO ships separately as `sso` from `@lunora/auth/plugins/enterprise` (an optional peer — see the docs).
 
 For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })`); it reads the token from the `x-captcha-response` header. For **non-auth** procedures, the package root also exports standalone helpers — `verifyTurnstile` (pure `siteverify`) and `verifyTurnstileMiddleware` (a `.use()` middleware that takes the token from the function args).
 

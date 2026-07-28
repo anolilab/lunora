@@ -554,6 +554,32 @@ export default crons;
             expect(parsed.triggers?.crons).toEqual([]);
         });
 
+        it("preserves committed triggers.crons on the --prebuilt (skipCodegen) path", async () => {
+            expect.assertions(2);
+
+            // --prebuilt skips codegen, so no cron schedules are discovered. The
+            // committed triggers.crons must be left untouched — clearing it would
+            // silently stop every production cron. Remove the lunora/ schema so
+            // codegen would fail if it ran, proving the path really is skipped.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["*/5 * * * *"] },\n    "d1_databases"'),
+                "utf8",
+            );
+            rmSync(join(workdir, "lunora"), { force: true, recursive: true });
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, skipCodegen: true, spawner });
+
+            expect(result.code).toBe(0);
+
+            const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
+
+            expect(parsed.triggers?.crons).toEqual(["*/5 * * * *"]);
+        });
+
         it("does not run migrations when --migrate is not set", async () => {
             expect.assertions(2);
 

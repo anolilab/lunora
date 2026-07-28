@@ -30,6 +30,7 @@ import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
+import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
@@ -449,6 +450,13 @@ export interface LintContext {
      * absent for runtime callers, where the lint finds nothing.
      */
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
+
+    /**
+     * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /
+     * `undefined`) — the `unrestricted_where_branch` lint input. Supplied by the
+     * codegen feeder only.
+     */
+    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
 
     /**
      * Payment webhook-adapter constructions (`createStripeAdapter` /

@@ -108,6 +108,9 @@ const assertIdentifier = (value: string, context: string): void => {
     }
 };
 
+/** Upper-case the first character — turns an emitted value name into its PascalCase type name. */
+const pascalCase = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
+
 /**
  * Emit a TS interface property: bare `name: T` when `name` is a JS identifier,
  * otherwise a quoted property name (`"weird name": T`). Quoted property names
@@ -268,6 +271,13 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
     }
 
     const tableNames = schema.tables.map((table) => `"${table.name}"`).join(" | ") || "never";
+    // Tables the app declared itself — an add-on's `.extend(...)` contributions are
+    // excluded. See the `AppTableName` doc in the emitted output.
+    const appTableNames =
+        schema.tables
+            .filter((table) => table.extensionKey === undefined)
+            .map((table) => `"${table.name}"`)
+            .join(" | ") || "never";
 
     const documents = schema.tables
         .map((table) => {
@@ -311,12 +321,7 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
 
     const searchIndexNamesByTable = schema.tables
         .map((table) => {
-            // `.global()` tables live in D1, whose reader doesn't back the
-            // legacy `query().withSearchIndex()` path the facade delegates to —
-            // so full-text search there isn't supported. Emit `never` (an
-            // uncallable `withSearchIndex`) rather than advertise an index name
-            // that throws at runtime.
-            const names = table.shardMode === "global" ? "" : table.searchIndexes.map((index) => JSON.stringify(index.name)).join(" | ");
+            const names = table.searchIndexes.map((index) => JSON.stringify(index.name)).join(" | ");
 
             return `    ${table.name}: ${names || "never"};`;
         })
@@ -405,6 +410,23 @@ export type {
 } from "${base.serverDataModel}";
 
 export type TableName = ${tableNames};
+
+/**
+ * The tables **this app declared** — every {@link TableName} except those an add-on
+ * contributed through \`defineSchema(...).extend(...)\`.
+ *
+ * An add-on's tables are real tables and stay in \`TableName\` (they are queryable,
+ * they appear in \`DataModel\`), but an app enumerating "my tables" should not have to
+ * know they exist: an account-deletion sweep, an export, a migration allowlist, or a
+ * helper generic over a table union is about the app's own data, and every add-on
+ * added or removed would otherwise silently change the correct answer.
+ *
+ * \`\`\`ts
+ * // Doesn't need to mention \`ratelimit_buckets\`, and won't drift when an add-on lands.
+ * const EXPORTED: readonly AppTableName[] = ["nodes", "tagColors"];
+ * \`\`\`
+ */
+export type AppTableName = ${appTableNames};
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -549,12 +571,46 @@ export interface OrmWriter extends OrmReader {
 const GENERATED_IMPORT_RE = /import\("(?<spec>(?:\.\.?\/)*_generated\/[^"]+)"\)/gu;
 const GENERATED_PREFIX_RE = /^(?:\.\.?\/)*_generated\//u;
 
+/**
+ * A rendered qualifier's final segment already carries a file extension. A user
+ * file may import a generated module either way (`"./_generated/dataModel"` or
+ * `"./_generated/dataModel.js"`), and the extensionless form would be a TS2835 in
+ * the emitted `_generated/*` — those files are consumed under NodeNext, where the
+ * extension is mandatory — so it is added back when absent.
+ */
+const QUALIFIER_HAS_EXTENSION_RE = /\.[A-Za-z]\w*$/u;
+
 const relocateGeneratedImports = (returnType: string): string =>
     returnType.replaceAll(GENERATED_IMPORT_RE, (_match, spec: string) => {
         const stripped = spec.replace(GENERATED_PREFIX_RE, "./");
+        const withExtension = QUALIFIER_HAS_EXTENSION_RE.test(stripped) ? stripped : `${stripped}.js`;
 
-        return `import("${stripped}")`;
+        return `import("${withExtension}")`;
     });
+
+/**
+ * An `import("@lunora/&lt;base>")` qualifier the type checker rendered into a
+ * function's args/return type — e.g. a mutator whose `server` impl returns
+ * `ctx.db.insert(...)`'s `Id&lt;"messages">` from a file that never imports `Id`, so
+ * ts-morph fully qualifies it as `import("@lunora/values").Id&lt;"messages">`.
+ *
+ * Only the BASE packages the `lunorash` umbrella re-exports are listed. An
+ * umbrella-only app has no `@lunora/values` in its `package.json`, so the
+ * verbatim qualifier is a TS2307 in the generated file; rewriting it to
+ * `import("lunorash/values")` resolves through the dependency it actually
+ * declares. Add-ons (`@lunora/agent`, `@lunora/notify`, …) are installed
+ * separately either way and are deliberately left alone.
+ */
+const UMBRELLA_QUALIFIER_RE = /import\("@lunora\/(?<pkg>client|do|runtime|server|values)(?<subpath>\/[^"]*)?"\)/gu;
+
+/** Rewrite base-package type qualifiers in a rendered generated file to the project's import form. */
+const relocateBaseQualifiers = (rendered: string, useUmbrella: boolean): string =>
+    useUmbrella
+        ? rendered.replaceAll(
+              UMBRELLA_QUALIFIER_RE,
+              (_match, packageName: string, subpath: string | undefined) => `import("lunorash/${packageName}${subpath ?? ""}")`,
+          )
+        : rendered;
 
 /**
  * Which of `Doc`/`Id` a rendered body actually references. We import only those
@@ -580,7 +636,11 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
     }
 
     const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
+        // Sorted by export name so a namespace that mixes discovered functions with
+        // synthetic entries (agents, custom mutators — appended after the sorted
+        // discovery output) still emits in a stable, alphabetical order.
         const members = list
+            .toSorted((a, b) => a.exportName.localeCompare(b.exportName))
             .map((definition) => {
                 // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
                 // generated `api.*` references plug directly into
@@ -937,6 +997,43 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
 };
 
 /**
+ * Synthetic `FunctionIR` entries for the project's custom mutators, so
+ * `api.mutators.&lt;name>` exists as a typed reference and a client
+ * `defineMutator({ serverRef: api.mutators.insertSibling })` binds the dispatch
+ * path at COMPILE time — a rename, a typo, or a moved file becomes a type error
+ * instead of a push that fails at runtime — while inferring its `args` from the
+ * server mutator's own validators instead of restating them.
+ *
+ * A mutator dispatches through the same `LUNORA_FUNCTIONS` table as an ordinary
+ * `mutation` (its `kind` IS `"mutation"`), and the `namespace:fn` ref matches the
+ * `LUNORA_MUTATOR_PATHS` entry the DO's `isCustomMutator` override reads, so the
+ * emitted reference is a real function reference — not a parallel shape.
+ *
+ * Mutators are client-pushed, so they land on the PUBLIC `api` surface. An
+ * app-registered function in `lunora/mutators.ts` with the same export name wins
+ * (no duplicate members), mirroring {@link syntheticAgentApiFunctions}.
+ */
+const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functions: ReadonlyArray<FunctionIR>): FunctionIR[] => {
+    if (mutators.length === 0) {
+        return [];
+    }
+
+    const taken = new Set(functions.filter((definition) => sanitizeNamespace(definition.filePath) === "mutators").map((definition) => definition.exportName));
+
+    return mutators
+        .filter((mutator) => !taken.has(mutator.exportName))
+        .map((mutator) => {
+            return {
+                args: mutator.args,
+                exportName: mutator.exportName,
+                filePath: mutator.filePath,
+                kind: "mutation" as const,
+                returnType: mutator.returnType,
+            };
+        });
+};
+
+/**
  * Render the `httpStreams.*` typed-reference block for `_generated/api.ts` —
  * one entry per `httpRoute.&lt;verb>(path).stream()` SSE route, grouped by source
  * file the way `api.*` is. Each reference carries the verb + path at runtime
@@ -1019,14 +1116,20 @@ interface EmitApiOptions {
     functions: ReadonlyArray<FunctionIR>;
     /** Typed REST routes; only `.stream()` (SSE) routes emit a `httpStreams.*` reference. */
     httpRoutes?: ReadonlyArray<HttpRouteIR>;
+    /** Custom mutators (`lunora/mutators.ts`) — emitted as `api.mutators.*` so a client `serverRef` is compile-checked. */
+    mutators?: ReadonlyArray<MutatorIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
 const emitApi = (options: EmitApiOptions): string => {
-    const { agents = [], functions, httpRoutes = [], useUmbrella = false, workflows = [] } = options;
+    const { agents = [], functions, httpRoutes = [], mutators = [], useUmbrella = false, workflows = [] } = options;
     const base = baseSpecifiers(useUmbrella);
-    const publicFunctions = [...functions.filter((definition) => definition.visibility !== "internal"), ...syntheticAgentApiFunctions(agents, functions)];
+    const publicFunctions = [
+        ...functions.filter((definition) => definition.visibility !== "internal"),
+        ...syntheticAgentApiFunctions(agents, functions),
+        ...syntheticMutatorApiFunctions(mutators, functions),
+    ];
     const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
 
     const publicBody = renderApiBody(publicFunctions);
@@ -1050,7 +1153,8 @@ const emitApi = (options: EmitApiOptions): string => {
     // stream-free project's generated api never references the type.
     const clientImports = httpStreamsRef.block === "" ? "FunctionReference" : "FunctionReference, HttpStreamRef";
 
-    return `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
 import type { ${clientImports} } from "${base.client}";
 ${schedulerReferences.importLine}${dataModelImportLine}
 export interface ApiTypes {${apiBlock}}
@@ -1061,7 +1165,9 @@ export const api = anyApi as unknown as ApiTypes;
 export interface InternalApiTypes {${internalBlock}}
 
 export const internal = anyApi as unknown as InternalApiTypes;
-${schedulerReferences.block}${httpStreamsRef.block}`;
+${schedulerReferences.block}${httpStreamsRef.block}`,
+        useUmbrella,
+    );
 };
 
 /**
@@ -1100,11 +1206,28 @@ export const createSeedClient = (options?: SeedClientOptions): SeedClient<Insert
 };
 
 /**
- * Emit `_generated/collections.ts` — one TanStack DB collection factory per
- * `defineShape` in `lunora/shapes.ts` (the local-first partial-replication
- * surface). Each factory builds a live collection that syncs its shape's rowset
- * through the client's poke protocol (`subscribeShape`), so an app feeds the
- * result straight to `useLiveQuery`.
+ * Emit `_generated/collections.ts` — a typed TanStack DB binding per `defineShape`
+ * in `lunora/shapes.ts` (the local-first partial-replication surface).
+ *
+ * Each shape emits **two** entry points.
+ *
+ * `&lt;shape>CollectionOptions(options)` is the composable form: it returns the full
+ * `LunoraCollectionOptions` — `config` for `createCollection`, plus `checkpoints`
+ * (which `bindMutators` gates optimistic overlays on) and `scope`. This is what an app
+ * with custom mutators needs, and what the old single-factory form made impossible: it
+ * built the collection internally and dropped `checkpoints` on the floor, so there was
+ * no way to wire mutators to the collection codegen produced.
+ *
+ * `&lt;shape>Collection(options)` is the convenience form for a read-only collection: it
+ * returns `{ checkpoints, collection, scope }` rather than a bare `Collection`, so the
+ * sync controls stay reachable even from the short path.
+ *
+ * Both are typed: `args` comes from the shape's own validators (a parameterless
+ * shape takes none), rows resolve to `Doc&lt;"table">` when the shape names its table
+ * with a literal, and `shardKey` / `getKey` / `load` / `onError` / `checkpoints` are
+ * all threadable — a sharded table needs `shardKey` for its watermark to land in the
+ * right bucket, and a server-minted `_id` that differs from the app's natural key
+ * needs `getKey`.
  *
  * Returns `""` (so `writeIfPresent` skips the file) unless the project both
  * declares shapes AND installs `@lunora/db` — the add-on that ships
@@ -1120,22 +1243,85 @@ const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, u
 
     const base = baseSpecifiers(useUmbrella);
 
+    // `Doc<"table">` when the shape named its table with a string literal;
+    // otherwise the permissive `Row` (the runtime object stays authoritative).
+    const rowTypeOf = (shape: ShapeIR): string => (shape.table === undefined ? "Row" : `Doc<${JSON.stringify(shape.table)}> & Row`);
+
     const factories = shapes
         .map((shape) => {
             assertIdentifier(shape.exportName, "shape export name");
 
-            return `/** Live collection for the \`${shape.exportName}\` replication shape — pass the shape's validated \`args\` (its partition selector). */
-export const ${shape.exportName}Collection = (client: LunoraClient, args?: Record<string, unknown>): Collection<Row, string> =>
-    createCollection(lunoraCollectionOptions({ client, shape: { args, name: "${shape.exportName}" } }).config);`;
+            const rowType = rowTypeOf(shape);
+            const argsType = renderArgsType(shape.args);
+            const hasArgs = Object.keys(shape.args).length > 0;
+            // A parameterless shape must not demand an empty object; a parameterized
+            // one must not let the caller forget its partition selector.
+            const argsField = hasArgs ? `        args: ${argsType};` : `        args?: ${argsType};`;
+            // Mirror the options type: a parameterized shape must not accept `scope()`
+            // with no selector, or an arbitrary `Record<string, unknown>`.
+            const scopeType = hasArgs ? `(args: ${argsType}) => void` : `(args?: ${argsType}) => void`;
+            const optionsType = `${shape.exportName}CollectionOptions`;
+
+            return `/** Options for the \`${shape.exportName}\` shape binding. */
+export interface ${pascalCase(optionsType)} {
+${argsField}
+    /**
+     * Share the optimistic-overlay gate with other collections + mutators on this
+     * shard. Defaults to the shared per-shard registry, which is almost always what
+     * you want — pass one only to isolate this collection's gate.
+     */
+    checkpoints?: CheckpointRegistry;
+    /** The Lunora client to subscribe through. */
+    client: LunoraClient;
+    /** Row key extractor — defaults to \`row._id\`. Override when the app keys rows by a natural column. */
+    getKey?: (row: ${rowType}) => string;
+    /** \`"eager"\` starts syncing at creation; \`"lazy"\` (default) on the first subscriber. */
+    load?: "eager" | "lazy";
+    /** Notified when the underlying subscription errors; the collection always leaves \`loading\`. */
+    onError?: (error: SubscriptionError) => void;
+    /** Routes the subscription to a shard's DO. **Required for a \`.shardBy()\` table** — without it the watermark lands in the default bucket. */
+    shardKey?: string;
+}
+
+/**
+ * Collection options for the \`${shape.exportName}\` replication shape: \`config\` for
+ * \`createCollection\`, plus the \`checkpoints\` registry to hand \`bindMutators\` and
+ * \`scope\` to re-point the subscription.
+ */
+export const ${shape.exportName}CollectionOptions = (options: ${pascalCase(optionsType)}): LunoraCollectionOptions<${rowType}> =>
+    lunoraCollectionOptions<${rowType}>({
+        client: options.client,
+        ...(options.checkpoints === undefined ? {} : { checkpoints: options.checkpoints }),
+        ...(options.getKey === undefined ? {} : { getKey: options.getKey }),
+        ...(options.load === undefined ? {} : { load: options.load }),
+        ...(options.onError === undefined ? {} : { onError: options.onError }),
+        ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }),
+        shape: { args: options.args, name: ${JSON.stringify(shape.exportName)}, ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }) },
+    });
+
+/** Live collection for the \`${shape.exportName}\` shape, with its sync controls. */
+export const ${shape.exportName}Collection = (
+    options: ${pascalCase(optionsType)},
+): { checkpoints: CheckpointRegistry; collection: Collection<${rowType}, string>; scope: ${scopeType} } => {
+    const { checkpoints, config, scope } = ${shape.exportName}CollectionOptions(options);
+
+    return { checkpoints, collection: createCollection(config), scope };
+};`;
         })
         .join("\n\n");
 
-    return `${GENERATED_HEADER}import type { LunoraClient } from "${base.client}";
+    // Import only the dataModel helpers the rendered types actually reference —
+    // `Doc` for a row type, `Id` when a shape's args carry a `v.id(...)`. Importing
+    // an unused one trips noUnusedLocals in the consuming project.
+    const dataModelImports = referencedDataModelImports(factories);
+    const dataModelImportLine = dataModelImports.length > 0 ? `import type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    return `${GENERATED_HEADER}import type { LunoraClient, SubscriptionError } from "${base.client}";
 import { lunoraCollectionOptions } from "@lunora/db/collections";
-import type { Row } from "@lunora/db";
+import type { CheckpointRegistry, LunoraCollectionOptions, Row } from "@lunora/db";
 import type { Collection } from "@tanstack/db";
 import { createCollection } from "@tanstack/db";
-
+${dataModelImportLine}
 ${factories}
 `;
 };
@@ -1598,6 +1784,20 @@ export type Env = CloudflareBindings;`;
     const imagesActionField = serverCapabilityField("images", hasImages);
     const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines);
     const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql);
+    // `ctx.vectors` — narrowed to the schema's declared vector indexes, so a
+    // typo'd index name is a compile error rather than a runtime "unknown
+    // index" throw from the binding facade. The base surface stays `string`
+    // for schema-agnostic consumers.
+    // Same source the `VectorIndexName` union is emitted from, so the narrowed
+    // ctx field and the union it references appear together or not at all.
+    const hasVectorIndexes = (schema?.vectorIndexes.length ?? 0) > 0;
+    const vectorsOmit = hasVectorIndexes ? ` | "vectors"` : "";
+    const vectorsWriterContextField = hasVectorIndexes ? `\n    readonly vectors: VectorSearch<VectorIndexName>;` : "";
+    const vectorsReaderContextField = hasVectorIndexes ? `\n    readonly vectors: VectorSearchReader<VectorIndexName>;` : "";
+    // The narrowed surface needs the base generics and the emitted union in scope.
+    const vectorsTypeImport = hasVectorIndexes
+        ? `import type { VectorSearch, VectorSearchReader } from "${base.server}";\nimport type { VectorIndexName } from "./dataModel.js";\n`
+        : "";
     // `ctx.access` — the verified Cloudflare Access identity, a synchronous facade
     // over the already-resolved claims. Rides EVERY ctx (a deterministic read of
     // the per-request identity, like `ctx.auth`; no I/O — verification happened
@@ -1747,7 +1947,7 @@ export type LunoraEnv = ReturnType<typeof lunoraEnvContract.${env.exportName}>;`
         ? `\n    /** Validated, typed environment declared by \`defineEnv\` in \`lunora/env.ts\` — parsed & coercion-aware config values (\`ctx.env.STRIPE_KEY\`); a missing or invalid value throws at read time. */\n    readonly env: LunoraEnv;`
         : "";
 
-    const server = `${GENERATED_HEADER}import { createPolicyDsl, initLunora, v as vBase } from "${base.server}";
+    const server = `${GENERATED_HEADER}import { createPolicyDsl, defineMutator as defineMutatorBase, initLunora, v as vBase } from "${base.server}";
 import type {
     ActionBuilder,
     ActionCtx as ActionCtxBase,
@@ -1760,16 +1960,19 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
     ReadOnlyStorage,
+    RegisteredMutator,
     Storage as StorageBase,
     TableReader,
+    Validator,
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
-export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
+${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
+export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
 export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
@@ -1801,22 +2004,47 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
-export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
+/**
+ * Resolves the \`asId\` table argument: a literal in {@link TableName} passes through, a
+ * genuinely-wide \`string\` (a computed name) passes through, and any OTHER literal
+ * collapses to \`never\` so it fails to typecheck.
+ *
+ * The \`string extends T\` arm is what distinguishes "the caller passed a computed
+ * string" from "the caller passed a misspelled literal" — only the wide \`string\` type
+ * is a supertype of \`string\`.
+ */
+type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? T : never;
+
+/**
+ * The id parse boundary \`ctx.db.asId(table, id)\`, bound to this schema: a misspelled
+ * table literal is a compile error rather than a call that hands back a confidently-
+ * branded id for a table that does not exist. Mirrors {@link TypedTableQuery} /
+ * {@link TypedTableGet}.
+ *
+ * Deliberately NOT an intersection with a wide \`(string, string) => string\` overload:
+ * overload resolution would fall through to it for a bad literal, silently restoring
+ * the very typo hole this narrowing exists to close. {@link AsIdTable} instead keeps a
+ * computed table name working — and keeps \`ctx.db\` structurally assignable to
+ * schema-agnostic consumers — without accepting an invalid literal.
+ */
+type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;
+
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${vectorsOmit}${authOmit}${envOmit}> {
+    readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsReaderContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 /**
@@ -1845,6 +2073,24 @@ export const internalMutation = lunoraBuilders.internalMutation as unknown as In
 
 /** \`internalAction\` builder bound to this project's typed {@link ActionCtx} — never exposed on \`api\`. */
 export const internalAction = lunoraBuilders.internalAction as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>;
+
+/**
+ * \`defineMutator\` bound to this project's typed {@link MutationCtx} — declare
+ * custom mutators (\`lunora/mutators.ts\`) with it instead of importing from
+ * \`${base.server}\`, and the authoritative \`server\` impl's \`ctx\` carries the
+ * schema-typed \`ctx.db\` (\`ctx.db.query("nodes")\` resolves \`Doc<"nodes">\`,
+ * \`ctx.db.patch(id, …)\` takes an \`Id<"nodes">\`) with no hand-written ctx type and
+ * no \`as unknown as\` cast. Runtime-identical to the package export; only the
+ * context type narrows, so discovery finds a mutator authored either way.
+ * @example
+ * export const setText = defineMutator({
+ *     args: { id: v.id("nodes"), text: v.string() },
+ *     server: async (ctx, args) => { await ctx.db.patch(args.id, { text: args.text }); },
+ * });
+ */
+export const defineMutator = defineMutatorBase as unknown as <Args extends Record<string, Validator> = Record<string, Validator>, ClientTx = unknown, R = unknown>(
+    definition: MutatorDefinition<Args, MutationCtx, ClientTx, R>,
+) => RegisteredMutator<Args, MutationCtx, ClientTx, R>;
 
 /**
  * \`definePolicy\` bound to THIS schema's {@link DataModel} + {@link Relations}.
@@ -1984,7 +2230,8 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -2073,7 +2320,9 @@ export interface RegisteredDataMigration {
  * shard DO's admin RPC and the CLI resolve migrations to run through this map.
  */
 export const LUNORA_MIGRATIONS: Record<string, RegisteredDataMigration> = {${migrationBody}};
-`;
+`,
+        useUmbrella,
+    );
 };
 
 /**
@@ -3488,7 +3737,6 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "DatabaseWriterLike",
     "DataMigrationLike",
     ...(hasFlags ? ["FlagsResult"] : []),
-    "LogSink",
     "MaskPoliciesResult",
     "MigrationRunResult",
     ...(hasQueues ? ["QueuesResult"] : []),
@@ -3507,6 +3755,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "StorageRulesResult",
     "StudioFeaturesResult",
     "SystemReaderStorageLike",
+    "TelemetrySink",
     ...(hasWorkflows ? ["WorkflowsResult"] : []),
     ...(hasVectors ? ["WriteHook"] : []),
 ];
@@ -3747,7 +3996,12 @@ const emitShard = ({
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
             const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
-            const shapeWhere = shape.compileWhere(ctx, args) as unknown as WhereInput;
+            // \`ownerField\` resolves an \`owner: true\` shape: only here is the table's
+            // \`.ownedBy(field)\` column in scope, so the DO hands it to the shape
+            // rather than every shape restating the ownership check in its \`where\`.
+            const shapeWhere = shape.compileWhere(ctx, args, {
+                ownerField: (schema as unknown as { tables: Record<string, { ownerField?: string }> }).tables[shape.table]?.ownerField,
+            }) as unknown as WhereInput;
 
             // AND-compose with the table's RLS read base-where. A shape runs no
             // procedure, so the \`.use(rls(...))\` middleware never fires; without
@@ -4359,7 +4613,7 @@ export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
-    observability?: (env: Record<string, unknown>) => LogSink | undefined;
+    observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }
@@ -4781,21 +5035,39 @@ ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
             const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
-${globalDatabaseLine}            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});
-${facadeBlock}${paymentsBuild}
             // \`ctx.log\`: the DO base builds the attributed logger (structured
             // fields + \`.with(...)\` child + trace correlation) and routes each call
             // to the optional \`observability\` sink. It also buffers the line (studio
             // Logs panel) and emits a structured console event the dev-server formats.
+            //
+            // Resolved BEFORE \`ctx.db\` below, because the database is wrapped in
+            // auto-instrumentation that needs the sink, the trace anchor, and the
+            // dispatch's wide-event handle.
             const observability = config.observability?.(env);
             const logFunctionPath = options.functionPath ?? "";
             const log = this.makeLogger(logFunctionPath, observability);
+            const traceAnchor = this.resolveDispatchAnchor(Boolean(options.identity));
+
+            // \`ctx.span\`: the handle onto the DISPATCH's own span — the wide-event
+            // surface. Attributes attached here accumulate for the whole request
+            // and are folded into the one span it already emits, instead of
+            // becoming N separate log lines. Shares \`traceAnchor\` with \`ctx.trace\`
+            // so both write to the same trace.
+            const span = this.makeDispatchSpan(traceAnchor, observability);
+
+${globalDatabaseLine}            // \`ctx.db\`, wrapped in automatic instrumentation: by default this
+            // adds aggregate counters (call count, total time, per-operation
+            // breakdown) to the wide event rather than a span per call, so a
+            // handler making hundreds of queries stays readable. See
+            // \`instrumentDatabase\` for the \`"spans"\` / \`"off"\` levels.
+            const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, observability);
+${facadeBlock}${paymentsBuild}
 
             // \`ctx.trace\` / \`ctx.metrics\`: spans and measurements to the same sink.
             // The trace anchor is threaded explicitly for the same reason \`identity\`
             // is — a deferred caller (a subscription re-run) must not inherit the
             // writing mutation's trace from the shared per-request field.
-            const trace = this.makeTracer(logFunctionPath, observability, options.identity ? undefined : this.getCurrentTrace());
+            const trace = this.makeTracer(logFunctionPath, observability, traceAnchor);
             const metrics = this.makeMetrics(logFunctionPath, observability);
 ${notifyBuild}
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
@@ -4812,12 +5084,17 @@ ${notifyBuild}
                     userId: userId ?? null,
                 },
                 db,
-                fetch: globalThis.fetch.bind(globalThis),
+                // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
+                // \`traceparent\` propagation, so time spent in a downstream service
+                // is visible and its spans join this trace. Degrades to the bare
+                // global when no sink is configured.
+                fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
                 ip: this.getCurrentIp(),
                 log,
                 metrics,
                 now,${ormContextField}
                 scheduler,
+                span,
                 storage,
                 trace,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
             };

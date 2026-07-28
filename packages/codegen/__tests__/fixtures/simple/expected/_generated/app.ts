@@ -52,7 +52,7 @@ interface ComposedApp extends LunoraWorker {
  * worker-side `createWorker` options — constructing the worker lazily on the
  * first request so per-isolate singletons are built once.
  */
-class AppBuilder<Env extends Record<string, unknown>> {
+class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
@@ -282,7 +282,7 @@ class AppBuilder<Env extends Record<string, unknown>> {
             Object.assign(options, this.buildStorageAdmin(env));
         }
 
-        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env) : undefined;
+        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 
@@ -323,8 +323,17 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
     };
 };
 
-/** Start composing the app. Chain the capability methods, then `.build()`. */
-const defineApp = <Env extends Record<string, unknown>>(): AppBuilder<Env> => new AppBuilder<Env>();
+/**
+ * Start composing the app. Chain the capability methods, then `.build()`.
+ *
+ * `Env` is constrained to `object`, not `Record<string, unknown>`: an `interface Env`
+ * — which is what wrangler's generated `worker-configuration.d.ts` gives you, and
+ * what any app with its own bindings declares — is NOT assignable to an index
+ * signature, so the stricter bound forced every real app to write
+ * `type AppEnv = Env & Record<string, unknown>`. The builder only ever reads `env`
+ * through the selectors you pass it, so the looser bound costs nothing.
+ */
+const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
 export type { ComposedApp, GlobalDeclaration, Selector, StorageDeclaration };

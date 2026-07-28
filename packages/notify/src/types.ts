@@ -71,6 +71,15 @@ export type RegisterInput =
 export interface SubscriptionFilter {
     /** Restrict to a delivery kind. */
     kind?: SubscriptionKind;
+
+    /**
+     * Cap the number of rows returned (a `LIMIT`). Applied server-side by the
+     * store, so a large audience never materializes wholesale in the isolate.
+     * A non-positive/absent value means "no cap"; a fractional value is truncated.
+     * `broadcast` deliberately leaves this unset (it must reach every matched
+     * device); admin/list reads set it to bound the page.
+     */
+    limit?: number;
     /** Restrict to a single owning user. */
     userId?: string | null;
 }
@@ -177,8 +186,15 @@ export interface LunoraPush {
      * target is derived from each subscription, so it is omitted from the payload.
      */
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
-    /** List stored subscriptions (optionally filtered). */
-    list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
+
+    /**
+     * List stored subscriptions (optionally filtered), with the delivery
+     * **secrets** stripped — the Web Push `keys` (RFC 8291 `auth`/`p256dh`) and the
+     * FCM `token`. Those, plus the endpoint, are enough to deliver arbitrary push to
+     * a device, so they never cross the app-facing facade; the raw rows are
+     * reachable only through the internal `SubscriptionStore`.
+     */
+    list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     /** Register (upsert) a device subscription and return the stored record. */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
@@ -219,6 +235,23 @@ export type FcmConfigFactory = (env: NotifyEnv) => FcmConfig | undefined;
 
 /** Options accepted by `defineNotify`. */
 export interface NotifyConfig {
+    /**
+     * Exact origins (`https://host[:port]`) a client-supplied Web Push `endpoint`
+     * may register from. When set (non-empty), `register()` requires the endpoint's
+     * origin to be one of these — the strongest anti-SSRF posture, and the way to
+     * close DNS rebinding for a facade that accepts client-controlled endpoints.
+     *
+     * When unset, the default posture applies: an endpoint must be `https:` with a
+     * host a STRING classifier does not flag as private / loopback / link-local.
+     * That classifier does NOT resolve DNS, so a public hostname resolving to a
+     * private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT blocked by it
+     * — `register()` also emits a one-shot dev warning in this case. Set this to the
+     * push services your app actually uses (e.g. `["https://fcm.googleapis.com",
+     * "https://updates.push.services.mozilla.com"]` — exact origins only, no
+     * wildcards) to hard-pin the boundary and close DNS rebinding.
+     */
+    allowedPushOrigins?: string[];
+
     /**
      * Optional chat provider factory (Slack/Discord/Teams/Telegram). Wire with a
      * provider from `@visulima/notification/providers/*`. Edge-safe (fetch-based).

@@ -59,12 +59,46 @@ describe("defineTable", () => {
         expect(documents.searchIndexes[0]).toMatchObject({ field: "body", filterFields: ["workspaceId"], name: "by_body" });
     });
 
+    /**
+     * Both guards exist for the same reason: neither option *degrades* on a
+     * typo, so nothing downstream can report one. An unknown language silently
+     * analyzes as folding-only; an unknown strategy silently picks a different
+     * physical storage layout. Schema-build time is the only place either is
+     * still a typo rather than a stored fact.
+     */
+    it(".searchIndex refuses an unknown language or strategy", () => {
+        expect.assertions(3);
+
+        expect(() => defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", language: "klingon" as never })).toThrow(
+            /unknown language "klingon" \(supported: de, en, es, fr, it, nl, none, pt\)/u,
+        );
+        expect(() => defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", strategy: "Native" as never })).toThrow(
+            /unknown strategy "Native" \(supported: native, portable\)/u,
+        );
+        // The accepted spellings still pass, so the guards are not just refusing.
+        expect(defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", language: "en", strategy: "native" }).searchIndexes[0]).toMatchObject({
+            language: "en",
+            strategy: "native",
+        });
+    });
+
     it(".shardBy marks the table as shard-local", () => {
         expect.assertions(1);
 
         const documents = defineTable({ body: v.string(), workspaceId: v.id("workspaces") }).shardBy("workspaceId");
 
         expect(documents.shardMode).toEqual({ field: "workspaceId", kind: "shardBy" });
+    });
+
+    it(".ownedBy records the owning column for owner-scoped shapes", () => {
+        expect.assertions(2);
+
+        // Independent of `.shardBy` even when both name the same column: the shard
+        // key routes storage, `ownedBy` states who the rows belong to.
+        const nodes = defineTable({ text: v.string(), userId: v.string() }).shardBy("userId").ownedBy("userId");
+
+        expect(nodes.ownerField).toBe("userId");
+        expect(defineTable({ text: v.string() }).ownerField).toBeUndefined();
     });
 
     it(".global marks the table as global", () => {

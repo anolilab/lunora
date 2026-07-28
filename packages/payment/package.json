@@ -1,6 +1,6 @@
 {
     "name": "@lunora/payment",
-    "version": "1.0.0-alpha.30",
+    "version": "1.0.0-alpha.49",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
     "keywords": [
         "billing",
@@ -85,20 +85,20 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.7",
-        "@lunora/server": "1.0.0-alpha.30",
-        "@lunora/values": "1.0.0-alpha.10",
+        "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/server": "1.0.0-alpha.49",
+        "@lunora/values": "1.0.0-alpha.11",
         "dinero.js": "2.0.2"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@polar-sh/sdk": "0.48.1",
+        "@polar-sh/sdk": "0.49.0",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
-        "autumn-js": "1.2.43",
-        "creem": "1.5.4",
-        "dodopayments": "2.42.2",
+        "autumn-js": "1.2.44",
+        "creem": "1.6.0",
+        "dodopayments": "2.43.0",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "stripe": "22.3.2",

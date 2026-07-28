@@ -56,11 +56,17 @@ export interface IndexIR {
 }
 
 export interface SearchIndexIR {
-    /** Primary text-search field. */
+    /** Primary text-search field; a dot-separated path reads a nested field. */
     field: string;
     /** Optional filter fields surfaced alongside the FTS column. */
     filterFields?: ReadonlyArray<string>;
+    /** Text-analysis profile (accent folding + that language's stopwords). */
+    language?: string;
     name: string;
+    /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
+    staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one (Postgres). */
+    strategy?: string;
 }
 
 /** A `.geoIndex(name, { field, precision? })` declaration — a geohash companion over a `v.geoPoint()` column. */
@@ -164,6 +170,17 @@ export interface ExternalSourceIR {
 }
 
 export interface TableIR {
+    /**
+     * The `defineSchemaExtension` key that contributed this table, set when it
+     * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
+     * declared itself.
+     *
+     * Drives the generated `AppTableName` union: an add-on's tables
+     * (`ratelimit_buckets`, …) are real tables and stay in `TableName`, but an app
+     * enumerating "my tables" should not have to know about them.
+     */
+    extensionKey?: string;
+
     /**
      * `true` when the table chain carried `.externallyManaged()` — its rows are
      * written outside Lunora's discoverable insert path (adapter/migration/
@@ -304,6 +321,12 @@ export interface MigrationIR {
  * because the runtime object (`columns`/`compileWhere`) carries the authority.
  */
 export interface ShapeIR {
+    /**
+     * The shape's `args` validator map — its partition selector. Lifted so
+     * `_generated/collections.ts` can type the selector a caller passes instead of
+     * widening it to `Record&lt;string, unknown>`. `{}` for a parameterless shape.
+     */
+    args: Record<string, ValidatorIR>;
     /** Export binding name — the shape's registry key and import member. */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"shapes"`. */
@@ -354,10 +377,24 @@ export interface EnvIR {
  * browser bundle separately — only the path crosses to the server side.
  */
 export interface MutatorIR {
+    /**
+     * The mutator's `args` validator map, parsed exactly as a procedure's is, so
+     * the emitted `api.mutators.&lt;name>` reference carries the arg type a client
+     * `defineMutator` infers instead of restating. `{}` for a parameterless
+     * mutator (or one whose `args` isn't an inline object literal).
+     */
+    args: Record<string, ValidatorIR>;
     /** Export binding name — the mutator's registry key and import member. */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"mutators"`. */
     filePath: string;
+
+    /**
+     * Serialized TS source for the authoritative `server` impl's return type,
+     * `Promise&lt;T>` unwrapped. `"unknown"` when ts-morph can't resolve it — same
+     * contract as {@link FunctionIR.returnType}.
+     */
+    returnType: string;
 }
 
 /**
@@ -983,6 +1020,18 @@ export interface ProcedureMiddlewareIR {
     fanOut: boolean;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
+
+    /**
+     * `true` when the procedure declares an email-shaped argument (`email`,
+     * `emailAddress`, `userEmail`, …), `false` when it provably declares none,
+     * and **absent** when the argument list can't be read statically (a
+     * `.input(sharedSchema)`, a spread, or a factory whose `args` comes from a
+     * variable). Feeds `signup_mutation_without_disposable_gating`, which can
+     * only be actioned when there is an address to gate — so "unreadable" must
+     * stay distinguishable from "none", or the lint would clear itself on a
+     * registration that may well expose one.
+     */
+    hasEmailArg?: boolean;
     /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     kind: "action" | "mutation" | "query";
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */
@@ -1133,6 +1182,28 @@ export interface KvKeyAccessIR {
  * arg-derived identity write reaches here. Structurally identical to
  * `AdvisorOwnerFieldWrite`.
  */
+
+/**
+ * One branching `defineShape({ where })` / `definePolicy({ when })` predicate arm
+ * that returns an unrestricted predicate — the `unrestricted_where_branch` lint
+ * input. A denial arm must match NO rows (`deny()` / `{ OR: [] }`); `{}` matches
+ * every row, so the near-miss silently replicates the whole table.
+ */
+export interface UnrestrictedWhereBranchIR {
+    /** Export binding name of the shape / policy the predicate belongs to. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Which unrestricted form was returned. */
+    form: "empty-object" | "undefined";
+    /** The config key carrying the predicate (`where` for a shape, `when` for a policy). */
+    key: string;
+    /** 1-based line of the offending returned expression. */
+    line: number;
+    /** The declaring call (`defineShape` / `definePolicy`). */
+    owner: string;
+}
+
 export interface OwnerFieldWriteIR {
     /** Export binding name of the procedure performing the write. */
     exportName: string;
@@ -1341,11 +1412,13 @@ export interface AuthConfigIR {
     // eslint-disable-next-line no-secrets/no-secrets -- the dotted config-path in the doc comment, not a credential
     /** `emailAndPassword.requireEmailVerification === true` present. */
     requireEmailVerification: boolean;
+    /** `trustedOrigins` array literal contains a `"*"` element. */
+    /** `plugins` includes `scim(...)` while `database` is a non-transactional Lunora adapter — a combination that throws at runtime. */
+    scimOnNonTransactionalAdapter: boolean;
     /** `advanced.useSecureCookies === false`. */
     secureCookiesDisabled: boolean;
     /** `session.freshAge === 0` (explicit literal). */
     sessionFreshAgeZero: boolean;
-    /** `trustedOrigins` array literal contains a `"*"` element. */
     trustedOriginsWildcard: boolean;
 }
 

@@ -116,7 +116,15 @@
             - "name": "Build packages"
               # Build everything before releasing — multi-semantic-release uses each package's
               # files: in package.json to publish, and those typically include dist/.
-              "run": "pnpm run build:packages"
+              #
+              # `build:prod` (packem --production), NOT `build` (--development): a dev build
+              # ships the React dev JSX runtime and dev-only branches, which crash consumers
+              # whose bundler stubs `react/jsx-dev-runtime` in production. That is exactly what
+              # `@lunora/react@1.0.0-alpha.31` did on npm.
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Verify no development-build artifacts"
+              "run": "pnpm run dist:check"
 
             # The vis git hooks (commitlint, secret scan, staged lint) are installed
             # by the `prepare` script during install. They must NOT run on

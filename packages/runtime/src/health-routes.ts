@@ -17,9 +17,12 @@
  * Security posture (plan 177 exit criteria): the body leaks NO secrets or PII. A
  * probe returns only a boolean and a message string the runtime controls — never
  * an env value, connection string, or binding name from user config. In the
- * default `"public"` posture the per-check `message` is omitted entirely; in the
- * `"admin"` posture the endpoint is bearer-gated AND the (still runtime-authored)
- * messages are included to aid an operator.
+ * default `"public"` posture the per-check `message` is omitted entirely AND the
+ * check `name` is reduced to its probe kind (`d1`, `r2`, …) so the operator's
+ * real binding keys never reach an unauthenticated caller (see `buildBody`); in
+ * the `"admin"` posture the endpoint is bearer-gated AND the (still
+ * runtime-authored) messages plus the full `kind:key` names are included to aid
+ * an operator.
  */
 import { LunoraError } from "./errors";
 import { methodGuard } from "./method-guard";
@@ -65,6 +68,7 @@ interface HealthCheckReport {
     critical: boolean;
     /** Present only in the `admin` posture. */
     message?: string;
+    /** The redacted probe kind (`d1`, `r2`, `d1#2`, …) in the `public` posture; the full `kind:key` name in `admin`. */
     name: string;
     status: "down" | "up";
 }
@@ -89,7 +93,12 @@ interface HealthRouteDeps {
 
     /**
      * Cache the last computed report for this many ms so an orchestrator polling
-     * every few seconds does not hammer the bindings. Defaults to `0` (no cache).
+     * every few seconds does not hammer the bindings (each uncached request runs
+     * a real Durable Object subrequest plus one `SELECT 1` per detected D1
+     * binding, which an unauthenticated flood would otherwise amplify). Cached
+     * independently for the aggregate and readiness probes, since their bodies
+     * differ. When omitted it defaults to `5000` in the `public` posture and `0`
+     * (no cache) in the bearer-gated `admin` posture.
      */
     cacheTtlMs?: number;
     /** Admin-bearer predicate, consulted only when `auth === "admin"`. */
@@ -192,12 +201,49 @@ const buildRegistry = (probes: ReadonlyArray<HealthProbe>): { criticalNames: Set
 
 /**
  * Assemble the sanitised response body from a registry report. In the `public`
- * posture the per-check `message` is dropped (only name + up/down survive), so
- * no runtime-authored detail — however benign — reaches an unauthenticated
- * caller. The overall `status` is `unhealthy` when any CRITICAL check is down
- * (drives the `503`), `degraded` when only non-critical checks are down, else
- * `healthy`.
+ * posture two things are redacted: the per-check `message` is dropped (only name
+ * + up/down survive), and the check `name` is reduced to its probe KIND — the
+ * name prefix up to the first `:` (`d1`, `r2`, `queue`, …) with a `#n`
+ * disambiguator when a kind repeats. This keeps the operator's real binding keys
+ * (`d1:BILLING_LEGACY`, `queue:PII_EXPORT`) out of an unauthenticated response,
+ * where they would otherwise leak internal systems / environments / tenant
+ * structure. The `admin` posture keeps the full `kind:key` names (Studio and
+ * operators depend on their readability). The overall `status` is `unhealthy`
+ * when any CRITICAL check is down (drives the `503`), `degraded` when only
+ * non-critical checks are down, else `healthy`.
  */
+
+/**
+ * Public-posture name redaction: reduce a check name to its probe KIND — the part
+ * before the first `:`. Auto-detected probes are `kind:key`, so this yields `d1`,
+ * `r2`, … A custom probe name lacking a `:` (e.g. an operator-supplied
+ * `acme-prod-billing`) has no safe kind prefix, so it collapses to a generic
+ * `probe` label rather than leaking the raw name to an unauthenticated caller.
+ * `kindCounts` is read and mutated so a repeated kind surfaces disambiguated
+ * (`d1#2`) instead of colliding.
+ */
+const redactCheckName = (name: string, kindCounts: Map<string, number>): string => {
+    const kind = name.includes(":") ? name.slice(0, name.indexOf(":")) : "probe";
+    const seen = (kindCounts.get(kind) ?? 0) + 1;
+
+    kindCounts.set(kind, seen);
+
+    return seen === 1 ? kind : `${kind}#${String(seen)}`;
+};
+
+/** Roll the per-check up/down tally into the body's overall status: any critical down → `unhealthy` (drives the 503), any non-critical down → `degraded`, else `healthy`. */
+const overallStatus = (anyCriticalDown: boolean, anyDown: boolean): HealthBody["status"] => {
+    if (anyCriticalDown) {
+        return "unhealthy";
+    }
+
+    if (anyDown) {
+        return "degraded";
+    }
+
+    return "healthy";
+};
+
 const buildBody = (
     report: Record<string, { health: { healthy: boolean; message?: string } }>,
     criticalNames: Set<string>,
@@ -208,23 +254,25 @@ const buildBody = (
     const checks: HealthCheckReport[] = [];
     let anyCriticalDown = false;
     let anyDown = false;
+    // Public-posture disambiguation: how many times each redacted kind has been
+    // seen so far, so a second `d1` binding surfaces as `d1#2` rather than
+    // colliding. Keyed by kind; unused in the admin posture.
+    const kindCounts = new Map<string, number>();
 
     for (const [name, entry] of Object.entries(report)) {
         const critical = criticalNames.has(name);
         const up = entry.health.healthy;
 
-        if (!up) {
-            anyDown = true;
+        anyDown = anyDown || !up;
+        anyCriticalDown = anyCriticalDown || (!up && critical);
 
-            if (critical) {
-                anyCriticalDown = true;
-            }
-        }
+        // Admin keeps the full `kind:key` name; the public posture redacts it.
+        const reportedName = posture === "admin" ? name : redactCheckName(name, kindCounts);
 
         checks.push({
             critical,
             ...(posture === "admin" && entry.health.message !== undefined ? { message: entry.health.message } : {}),
-            name,
+            name: reportedName,
             status: up ? "up" : "down",
         });
     }
@@ -232,26 +280,42 @@ const buildBody = (
     // Stable ordering so a contract/snapshot never flakes on registry iteration order.
     checks.sort((a, b) => a.name.localeCompare(b.name));
 
-    let status: HealthBody["status"] = "healthy";
-
-    if (anyCriticalDown) {
-        status = "unhealthy";
-    } else if (anyDown) {
-        status = "degraded";
-    }
-
     return {
         anyCriticalDown,
-        body: { appName, appVersion, checks, status, timestamp: new Date().toISOString() },
+        body: { appName, appVersion, checks, status: overallStatus(anyCriticalDown, anyDown), timestamp: new Date().toISOString() },
     };
 };
 
 /** Build the health + readiness route map merged into the worker's internal route table. */
 const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    // `cacheTtlMs` is accepted for API/back-compat but is currently a no-op: a
-    // fresh registry is built per request, so there is no cross-request cache to
-    // TTL. (It never cached across requests under the old dependency either.)
-    const { appName = "lunora", appVersion = "0.0.0", auth = "public", isAdmin, resolveProbes } = deps;
+    const { appName = "lunora", appVersion = "0.0.0", auth = "public", cacheTtlMs, isAdmin, resolveProbes } = deps;
+
+    // Cache the computed report so a frequent poller (and, more importantly, an
+    // unauthenticated flood) does not re-run the live probes — a real Durable
+    // Object subrequest plus one `SELECT 1` per detected D1 binding — on every
+    // request. Keyed by probe kind because the aggregate and readiness endpoints,
+    // though served under the same posture, produce different bodies. This closure
+    // is built once per worker, so the cache persists across requests in the isolate.
+    //
+    // The DEFAULT TTL differs by probe kind. The aggregate probe defaults to
+    // `5000` ms in the unauthenticated `public` posture (the amplification vector)
+    // and `0` in the bearer-gated `admin` posture. The readiness gate defaults to
+    // `0` (uncached) in BOTH postures: a load-balancer / k8s readiness poll must
+    // observe a dependency going down on the very next poll, not up to 5s later.
+    // An operator can still opt the readiness gate into caching by setting
+    // `cacheTtlMs` explicitly, which overrides the default for both endpoints.
+    const cacheTtlFor = (probeKind: "aggregate" | "readiness"): number => {
+        if (cacheTtlMs !== undefined) {
+            return cacheTtlMs;
+        }
+
+        if (probeKind === "readiness") {
+            return 0;
+        }
+
+        return auth === "public" ? 5000 : 0;
+    };
+    const cache: Partial<Record<"aggregate" | "readiness", { body: HealthBody; down: boolean; expiresAt: number }>> = {};
 
     const gate = (request: Request): void => {
         if (auth === "admin" && !isAdmin(request)) {
@@ -268,6 +332,16 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
 
         gate(request);
 
+        const effectiveCacheTtlMs = cacheTtlFor(probeKind);
+
+        if (effectiveCacheTtlMs > 0) {
+            const hit = cache[probeKind];
+
+            if (hit !== undefined && Date.now() < hit.expiresAt) {
+                return Response.json(hit.body, { headers: { "cache-control": "no-store" }, status: hit.down ? 503 : 200 });
+            }
+        }
+
         const { criticalNames, registry } = buildRegistry(resolveProbes(env));
         const { healthy, report } = await registry.getReport(probeKind === "readiness" ? "readiness" : undefined);
         const { anyCriticalDown, body } = buildBody(report, criticalNames, auth, appName, appVersion);
@@ -276,6 +350,10 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
         // the readiness gate is `503` whenever any readiness check is unhealthy
         // (a load balancer should stop routing on any readiness failure).
         const down = probeKind === "readiness" ? !healthy : anyCriticalDown;
+
+        if (effectiveCacheTtlMs > 0) {
+            cache[probeKind] = { body, down, expiresAt: Date.now() + effectiveCacheTtlMs };
+        }
 
         return Response.json(body, { headers: { "cache-control": "no-store" }, status: down ? 503 : 200 });
     };

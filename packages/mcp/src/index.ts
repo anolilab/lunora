@@ -1,6 +1,9 @@
 /**
- * `@lunora/mcp` — a Model Context Protocol server that exposes a Lunora
- * deployment to AI agents. It registers tools for introspecting a deployment
+ * `@lunora/mcp` — Model Context Protocol servers for Lunora. This entry exposes
+ * a *deployment* to AI agents; the `@lunora/mcp/docs` subpath exposes the
+ * framework's *documentation* (credential-free, and safe to host publicly).
+ *
+ * The deployment server: It registers tools for introspecting a deployment
  * (`lunora_list_functions`, `lunora_list_tables`) and invoking its functions
  * (`lunora_run_query`, plus `lunora_run_mutation` and `lunora_run_action` when
  * writes are enabled), each backed by `LunoraClient` over HTTP RPC. The server
@@ -17,8 +20,12 @@
  */
 export type { CallAgentToolOptions, McpAgentExposure } from "./agent-tools";
 export { AGENT_RUN_INPUT_SCHEMA, AGENT_STATUS_TOOL_NAME, agentToolDefinitions, callAgentTool, parseAgentsEnv } from "./agent-tools";
+export type { McpServerInfo, McpTool } from "./compose";
+export { createToolServer } from "./compose";
 export type { McpFetchHandler } from "./http";
-export { createMcpFetchHandler } from "./http";
+export { createMcpFetchHandler, serveStateless } from "./http";
+export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions } from "./local";
+export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE } from "./local";
 export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler } from "./paid";
 export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";

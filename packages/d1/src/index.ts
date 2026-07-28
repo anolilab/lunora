@@ -10,6 +10,7 @@ export type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "./d
 export { D1Client, D1Session } from "./d1-client";
 export type { D1CtxDbOptions, D1Exec, SqlCtxDbOptions, SqlCtxExec } from "./d1-ctx-db";
 export {
+    backfillD1SearchIndexes,
     createD1CtxDb,
     createSqlCtxDb,
     readD1CdcChanges,

@@ -2,8 +2,8 @@
 name: lunora-performance-audit
 description: Diagnoses and fixes Lunora performance problems — full-table scans, missing
     indexes, OCC write conflicts, oversized subscriptions, and sharding/`.global()`
-    scaling. Use when queries are slow, mutations conflict, or `@lunora/advisor`
-    flags a table.
+    scaling. Use when queries are slow, mutations conflict, `lunora insights`
+    reports a hot-spot, or `@lunora/advisor` flags a table.
 ---
 
 # Lunora Performance Audit
@@ -34,12 +34,35 @@ apply it across sibling functions consistently.
 
 ## Signal Gathering
 
-Start with the static advisors — they need no traffic:
+### Runtime signal: `lunora insights`
+
+When the worker is running and has served traffic, start here — it reports the
+measured problem, not a suspected one:
+
+```bash
+lunora insights                      # against the local dev worker
+lunora insights --shard channel:demo # scope to one shard
+lunora insights --limit 25 --json    # machine-readable, more rows
+lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
+```
+
+It ranks per-function **write-conflict hot-spots** (OCC contention — the
+sharding signal), **error rates**, and **latency outliers**. A function at the
+top of the write-conflict list is the direct input to the OCC section below; a
+latency outlier usually resolves to the read-amplification section.
+
+The Studio **Issues** panel and `lunora logs` cover the error side in more
+detail once `insights` tells you where to look.
+
+### Static signal: the advisors
+
+These need no traffic, so they also work on a cold codebase:
 
 - **Lunora Studio → Advisors tab** surfaces `@lunora/advisor` findings live in
   dev.
-- `@lunora/advisor` runs static lints over `defineSchema` + discovered query
-  reads / insert writes. Relevant performance/schema rules:
+- `@lunora/advisor` runs ~90 static lints over `defineSchema` + discovered query
+  reads / insert writes (plus a few runtime lints). The performance/schema rules
+  most relevant here:
     - `filter-without-index` — a query filters a table with no covering index.
     - `unindexed-foreign-key` — a relation/FK column has no index.
     - `duplicate-index` / `empty-index` — wasted or malformed indexes.
@@ -75,7 +98,8 @@ column. Fix every sibling query on the table the same way.
 
 ## Problem Class: Write Conflicts (OCC)
 
-**Symptom:** mutations on hot rows retry or fail under concurrency. ShardDO uses
+**Symptom:** mutations on hot rows retry or fail under concurrency, or the
+function tops the write-conflict section of `lunora insights`. ShardDO uses
 optimistic concurrency control — concurrent writes to the same DO that touch
 overlapping state conflict and retry.
 
@@ -115,6 +139,11 @@ cross-region reads (with read-your-writes via the Sessions API). Reserve it for
 read-mostly tables — `.global()` adds the D1 migration flow (see the
 `lunora-migration-helper` skill) and write-path cost.
 
+If the dataset outgrows D1, `.global({ backend: "hyperdrive" })` serves the same
+reactive `.global()` contract from Postgres/MySQL over Cloudflare Hyperdrive —
+see the `lunora-setup-hyperdrive-global` skill (and `lunora migrate
+d1-to-hyperdrive` to move an existing dataset).
+
 ### `.shardBy(key)` vs `.global()` — choose one per table
 
 - `.shardBy(key)`: partitions a table across Durable Objects by key — scales
@@ -135,6 +164,7 @@ read-mostly tables — `.global()` adds the D1 migration flow (see the
 ## Checklist
 
 - [ ] Scoped one concrete flow; traced every `ctx.db` read/write.
+- [ ] Ran `lunora insights` (if the worker has traffic) for the measured signal.
 - [ ] Checked the Studio Advisors tab / `@lunora/advisor` findings.
 - [ ] Read amplification: replaced `.filter()` with an indexed `.withIndex()`.
 - [ ] Write conflicts: narrowed writes and/or partitioned with `.shardBy(key)`.

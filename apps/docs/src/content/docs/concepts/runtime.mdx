@@ -1,0 +1,131 @@
+---
+title: Runtime & bundling
+description: Everything runs on the Workers runtime — what that means for Node APIs, dependencies, and the 10 MB bundle you have to fit into.
+---
+
+There is one runtime. Queries, mutations, actions, HTTP endpoints, scheduled
+jobs, and workflows all execute on Cloudflare's Workers runtime — there is no
+separate Node environment to opt a function into.
+
+That single fact explains most of what follows: a dependency that only works on
+Node will not work anywhere in your Lunora app, and code you can ship is code
+that fits in a Worker bundle.
+
+## Node compatibility
+
+The Workers runtime is not Node, but it can emulate much of it. Lunora's
+scaffolded config enables the compatibility flag:
+
+```jsonc
+// wrangler.jsonc
+{
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+}
+```
+
+`nodejs_compat` provides the built-in modules most libraries actually reach for —
+`node:buffer`, `node:crypto`, `node:stream`, `node:util`, and friends. What it
+cannot provide is anything that assumes a real operating system underneath:
+there is no filesystem to write to, no child processes to spawn, no long-lived
+listening sockets, and no native addons.
+
+`compatibility_date` matters as much as the flag. It pins runtime behaviour to a
+date, so moving it forward is a change worth making deliberately rather than
+incidentally.
+
+### When a dependency will not run
+
+Some work genuinely needs a real machine — ffmpeg, headless Chrome, a native ML
+runtime, a long-running process. That is what
+[containers](/docs/packages/container) are for: a Docker workload running as a
+Durable Object, reached from an action through `ctx.containers`. Reach for one
+when the constraint is the runtime itself, not when a library merely needs a
+polyfill.
+
+## Where the constraints bite
+
+| Constraint      | Value               | What it means                                       |
+| --------------- | ------------------- | --------------------------------------------------- |
+| Bundle size     | 10 MB               | The whole worker, dependencies included             |
+| CPU per request | 30 s                | Long work belongs in an action plus the scheduler   |
+| Subrequests     | 50 free / 1000 paid | Caps outbound `fetch` and fan-out reads per request |
+| Env var size    | 5 KB total          | Larger config belongs in D1 or KV                   |
+
+The full table is in [Limits](/docs/limits).
+
+CPU time is the one that surprises people. A mutation holds its shard's
+transaction open while it runs, so slow work there does not just risk the
+timeout — it blocks every other write to that shard. Move anything unbounded
+into an [action](/docs/concepts/actions), and anything deferrable into the
+[scheduler](/docs/concepts/scheduling).
+
+## Bundling
+
+The Vite plugin and the CLI both bundle through wrangler, so the output is the
+same either way. What you control is what goes into it.
+
+### Measure before optimising
+
+```bash
+lunora analyze
+lunora analyze --json    # for a CI artifact
+```
+
+This runs a wrangler dry-deploy and reports the bundle size, the heaviest
+modules, and the state of your `_generated/` files. Run it when you add a
+dependency, not when you get a deploy failure.
+
+### Keeping the bundle small
+
+A few habits do most of the work:
+
+- **Import narrowly.** Deep-import the subpath you need rather than a package's
+  barrel file, so the bundler can drop the rest. Lunora's own packages are built
+  for this — `@lunora/bindings/kv` rather than all of `@lunora/bindings`.
+- **Install only the add-ons you use.** The `lunorash` umbrella covers the base;
+  add-ons, adapters, and the Vite plugin stay separate installs precisely so an
+  app does not pay for what it does not use.
+- **Watch provider SDKs.** Cloud-provider SDKs are usually the heaviest thing in
+  a worker. Prefer the platform binding or a direct `fetch` where one exists.
+- **Keep dev-only code out.** Test helpers, fixtures, and seed data should not be
+  reachable from the worker entry.
+
+Lunora's packages are ESM-only and marked `"sideEffects": false`, so unused
+exports tree-shake cleanly — provided you do not defeat it by importing for side
+effects.
+
+## The worker entry
+
+Some generated classes must be re-exported from your worker entry or wrangler
+will reject the deploy — Durable Object classes, container classes, and workflow
+entrypoints among them:
+
+```ts
+export * from "./lunora/_generated/containers";
+```
+
+`lunora doctor` checks this, and the error overlay recognises the failure and
+tells you which export is missing. If a deploy fails complaining that a class is
+not exported, this is why.
+
+## Build once, deploy many
+
+For CI, split the build from the deploy so the artifact you verified is the
+artifact you ship:
+
+```bash
+lunora build                 # full pre-deploy pipeline, bundle to disk
+lunora deploy --prebuilt     # ship the bundle without redoing codegen
+```
+
+`build` runs codegen, the schema-drift gate, and `wrangler.jsonc` validation, then
+writes the bundled worker without publishing. `--prebuilt` trusts that work.
+
+## See also
+
+- [Actions](/docs/concepts/actions)
+- [Debugging](/docs/concepts/debugging)
+- [Limits](/docs/limits)
+- [Deployment](/docs/deployment)
+- [@lunora/container](/docs/packages/container)

@@ -77,6 +77,8 @@ export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, Hea
 export { buildHealthRoutes, d1Probe, durableObjectProbe, HEALTH_PATH, HEALTH_READY_PATH, presenceProbe } from "./health-routes";
 export type { LogArchiveConfig } from "./log-archive-admin-routes";
 export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH, resolveLogArchiveFromEnv } from "./log-archive-admin-routes";
+export type { MemoizeIdentityOptions } from "./memoize-identity";
+export { memoizeIdentity, memoizeIdentityPerRequest } from "./memoize-identity";
 export type {
     LogEvent,
     LogFields,
@@ -152,6 +154,16 @@ export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, Res
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
+export type {
+    ShardCallArgs,
+    ShardCallerIdentity,
+    ShardCallOptions,
+    ShardCallReturn,
+    ShardClient,
+    ShardClientOptions,
+    ShardFunctionReference,
+} from "./shard-client";
+export { createShardClient } from "./shard-client";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 
 export const VERSION: string = "0.0.0";

@@ -351,7 +351,7 @@ interface ContextMetrics {
 ### `ContextTracer` (type)
 
 ```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions) => Promise<T>;
 ```
 
 ### `CountArgs` (type)
@@ -433,10 +433,17 @@ type DataMigrationTransform = (document: DataMigrationDocument) => DataMigration
 ```ts
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
+    asId?: (tableName: string, id: string) => string;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: {
         hard?: boolean;
     }) => Promise<void>;
+    deleteAll?: (tableName: string, options?: {
+        chunkSize?: number;
+        hard?: boolean;
+    }) => Promise<{
+        deleted: number;
+    }>;
     deleteMany?: (ids: ReadonlyArray<string>, options?: {
         limit?: number;
     }, expectedTable?: string) => Promise<{
@@ -496,6 +503,14 @@ interface DatabaseWriterLike {
     }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
     system?: SystemDatabaseReader;
+    wipeShard?: (options?: {
+        chunkSize?: number;
+        exclude?: ReadonlyArray<string>;
+        tables?: ReadonlyArray<string>;
+    }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 ```
 
@@ -1738,6 +1753,19 @@ interface SearchFilterBuilderLike {
 }
 ```
 
+### `SearchIndexDefinitionLike` (interface)
+
+```ts
+interface SearchIndexDefinitionLike {
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    readonly language?: string;
+    readonly name: string;
+    readonly staged?: boolean;
+    readonly strategy?: string;
+}
+```
+
 ### `SecurityAuditResult` (interface)
 
 ```ts
@@ -1967,12 +1995,17 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected recordChangedTable(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer;
+    protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T;
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch;
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
-    protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void;
+    protected handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
         changes: CdcChange[];
@@ -2090,8 +2123,16 @@ type SourceRefresh = "manual" | {
 
 ```ts
 interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordEvaluation: (evaluation: EvaluationInput) => void;
+    recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
+    spanContext: () => {
+        spanId: string;
+        traceId: string;
+    };
 }
 ```
 
@@ -2370,10 +2411,16 @@ interface TablesColumnsResult {
 
 ```ts
 interface TelemetrySink {
+    flush?: (context?: LogSinkContext) => void;
     fuseCloudflareTraces?: boolean;
+    instrumentDatabase?: DatabaseInstrumentation;
+    metricHistory?: boolean | MetricHistoryOptions;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
+    traceFetch?: boolean | {
+        propagate?: ((url: URL) => boolean) | boolean;
+    };
 }
 ```
 
@@ -2382,6 +2429,7 @@ interface TelemetrySink {
 ```ts
 interface TraceAnchor {
     rootSpanId: string;
+    sampled?: boolean;
     traceId: string;
 }
 ```
@@ -2613,16 +2661,16 @@ const backfillAggregateIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 const backfillRankIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 ```
 
+### `backfillSearchIndexes` (const)
+
+```ts
+const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike) => void;
+```
+
 ### `boundingBoxGeohashes` (const)
 
 ```ts
 const boundingBoxGeohashes: (box: GeoBoundingBox) => string[];
-```
-
-### `buildFtsMatch` (const)
-
-```ts
-const buildFtsMatch: (tokens: ReadonlyArray<string>) => string;
 ```
 
 ### `buildSecurityAudit` (const)
@@ -2725,6 +2773,7 @@ const diffExternalSource: (pulled: ReadonlyArray<Record<string, unknown>>, basel
 ```ts
 const dispatchRootSpan: (input: {
     anchor: TraceAnchor;
+    collected?: SpanCollection;
     durationMs: number;
     failure: {
         thrown: unknown;
@@ -2806,12 +2855,6 @@ const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => P
 
 ```ts
 const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>) => void;
-```
-
-### `ftsTableName` (const)
-
-```ts
-const ftsTableName: (table: string, indexName: string) => string;
 ```
 
 ### `guardWriter` (const)
@@ -3154,12 +3197,6 @@ const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
 const runTriggers: (options: RunTriggersOptions) => Promise<void>;
 ```
 
-### `scoreDocument` (const)
-
-```ts
-const scoreDocument: (text: string, tokens: ReadonlyArray<string>) => number;
-```
-
 ### `selectExpiredIds` (const)
 
 ```ts
@@ -3243,12 +3280,6 @@ const stableStringify: (value: unknown) => string;
 const stableWireKey: (value: unknown) => string;
 ```
 
-### `stringifySearchText` (const)
-
-```ts
-const stringifySearchText: (value: unknown) => string;
-```
-
 ### `subscriptionListDeltas` (const)
 
 ```ts
@@ -3259,12 +3290,6 @@ const subscriptionListDeltas: (previousJson: string, nextResult: unknown, table:
 
 ```ts
 const throwingScheduler: SchedulerLike;
-```
-
-### `tokenizeSearch` (const)
-
-```ts
-const tokenizeSearch: (query: string) => string[];
 ```
 
 ### `trimCdcChanges` (const)

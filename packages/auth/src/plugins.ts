@@ -48,15 +48,29 @@
  * the plugin factories with a Lunora-namespaced import path.
  */
 
+// OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`.
+// better-auth 1.7 moved these out of its core barrel into `@better-auth/mcp`, and
+// renamed `withMcpAuth` to `requireMcpAuth` (`mcpHandler` is new alongside it).
+export { mcp, mcpHandler, requireMcpAuth } from "@better-auth/mcp";
+
+// Turn your app into an OAuth/OpenID Connect provider other apps sign in with.
+// Replaces the `oidcProvider` plugin, which better-auth deprecated in 1.6 and
+// removed in 1.7; the factory is named `oauthProvider` in its new home.
+export { oauthProvider } from "@better-auth/oauth-provider";
 export { passkey } from "@better-auth/passkey";
+
+/**
+ * SCIM 2.0 server — directory-driven user provisioning, so an enterprise IdP can
+ * create/update/deactivate users without anyone signing in. Users only (no
+ * `/Groups`), and deactivation needs the `admin` plugin. See the package docs for
+ * the setup and its security-relevant defaults.
+ */
+export { scim } from "@better-auth/scim";
 // `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox) has no
 // dedicated `better-auth/plugins/<name>` subpath in better-auth's exports map —
 // it ships only via the `better-auth/plugins` barrel, so it is re-exported from
 // there rather than a per-plugin subpath like the others.
 export { captcha } from "better-auth/plugins";
-// `mcp` + `withMcpAuth` (OAuth-protected Model Context Protocol servers — pairs
-// with `@lunora/mcp`) have no dedicated subpath; both ship via the barrel.
-export { mcp, withMcpAuth } from "better-auth/plugins";
 // Access-control builder (`createAccessControl`) — the companion to the `admin`
 // and `organization` plugins for defining custom roles/permissions.
 export { createAccessControl } from "better-auth/plugins/access";
@@ -72,7 +86,6 @@ export { jwt } from "better-auth/plugins/jwt";
 export { magicLink } from "better-auth/plugins/magic-link";
 export { multiSession } from "better-auth/plugins/multi-session";
 export { oAuthProxy } from "better-auth/plugins/oauth-proxy";
-export { oidcProvider } from "better-auth/plugins/oidc-provider";
 export { oneTimeToken } from "better-auth/plugins/one-time-token";
 export { organization } from "better-auth/plugins/organization";
 export { phoneNumber } from "better-auth/plugins/phone-number";

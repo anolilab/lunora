@@ -12,6 +12,7 @@
 import type { SchemaLike } from "@lunora/do";
 import type { SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
 import {
+    backfillSqlSearchIndexes,
     createSqlCtxDb,
     readSqlCdcChanges,
     runSqlAggregateMigrations,
@@ -40,8 +41,11 @@ const runD1AggregateMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise
 /** Materialize the `__rank_&lt;index>` companion tables for the schema's rank indexes. */
 const runD1RankMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlRankMigrations(exec, schema, sqliteDialect);
 
-/** Materialize the `__fts_&lt;index>` fts5 shadow tables for the schema's search indexes (no-op without fts5). */
+/** Materialize (and backfill) the `__fts_&lt;index>` fts5 shadow tables for the schema's search indexes. */
 const runD1SearchMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlSearchMigrations(exec, schema, sqliteDialect);
+
+/** Index existing rows into every search companion, including the `staged: true` ones migrations leave empty. */
+const backfillD1SearchIndexes = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => backfillSqlSearchIndexes(exec, schema, sqliteDialect);
 
 /** Create the `__cdc_log` table in D1 (idempotent; only run when CDC is enabled). */
 const runD1CdcMigration = (exec: SqlCtxExec): Promise<void> => runSqlCdcMigration(exec, sqliteDialect);
@@ -56,6 +60,7 @@ const trimD1CdcChanges = (exec: SqlCtxExec, throughSeq: number): Promise<void> =
 export type { SqlCtxExec as D1Exec, SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
 export { createSqlCtxDb, decodeGlobalRow } from "@lunora/sql-store";
 export {
+    backfillD1SearchIndexes,
     createD1ContextDatabase as createD1CtxDb,
     readD1CdcChanges,
     runD1AggregateMigrations,

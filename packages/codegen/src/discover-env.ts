@@ -6,12 +6,10 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { EnvIR } from "./ir";
+import { isServerPackageModule } from "./module-specifiers";
 
 /** The only file a `defineEnv` contract may be declared in — mirrors `lunora/identity.ts`. */
 const ENV_FILENAME = "env.ts";
-
-/** Both module specifiers `defineEnv` may be imported from (granular + umbrella). */
-const ENV_MODULE_SPECIFIERS = new Set(["@lunora/server", "lunorash/server"]);
 
 /**
  * Decide whether a callee identifier refers to `defineEnv` from `@lunora/server`
@@ -31,7 +29,7 @@ const isDefineEnv = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (!ENV_MODULE_SPECIFIERS.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+        if (!isServerPackageModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 
@@ -60,7 +58,7 @@ const isEnvNamespaceImport = (identifier: Identifier): boolean => {
 
         const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
 
-        return importDeclaration !== undefined && ENV_MODULE_SPECIFIERS.has(importDeclaration.getModuleSpecifierValue());
+        return importDeclaration !== undefined && isServerPackageModule(importDeclaration.getModuleSpecifierValue());
     }
 
     return false;

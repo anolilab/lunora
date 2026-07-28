@@ -1,0 +1,24 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers` to boot
+// the test Worker in a real workerd runtime.
+//
+// IMPORTANT: this file is not deployed. Two suites share it:
+//
+//   - the plugin-load smoke, which needs no storage at all (it only proves the
+//     enterprise plugins import and construct inside workerd), and
+//   - the DO-backed adapter suite, which needs a real SQLite-backed Durable Object
+//     so `state.storage.transaction` is the platform's own primitive rather than a
+//     BEGIN/COMMIT stand-in.
+//
+// Hence the DO binding and the `new_sqlite_classes` migration below. No D1 binding:
+// D1 behaviour is covered by the Node suites, and SCIM cannot run on D1 anyway.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-auth-enterprise-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "class_name": "AuthStorageDO", "name": "AUTH_DO" }],
+    },
+    "migrations": [{ "new_sqlite_classes": ["AuthStorageDO"], "tag": "v1" }],
+}

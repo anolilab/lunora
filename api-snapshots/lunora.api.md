@@ -333,6 +333,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraWideEvent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ManyRelation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -593,7 +597,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanEvaluation` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -845,6 +865,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `allowAll` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `anyApi` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -965,6 +989,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `deny` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `httpAction` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -982,6 +1010,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `installPlugins` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `isDeny` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1026,6 +1058,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `storageRules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `toWhereInput` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1088,6 +1124,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `CachedQuery` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ClientDebugShard` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ClientDebugSnapshot` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ClientDebugSubscription` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1263,6 +1311,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `OptimisticMessage` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `OptimisticUpdate` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1316,6 +1368,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `QueuedMutation` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `RETIRE_AFTER_DURABLE_SEQ_ADVANCE` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ReconcileDurableMessage` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1567,6 +1627,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `maxSeq` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `preloadQuery` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1576,6 +1640,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `queryCacheKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `reconcileOptimistic` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2401,6 +2469,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `SearchIndexDefinitionLike` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SecurityAuditResult` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2713,11 +2785,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `boundingBoxGeohashes` (const)
+### `backfillSearchIndexes` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `buildFtsMatch` (const)
+### `boundingBoxGeohashes` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2830,10 +2902,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `foldAggregateTally` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ftsTableName` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3037,10 +3105,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `scoreDocument` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `selectExpiredIds` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3085,19 +3149,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `stringifySearchText` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `throwingScheduler` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `tokenizeSearch` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3805,6 +3861,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `MemoizeIdentityOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `MergeStrategy` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4005,11 +4065,39 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ShardCallArgs` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ShardCallOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ShardCallReturn` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ShardCallerIdentity` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ShardClient` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ShardClientOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ShardError` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ShardExportOutcome` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ShardFunctionReference` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4173,6 +4261,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `createShardClient` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `createStaticShardRegistry` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4214,6 +4306,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `handleCorsPreflight` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `memoizeIdentity` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `memoizeIdentityPerRequest` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4627,6 +4727,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraWideEvent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ManyRelation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4887,7 +4991,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanEvaluation` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5139,6 +5259,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `allowAll` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `anyApi` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5259,6 +5383,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `deny` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `httpAction` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5276,6 +5404,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `installPlugins` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `isDeny` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5320,6 +5452,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `storageRules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `toWhereInput` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6439,6 +6575,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraWideEvent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MutationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6523,6 +6663,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SearchLanguage` (type)
+
+Re-exported from `@lunora/search-core` — signature tracked at its source.
+
+### `SearchStrategy` (type)
+
+Re-exported from `@lunora/search-core` — signature tracked at its source.
+
 ### `Secrets` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6535,7 +6683,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanEvaluation` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

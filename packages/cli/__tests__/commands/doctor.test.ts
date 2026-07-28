@@ -45,6 +45,25 @@ const seed = (dir: string, wrangler: string): void => {
     writeFileSync(join(dir, "wrangler.jsonc"), wrangler, "utf8");
 };
 
+/** Write a `lunora/schema.ts` so the schema-derived checks have something to read. */
+const seedSchema = (dir: string, source: string): void => {
+    mkdirSync(join(dir, "lunora"), { recursive: true });
+    writeFileSync(join(dir, "lunora", "schema.ts"), source, "utf8");
+};
+
+const SCHEMA_WITH_VECTOR_METADATA = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+const embed = async (text: string): Promise<number[]> => [text.length];
+
+export const schema = defineSchema({
+    docs: defineTable({
+        body: v.string(),
+        tags: v.array(v.string()),
+        workspaceId: v.id("workspaces"),
+    }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["workspaceId", "tags"], metric: "cosine" }),
+});
+`;
+
 let workdir: string;
 let savedToken: string | undefined;
 
@@ -86,6 +105,44 @@ describe("runDoctor", () => {
         expect(result.code).toBe(0);
         expect(result.findings.some((finding) => finding.level === "fail")).toBe(false);
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
+    });
+
+    /**
+     * The one check whose absence is invisible in production. Cloudflare only
+     * filters on a Vectorize metadata property that has an explicit metadata
+     * index; without one, `filter` matches nothing and returns an empty list
+     * that reads exactly like "no documents matched". `lunora deploy` creates
+     * them, so doctor's job is to name the command for anyone deploying with
+     * wrangler directly — and to refuse to promise a filter that can never work.
+     */
+    it("names the exact command for each declared Vectorize metadata index", async () => {
+        expect.assertions(2);
+
+        seed(workdir, CLEAN_WRANGLER);
+        seedSchema(workdir, SCHEMA_WITH_VECTOR_METADATA);
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.level === "info" && entry.message.includes(`metadata "workspaceId"`));
+
+        expect(finding?.message).toContain(`vector index "docs-body"`);
+        // Pasteable, with the type derived from the column — a metadata index
+        // created with the wrong type never matches either.
+        expect(finding?.fix).toBe("wrangler vectorize create-metadata-index docs-body --property-name=workspaceId --type=string");
+    });
+
+    it("warns about a metadata property whose type Vectorize cannot filter on", async () => {
+        expect.assertions(2);
+
+        seed(workdir, CLEAN_WRANGLER);
+        seedSchema(workdir, SCHEMA_WITH_VECTOR_METADATA);
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.level === "warn" && entry.message.includes(`metadata "tags"`));
+
+        // An array can be *stored* as metadata but never filtered on, so
+        // creating an index for it would be a command that cannot help.
+        expect(finding).toBeDefined();
+        expect(finding?.message).toContain("cannot filter on");
     });
 
     it("reports a failure when wrangler.jsonc is missing", async () => {
@@ -154,5 +211,79 @@ describe("runDoctor", () => {
         const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
         expect(result.findings.some((finding) => finding.level === "pass" && /container "transcoder" is exported/u.test(finding.message))).toBe(true);
+    });
+
+    /**
+     * Nothing in an app's manifest tells the adopter which combination of the
+     * independently-versioned `@lunora/*` packages is coherent, so a partial
+     * `pnpm update` produces a set that looks fine and behaves like a framework bug.
+     */
+    describe("version skew", () => {
+        const seedManifest = (dependencies: Record<string, string>): void => {
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies, name: "demo" }), "utf8");
+        };
+
+        const versionFinding = (findings: ReadonlyArray<{ level: string; message: string }>) => findings.find((finding) => /Lunora p/u.test(finding.message));
+
+        it("warns when Lunora packages span different versions", async () => {
+            expect.assertions(3);
+
+            seedManifest({ "@lunora/db": "1.0.0-alpha.27", "@lunora/react": "1.1.0-alpha.4", lunorash: "1.0.0-alpha.98" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = versionFinding(result.findings);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("@lunora/react@1.1.0-alpha.4");
+            // A warning, never a failure: the doctor doesn't know the real
+            // compatibility matrix and must not block a deliberate mix.
+            expect(result.code).toBe(0);
+        });
+
+        it("warns when packages mix release channels", async () => {
+            expect.assertions(2);
+
+            seedManifest({ "@lunora/db": "1.0.0", "@lunora/react": "1.0.0-alpha.31" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = versionFinding(result.findings);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("mix release channels");
+        });
+
+        it("reports same-channel counter drift as info, since independent versioning makes it normal", async () => {
+            expect.assertions(2);
+
+            seedManifest({ "@lunora/db": "1.0.0-alpha.27", "@lunora/react": "1.0.0-alpha.31", lunorash: "1.0.0-alpha.98" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = versionFinding(result.findings);
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.message).toContain("27–98");
+        });
+
+        it("ignores non-Lunora dependencies and unpinnable specs", async () => {
+            expect.assertions(1);
+
+            seedManifest({ "@lunora/db": "workspace:*", "@lunora/react": "1.0.0-alpha.31", react: "^19.0.0" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            // Only one pinnable Lunora spec remains, so there is nothing to compare.
+            expect(versionFinding(result.findings)).toBeUndefined();
+        });
+
+        it("skips silently when there is no package.json", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(versionFinding(result.findings)).toBeUndefined();
+        });
     });
 });

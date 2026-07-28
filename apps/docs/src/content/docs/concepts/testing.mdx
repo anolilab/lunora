@@ -252,15 +252,15 @@ test("password reset email carries a working link", async () => {
 The harness is plain Vitest, so it runs anywhere `pnpm run test` does, with no
 Cloudflare account or `wrangler` login needed. Two things to wire up:
 
-- **`lunora codegen --check`** before the test job, so a stale `_generated/` is a
-  build failure rather than tests passing against old types (the same gate
+- **`lunora verify`** before the test job, so codegen drift is a build failure
+  rather than tests passing against old types (the same gate
   [deployment](/docs/deployment) recommends before deploy).
 - For the **mail-catcher E2E** path, your CI must boot `lunora dev` and pass the
   worker's `baseUrl` and `LUNORA_ADMIN_TOKEN` to the test; those helpers talk to
   a running worker, unlike the in-memory harness.
 
 ```bash
-pnpm lunora codegen --check
+pnpm lunora verify
 pnpm run test
 ```
 
@@ -268,5 +268,5 @@ pnpm run test
 
 - [Queries & mutations](/docs/concepts/queries-mutations) — the `query` / `mutation` / `action` functions the harness runs
 - [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — proving the full live-loader path
-- [Deployment](/docs/deployment) — the `codegen --check` CI gate
+- [Deployment](/docs/deployment) — the `lunora verify` CI gate
 - [@lunora/testing](/docs/packages/testing) — full harness and mail-catcher reference

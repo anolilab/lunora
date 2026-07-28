@@ -485,6 +485,7 @@ interface CrossShardRelationOptions {
 
 ```ts
 interface CsrfOptions {
+    allowLoopback?: boolean;
     trustedOrigins?: string[];
 }
 ```
@@ -1093,6 +1094,7 @@ interface LogArchiveConfig {
 ```ts
 interface LogEvent {
     args: unknown[];
+    eventName?: string;
     fields?: LogFields;
     functionPath: string;
     level: ContextLogLevel;
@@ -1155,6 +1157,16 @@ interface LunoraWorker {
         shardKey?: string;
         waitUntil?: (promise: Promise<unknown>) => void;
     }) => Promise<Response>;
+}
+```
+
+### `MemoizeIdentityOptions` (interface)
+
+```ts
+interface MemoizeIdentityOptions {
+    cacheKey?: (request: Request) => string | undefined;
+    maxEntries?: number;
+    ttlMs?: number;
 }
 ```
 
@@ -1255,7 +1267,7 @@ interface NotifySubscriptionDevice {
 
 ```ts
 interface NotifySubscriptionStoreLike {
-    list: () => Promise<ReadonlyArray<NotifySubscriptionDevice & {
+    list: (filter?: NotifySubscriptionFilter) => Promise<ReadonlyArray<NotifySubscriptionDevice & {
         keys?: unknown;
         token?: unknown;
     }>>;
@@ -1297,11 +1309,20 @@ interface ObservabilityEvent {
 
 ```ts
 interface ObservabilitySink {
+    flush?: (context?: ObservabilitySinkContext) => void;
     fuseCloudflareTraces?: boolean;
+    instrumentDatabase?: "off" | "spans" | "summary";
+    metricHistory?: boolean | {
+        maxSeries?: number;
+        retentionBuckets?: number;
+    };
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
     onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
     onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
+    traceFetch?: boolean | {
+        propagate?: ((url: URL) => boolean) | boolean;
+    };
 }
 ```
 
@@ -1321,14 +1342,17 @@ type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
 
 ```ts
 interface OtlpSinkOptions extends OnlyErrorsOption {
+    batch?: OtlpBatchOptions | false;
     deploymentEnvironment?: string;
     detectResources?: boolean;
     endpoint: string;
     headers?: Record<string, string>;
+    postProcessor?: OtlpPostProcessor;
     resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
     serviceNamespace?: string;
     serviceVersion?: string;
+    tailSampler?: TailSampler;
     token?: string;
 }
 ```
@@ -1351,6 +1375,7 @@ type PipelineLogColumnMap = Partial<Record<PipelineLogField, string>>;
 
 ```ts
 interface PipelineLogCursor {
+    seen?: string[];
     ts: number;
 }
 ```
@@ -1705,6 +1730,58 @@ interface SentrySinkOptions extends OnlyErrorsOption {
 }
 ```
 
+### `ShardCallArgs` (type)
+
+```ts
+type ShardCallArgs<F> = F extends ShardFunctionReference<infer A, infer _R> ? A : Record<string, unknown>;
+```
+
+### `ShardCallOptions` (interface)
+
+```ts
+interface ShardCallOptions {
+    mutationId?: string;
+    shardKey?: string;
+}
+```
+
+### `ShardCallReturn` (type)
+
+```ts
+type ShardCallReturn<F> = F extends ShardFunctionReference<infer _A, infer R> ? R : unknown;
+```
+
+### `ShardCallerIdentity` (interface)
+
+```ts
+interface ShardCallerIdentity {
+    claims?: Record<string, unknown>;
+    userId: string;
+}
+```
+
+### `ShardClient` (interface)
+
+```ts
+interface ShardClient {
+    as: (identity: ShardCallerIdentity) => ShardClient;
+    asSystem: () => ShardClient;
+    call: <F extends ShardFunctionReference | string>(reference: F, args: F extends string ? Record<string, unknown> : ShardCallArgs<F>, options?: ShardCallOptions) => Promise<ShardCallReturn<F>>;
+    forShard: (shardKey: string) => ShardClient;
+}
+```
+
+### `ShardClientOptions` (interface)
+
+```ts
+interface ShardClientOptions {
+    as?: ShardCallerIdentity;
+    jurisdiction?: DurableObjectJurisdiction;
+    shardKey?: string;
+    system?: boolean;
+}
+```
+
 ### `ShardError` (interface)
 
 ```ts
@@ -1728,6 +1805,19 @@ interface ShardExportOutcome {
         table: string;
     }>;
     shardKey: string;
+}
+```
+
+### `ShardFunctionReference` (interface)
+
+```ts
+interface ShardFunctionReference<Args = unknown, Return = unknown> {
+    readonly __lunoraPhantom?: {
+        args: Args;
+        kind: string;
+        returns: Return;
+    };
+    readonly __lunoraRef: string;
 }
 ```
 
@@ -1869,11 +1959,14 @@ interface ShardingInfo {
 interface SpanEvent {
     attributes?: LogFields;
     durationMs: number;
+    events?: SpanEventPoint[];
     error?: {
         message: string;
         type: string;
     };
     functionPath: string;
+    kind?: OtlpSpanKind;
+    links?: SpanLink[];
     name: string;
     ok: boolean;
     parentSpanId: string;
@@ -2166,6 +2259,12 @@ const createRestRateLimit: (limiter: RateLimiterLike, options: {
 }) => RestRateLimit;
 ```
 
+### `createShardClient` (const)
+
+```ts
+const createShardClient: (namespace: ShardNamespaceLike, options?: ShardClientOptions) => ShardClient;
+```
+
 ### `createStaticShardRegistry` (const)
 
 ```ts
@@ -2226,7 +2325,7 @@ const emitLogEvent: (sink: ObservabilitySink | undefined, event: LogEvent, conte
 ### `emitRpcEvent` (const)
 
 ```ts
-const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext, sampling?: TraceSamplingConfig) => void;
+const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext, sampling?: TraceSamplingConfig, decision?: TraceSamplingDecision) => void;
 ```
 
 ### `enforceOrigin` (const)
@@ -2239,6 +2338,18 @@ const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response 
 
 ```ts
 const handleCorsPreflight: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
+```
+
+### `memoizeIdentity` (const)
+
+```ts
+const memoizeIdentity: (resolver: IdentityResolver, options?: MemoizeIdentityOptions) => IdentityResolver;
+```
+
+### `memoizeIdentityPerRequest` (const)
+
+```ts
+const memoizeIdentityPerRequest: (resolver: IdentityResolver) => IdentityResolver;
 ```
 
 ### `mergeStrategyForAggregate` (const)

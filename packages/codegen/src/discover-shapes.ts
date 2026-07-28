@@ -5,13 +5,12 @@ import type { CallExpression, Identifier, Node as TsNode, Project, SourceFile } 
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
-import type { ShapeIR } from "./ir";
+import type { ShapeIR, ValidatorIR } from "./ir";
+import { isServerPackageModule } from "./module-specifiers";
+import { parseObjectShape } from "./parse-validator";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";
-
-/** Both module specifiers `defineShape` may be imported from (granular + umbrella). */
-const SHAPE_MODULE_SPECIFIERS = new Set(["@lunora/server", "lunorash/server"]);
 
 /**
  * Decide whether a callee identifier refers to `defineShape` from
@@ -32,7 +31,7 @@ const isDefineShape = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (!SHAPE_MODULE_SPECIFIERS.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+        if (!isServerPackageModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 
@@ -61,7 +60,7 @@ const isShapeNamespaceImport = (identifier: Identifier): boolean => {
 
         const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
 
-        return importDeclaration !== undefined && SHAPE_MODULE_SPECIFIERS.has(importDeclaration.getModuleSpecifierValue());
+        return importDeclaration !== undefined && isServerPackageModule(importDeclaration.getModuleSpecifierValue());
     }
 
     return false;
@@ -110,6 +109,35 @@ const tableLiteralFrom = (call: CallExpression): string | undefined => {
     return value && Node.isStringLiteral(value) ? value.getLiteralValue() : undefined;
 };
 
+/**
+ * Read the `args` validator map from a `defineShape({ args: { … } })` config, so
+ * `_generated/collections.ts` can type a shape's partition selector instead of
+ * widening it to `Record&lt;string, unknown>`. Returns `{}` for a parameterless shape
+ * (or one whose `args` isn't a plain object literal — the runtime object stays
+ * authoritative either way).
+ */
+const argsFrom = (call: CallExpression): Record<string, ValidatorIR> => {
+    const [config] = call.getArguments();
+
+    if (!config || !Node.isObjectLiteralExpression(config)) {
+        return {};
+    }
+
+    const argsProperty = config.getProperty("args");
+
+    if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
+        return {};
+    }
+
+    const initializer = argsProperty.getInitializer();
+
+    if (!initializer || !Node.isObjectLiteralExpression(initializer)) {
+        return {};
+    }
+
+    return parseObjectShape(initializer);
+};
+
 /** Collect exported `defineShape` declarations from one source file. */
 const shapesFromSource = (source: SourceFile): ShapeIR[] => {
     const shapes: ShapeIR[] = [];
@@ -138,7 +166,7 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
             throw diagnosticAt(nameNode, "defineShape exports must be plain named exports (no destructuring)");
         }
 
-        shapes.push({ exportName: nameNode.getText(), filePath: "shapes", table: tableLiteralFrom(callExpression) });
+        shapes.push({ args: argsFrom(callExpression), exportName: nameNode.getText(), filePath: "shapes", table: tableLiteralFrom(callExpression) });
     }
 
     return shapes;

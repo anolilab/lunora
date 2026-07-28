@@ -903,6 +903,7 @@ interface SchemaIndex {
 interface SchemaInfo {
     hasGlobalTable: boolean;
     vectorIndexNames?: ReadonlyArray<string>;
+    vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }
 ```
 
@@ -1086,6 +1087,7 @@ interface WranglerConfig {
     pipelines?: ReadonlyArray<{
         binding?: string;
         pipeline?: string;
+        stream?: string;
     } | null | undefined>;
     placement?: {
         mode?: string;

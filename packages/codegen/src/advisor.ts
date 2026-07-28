@@ -56,6 +56,7 @@ import type {
     StorageKeyAccessIR,
     StorageUploadIR,
     TableIR,
+    UnrestrictedWhereBranchIR,
     VectorNamespaceAccessIR,
     WorkflowCallIR,
     WorkflowIR,
@@ -232,6 +233,7 @@ export interface LintSchemaOptions {
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
     workflows?: ReadonlyArray<WorkflowIR>;
@@ -272,6 +274,7 @@ export const lintSchema = (options: LintSchemaOptions): Finding[] =>
             notifyCalls: options.notifyCalls,
             notifyConfig: options.notifyConfig,
             ownerFieldWrites: options.ownerFieldWrites,
+            unrestrictedWhereBranches: options.unrestrictedWhereBranches,
             paymentWebhooks: options.paymentWebhooks,
             privilegedDispatches: options.privilegedDispatches,
             procedureProtections: options.procedureProtections,

@@ -5,6 +5,7 @@ import { discoverMigrations, runCodegen } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     discoverContainerInfo,
+    discoverSchemaInfo,
     findWranglerFile,
     generateSecretValue,
     inferLunoraBindings,
@@ -39,6 +40,8 @@ import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { createTuiConfirm } from "../../util/tui-prompts";
+import type { VectorMetadataIndex } from "../../util/vectorize-metadata";
+import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -332,13 +335,41 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
 };
 
 /**
+ * Reconcile the committed `triggers.crons` with the schedules codegen discovered.
+ *
+ * `undefined` means codegen was skipped (e.g. `--prebuilt`): we have no evidence
+ * of the project's crons, so leave the committed `triggers.crons` untouched —
+ * clearing it would silently stop every production cron. A defined array
+ * (including `[]`) means codegen ran and reconciling — clearing a
+ * genuinely-removed last cron — is intended. Mirrors the
+ * `if (codegen !== undefined)` guard on the schema-drift gate.
+ */
+const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined): void => {
+    if (cronTriggers === undefined) {
+        return;
+    }
+
+    try {
+        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
+
+        if (reconciled.changed) {
+            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`cron trigger sync skipped: ${message}`);
+    }
+};
+
+/**
  * Auto-provision the bindings the project's code implies before validating, so
  * a first deploy doesn't fail on a SESSION/SCHEDULER/DB binding the user never
  * had to hand-write. Idempotent — a no-op once the config is in sync — and
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined): Promise<void> => {
     try {
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
@@ -370,17 +401,7 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         logger.warn(`compatibility date sync skipped: ${message}`);
     }
 
-    try {
-        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
-
-        if (reconciled.changed) {
-            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`cron trigger sync skipped: ${message}`);
-    }
+    syncCronTriggers(cwd, logger, cronTriggers);
 };
 
 /**
@@ -787,6 +808,58 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | un
 };
 
 /**
+ * Create the Vectorize metadata indexes the schema's `.vectorize({ metadata })`
+ * declarations imply.
+ *
+ * Cloudflare will not filter on a metadata property that has no index, and it
+ * says so by returning nothing rather than by failing — so a schema that
+ * declares filterable metadata needs these provisioned or its filters quietly
+ * match zero vectors. Idempotent, and non-fatal: the worker is already live, so
+ * a failure here is reported with the command to run, not a failed deploy.
+ */
+const provisionVectorMetadataIndexes = async (options: DeployCommandOptions, cwd: string): Promise<void> => {
+    const { info } = discoverSchemaInfo(cwd, "lunora");
+    const declared = info?.vectorMetadata ?? [];
+
+    if (declared.length === 0) {
+        return;
+    }
+
+    const entries: VectorMetadataIndex[] = [];
+
+    for (const declaration of declared) {
+        const type = metadataTypeFor(declaration.kind);
+
+        if (type === undefined) {
+            options.logger.warn(
+                `vector index "${declaration.index}" declares metadata "${declaration.property}", whose column type cannot be filtered on in Vectorize — it is stored with each vector but no filter will match it.`,
+            );
+
+            continue;
+        }
+
+        entries.push({ index: declaration.index, property: declaration.property, type });
+    }
+
+    if (entries.length === 0) {
+        return;
+    }
+
+    const results = await ensureVectorMetadataIndexes({
+        cwd,
+        entries,
+        exec: execArgsFor(detectPackageManager(cwd), "wrangler", []),
+        logger: options.logger,
+        spawner: options.spawner ?? defaultSpawner,
+    });
+    const provisioned = results.filter((result) => result.status !== "failed").length;
+
+    if (provisioned > 0) {
+        options.logger.success(`vectorize metadata indexes ready: ${String(provisioned)}/${String(entries.length)}`);
+    }
+};
+
+/**
  * After a successful `wrangler deploy`, run any requested data migrations and —
  * only when the whole operation succeeded — advance the committed schema
  * baseline via the gate's deferred `rebless`. Extracted from `executeDeploy` to
@@ -799,6 +872,10 @@ const finalizeSuccessfulDeploy = async (
     validation: DeployCommandResult["validation"],
     reblessSchemaBaseline: (() => void) | undefined,
 ): Promise<DeployCommandResult> => {
+    // Before migrations: a data migration may write rows whose vectors are
+    // filtered on immediately afterwards.
+    await provisionVectorMetadataIndexes(options, cwd);
+
     if (options.migrate) {
         const migrateCode = await runPostDeployMigrations(options, cwd);
 
@@ -972,7 +1049,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers ?? []);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 

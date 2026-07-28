@@ -2,7 +2,8 @@
 name: lunora-migration-helper
 description: Plans Lunora schema and data migrations with widen-migrate-narrow. Use for
     breaking schema changes, backfills, table reshaping, online data migrations
-    (`defineMigration` + `lunora migrate up`), the `.global()` D1 SQL flow, and the
+    (`defineMigration` + `lunora migrate up`), the `.global()` D1 / Hyperdrive
+    structural flows, and the
     pre-deploy schema-drift gate.
 ---
 
@@ -15,7 +16,7 @@ Safely change a Lunora schema and migrate data when making breaking changes.
 - Adding required fields to existing tables.
 - Changing field types or structure.
 - Splitting/merging tables, renaming/removing fields.
-- Reshaping `.global()` (D1-backed) tables.
+- Reshaping `.global()` tables (D1- or Hyperdrive-backed).
 
 ## When Not to Use
 
@@ -23,21 +24,35 @@ Safely change a Lunora schema and migrate data when making breaking changes.
 - Adding **optional** fields that need no backfill.
 - Adding new tables or indexes with no correctness concern.
 
-## Two Storage Layers — Know Which You Are Migrating
+## Storage Layers — Know Which You Are Migrating
 
-Lunora tables live in one of two backends, and they migrate differently:
+Lunora tables live in one of three backends, and they migrate differently:
 
 - **ShardDO SQLite (default `root`, and `.shardBy(key)` tables).** State lives in
   the per-app / per-shard Durable Object. Data is reshaped with **online data
   migrations** — `defineMigration` declarations run by `lunora migrate up`,
   resumable per shard.
-- **`.global()` tables (D1).** Replicated to D1 for cross-region reads. Their
-  structural DDL gets versioned **SQL migrations** via `lunora migrate generate`,
-  applied by `@lunora/d1`'s runner at deploy time.
+- **`.global()` on D1 (the default global backend).** Replicated to D1 for
+  cross-region reads. Structural DDL gets versioned **SQL migrations** via
+  `lunora migrate generate`, applied by `@lunora/d1`'s runner at deploy time.
+- **`.global({ backend: "hyperdrive" })` on Postgres/MySQL.** The same reactive
+  `.global()` contract served over Cloudflare Hyperdrive. Structural DDL works
+  differently here: tables **auto-provision on first use** — the runtime applies
+  the DDL through the dialect — so there is no `lunora migrate generate` step
+  and no versioned SQL file to commit. See `lunora-setup-hyperdrive-global`.
 
-A breaking change to a `.global()` table needs a generated SQL migration; a data
-backfill (either layer) is an online `defineMigration`. Both follow the same
-**widen → migrate → narrow** discipline.
+So: a breaking structural change to a **D1-backed** `.global()` table needs a
+generated SQL migration; the Hyperdrive-backed equivalent provisions itself. A
+data backfill (any layer) is always an online `defineMigration`. All three
+follow the same **widen → migrate → narrow** discipline — check the table's
+backend before assuming which structural path applies.
+
+> **Moving an existing dataset between global backends.** To move a `.global()`
+> dataset from D1 onto Hyperdrive, use
+> `lunora migrate d1-to-hyperdrive --from-url <d1-worker> --to-url <hd-worker>`
+> (`--tables` scopes it; `--out` keeps the intermediate NDJSON dump). This is a
+> backend move, not a schema change — the widen → migrate → narrow discipline
+> below still governs any reshaping you do on either side of it.
 
 ## Key Principle: Widen, Migrate, Narrow
 
@@ -129,7 +144,10 @@ lunora migrate down backfill-display-name      # revert (if `down` defined)
 Useful flags: `--batch-size <n>`, `--steps <n>` (cap batches this run), and
 `--prod --url <worker> --yes` to target production (with `LUNORA_ADMIN_TOKEN`).
 
-## `.global()` (D1) Structural Migration Flow
+## `.global()` on D1 — Structural Migration Flow
+
+This flow is **D1-specific**. Hyperdrive-backed globals auto-provision their DDL
+at runtime and skip it entirely.
 
 ```bash
 # 1. Edit lunora/schema.ts (widen: add the optional new field to the .global() table).
@@ -146,8 +164,8 @@ lunora deploy
 ```
 
 `lunora migrate generate` only considers `.global()` tables (root/sharded tables
-are not D1-backed). Run it after each schema edit in the widen and narrow steps;
-backfill data with an online migration between them.
+live in ShardDO SQLite, not D1). Run it after each schema edit in the widen and
+narrow steps; backfill data with an online migration between them.
 
 ## The Schema-Drift Gate
 
@@ -176,9 +194,10 @@ add the migration — not to bypass it.
    transform before it touches real rows.
 5. **Deleting a field prematurely.** Deprecate with `v.optional` + a comment;
    delete only once nothing references it.
-6. **Migrating the wrong layer.** A `.global()` structural change needs `lunora
-migrate generate` (SQL); a data backfill needs a `defineMigration`. Check the
-   table's `.global()` / `.shardBy()` modifier first.
+6. **Migrating the wrong layer.** A D1-backed `.global()` structural change needs
+   `lunora migrate generate` (SQL); a Hyperdrive-backed one auto-provisions; a
+   data backfill needs a `defineMigration`. Check the table's `.global()` /
+   `.shardBy()` modifier — and, for `.global()`, its `backend` — first.
 
 ## Checklist
 

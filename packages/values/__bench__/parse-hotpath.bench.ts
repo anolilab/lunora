@@ -8,12 +8,26 @@ import { v } from "../src/v";
  * 1. v.object hoists Object.keys(shape) + toInternal() to construction time.
  * 2. object/array/record thread a single mutable path stack (push/pop) instead
  *    of spreading `[...context.path, segment]` per child.
- * 3. v.array uses a preallocated indexed loop instead of value.entries()+push.
+ * 3. v.array builds its result with `push` onto an empty literal. It previously
+ *    preallocated with `Array.from({ length })`, which has no V8 fast path and
+ *    made this bench report the baseline as ~6x FASTER than the "optimized"
+ *    parser. NOTE the array pair below no longer isolates that: both arms now
+ *    push, so they differ only in iteration/path strategy. The `Array.from`
+ *    shape is therefore benched explicitly as a third arm ("regression guard"),
+ *    which is what actually pins the pessimization out.
  *
  * Each `*-baseline` bench re-implements the pre-optimization parser inline over
  * the same fixtures so the relative win is demonstrable in one run. The
  * baselines call the real per-element validators (`v.string()` etc.) so only
  * the iteration/allocation strategy differs.
+ *
+ * READ THE OBJECT NUMBERS WITH CARE. `objectBaseline` reads each field with a
+ * bare `input[key]`, while the real parser reads it through `Object.hasOwn` so a
+ * declared field colliding with an `Object.prototype` member (`toString`,
+ * `constructor`, …) reads as absent instead of inheriting the prototype's
+ * function. That guard is a correctness fix, not overhead to remove, so the
+ * object baseline is expected to stay marginally ahead — it is doing strictly
+ * less work. Only a LARGE object-side gap indicates a real regression.
  */
 
 type ParseContext = { path: (number | string)[] };
@@ -76,6 +90,38 @@ const arrayBaseline = (input: unknown[]): unknown[] => {
     return out;
 };
 
+/**
+ * The REGRESSION this file exists to catch: preallocate with
+ * `Array.from({ length })` and assign by index, the shape `v.array` used to have.
+ *
+ * `Array.from` over a bare length-only object has no V8 fast path — it walks the
+ * array-like through the generic iteration protocol. Keeping it benched means a
+ * future edit that reintroduces it shows up as a large, obvious gap instead of
+ * quietly making every array parse several times slower again.
+ *
+ * Deliberately identical to the shipped parser in EVERY other respect — one
+ * reused context with a push/pop path stack, `length` hoisted, indexed loop — so
+ * the only variable against the `optimized` arm is how the result array is
+ * built. Allocating a fresh `{ path: [index] }` per element here instead would
+ * fold per-element path allocation into the reading and stop it isolating
+ * `Array.from` at all.
+ */
+const arrayFromPreallocationRegression = (input: unknown[]): unknown[] => {
+    const inner = asInternal(stringElement);
+    const { length } = input;
+    const out: unknown[] = Array.from({ length });
+    const context: ParseContext = { path: [] };
+    const { path } = context;
+
+    for (let index = 0; index < length; index += 1) {
+        path.push(index);
+        out[index] = inner._parse(input[index], context);
+        path.pop();
+    }
+
+    return out;
+};
+
 const recordBaseline = (input: Record<string, unknown>): Record<string, unknown> => {
     const keyInternal = asInternal(keyValidator);
     const valueInternal = asInternal(valueValidator);
@@ -109,8 +155,12 @@ describe("v.array(v.string()) — 32 items", () => {
         arrayBaseline(sampleStringArray);
     });
 
-    bench("optimized (preallocated indexed loop + mutable path)", () => {
+    bench("optimized (push onto empty literal + mutable path)", () => {
         stringArray.parse(sampleStringArray);
+    });
+
+    bench("regression guard (Array.from({ length }) preallocation)", () => {
+        arrayFromPreallocationRegression(sampleStringArray);
     });
 });
 

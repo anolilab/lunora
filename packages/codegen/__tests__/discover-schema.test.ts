@@ -164,6 +164,22 @@ describe("discoverSchema", () => {
         });
     });
 
+    it("captures searchIndex staged: true", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                docs: defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", staged: true }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables[0]?.searchIndexes[0]).toMatchObject({ field: "body", name: "by_body", staged: true });
+    });
+
     it("searchIndex without filterFields leaves the field undefined (not an empty array)", () => {
         expect.assertions(2);
 
@@ -792,6 +808,29 @@ describe("discoverSchema", () => {
         expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "todos"]);
         expect(buckets).toBeDefined();
         expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", unique: true }]);
+    });
+
+    it("records the contributing extension key so app-declared tables stay distinguishable", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ratelimit", {
+                    tables: { buckets: defineTable({ key: v.string() }) },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        // Drives the emitted `AppTableName`: an add-on's table is a real table, but an
+        // app enumerating "my tables" should not have to know it exists.
+        expect(schema.tables.find((table) => table.name === "ratelimit_buckets")?.extensionKey).toBe("ratelimit");
+        expect(schema.tables.find((table) => table.name === "todos")?.extensionKey).toBeUndefined();
     });
 
     it("rewrites an intra-extension relation to the prefixed table, leaving base references untouched", () => {

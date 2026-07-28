@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { WranglerConfig } from "@lunora/config";
 import {
     DEV_VARS_FILE,
+    discoverSchemaInfo,
     findWranglerFile,
     inferLunoraBindings,
     isPlaceholderValue,
@@ -15,6 +16,7 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { DoctorOptions } from "./index";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
@@ -97,6 +99,39 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
         findings.push({ level: "pass", message: "wrangler.jsonc present with a SHARD durable-object binding." });
     } else {
         findings.push({ fix: "Run `lunora dev` to auto-reconcile, or add the binding manually.", level: "fail", message: shardError });
+    }
+};
+
+/**
+ * A `.vectorize({ metadata })` declaration without its Vectorize metadata index
+ * → WARN.
+ *
+ * Cloudflare only filters on a metadata property that has been indexed, and a
+ * missing index is silent: `filter` simply matches nothing. `lunora deploy`
+ * provisions them, so this exists for the case where someone deploys with
+ * wrangler directly — and to name the exact command.
+ */
+const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
+    const { info } = discoverSchemaInfo(cwd, "lunora");
+
+    for (const declaration of info?.vectorMetadata ?? []) {
+        const type = metadataTypeFor(declaration.kind);
+
+        if (type === undefined) {
+            findings.push({
+                fix: "Filter on a string, number or boolean column, or drop it from `metadata`.",
+                level: "warn",
+                message: `vector index "${declaration.index}" declares metadata "${declaration.property}", whose type Vectorize cannot filter on.`,
+            });
+
+            continue;
+        }
+
+        findings.push({
+            fix: `wrangler ${createMetadataIndexArgs({ index: declaration.index, property: declaration.property, type }).join(" ")}`,
+            level: "info",
+            message: `vector index "${declaration.index}" filters on metadata "${declaration.property}" — that needs a Vectorize metadata index (\`lunora deploy\` creates it).`,
+        });
     }
 };
 
@@ -219,6 +254,133 @@ const checkContainers = async (cwd: string, findings: Finding[]): Promise<void> 
     }
 };
 
+/** A parsed `1.0.0-alpha.31`-style Lunora version. `channel` is `""` for a stable release. */
+interface LunoraVersion {
+    channel: string;
+    /** `major.minor.patch`. */
+    core: string;
+    /** The pre-release counter (`31`), or `undefined` for a stable release. */
+    counter: number | undefined;
+    raw: string;
+}
+
+/** Leading range operators (`^`, `~`, `>=`, …) stripped before parsing. */
+const VERSION_RANGE_PREFIX = /^[\^~><= ]+/u;
+
+/** `major.minor.patch` with an optional `-channel.counter` pre-release tail. */
+const LUNORA_VERSION_PATTERN = /^(?<core>\d+\.\d+\.\d+)(?:-(?<channel>[a-z]+)\.(?<counter>\d+))?$/u;
+
+/** Strip a range prefix (`^`, `~`, `>=`) and parse. Returns `undefined` for a non-pinnable spec (`workspace:*`, a URL, `*`). */
+const parseLunoraVersion = (spec: string): LunoraVersion | undefined => {
+    const cleaned = spec.replace(VERSION_RANGE_PREFIX, "").trim();
+    const match = LUNORA_VERSION_PATTERN.exec(cleaned);
+
+    if (!match?.groups) {
+        return undefined;
+    }
+
+    const { channel, core, counter } = match.groups;
+
+    return {
+        channel: channel ?? "",
+        core: core ?? "",
+        counter: counter === undefined ? undefined : Number.parseInt(counter, 10),
+        raw: cleaned,
+    };
+};
+
+/**
+ * Flag an incoherent set of `@lunora/*` versions.
+ *
+ * Lunora publishes every package independently, so an app's manifest holds a set of
+ * unrelated-looking versions (`lunorash@1.0.0-alpha.98`, `@lunora/react@…alpha.31`,
+ * `@lunora/db@…alpha.27`) and **nothing tells the adopter which combination is
+ * coherent**. During an alpha the packages move together; a set spanning several
+ * release waves usually means a partial `pnpm update`, and the resulting bug looks
+ * like a framework bug.
+ *
+ * The check is deliberately conservative — it can't know the real compatibility
+ * matrix, so it only warns, and only on the two signals that are unambiguous: mixed
+ * major.minor.patch cores, or mixed pre-release channels. Same-channel counter drift
+ * is normal and is reported as INFO with the spread, so a reader can judge it.
+ */
+const checkVersionSkew = (cwd: string, findings: Finding[]): void => {
+    const manifestPath = join(cwd, "package.json");
+
+    if (!existsSync(manifestPath)) {
+        return;
+    }
+
+    let manifest: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+
+    try {
+        manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
+    } catch {
+        return; // A malformed manifest is another check's problem.
+    }
+
+    const specs = { ...manifest.devDependencies, ...manifest.dependencies };
+    const parsed: { name: string; version: LunoraVersion }[] = [];
+
+    for (const [name, spec] of Object.entries(specs)) {
+        if (name !== "lunorash" && !name.startsWith("@lunora/")) {
+            continue;
+        }
+
+        const version = parseLunoraVersion(spec);
+
+        if (version) {
+            parsed.push({ name, version });
+        }
+    }
+
+    if (parsed.length < 2) {
+        return;
+    }
+
+    const describe = (entries: typeof parsed): string => entries.map((entry) => `${entry.name}@${entry.version.raw}`).join(", ");
+    const cores = new Set(parsed.map((entry) => entry.version.core));
+    const channels = new Set(parsed.map((entry) => entry.version.channel));
+
+    if (cores.size > 1) {
+        findings.push({
+            fix: 'Run `pnpm update "@lunora/*" lunorash` (or `npm`/`yarn` equivalent) so every Lunora package moves to the same release.',
+            level: "warn",
+            message: `Lunora packages span ${String(cores.size)} different versions: ${describe(parsed)}.`,
+        });
+
+        return;
+    }
+
+    if (channels.size > 1) {
+        findings.push({
+            fix: "Pick one channel (all stable, or all alpha/beta) and update the odd package out.",
+            level: "warn",
+            message: `Lunora packages mix release channels (${[...channels].map((channel) => (channel === "" ? "stable" : channel)).join(" + ")}): ${describe(parsed)}.`,
+        });
+
+        return;
+    }
+
+    const counters = parsed.map((entry) => entry.version.counter).filter((counter): counter is number => counter !== undefined);
+
+    if (counters.length > 1) {
+        const lowest = Math.min(...counters);
+        const highest = Math.max(...counters);
+
+        // Independent per-package versioning makes counter drift the norm, not a
+        // defect — so this is INFO with the spread, not a warning. It's still the
+        // number to check first when behavior disagrees with the docs.
+        findings.push({
+            level: "info",
+            message:
+                counters.length === parsed.length && lowest === highest
+                    ? `Lunora packages are all at ${[...channels][0] ?? ""}.${String(highest)}.`
+                    : `Lunora pre-release counters span ${String(lowest)}–${String(highest)}: ${describe(parsed)}.`,
+        });
+    }
+};
+
 /**
  * Pure, testable preflight core: run the read-only project checks against `cwd`
  * and return the aggregated findings + the exit code (1 if any hard FAIL). Does
@@ -236,6 +398,8 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkEmailDestination(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(findings);
+    checkVersionSkew(cwd, findings);
+    checkVectorMetadataIndexes(cwd, findings);
     await checkContainers(cwd, findings);
 
     const code = findings.some((finding) => finding.level === "fail") ? 1 : 0;

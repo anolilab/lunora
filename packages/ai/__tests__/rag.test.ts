@@ -515,6 +515,48 @@ describe(defineRag, () => {
             expect(result.sources[0]?.weight).toBe(0.4);
         });
 
+        it("keeps the score finite when importance is 0 (guards the rescale divide)", async () => {
+            expect.assertions(3);
+
+            // When `__ragImportance` is an INDEXED field, the vector query returns
+            // it even under `returnMetadata: "indexed"`, so `parseMatches` sees
+            // importance 0 and `chunk.score` is `cosine * 0 = 0`. The hydrate rescale
+            // then computed `chunk.score / chunk.importance` = `0 / 0` = NaN,
+            // corrupting the ENTIRE retrieval ordering (not just this chunk). 0 is a
+            // validated, accepted importance — the guard must keep the score finite.
+            const { store, vectors } = memoryVectors();
+            // Surface the indexed importance on the query leg (a real backend that
+            // indexes `__ragImportance` does exactly this).
+            const baseQuery = vectors.query;
+            const patched: RagVectors = {
+                ...vectors,
+                query: async (index, input) => {
+                    const result = await baseQuery(index, input);
+
+                    return {
+                        ...result,
+                        matches: result.matches.map((match) => ({
+                            ...match,
+                            metadata: { ...(match.metadata ?? {}), __ragImportance: store.get(match.id)?.metadata?.["__ragImportance"] },
+                        })),
+                    };
+                },
+            };
+
+            const { store: textStore } = memoryTextStore();
+            const ctx = fakeCtx(patched);
+            const docs = defineRag({ allowSharedNamespace: true, index: "docs", textStore });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", importance: 0, text: "rain storm cloud" });
+
+            const result = await rag.retrieve("rain storm cloud");
+
+            expect(result.chunks[0]?.importance).toBe(0);
+            expect(Number.isFinite(result.chunks[0]?.score)).toBe(true);
+            expect(result.chunks[0]?.score).toBe(0);
+        });
+
         it("propagates removals into the text store", async () => {
             const { vectors } = memoryVectors();
             const { removed, store: textStore } = memoryTextStore();

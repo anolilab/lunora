@@ -155,4 +155,37 @@ describe("discoverAuthConfig", () => {
 
         expect(discoverAuthConfig(project, join(workdir, "lunora"))).toHaveLength(0);
     });
+
+    it("flags scim() paired with an adapter that has no native transactions", () => {
+        expect.assertions(2);
+
+        write("auth.ts", `export const auth = createAuth({ secret: "x", database: lunoraD1Adapter(env.DB), plugins: [scim({ connections: [] }), admin()] });`);
+
+        const found = discoverAuthConfig(project, join(workdir, "lunora"));
+
+        // The pairing throws on the first SCIM request, and it is visible statically —
+        // this is the fact `auth_scim_without_transactions` fires on.
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ analyzable: true, scimOnNonTransactionalAdapter: true });
+    });
+
+    it("does not flag scim() on an adapter that does have transactions", () => {
+        expect.assertions(1);
+
+        write("auth.ts", `export const auth = createAuth({ secret: "x", database: lunoraDoAdapter(state.storage), plugins: [scim({ connections: [] })] });`);
+
+        const found = discoverAuthConfig(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ scimOnNonTransactionalAdapter: false });
+    });
+
+    it("does not flag a D1 adapter without scim()", () => {
+        expect.assertions(1);
+
+        write("auth.ts", `export const auth = createAuth({ secret: "x", database: lunoraD1Adapter(env.DB), plugins: [admin()] });`);
+
+        const found = discoverAuthConfig(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ scimOnNonTransactionalAdapter: false });
+    });
 });

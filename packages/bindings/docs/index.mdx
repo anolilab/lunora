@@ -113,7 +113,23 @@ export const search = action({
 });
 ```
 
-`query(index, { input })` embeds `input` with the index's configured embedder, then runs the search; pass a precomputed `vector` instead of `input` to skip embedding. `upsert` / `upsertMany` write vectors back.
+`query(index, { input })` embeds `input` with the index's configured embedder, then runs the search; pass a precomputed `vector` instead of `input` to skip embedding. `upsert` / `upsertMany` write vectors back. The index name is narrowed to the ones your schema declares, so a typo is a compile error.
+
+### Filtering on metadata
+
+`.vectorize(field, { metadata: ["authorId"] })` mirrors those columns into each vector's metadata so `query(index, { filter })` can narrow by them:
+
+```ts
+ctx.vectors.query("docs", { filter: { authorId: userId }, input: query, topK: 5 });
+```
+
+Vectorize only filters on a property that has a **metadata index**, which is created separately from the vector index itself. `lunora deploy` provisions one per declared property (idempotently, and non-fatally — it reports the command if it can't); `lunora doctor` lists what your schema expects. Deploying with `wrangler` directly means creating them yourself:
+
+```bash
+wrangler vectorize create-metadata-index docs --property-name=authorId --type=string
+```
+
+This matters more than it looks: a missing metadata index is **silent**. Vectorize does not error on an unindexed filter property — it returns nothing, which reads like "no matches" rather than "misconfigured". Only `string`, `number` and `boolean` columns can be filtered on; other kinds are stored with the vector but never match a filter, and both deploy and doctor say so.
 
 ## R2 SQL — `@lunora/bindings/r2sql`
 
