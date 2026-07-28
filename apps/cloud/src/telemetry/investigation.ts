@@ -145,7 +145,7 @@ const spanMatchesIncident = (span: EvidenceSpanRow, incident: InvestigationIncid
         return false;
     }
 
-    if (incident.container === undefined) {
+    if (incident.container == null) {
         return true;
     }
 
@@ -201,7 +201,7 @@ export const buildEvidenceBundle = (input: {
 
     const correlatedLogs = logs
         .filter((log): log is EvidenceLogRow & { level: "error" | "fatal" } => log.level === "error" || log.level === "fatal")
-        .filter((log) => log.traceId !== undefined && traceSet.has(log.traceId))
+        .filter((log) => log.traceId != null && traceSet.has(log.traceId))
         .toSorted((a, b) => b.createdAt - a.createdAt)
         .slice(0, MAX_EVIDENCE_LOGS);
 
@@ -289,7 +289,7 @@ export const createDeterministicRunner = (): IncidentInvestigationRunner => ({
 export const deterministicResult = (bundle: EvidenceBundle): InvestigationResult => {
     const { incident } = bundle;
     const kindLabel = KIND_LABELS[incident.kind];
-    const where = incident.container === undefined ? "" : ` in container "${clampField(incident.container)}"`;
+    const where = incident.container == null ? "" : ` in container "${clampField(incident.container)}"`;
 
     const topCulprit = bundle.spans[0]?.culprit;
     const topMessage = bundle.spans[0]?.message;
@@ -344,7 +344,7 @@ export const buildInvestigationPrompt = (bundle: EvidenceBundle): string => {
         "",
         FENCE,
         `Incident: ${clampField(incident.title)}`,
-        `Kind: ${incident.kind}${incident.container === undefined ? "" : ` (container: ${clampField(incident.container)})`}`,
+        `Kind: ${incident.kind}${incident.container == null ? "" : ` (container: ${clampField(incident.container)})`}`,
         `Occurrences: ${String(incident.count)}`,
         `Evidence: ${String(timeline.errorSpanCount)} error span(s), ${String(timeline.traceCount)} trace(s), ${String(timeline.errorLogCount)} log line(s)`,
         "",

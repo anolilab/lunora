@@ -2631,7 +2631,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             // Refinement checks fire on the merged row so a patch that flips
             // a field to an invalid value is rejected before D1 sees it.
-            runRowValidators(definition, merged);
+            runRowValidators(definition, merged, true);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });

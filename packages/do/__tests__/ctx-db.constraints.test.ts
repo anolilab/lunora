@@ -397,6 +397,19 @@ describe("ctx-db constraints", () => {
             await expect(writer.count("notes")).resolves.toBe(1);
         });
 
+        it("still rejects a caller-supplied null on insert", async () => {
+            expect.assertions(1);
+
+            const writer = setupNullable();
+
+            // The patch path tolerates a null because it may be one the store itself
+            // produced (`onDelete: "set null"`, or a `.global()` read of an unset
+            // column). Insert has no such excuse — the whole document comes from the
+            // caller — so a null must not be persistable into a column the generated
+            // types promise is `string | undefined`.
+            await expect(writer.insert("notes", { note: null, title: "t" })).rejects.toThrow(/Expected string, received null/u);
+        });
+
         it("still rejects a null on a required column", async () => {
             expect.assertions(1);
 
