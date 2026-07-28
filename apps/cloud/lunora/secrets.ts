@@ -1,7 +1,7 @@
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -26,7 +26,7 @@ interface SecretRow {
 
 /** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
 export const store = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({
         ciphertext: boundedString(LIMITS.secret),
         // Deployment kind this secret applies to; defaults to "all" (shared).
@@ -126,7 +126,7 @@ export const listEncrypted = query
 
 /** Delete a secret (owner/admin). */
 export const remove = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({ id: v.id("secrets"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);

@@ -1,7 +1,7 @@
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 interface AuditRow {
@@ -19,7 +19,7 @@ interface AuditRow {
  * did what.
  */
 export const record = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({
         action: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
