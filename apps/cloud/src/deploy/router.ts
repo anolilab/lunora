@@ -1,3 +1,4 @@
+import { isLunoraError } from "@lunora/errors";
 import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { RateLimiter } from "@lunora/ratelimit";
@@ -114,6 +115,38 @@ interface TelemetryBody extends OtlpTracePayload {
 
 const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 
+/**
+ * Map a thrown error from a control-plane mutation onto the right HTTP status for a
+ * machine caller.
+ *
+ * These routes serve OTel exporters, CI and the MCP bridge, and every catch here
+ * used to answer `403` with the raw message. That was fine while the only failure
+ * was a bad deploy key, but rate limits and argument bounds now throw through the
+ * same path — and a client that correctly backs off on 429/503 treats 403 as a
+ * permanent credential failure and **drops the batch**, so a throttled tenant is
+ * indistinguishable from a misconfigured one. A `LunoraError` already carries the
+ * status it means; honour it, and echo `Retry-After` so a throttled exporter knows
+ * when to come back. Anything unrecognised still falls back to 403.
+ */
+const rejected = (error: unknown, fallback: string): Response => {
+    const message = error instanceof Error ? error.message : fallback;
+
+    if (!isLunoraError(error)) {
+        return jsonError(403, message);
+    }
+
+    const retryAfter = (error as { retryAfter?: number }).retryAfter;
+
+    if (error.status === 429 && typeof retryAfter === "number") {
+        return Response.json(
+            { error: message },
+            { headers: { "content-type": "application/json", "retry-after": String(Math.max(1, Math.ceil(retryAfter / 1000))) }, status: 429 },
+        );
+    }
+
+    return jsonError(error.status >= 400 && error.status <= 599 ? error.status : 403, message);
+};
+
 /** `POST /v1/github/webhook` — verify + resolve the connected project (§2.3). */
 const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
     if (!environment.GITHUB_WEBHOOK_SECRET) {
@@ -200,7 +233,7 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
             },
         );
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "admin request denied");
+        return rejected(error, "admin request denied");
     }
 };
 
@@ -254,7 +287,7 @@ const handleUsageRoute = async (request: Request, environment: RouterEnv): Promi
 
         return Response.json({ id });
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "usage rejected");
+        return rejected(error, "usage rejected");
     }
 };
 
@@ -288,7 +321,7 @@ const handleInviteRoute = async (request: Request, environment: RouterEnv): Prom
 
         return Response.json({ ok: true });
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "invite rejected");
+        return rejected(error, "invite rejected");
     }
 };
 
@@ -344,7 +377,7 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
 
         return Response.json({ ok: true });
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "set secret failed");
+        return rejected(error, "set secret failed");
     }
 };
 
@@ -457,7 +490,7 @@ const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): 
 
         return Response.json(result);
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "log ingestion rejected");
+        return rejected(error, "log ingestion rejected");
     }
 };
 
@@ -581,18 +614,30 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
             const environmentRecord = environment as unknown as Record<string, unknown>;
 
             await Promise.all(result.alerts.map((alert) => deliverAlert(environmentRecord, alert).catch(() => undefined)));
+            // Alerts have already gone out, so a failure here must not fail the
+            // ingest — but it must not be invisible either: unmarked alerts are
+            // re-delivered on the next sweep, and `markDelivered` is now rate-limited
+            // (the `machine` bucket), so a 429 is a reachable cause of duplicate
+            // pages rather than a theoretical one.
             await context
                 .runMutation(api.alerts.markDelivered, {
                     deployKey: body.deployKey,
                     ids: result.alerts.map((alert) => alert.id),
                     organizationId: body.organizationId,
                 })
-                .catch(() => undefined);
+                .catch((error: unknown) => {
+                    // eslint-disable-next-line no-console -- delivered-but-unmarked alerts will re-fire; surface it
+                    console.error("[alerts] markDelivered failed; alerts may be re-delivered", {
+                        count: result.alerts.length,
+                        error: error instanceof Error ? error.message : String(error),
+                        organizationId: body.organizationId,
+                    });
+                });
         }
 
         return Response.json({ alerts: result.alerts.length, incidents: result.incidents, issues: result.issues });
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "telemetry rejected");
+        return rejected(error, "telemetry rejected");
     }
 };
 
@@ -910,7 +955,7 @@ const handleDomainAddRoute = async (request: Request, environment: RouterEnv): P
 
         return Response.json(result);
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "domain add failed");
+        return rejected(error, "domain add failed");
     }
 };
 
@@ -950,7 +995,7 @@ const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv)
 
         return Response.json(result);
     } catch (error) {
-        return jsonError(403, error instanceof Error ? error.message : "domain verification failed");
+        return rejected(error, "domain verification failed");
     }
 };
 
@@ -1191,7 +1236,7 @@ export const createDeployRouter = (): HttpRouterLike => {
 
             return Response.json({ ok: true, ...result });
         } catch (error) {
-            return jsonError(403, error instanceof Error ? error.message : "rollback failed");
+            return rejected(error, "rollback failed");
         }
     };
 

@@ -3,6 +3,7 @@ import { foldSessions } from "../src/telemetry/session-rollup";
 import type { Id } from "./_generated/dataModel.js";
 import { query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * LLM **sessions / threads** over stored **generation** observations (Tier 1) —
@@ -108,7 +109,7 @@ export const list = query
 export const get = query
     .input({
         organizationId: v.id("organizations"),
-        sessionId: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        sessionId: boundedString(LIMITS.name),
     })
     .query(async ({ ctx: context, args }): Promise<SessionTurnView[]> => {
         await assertMember(context, args.organizationId);

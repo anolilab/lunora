@@ -94,10 +94,10 @@
         },
     ],
     // The producer half of that archive. `src/telemetry/store.ts` reads it as
-    // `env.TELEMETRY_PIPELINE` and no-ops when absent, so declaring the binding
-    // costs nothing where the pipeline hasn't been created yet. The `pipeline`
-    // name must match what `wrangler pipelines create` minted for the cell —
-    // it is NOT auto-provisioned; see the note above.
+    // `env.TELEMETRY_PIPELINE` and no-ops when absent, so declaring the binding costs
+    // nothing where the pipeline hasn't been created yet. The `stream` value must
+    // match what `wrangler pipelines create` minted for this cell — the resource is
+    // not auto-provisioned, which is why the dev server hints about it.
     "pipelines": [
         {
             "binding": "TELEMETRY_PIPELINE",
@@ -106,14 +106,19 @@
         },
     ],
     // Workers AI — powers the on-demand incident AI-triage action
-    // (`incidents.triage`). Inference is billed per call; the action only runs
-    // when a member clicks "Triage" in the dashboard. AI has no local emulation
-    // and always reaches the remote account, so `remote: true` states that
-    // explicitly — dev triage calls do bill, which is why the `ai` rate-limit
-    // bucket in `lunora/guards.ts` is metered per hour.
+    // (`incidents.triage`). Inference is billed per call; the action only runs when a
+    // member clicks "Triage" in the dashboard, and the `ai` rate-limit bucket in
+    // `lunora/guards.ts` meters it per hour rather than per minute for that reason.
+    //
+    // Deliberately NOT `remote: true`, for the same reason as the dispatch namespace
+    // above: it makes `lunora dev` open a remote proxy session at startup, so anyone
+    // without authenticated Cloudflare credentials can no longer boot the control
+    // plane locally — and it would bill real inference from a dev server. Remote
+    // bindings are meant to be an opt-in per dev session (`LUNORA_REMOTE`), not a
+    // committed default. The dev-server warning about AI reaching the remote account
+    // is accurate and accepted.
     "ai": {
         "binding": "AI",
-        "remote": true,
     },
     "observability": {
         "enabled": true,

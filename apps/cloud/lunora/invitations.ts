@@ -1,11 +1,11 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Team invitations (CLOUD-PLAN.md §3 / Phase 3). An owner/admin invites an email
@@ -49,9 +49,9 @@ export const list = query
  * single-use token **once** — the caller mails it; only its hash is persisted.
  */
 export const invite = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({
-        email: v.string().check((value) => value.length <= 320, { message: "must be at most 320 characters", schema: { maxLength: 320 } }),
+        email: boundedString(LIMITS.email),
         organizationId: v.id("organizations"),
         role,
     })
@@ -76,7 +76,7 @@ export const invite = mutation
 
 /** Revoke a pending invitation (owners/admins only). */
 export const revoke = mutation
-    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
+    .use(dbRateLimit("api"))
     .input({ id: v.id("invitations"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -91,8 +91,8 @@ export const revoke = mutation
  * member with the invited role and marks the invitation accepted.
  */
 export const accept = mutation
-    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
-    .input({ token: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
+    .use(dbRateLimit("sensitive"))
+    .input({ token: boundedString(LIMITS.token) })
     .mutation(async ({ ctx: context, args: { token } }): Promise<{ organizationId: Id<"organizations"> }> => {
         const { userId } = context.auth;
 

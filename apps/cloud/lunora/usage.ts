@@ -1,4 +1,3 @@
-import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { evaluateSpendCap } from "../src/billing/spend";
@@ -6,7 +5,8 @@ import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
-import { callerKey, RATE_LIMITS } from "./guards";
+import { dbRateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Platform resource metering (CLOUD-PLAN.md §4). `record` is written by the
@@ -45,9 +45,9 @@ export const record = internalMutation
  * path). The tenant Worker / metering sidecar reports requests/CPU/storage here.
  */
 export const ingest = mutation
-    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
+    .use(dbRateLimit("ingest"))
     .input({
-        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        deployKey: boundedString(LIMITS.token),
         deploymentId: v.optional(v.id("deployments")),
         kind,
         organizationId: v.id("organizations"),
