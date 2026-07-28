@@ -123,7 +123,7 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
                                 }}
                                 type="button"
                             >
-                                <span className="muted">{command.group}</span>
+                                <span className="text-muted-foreground">{command.group}</span>
                                 <span>{command.label}</span>
                             </button>
                         </li>

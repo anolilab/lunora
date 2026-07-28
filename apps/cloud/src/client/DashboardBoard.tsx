@@ -34,13 +34,13 @@ const PanelCard = ({
     <div className="card dash-panel">
         <div className="dash-panel-head">
             <div className="dash-panel-id">
-                <span className="row-title">{panel.title}</span>
+                <span className="font-medium">{panel.title}</span>
                 <span className="metric-kind">{PANEL_KIND_LABELS[panel.kind]}</span>
             </div>
             <div className="dash-panel-controls">
                 <button
                     aria-label="Move panel up"
-                    className="link"
+                    className="text-primary underline-offset-4 hover:underline"
                     disabled={isFirst}
                     onClick={() => {
                         onMove("up");
@@ -51,7 +51,7 @@ const PanelCard = ({
                 </button>
                 <button
                     aria-label="Move panel down"
-                    className="link"
+                    className="text-primary underline-offset-4 hover:underline"
                     disabled={isLast}
                     onClick={() => {
                         onMove("down");
@@ -83,8 +83,8 @@ export const DashboardBoard = ({
     panels,
     series,
 }: DashboardBoardProps & { series: MetricSeries[] | undefined }): ReactElement => (
-    <div className="stack">
-        <section className="card">
+    <div className="flex flex-col gap-6">
+        <section className="rounded-lg border bg-card p-6">
             <div className="metrics-head">
                 <h3>{name}</h3>
                 <button className="link danger" onClick={onRemoveDashboard} type="button">
@@ -100,8 +100,8 @@ export const DashboardBoard = ({
         </section>
 
         {panels.length === 0 ? (
-            <section className="card">
-                <p className="muted">No panels yet — add a metric trend, a single stat, or a Traces/Logs shortcut above.</p>
+            <section className="rounded-lg border bg-card p-6">
+                <p className="text-muted-foreground">No panels yet — add a metric trend, a single stat, or a Traces/Logs shortcut above.</p>
             </section>
         ) : (
             <div className="dash-grid">
