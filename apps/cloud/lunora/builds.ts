@@ -1,10 +1,15 @@
 import { LunoraError } from "@lunora/server";
 
+import { runBuildDispatch } from "../src/builds/dispatch";
+import type { BuildRunnerPorts } from "../src/builds/runner";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, query, v } from "./_generated/server.js";
+import { internalAction, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
+
+/** The runner ports speak plain strings; the mutations want the branded id. */
+type BuildId = Id<"builds">;
 
 /**
  * Server-side builds (GAPS.md A3/A4). A verified GitHub push records a build
@@ -265,4 +270,64 @@ export const expireStale = internalMutation.mutation(async ({ ctx: context }): P
     }
 
     return { expired: stale.length };
+});
+
+/**
+ * The build source/execute seam, resolved from configuration.
+ *
+ * Both ports are 🌐 and neither can be faked: `fetchSource` needs a GitHub App
+ * installation token (an App id + private key — distinct from the
+ * `GITHUB_CLIENT_ID`/`SECRET` OAuth pair used for social sign-in), and `execute`
+ * needs a container to run `lunora build` in. Until those exist, this throws with
+ * the reason, which `runBuild` turns into a logged, FAILED build.
+ *
+ * That failure is the point. Before the dispatcher was wired, a pushed build sat
+ * `pending` with nobody to claim it and was failed 24 hours later by the expiry
+ * cron, with no explanation anywhere. Failing in the first minute, with the cause
+ * written to `buildLogs`, is strictly better than silence — and the day the
+ * infrastructure lands, only this function changes.
+ */
+const unconfigured = (what: string) => (): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `build ${what} is not configured: the control plane has no ${what === "source fetch" ? "GitHub App credentials (app id + private key) to mint an installation token" : "build container binding to execute `lunora build`"}. Builds cannot run until it is provisioned.`,
+    );
+};
+
+/**
+ * Claim and run queued builds — the loop that was missing.
+ *
+ * `builds.recordPush` enqueues, `claimNext` leases and `runBuild` drives a build
+ * through fetch → execute → complete/fail, but nothing called the loop that joins
+ * them, so `claimNext` had no caller in the entire codebase. This is that caller,
+ * invoked once a minute by the cron in `lunora/crons.ts`.
+ *
+ * `runnerId` identifies this lease holder. It is derived from `ctx.now` rather
+ * than randomly so a handler re-run under OCC retry reuses the same id instead of
+ * orphaning the lease it just took.
+ */
+export const dispatch = internalAction.action(async ({ ctx: context }): Promise<{ ran: number }> => {
+    const runnerId = `cron-${String(context.now)}`;
+
+    const runnerPorts: BuildRunnerPorts = {
+        appendLog: async (buildId, level, line) => {
+            await context.runMutation(appendLog, { buildId: buildId as BuildId, level, line, runnerId });
+        },
+        complete: async (buildId, bundleHash) => {
+            await context.runMutation(complete, { buildId: buildId as BuildId, bundleHash, runnerId });
+        },
+        execute: unconfigured("execution"),
+        fail: async (buildId, error) => {
+            await context.runMutation(fail, { buildId: buildId as BuildId, error, runnerId });
+        },
+        fetchSource: unconfigured("source fetch"),
+    };
+
+    const { outcomes } = await runBuildDispatch({
+        claimNext: async (id) => (await context.runMutation(claimNext, { runnerId: id })),
+        runnerId,
+        runnerPorts,
+    });
+
+    return { ran: outcomes.length };
 });
