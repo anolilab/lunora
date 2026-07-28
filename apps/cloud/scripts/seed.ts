@@ -30,15 +30,17 @@
  * production deployment, a deploy key, and telemetry (logs, metric series, traces,
  * errors) so the observability views render real data.
  *
- * Two stages report a skip instead of data, and neither is a seed bug:
- *  - **domain** needs the `customDomains` entitlement, which resolves from a synced
- *    billing subscription; only the provider's signature-verified webhook writes
- *    those, so there is no honest local path to one.
- *  - **builds** need a claimed GitHub installation, recorded only by the
- *    signature-verified webhook. See `seedTelemetry`.
+ * Every stage now seeds, including the two that used to be skipped. Both are gated
+ * behind signature-verified provider webhooks, and both secrets are already in
+ * `.dev.vars`, so the seed signs genuine payloads and drives the real routes rather
+ * than writing rows behind the app's back:
+ *  - **builds** — a signed GitHub `installation` webhook records the install, the org
+ *    claims it, and a signed `push` webhook is what actually creates the build.
+ *  - **billing** — a signed Creem `subscription.active` webhook syncs a `pro`
+ *    subscription, which is what grants `customDomains` and so unblocks the domain
+ *    stage below it.
  *
- * Both are deliberate, reported skips rather than hard failures, so the seed still
- * leaves the app usable and starts producing more data if those become reachable.
+ * They degrade to a reported skip (never a failure) if either secret is missing.
  */
 
 /* eslint-disable no-console -- a terminal script: its progress report to stdout is the deliverable, not a stray debug statement. */
@@ -62,6 +64,10 @@ const PROJECT_SLUG = "web";
 const SCRIPT_NAME = "acme-dev-web";
 const DOMAIN_HOSTNAME = "web.acme-dev.test";
 const DEPLOY_KEY_NAME = "dev-seed";
+const GITHUB_REPO = "acme-dev/web";
+const GITHUB_EVENT = "push";
+/** Fixed so `builds:recordPush`, which dedupes on (projectId, commitSha), treats a re-run as the same push. */
+const SEED_COMMIT_SHA = "5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed";
 
 /**
  * A random id of `length` hex chars — 32 for a trace id, 16 for a span id, the
@@ -241,7 +247,7 @@ const ensureProject = async (cookie: string, organizationId: string): Promise<st
     // NOT enable build seeding — see the note on `builds` in `seedTelemetry`.
     const projectId = await rpc<string>(cookie, "projects:create", {
         framework: "vite",
-        githubRepo: "acme-dev/web",
+        githubRepo: GITHUB_REPO,
         name: PROJECT_NAME,
         organizationId,
         slug: PROJECT_SLUG,
@@ -520,6 +526,150 @@ const assertLocalTarget = (): void => {
     );
 };
 
+/**
+ * POST a webhook the way its provider would: raw JSON body, HMAC-SHA256 of that exact
+ * body in the header the verifier reads.
+ *
+ * Both secrets already live in `.dev.vars`, which is what makes the builds and
+ * subscription stages seedable *through the real routes* rather than by writing rows
+ * behind the app's back. The signature is computed over the serialized string, not
+ * the object — re-serializing on the way out would change the bytes and fail the
+ * check.
+ */
+const postSignedWebhook = async (path: string, body: unknown, secret: string, header: (hex: string) => Record<string, string>): Promise<Response> => {
+    const { createHmac } = await import("node:crypto");
+    const raw = JSON.stringify(body);
+    const digest = createHmac("sha256", secret).update(raw).digest("hex");
+
+    return fetch(`${BASE_URL}${path}`, {
+        body: raw,
+        headers: { "content-type": "application/json", origin: BASE_URL, ...header(digest) },
+        method: "POST",
+    });
+};
+
+/** Read one key out of `.dev.vars` via the same resolver the admin token uses. */
+const readDevVariable = async (key: string): Promise<string | undefined> => {
+    const { parseDevVariable } = await import("@lunora/config/studio-host");
+    const { readFile } = await import("node:fs/promises");
+
+    try {
+        return parseDevVariable(await readFile(fileURLToPath(new URL("../.dev.vars", import.meta.url)), "utf8"), key);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Seed a build by driving the real GitHub App flow end to end: the `installation`
+ * webhook records the install, the org claims it, and a `push` webhook on the
+ * project's repo is what actually creates the build row.
+ *
+ * `builds:recordPush` is an `internalMutation` reachable only from the
+ * signature-verified webhook route, and it refuses a push whose installation the org
+ * has not claimed — so all three steps are required, and none of them can be
+ * short-circuited. Skipped (not fatal) when `GITHUB_WEBHOOK_SECRET` is absent.
+ */
+const seedBuild = async (cookie: string, organizationId: string, projectId: string): Promise<void> => {
+    const secret = await readDevVariable("GITHUB_WEBHOOK_SECRET");
+
+    if (secret === undefined || secret === "") {
+        console.info(`  build       (skipped — no GITHUB_WEBHOOK_SECRET in .dev.vars)`);
+
+        return;
+    }
+
+    const existing = await rpc<{ _id: string }[]>(cookie, "builds:listByProject", { organizationId, projectId });
+
+    if (existing.length > 0) {
+        console.info(`  build       (exists)`);
+
+        return;
+    }
+
+    const installationId = 4_242_424;
+    const githubHeader = (digest: string): Record<string, string> => {
+        return { "x-github-event": GITHUB_EVENT, "x-hub-signature-256": `sha256=${digest}` };
+    };
+
+    await postSignedWebhook(
+        "/v1/github/webhook",
+        { action: "created", installation: { account: { login: "acme-dev" }, id: installationId } },
+        secret,
+        (digest) => {
+            return { ...githubHeader(digest), "x-github-event": "installation" };
+        },
+    );
+
+    await rpc<unknown>(cookie, "github_installations:claim", { installationId, organizationId });
+
+    const response = await postSignedWebhook(
+        "/v1/github/webhook",
+        {
+            after: SEED_COMMIT_SHA,
+            installation: { id: installationId },
+            ref: "refs/heads/main",
+            repository: { default_branch: "main", full_name: GITHUB_REPO },
+        },
+        secret,
+        (digest) => {
+            return { ...githubHeader(digest), "x-github-event": "push" };
+        },
+    );
+
+    console.info(`  build       ${response.ok ? "(created via signed push webhook)" : `(skipped — webhook returned ${String(response.status)})`}`);
+};
+
+/**
+ * Seed an active `pro` subscription by POSTing a properly signed Creem
+ * `subscription.active` webhook — the same route the real provider calls.
+ *
+ * This is what unlocks the `customDomains` entitlement, and therefore the domain
+ * stage below. Entitlements resolve from an org's SYNCED subscription rows, which
+ * only the signature-verified webhook writes; `CREEM_WEBHOOK_SECRET` is in
+ * `.dev.vars`, so the seed can produce a genuine signed payload instead of inserting
+ * a subscription row behind the app's back. `metadata.referenceId` is how the
+ * provider carries the organization, and `product` must be a price id the `pro` plan
+ * lists or the entitlement will not resolve.
+ *
+ * Skipped (not fatal) when the secret is absent.
+ */
+const seedSubscription = async (organizationId: string): Promise<boolean> => {
+    const secret = await readDevVariable("CREEM_WEBHOOK_SECRET");
+
+    if (secret === undefined || secret === "") {
+        console.info(`  billing     (skipped — no CREEM_WEBHOOK_SECRET in .dev.vars)`);
+
+        return false;
+    }
+
+    const now = Date.now();
+    const response = await postSignedWebhook(
+        "/v1/billing/webhook",
+        {
+            eventType: "subscription.active",
+            id: `evt_seed_${String(now)}`,
+            object: {
+                current_period_end_date: new Date(now + 30 * 24 * 3_600_000).toISOString(),
+                current_period_start_date: new Date(now).toISOString(),
+                customer: { id: "cust_dev_seed" },
+                id: "sub_dev_seed",
+                metadata: { referenceId: organizationId },
+                product: { id: "price_pro_monthly" },
+                status: "active",
+            },
+        },
+        secret,
+        (digest) => {
+            return { "creem-signature": digest };
+        },
+    );
+
+    console.info(`  billing     ${response.ok ? "pro subscription (synced via signed webhook)" : `(skipped — webhook returned ${String(response.status)})`}`);
+
+    return response.ok;
+};
+
 const main = async (): Promise<void> => {
     // Before anything reads a credential or opens a connection.
     assertLocalTarget();
@@ -535,6 +685,9 @@ const main = async (): Promise<void> => {
     const projectId = await ensureProject(cookie, organizationId);
     const deploymentId = await ensureDeployment(cookie, organizationId, projectId);
 
+    await seedBuild(cookie, organizationId, projectId);
+    // Before the domain stage: it needs the entitlement this unlocks.
+    await seedSubscription(organizationId);
     await ensureDomain(cookie, organizationId, projectId);
 
     const deployKey = await ensureDeployKey(cookie, organizationId, projectId);
