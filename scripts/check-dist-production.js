@@ -31,6 +31,14 @@ const packagesDir = join(rootDir, "packages");
 /**
  * Markers that only a development build emits. Each is matched literally against
  * every shipped JS file; `why` is what the reader needs in order to act.
+ *
+ * Know the coverage limit before trusting a green run: every marker here is a
+ * React dev-JSX tell, so this proves the React-family packages (`react`,
+ * `react-native`, `studio`, …) were built for production and proves nothing about
+ * the rest. A dev build of a package that emits no JSX — unminified, with
+ * `NODE_ENV` branches unfolded — passes clean. Widening this list to catch that
+ * means a different kind of check (bundle-size or `process.env.NODE_ENV`
+ * residue), not another literal.
  */
 const DEV_MARKERS = [
     { marker: "react/jsx-dev-runtime", why: "React dev JSX runtime import — production bundlers may stub this to undefined" },
