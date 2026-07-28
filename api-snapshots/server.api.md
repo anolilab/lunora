@@ -271,8 +271,8 @@ interface DefineIdentityOptions {
 interface DefineListArgsConfig<F extends Record<string, Validator>, O extends string> {
     readonly defaultLimit?: number;
     readonly filter: F;
-    readonly maxLimit?: number;
     readonly maxInValues?: number;
+    readonly maxLimit?: number;
     readonly maxOrderBy?: number;
     readonly orderBy: ReadonlyArray<O>;
 }
