@@ -3,6 +3,13 @@ import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { operationLog } from "./operation-log";
 
 /**
+ * Symbol key under which {@link recordedCall} tags a rejection with its
+ * operation-tape sequence number. A Symbol (not a string field) so it can never
+ * collide with a server-sent error property or show up in serialization.
+ */
+const OPERATION_SEQ = Symbol("lunora.operationSeq");
+
+/**
  * Dispatch a Lunora RPC through the client method that matches the function's
  * `kind`: an `action` runs via `client.action`, a `mutation` via `client.mutation`,
  * and everything else (a `query`) via `client.query`. The single home for that
@@ -74,8 +81,27 @@ export const recordedCall = async <T>(functionPath: string, args: Record<string,
     } catch (error: unknown) {
         operationLog.settle(seq, { error: errorMessage(error) });
 
+        // Tag the rejection with its tape entry so an `ErrorAlert` rendered from
+        // this failure can jump to the exact call that produced it. A Symbol key
+        // on a non-null object: invisible to `JSON.stringify`, to the existing
+        // `errorMessage`/`errorHint` readers, and to anything that re-throws it.
+        if (typeof error === "object" && error !== null) {
+            Object.defineProperty(error, OPERATION_SEQ, { configurable: true, enumerable: false, value: seq, writable: true });
+        }
+
         throw error;
     }
+};
+
+/** Read the operation-tape sequence a rejection was tagged with, if any. */
+export const operationSeqOf = (error: unknown): number | undefined => {
+    if (typeof error !== "object" || error === null) {
+        return undefined;
+    }
+
+    const seq = (error as Record<symbol, unknown>)[OPERATION_SEQ];
+
+    return typeof seq === "number" ? seq : undefined;
 };
 
 /**

@@ -74,6 +74,12 @@ if (typeof globalThis.Element.prototype.getAnimations !== "function") {
     (globalThis.Element.prototype as any).getAnimations = (): Animation[] => [];
 }
 
+// jsdom implements no scrolling at all, so `scrollIntoView` is absent — the
+// operation console calls it to reveal the entry an error surface pointed at.
+if (typeof globalThis.Element.prototype.scrollIntoView !== "function") {
+    (globalThis.Element.prototype as any).scrollIntoView = (): void => {};
+}
+
 if (typeof globalThis.matchMedia !== "function") {
     globalRef["matchMedia"] = (query: string): MediaQueryList => {
         return {

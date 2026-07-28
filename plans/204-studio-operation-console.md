@@ -3,7 +3,7 @@
 - **Category**: dx/obs (competitive parity — Prisma Studio `console` view)
 - **Priority**: P3
 - **Effort**: S–M · **Risk**: LOW
-- **Status**: DONE (Phases 1–2 shipped; Phase 3 deferred — see below)
+- **Status**: DONE (Phases 1–3 shipped)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: a tape of what **Studio itself** just did — every admin RPC it issued,
   with timing, outcome, and a copyable reproduction — so a failed action in the UI
@@ -66,12 +66,13 @@ links out to the audit panel for a write it issued.
       function path to a summariser. Default for an unmapped function: record the
       argument _keys_ only. Never a blanket `JSON.stringify(args)`; that is how
       row values leak in.
-- [~] PARTIAL — live subscriptions are NOT separately instrumented. The initial
-  read of a `live: true` query is recorded (it goes through the same fetcher);
-  subsequent WS pushes are not, which happens to satisfy the "do not flood the
-  buffer" requirement but does not give the subscribe/unsubscribe + push-count
-  entry the plan asked for. The push path is `client.subscribe` inside
-  `use-admin-query.ts`, a different seam from the recorded fetcher.
+- [x] Live subscriptions record one entry per CHANNEL: `startSubscription` on
+      open, `recordPush` bumping a counter per push, `failSubscription` on channel
+      error, `endSubscription` on teardown — which does NOT overwrite an error
+      status, because the teardown of something already reported broken must not
+      erase the diagnosis. A `subscription` entry is badged `live` and shows its
+      push count, so a channel sitting at `live` reads as healthy while a `call`
+      stuck at `pending` reads as hung.
 
 ## Phase 2 — The view
 
@@ -86,17 +87,25 @@ links out to the audit panel for a write it issued.
 - [x] An error entry links to the corresponding audit-log row when the operation
       was a write that the server recorded.
 
-## Phase 3 — Wire it to failures — DEFERRED
+## Phase 3 — Wire it to failures
 
-- [ ] Existing error surfaces (`components/error-alert.tsx`, `LiveError`) gain a
-      "show in console" affordance that opens the drawer scrolled to that entry.
-
-Not shipped. The drawer's open state lives in `StudioLayout`, while
-`ErrorAlert`/`LiveError` are rendered deep inside individual panels, so wiring
-"show in console" needs the toggle lifted into a context first. That is a small
-refactor, but it is a refactor of a component every panel uses — worth doing
-deliberately rather than as a tail of this plan. The console is reachable
-meanwhile via ⌘/Ctrl+` from anywhere.
+- [x] The drawer's open/focus state moved into `components/operation-console-provider.tsx`,
+      wrapped around the shell (`StudioLayout` → provider → `StudioLayoutShell`,
+      split because a component cannot read a context it provides itself). The
+      provider's default value is INERT rather than throwing: `ErrorAlert` is
+      mounted standalone by other suites, and a debugging affordance must never be
+      the reason an error component crashes.
+- [x] `recordedCall` tags a rejection with its tape sequence under a Symbol key
+      (invisible to `JSON.stringify` and to the existing `errorMessage`/`errorHint`
+      readers), so `ErrorAlert` opens the console **on the exact entry that
+      failed** rather than making the operator hunt for it.
+- [x] `LiveError` gets the same affordance. It receives only a message, not the
+      error object, so it opens the errors-only view — where the failed
+      subscription is the most recent entry — instead of a precise anchor.
+- [x] The focused row scrolls into view via a ref callback memoized on `focused`
+      (not an effect): it re-attaches exactly when focus flips, so the scroll fires
+      when the row mounts into an opening drawer and when focus moves, but never on
+      an unrelated re-render where it would fight the operator's own scrolling.
 
 ## Exit criteria
 
@@ -106,6 +115,9 @@ meanwhile via ⌘/Ctrl+` from anywhere.
   summary that produced it.
 - A test asserts no row values reach the buffer for the data-browser read path
   (the summariser map is exercised, not bypassed).
+- A component test drives a real failing call through `recordedCall`, clicks
+  "show in console", and asserts the drawer opens on that entry, filtered to
+  errors — plus that a provider-less `ErrorAlert` stays inert.
 - The buffer is bounded: a synthetic 10k-operation burst evicts oldest and does
   not grow memory without limit.
 - Zero events emitted when the drawer has never been opened is **not** a goal —

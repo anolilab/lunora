@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 
 import { useT } from "../i18n/i18n-context";
+import { useOperationConsole } from "./operation-console-provider";
 
 export interface LiveErrorProps {
     /** The live-subscription rejection message, or `undefined` when the channel is healthy. */
@@ -18,14 +19,31 @@ export interface LiveErrorProps {
  */
 export const LiveError = ({ message, prefix }: LiveErrorProps): ReactElement | null => {
     const t = useT();
+    const { openConsole } = useOperationConsole();
+
+    const showInConsole = (): void => {
+        openConsole({ errorsOnly: true });
+    };
 
     if (message === undefined) {
         return null;
     }
 
     return (
-        <span className="text-xs text-destructive" data-testid={`${prefix}-live-error`} role="status">
+        <span className="flex items-center gap-1.5 text-xs text-destructive" data-testid={`${prefix}-live-error`} role="status">
             {t("Live unavailable: {liveError}", { liveError: message })}
+            {/* The failing channel is recorded as a `subscription` entry on the
+                operation tape; no seq is threaded here (LiveError receives only a
+                message), so this opens the errors-only view where it is the most
+                recent entry. */}
+            <button
+                className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                data-testid={`${prefix}-live-error-console`}
+                onClick={showInConsole}
+                type="button"
+            >
+                {t("Show in console")}
+            </button>
         </span>
     );
 };

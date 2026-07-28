@@ -23,14 +23,33 @@
 /** How many operations the tape keeps before evicting the oldest. */
 const OPERATION_LOG_LIMIT = 300;
 
+/**
+ * Whether an entry is a one-shot request/response, or a live WS subscription
+ * that stays open and receives pushes. The distinction matters for reading the
+ * tape: a `call` that never leaves `pending` is a hung request, whereas a
+ * `subscription` that sits at `live` is working exactly as intended.
+ */
+type OperationKind = "call" | "subscription";
+
 /** One recorded Studio operation. */
 interface OperationEntry {
-    /** Millisecond round trip, absent while the call is still in flight. */
+    /**
+     * Millisecond round trip for a `call`; for a `subscription`, how long the
+     * channel stayed open (set when it closes).
+     */
     durationMs?: number;
-    /** Error message when the call rejected; absent on success. */
+    /** Error message when the call rejected or the subscription failed. */
     error?: string;
     /** The `__lunora_admin__:*` path called. */
     functionPath: string;
+    kind: OperationKind;
+
+    /**
+     * Server pushes received on a `subscription`. ONE entry counts them all —
+     * an entry per push would evict everything else on the tape within seconds
+     * of opening a live data-browser view.
+     */
+    pushes?: number;
     /** Rows (or entries) the reply carried, when the shape is countable. */
     resultCount?: number;
     /** Issue order — assigned at DISPATCH, so the tape reflects what was sent, not what landed first. */
@@ -39,8 +58,8 @@ interface OperationEntry {
     shardKey: string;
     /** Epoch millis the call was issued. */
     startedAt: number;
-    /** Lifecycle: in flight, resolved, or rejected. */
-    status: "error" | "ok" | "pending";
+    /** Lifecycle: `pending`/`ok`/`error` for a call, `live`/`closed`/`error` for a subscription. */
+    status: "closed" | "error" | "live" | "ok" | "pending";
     /** Redacted argument summary — see the module docblock. */
     summary: string;
 }
@@ -155,14 +174,82 @@ class OperationLog {
      * must not appear after the fast one it raced.
      */
     public start(functionPath: string, args: Record<string, unknown>, shardKey: string): number {
+        return this.append(functionPath, args, shardKey, "call", "pending");
+    }
+
+    /**
+     * Record an opening live subscription. One entry per CHANNEL, not per push —
+     * a live data-browser view pushes on every write-flush, and an entry each
+     * would evict the whole tape within seconds of opening it.
+     */
+    public startSubscription(functionPath: string, args: Record<string, unknown>, shardKey: string): number {
+        return this.append(functionPath, args, shardKey, "subscription", "live");
+    }
+
+    /**
+     * Count one server push on an open subscription. Updates the existing entry's
+     * counter — deliberately the only thing a push does to the tape.
+     */
+    public recordPush(seq: number): void {
+        this.patch(seq, (entry) => {
+            return { ...entry, pushes: (entry.pushes ?? 0) + 1 };
+        });
+    }
+
+    /** Mark an open subscription as failed (the channel rejected, e.g. no admin token). */
+    public failSubscription(seq: number, error: string): void {
+        this.patch(seq, (entry) => {
+            return { ...entry, error, status: "error" };
+        });
+    }
+
+    /** Close an open subscription, stamping how long it stayed open. */
+    public endSubscription(seq: number): void {
+        // A channel that already failed keeps its error status; closing it is just
+        // the teardown of something already reported broken.
+        this.patch(seq, (entry) => (entry.status === "error" ? entry : { ...entry, durationMs: Date.now() - entry.startedAt, status: "closed" }));
+    }
+
+    /** The most recent entry that failed, for "show me what just broke". */
+    public lastErrorSeq(): number | undefined {
+        return this.entries.findLast((entry) => entry.status === "error")?.seq;
+    }
+
+    /** Close out a dispatch with its outcome. A `seq` no longer in the buffer is ignored. */
+    public settle(seq: number, outcome: { error?: string; result?: unknown }): void {
+        this.patch(seq, (entry) => {
+            return {
+                ...entry,
+                durationMs: Date.now() - entry.startedAt,
+                ...(outcome.error === undefined
+                    ? { resultCount: countResult(outcome.result), status: "ok" as const }
+                    : { error: outcome.error, status: "error" as const }),
+            };
+        });
+    }
+
+    public clear(): void {
+        this.entries = [];
+        this.emit();
+    }
+
+    /** Append a new entry, bounding the tape. Shared by calls and subscriptions. */
+    private append(functionPath: string, args: Record<string, unknown>, shardKey: string, kind: OperationKind, status: OperationEntry["status"]): number {
         const seq = this.nextSeq;
 
         this.nextSeq += 1;
 
-        const appended: OperationEntry[] = [
-            ...this.entries,
-            { functionPath, seq, shardKey, startedAt: Date.now(), status: "pending", summary: summariseArgs(functionPath, args) },
-        ];
+        const entry: OperationEntry = {
+            functionPath,
+            kind,
+            seq,
+            shardKey,
+            startedAt: Date.now(),
+            status,
+            summary: summariseArgs(functionPath, args),
+            ...(kind === "subscription" ? { pushes: 0 } : {}),
+        };
+        const appended: OperationEntry[] = [...this.entries, entry];
 
         // Bound by dropping from the head: a busy session evicts the oldest
         // operations, never the ones the operator is currently looking at.
@@ -172,29 +259,15 @@ class OperationLog {
         return seq;
     }
 
-    /** Close out a dispatch with its outcome. A `seq` no longer in the buffer is ignored. */
-    public settle(seq: number, outcome: { error?: string; result?: unknown }): void {
+    /** Replace one entry in place. A `seq` no longer in the buffer is ignored. */
+    private patch(seq: number, update: (entry: OperationEntry) => OperationEntry): void {
         const index = this.entries.findIndex((entry) => entry.seq === seq);
 
         if (index === -1) {
             return;
         }
 
-        const entry = this.entries[index] as OperationEntry;
-        const settled: OperationEntry = {
-            ...entry,
-            durationMs: Date.now() - entry.startedAt,
-            ...(outcome.error === undefined
-                ? { resultCount: countResult(outcome.result), status: "ok" as const }
-                : { error: outcome.error, status: "error" as const }),
-        };
-
-        this.entries = this.entries.with(index, settled);
-        this.emit();
-    }
-
-    public clear(): void {
-        this.entries = [];
+        this.entries = this.entries.with(index, update(this.entries[index] as OperationEntry));
         this.emit();
     }
 
@@ -212,4 +285,4 @@ class OperationLog {
 const operationLog = new OperationLog();
 
 export { OPERATION_LOG_LIMIT, OperationLog, operationLog, summariseArgs };
-export type { OperationEntry };
+export type { OperationEntry, OperationKind };

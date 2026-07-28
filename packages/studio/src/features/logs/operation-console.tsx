@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Input } from "../../components/ui/input";
@@ -28,24 +28,49 @@ const statusVariant = (status: OperationEntry["status"]): "default" | "destructi
 };
 
 /** One row of the tape. */
-const OperationRow = ({ entry }: { readonly entry: OperationEntry }): ReactElement => {
+const OperationRow = ({ entry, focused }: { readonly entry: OperationEntry; readonly focused: boolean }): ReactElement => {
     const t = useT();
+
+    // Bring the entry an error surface pointed at into view, via a ref callback
+    // rather than an effect: the callback re-attaches exactly when `focused`
+    // flips (its identity is memoized on it), so the scroll fires when the row
+    // mounts into an opening drawer AND when focus moves to another row — and
+    // never on an unrelated re-render, which would fight the operator's own
+    // scrolling.
+    const scrollWhenFocused = useCallback(
+        (node: HTMLLIElement | null): void => {
+            if (node !== null && focused) {
+                node.scrollIntoView({ block: "nearest" });
+            }
+        },
+        [focused],
+    );
 
     const copy = (): void => {
         copyToClipboard(`${entry.functionPath} ${entry.summary}${entry.shardKey === "" ? "" : ` (shard ${entry.shardKey})`}`);
     };
 
     return (
-        <li className="border-b border-border/60 last:border-b-0" data-testid="oc-row">
+        <li
+            className={cn("border-b border-border/60 last:border-b-0", focused && "bg-accent ring-1 ring-inset ring-primary/40")}
+            data-testid="oc-row"
+            ref={scrollWhenFocused}
+        >
             <div className="flex items-start gap-2 px-3 py-1.5 text-xs">
                 <Badge className="mt-px shrink-0" variant={statusVariant(entry.status)}>
                     {entry.status === "pending" ? "…" : entry.status}
                 </Badge>
                 <span className="shrink-0 font-mono text-[11px] text-foreground">{shortPath(entry.functionPath)}</span>
+                {entry.kind === "subscription" && (
+                    <Badge className="shrink-0" variant="outline">
+                        {t("live")}
+                    </Badge>
+                )}
                 {entry.summary !== "" && <span className="min-w-0 truncate text-muted-foreground">{entry.summary}</span>}
                 <span className="ms-auto flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
                     {entry.shardKey !== "" && <span className="font-mono">{entry.shardKey}</span>}
                     {entry.resultCount !== undefined && <span>{t("{count} rows", { count: entry.resultCount })}</span>}
+                    {entry.pushes !== undefined && entry.pushes > 0 && <span>{t("{count} pushes", { count: entry.pushes })}</span>}
                     {entry.durationMs !== undefined && <span>{entry.durationMs}ms</span>}
                     <button
                         aria-label={t("Copy")}
@@ -78,11 +103,23 @@ const OperationRow = ({ entry }: { readonly entry: OperationEntry }): ReactEleme
  * Rendered as a drawer rather than a nav page because it is a companion to
  * whatever page you are on, not a destination.
  */
-export const OperationConsole = ({ onClose }: { readonly onClose: () => void }): ReactElement => {
+export const OperationConsole = ({
+    errorsOnly = false,
+    focusSeq,
+    onClose,
+}: {
+    /** Open showing only failures — what an error surface asks for. */
+    readonly errorsOnly?: boolean;
+    /** Highlight and scroll to this tape entry, when the caller named one. */
+    readonly focusSeq?: number;
+    readonly onClose: () => void;
+}): ReactElement => {
     const t = useT();
 
     const entries = useOperationLog();
-    const [filter, setFilter] = useState<ConsoleFilter>("all");
+    // Seeded from the opener's intent, then owned by the operator's clicks — a
+    // derived-every-render filter would fight them the moment they widened it.
+    const [filter, setFilter] = useState<ConsoleFilter>(errorsOnly ? "errors" : "all");
     const [needle, setNeedle] = useState<string>("");
 
     const shown = useMemo(() => {
@@ -150,7 +187,7 @@ export const OperationConsole = ({ onClose }: { readonly onClose: () => void }):
             ) : (
                 <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="oc-rows">
                     {shown.map((entry) => (
-                        <OperationRow entry={entry} key={entry.seq} />
+                        <OperationRow entry={entry} focused={entry.seq === focusSeq} key={entry.seq} />
                     ))}
                 </ul>
             )}

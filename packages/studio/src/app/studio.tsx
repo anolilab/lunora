@@ -12,10 +12,11 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { createContext, lazy, Suspense, use, useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
 
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
+import { OperationConsoleProvider, useOperationConsole } from "../components/operation-console-provider";
 import RulesBanner from "../components/rules-banner";
 import { EnsureThemeProvider } from "../components/theme-provider";
 import { ThemeToggle } from "../components/theme-toggle";
@@ -804,7 +805,7 @@ const RoutePending = (): ReactElement => (
  * tab is derived from the URL, so deep links and the browser back/forward
  * buttons drive which panel shows.
  */
-const StudioLayout = (): ReactElement => {
+const StudioLayoutShell = (): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
     const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -814,17 +815,15 @@ const StudioLayout = (): ReactElement => {
     // The operation console (plan 204): a dockable tape of every admin RPC this
     // studio issued. Toggled with ⌘/Ctrl+` — recording is always on regardless,
     // because a tape you have to arm before the bug is a tape that misses it.
-    const [consoleOpen, setConsoleOpen] = useState<boolean>(false);
-
-    const closeConsole = useCallback((): void => {
-        setConsoleOpen(false);
-    }, []);
+    // The open/focus state lives in a provider above this layout so an
+    // `ErrorAlert` rendered deep inside a panel can open it on a specific entry.
+    const { close: closeConsole, errorsOnly: consoleErrorsOnly, focusSeq: consoleFocusSeq, open: consoleOpen, toggle: toggleConsole } = useOperationConsole();
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent): void => {
             if ((event.metaKey || event.ctrlKey) && event.key === "`") {
                 event.preventDefault();
-                setConsoleOpen((open) => !open);
+                toggleConsole();
             }
         };
 
@@ -833,7 +832,7 @@ const StudioLayout = (): ReactElement => {
         return () => {
             globalThis.removeEventListener("keydown", onKeyDown);
         };
-    }, []);
+    }, [toggleConsole]);
 
     // Which optional package-backed pages this deployment enables. Defaults to
     // everything-shown until the RPC settles, so the nav never flickers a page in
@@ -1083,12 +1082,26 @@ const StudioLayout = (): ReactElement => {
                     </div>
                     {/* The operation console docks under whatever panel is open — it is a
                         companion to the current page, not a destination of its own. */}
-                    {consoleOpen && <OperationConsole onClose={closeConsole} />}
+                    {consoleOpen && <OperationConsole errorsOnly={consoleErrorsOnly} focusSeq={consoleFocusSeq} onClose={closeConsole} />}
                 </div>
             </SidebarInset>
         </SidebarProvider>
     );
 };
+
+/**
+ * The root route component: the console provider wrapped around the shell.
+ *
+ * Split in two because {@link StudioLayoutShell} CONSUMES the console context
+ * (for the ⌘/Ctrl+` toggle and to render the drawer) — a component cannot read a
+ * context it provides itself, and every panel under the routed outlet needs to
+ * reach the same provider to offer "show in console" on a failure.
+ */
+const StudioLayout = (): ReactElement => (
+    <OperationConsoleProvider>
+        <StudioLayoutShell />
+    </OperationConsoleProvider>
+);
 
 /**
  * Schema tab wrapper that lifts the optional `?table=&lt;name>` search param off

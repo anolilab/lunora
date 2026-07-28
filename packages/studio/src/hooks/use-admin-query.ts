@@ -4,6 +4,7 @@ import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClie
 import { useCallback, useEffect, useState } from "react";
 
 import { adminRef, callOptions, errorMessage, fireAndForget, recordedCall } from "../lib/internal";
+import { operationLog } from "../lib/operation-log";
 
 /**
  * The TanStack Query key for a reserved admin RPC read. Stable + structural:
@@ -233,20 +234,33 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 
         setLiveError(undefined);
 
-        return client.subscribe(
+        // One tape entry per CHANNEL (see `operation-log.ts`): the open is
+        // recorded here, each push only bumps its counter, and the teardown below
+        // closes it. Recording an entry per push would evict the whole tape within
+        // seconds of opening a live data-browser view.
+        const seq = operationLog.startSubscription(path, args, shardKey);
+
+        const unsubscribe = client.subscribe(
             adminRef(path),
             args,
             (value) => {
+                operationLog.recordPush(seq);
                 setLiveError(undefined);
                 queryClient.setQueryData(queryKey, value);
             },
             {
                 ...callOptions(shardKey),
                 onError: (error) => {
+                    operationLog.failSubscription(seq, error.message);
                     setLiveError(error.message);
                 },
             },
         );
+
+        return () => {
+            operationLog.endSubscription(seq);
+            unsubscribe();
+        };
         // `args`/`queryKey` are tracked via `keySignature`; `client`/`queryClient` are provider-stable.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [keySignature, enabled, live]);

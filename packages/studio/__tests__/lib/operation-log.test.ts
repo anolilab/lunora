@@ -134,6 +134,75 @@ describe("operationLog", () => {
         }).not.toThrow();
     });
 
+    it("records a live subscription as ONE entry and counts its pushes", () => {
+        expect.assertions(4);
+
+        const seq = log.startSubscription("__lunora_admin__:getLogs", {}, "");
+
+        log.recordPush(seq);
+        log.recordPush(seq);
+        log.recordPush(seq);
+
+        const entries = log.getSnapshot();
+
+        // Three pushes must not become three entries — that is what would evict
+        // the rest of the tape seconds after opening a live view.
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.kind).toBe("subscription");
+        expect(entries[0]?.pushes).toBe(3);
+        expect(entries[0]?.status).toBe("live");
+    });
+
+    it("closes a subscription with the time it stayed open", () => {
+        expect.assertions(2);
+
+        const seq = log.startSubscription("__lunora_admin__:getLogs", {}, "");
+
+        log.endSubscription(seq);
+
+        expect(log.getSnapshot()[0]?.status).toBe("closed");
+        expect(log.getSnapshot()[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it("keeps a failed subscription reported as failed when it is torn down", () => {
+        expect.assertions(2);
+
+        const seq = log.startSubscription("__lunora_admin__:getLogs", {}, "");
+
+        log.failSubscription(seq, "no admin token");
+        // Teardown follows every failure; it must not overwrite the diagnosis.
+        log.endSubscription(seq);
+
+        expect(log.getSnapshot()[0]?.status).toBe("error");
+        expect(log.getSnapshot()[0]?.error).toBe("no admin token");
+    });
+
+    it("reports the most recent failure for the show-in-console jump", () => {
+        expect.assertions(2);
+
+        expect(log.lastErrorSeq()).toBeUndefined();
+
+        const ok = log.start("__lunora_admin__:listTables", {}, "");
+
+        log.settle(ok, { result: [] });
+
+        const bad = log.start("__lunora_admin__:writeRow", {}, "");
+
+        log.settle(bad, { error: "denied" });
+
+        expect(log.lastErrorSeq()).toBe(bad);
+    });
+
+    it("marks one-shot calls as calls, so a stuck request reads differently to a healthy channel", () => {
+        expect.assertions(2);
+
+        log.start("__lunora_admin__:listTables", {}, "");
+        log.startSubscription("__lunora_admin__:getLogs", {}, "");
+
+        expect(log.getSnapshot()[0]?.kind).toBe("call");
+        expect(log.getSnapshot()[1]?.kind).toBe("subscription");
+    });
+
     it("notifies subscribers and stops after unsubscribe", () => {
         expect.assertions(2);
 
