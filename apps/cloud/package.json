@@ -17,6 +17,11 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@base-ui/react": "catalog:ui",
+        "@fontsource-variable/geist": "catalog:ui",
+        "@fontsource-variable/geist-mono": "catalog:ui",
+        "@hugeicons/core-free-icons": "catalog:ui",
+        "@hugeicons/react": "catalog:ui",
         "@lunora/ai": "workspace:*",
         "@lunora/auth": "workspace:*",
         "@lunora/bindings": "workspace:*",
@@ -36,10 +41,14 @@
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:web",
         "@tanstack/react-start": "catalog:web",
+        "@xyflow/react": "catalog:frontend",
         "better-auth": "catalog:auth",
+        "class-variance-authority": "catalog:ui",
+        "clsx": "catalog:ui",
         "creem": "^1.5.3",
         "react": "catalog:frontend",
-        "react-dom": "catalog:frontend"
+        "react-dom": "catalog:frontend",
+        "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {
         "@cloudflare/vite-plugin": "catalog:vite",
@@ -48,10 +57,13 @@
         "@lunora/codegen": "workspace:*",
         "@lunora/config": "workspace:*",
         "@lunora/vite": "workspace:*",
+        "@tailwindcss/vite": "catalog:vite",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
         "@vitejs/plugin-react": "catalog:web",
+        "tailwindcss": "catalog:vite",
+        "tw-animate-css": "catalog:vite",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test",
