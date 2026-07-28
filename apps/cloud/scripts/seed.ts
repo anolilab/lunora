@@ -683,6 +683,87 @@ const seedSubscription = async (organizationId: string): Promise<boolean> => {
     return response.ok;
 };
 
+/**
+ * Build output for the seeded build — the one stage that cannot go through a real
+ * surface, and the reason is worth stating.
+ *
+ * `builds:appendLog` and `builds:complete` are `internalMutation`s driven by the
+ * build runner, and the runner is started by `src/builds/dispatch.ts`, which
+ * NOTHING calls — its own docstring says so ("without it `claimNext` has no caller
+ * and every enqueued build sits until the 24h expiry cron fails it"). Even wired,
+ * the runner needs a Cloudflare Container to execute and a GitHub tarball to fetch,
+ * neither of which exists locally. So a seeded build stays `pending` forever with an
+ * empty log panel.
+ *
+ * Rather than leave the Builds view blank, this writes the rows the runner would
+ * have written, through `wrangler d1 execute --local` — the supported local tool,
+ * not a hand-rolled poke at the SQLite file. It is bounded to the local database by
+ * construction, and `assertLocalTarget` has already refused any non-loopback run.
+ * Delete this stage the day the dispatcher is wired.
+ */
+const seedBuildLogs = async (cookie: string, organizationId: string, projectId: string): Promise<void> => {
+    const builds = await rpc<{ _id: string; status: string }[]>(cookie, "builds:listByProject", { organizationId, projectId });
+    const build = builds.at(0);
+
+    if (build === undefined) {
+        return;
+    }
+
+    if (build.status === "successful") {
+        console.info(`  build logs  (exists)`);
+
+        return;
+    }
+
+    const lines: [level: "error" | "info", line: string][] = [
+        ["info", "Cloning repository (shallow, depth=1)…"],
+        ["info", `HEAD is now at ${SEED_COMMIT_SHA.slice(0, 7)} Seed the dev database`],
+        ["info", "Detected package manager: pnpm@11.15.0"],
+        ["info", "Installing dependencies…"],
+        ["info", "Lockfile is up to date, resolution step is skipped"],
+        ["info", "Progress: resolved 842, reused 812, downloaded 30, added 842, done"],
+        ["info", "Done in 8.4s"],
+        ["info", "Running build: vite build"],
+        ["info", "vite v8.1.5 building for production…"],
+        ["info", "transforming…"],
+        ["info", "✓ 1284 modules transformed"],
+        ["info", "rendering chunks…"],
+        ["info", "dist/client/assets/index-Ba91kqQ2.js   184.22 kB │ gzip: 58.11 kB"],
+        ["info", "✓ built in 3.42s"],
+        ["info", "Uploading worker bundle (1.2 MB)…"],
+        ["info", "Deployment live at https://web.acme-dev.test"],
+    ];
+
+    const now = Date.now();
+    const values = lines
+        .map(([level, line], index) => {
+            const id = `${build._id}-log-${String(index).padStart(3, "0")}`;
+            const at = now - (lines.length - index) * 1000;
+
+            // `wrangler d1 execute --command` takes raw SQL, so single quotes in a log
+            // line have to be doubled or they terminate the literal early.
+            return `('${id}',${String(at)},${String(at)},'${build._id}','${level}','${line.replaceAll("'", "''")}','${organizationId}')`;
+        })
+        .join(",");
+
+    const sql = [
+        `INSERT OR IGNORE INTO buildLogs (id,_creationTime,createdAt,buildId,level,line,organizationId) VALUES ${values};`,
+        `UPDATE builds SET status='successful', successfulAt=${String(now)}, updatedAt=${String(now)} WHERE id='${build._id}';`,
+    ].join(" ");
+
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+
+    try {
+        await promisify(execFile)("node", ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "lunora-cloud", "--local", "--command", sql], {
+            cwd: fileURLToPath(new URL("..", import.meta.url)),
+        });
+        console.info(`  build logs  ${String(lines.length)} lines (build marked successful)`);
+    } catch {
+        console.info(`  build logs  (skipped — \`wrangler d1 execute --local\` failed)`);
+    }
+};
+
 const main = async (): Promise<void> => {
     // Before anything reads a credential or opens a connection.
     assertLocalTarget();
@@ -699,6 +780,7 @@ const main = async (): Promise<void> => {
     const deploymentId = await ensureDeployment(cookie, organizationId, projectId);
 
     await seedBuild(cookie, organizationId, projectId);
+    await seedBuildLogs(cookie, organizationId, projectId);
     // Before the domain stage: it needs the entitlement this unlocks.
     await seedSubscription(organizationId);
     await ensureDomain(cookie, organizationId, projectId);
