@@ -37,6 +37,14 @@ crons.interval("prune metric points", { hours: 6 }, internal.metrics.prune, {});
 
 // Prune superseded releases past the rollback retention (GAPS.md A1) so
 // dispatch namespaces never accumulate unboundedly.
+// The build queue's missing consumer. `builds.recordPush` enqueues on a GitHub
+// push and `claimNext` leases, but nothing joined them — `claimNext` had no caller
+// anywhere, so every queued build sat `pending` until `expireStale` failed it 24
+// hours later with no explanation. Once a minute keeps a push responsive without
+// letting one tick monopolise the scheduled invocation (the loop drains at most
+// `DEFAULT_MAX_BUILDS_PER_TICK`).
+crons.interval("dispatch builds", { minutes: 1 }, internal.builds.dispatch, {});
+
 crons.interval("prune superseded releases", { hours: 6 }, internal.deployments.pruneSuperseded, {});
 
 // Self-heal the build queue: fail never-claimed and lease-stuck builds (A3).

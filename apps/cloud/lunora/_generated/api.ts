@@ -158,6 +158,7 @@ export interface InternalApiTypes {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;
         claimNext: FunctionReference<"mutation", { runnerId: string }, { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;
         complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
+        dispatch: FunctionReference<"action", {}, { ran: number; }>;
         expireStale: FunctionReference<"mutation", {}, { expired: number; }>;
         fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
         recordPush: FunctionReference<"mutation", { branch: unknown; commitSha: unknown; installationId: number; repository: unknown }, { buildId: Id<"builds">; reused: boolean; } | null>;
