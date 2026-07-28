@@ -1,6 +1,14 @@
 import { defineConfig } from "@visulima/vis/config";
 
 export default defineConfig({
+    // `alpha` is the development branch, not `main`. vis only derives the
+    // affected base from CI env vars for `pull_request`/`push` events — it has
+    // no `merge_group` handling at all — so in the merge queue it falls through
+    // to `origin/<defaultBase>`. Left unset that fallback is `main`, which sits
+    // ~2340 commits behind `alpha`: every queue run then marked all 50 packages
+    // affected and `vis affected build` died with `spawn E2BIG`. This also
+    // fixes local `vis affected`, which merge-bases against the same default.
+    defaultBase: "alpha",
     namedInputs: {
         default: ["sharedGlobals", "{projectRoot}/**/*", "!{projectRoot}/**/*.md"],
         production: ["default", "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],

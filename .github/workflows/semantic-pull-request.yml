@@ -16,6 +16,16 @@
 
 "jobs":
     "semantic-pull-request":
+        # The `merge_group` trigger above exists only so this required check
+        # reports a status in the merge queue — a job skipped by `if` counts as
+        # passing, whereas a workflow that never triggers leaves the queue entry
+        # stuck on "Expected". The validation itself must not run there:
+        # amannn/action-semantic-pull-request hard-errors with "This action can
+        # only be invoked in `pull_request_target` or `pull_request` events"
+        # because a merge group has no PR to infer. The title was already
+        # validated on the PR and cannot change once queued, so re-checking it
+        # here would be redundant even if the action supported it.
+        "if": "github.event_name != 'merge_group'"
         "permissions":
             "pull-requests": "write" # to analyze PRs (amannn/action-semantic-pull-request)
             "statuses": "write" # to mark status of analyzed PR (amannn/action-semantic-pull-request)
