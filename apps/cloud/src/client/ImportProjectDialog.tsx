@@ -142,8 +142,7 @@ export const ImportProjectDialog = ({ onImported, onOpenChange, open, organizati
 
                         <FieldForm
                             className="max-w-none"
-                            onSubmit={(event) => {
-                                event.preventDefault();
+                            action={() => {
                                 setError(null);
 
                                 const parsed = parseRepo(repo);
