@@ -739,6 +739,7 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     directory: ShardDirectory;
     kv?: ShardKvStore;
+    readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
     shard: ShardHost;
@@ -795,6 +796,7 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     directory: ShardDirectory;
     kv?: ShardKvStore;
+    readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
     shard: ShardHost;

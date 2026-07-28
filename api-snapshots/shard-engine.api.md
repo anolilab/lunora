@@ -3129,3 +3129,42 @@ const writeIdempotent: (sql: SqlExec, identity: string, mutationId: string, resu
 ```ts
 const writeSearchBackfillState: (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string) => void;
 ```
+
+## `@lunora/shard-engine/conformance`
+
+### `EngineHostFactory` (type)
+
+```ts
+type EngineHostFactory = () => {
+    close?: () => void;
+    createSocket?: () => unknown;
+    host: ShardHost;
+    readFrames: (socket: SocketHandle) => Promise<string[]> | string[];
+    sockets: SocketHost;
+};
+```
+
+### `EngineVitestApi` (interface)
+
+```ts
+interface EngineVitestApi {
+    describe: (name: string, body: () => void) => void;
+    expect: (actual: unknown) => {
+        rejects: {
+            toBeInstanceOf: (ctor: unknown) => Promise<void>;
+            toThrow: (matcher?: unknown) => Promise<void>;
+        };
+        toBe: (expected: unknown) => void;
+        toBeInstanceOf: (ctor: unknown) => void;
+        toBeUndefined: () => void;
+        toStrictEqual: (expected: unknown) => void;
+    };
+    it: (name: string, body: () => Promise<void> | void) => void;
+}
+```
+
+### `defineEngineContractSuite` (const)
+
+```ts
+const defineEngineContractSuite: (name: string, factory: EngineHostFactory, vitest: EngineVitestApi) => void;
+```

@@ -75,8 +75,12 @@ type EngineHostFactory = () => {
      * Read back the frames a socket was sent, oldest first. Required: every
      * delivery guarantee below is stated in terms of what arrived, and a host
      * that can't report that can't be proven to deliver at all.
+     *
+     * May be async. On a real transport a frame is observed by the peer end
+     * through an event, so the host needs a turn to settle before it can answer
+     * — only an in-memory host can answer synchronously.
      */
-    readFrames: (socket: SocketHandle) => string[];
+    readFrames: (socket: SocketHandle) => Promise<string[]> | string[];
     sockets: SocketHost;
 };
 
@@ -417,7 +421,8 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     await seedSocket(relay, alice, "s1");
                     await relay.handleControl(poke());
 
-                    const parsed = readFrames(alice).map((frame) => JSON.parse(frame) as Record<string, unknown>);
+                    const frames = await readFrames(alice);
+                    const parsed = frames.map((frame) => JSON.parse(frame) as Record<string, unknown>);
 
                     // Ordering is the contract, not an implementation detail: the
                     // client buffers parts and applies them atomically at
@@ -450,20 +455,26 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
 
                     await relay.handleControl(poke());
 
-                    expect(readFrames(alice).length).toBe(3);
+                    const aliceFrames = await readFrames(alice);
+
+                    expect(aliceFrames.length).toBe(3);
 
                     // Bob is skipped rather than caught up: applying a `(10, 20]`
                     // delta to a socket sitting at 7 would silently swallow
                     // everything in `(7, 10]`, leaving it permanently wrong with
                     // no error anywhere.
-                    expect(readFrames(bob).length).toBe(0);
+                    const bobFrames = await readFrames(bob);
+
+                    expect(bobFrames.length).toBe(0);
 
                     // Re-delivering the SAME poke is the resume case: Alice's memo
                     // advanced to 20, so the poke no longer matches her and she
                     // must not double-apply it.
                     await relay.handleControl(poke());
 
-                    expect(readFrames(alice).length).toBe(3);
+                    const aliceAfterResend = await readFrames(alice);
+
+                    expect(aliceAfterResend.length).toBe(3);
                 } finally {
                     close?.();
                 }
@@ -484,7 +495,9 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     // epoch is what makes the memo unambiguous.
                     await relay.handleControl(poke({ epoch: "e2" }));
 
-                    expect(readFrames(alice).length).toBe(0);
+                    const aliceFrames = await readFrames(alice);
+
+                    expect(aliceFrames.length).toBe(0);
 
                     // …and the guard is the epoch specifically, not a blanket
                     // refusal: the same poke on the seeded epoch still lands.
@@ -492,7 +505,9 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     // stopped delivering entirely.
                     await relay.handleControl(poke());
 
-                    expect(readFrames(alice).length).toBe(3);
+                    const aliceOnSeededEpoch = await readFrames(alice);
+
+                    expect(aliceOnSeededEpoch.length).toBe(3);
                 } finally {
                     close?.();
                 }
