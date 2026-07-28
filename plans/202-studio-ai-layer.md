@@ -1,28 +1,57 @@
-# Plan 202 — Studio AI layer (pluggable `llm` hook)
+# Plan 202 — Studio AI layer (Workers AI via the app's own binding)
 
 - **Category**: feat (competitive parity — Prisma Studio AI affordances)
 - **Priority**: P3
 - **Effort**: L · **Risk**: MED
-- **Status**: TODO (product decision first — see "Prerequisite")
+- **Status**: PHASE 0 DONE (decisions recorded); Phases 1–4 ready to build
 - **Baseline**: `865a9a4c` (2026-07-28)
-- **Goal**: one host-supplied `llm` hook that powers natural-language → SQL (with
+- **Goal**: AI assistance in Studio — natural-language → SQL (with
   database-error correction), natural-language → table filter, and chart-config
-  inference from a result set — with every affordance hidden when no host wires
-  the hook.
+  inference from a result set — served by the app's own Workers AI binding, with
+  every affordance hidden when that binding is absent.
 
-## Prerequisite (do not skip)
+## Phase 0 — decisions (RESOLVED 2026-07-28)
 
-This is the only plan in the wave that is **not** purely an engineering call.
-Shipping AI in Studio means deciding whose model, whose key, and what data leaves
-the machine. Get an explicit answer before Phase 1:
+**Q1 — whose model?** `@lunora/ai`, i.e. Workers AI through the app's own `AI`
+binding. Decided by the maintainer.
 
-- Which host provides the model — the CLI dev host via `@lunora/ai`
-  (`ctx.ai`, Workers AI on the Vercel AI SDK), `apps/cloud` via its own
-  credentials, or BYO-key in Studio settings?
-- Is sending schema (always) and result rows (for chart inference) to a model
-  acceptable by default, or strictly opt-in?
+**Q2 — data egress?** Q1 largely dissolves it. Workers AI runs inference on the
+user's OWN Cloudflare account, inside the same trust boundary the app already
+runs in — the schema and result rows do not leave their infrastructure for a
+third-party provider. So schema goes by default; **result row VALUES still stay
+opt-in** for chart inference, because "same account" is not the same as "the
+operator expected this row to be read by a model", and the opt-in costs one click.
 
-Phase 0 exists to answer these on paper. **Do not write Phase 1 code first.**
+**The repo already has this exact pattern**, which supersedes the "Studio ships
+no provider / host supplies an `llm` prop" design sketched below.
+`packages/do/src/issue-explainer.ts` backs the `__lunora_admin__:explainIssue`
+RPC and establishes every convention this plan needs:
+
+- The engine lives OUTSIDE `shard-do.ts` as a pure parse → ground → call → shape
+  unit over an **injected binding**; `ShardDO` is a thin adapter supplying
+  `env.AI` and writing the audit entry.
+- It takes the raw `AI` binding, so `@lunora/do` needs **no dependency edge** on
+  `@lunora/ai`.
+- A pinned default model (`DEFAULT_EXPLAIN_ISSUE_MODEL`,
+  `@cf/meta/llama-3.3-70b-instruct-fp8-fast`), with a note that a retired model
+  id makes `binding.run` throw and silently degrade every call.
+- Input caps, a fencing delimiter around caller-supplied text, and a timeout —
+  the DO's admin dispatch is single-threaded, so a hung model would block it.
+- **Degrades to the non-AI answer** with no binding, a model error, or a timeout.
+  The AI layer is additive, never the only help.
+
+**Revised design.** Do NOT add an `llm` prop to `StudioProps`. Add a
+`sql-assistant.ts` engine beside `issue-explainer.ts` and an
+`__lunora_admin__:aiGenerateSql` RPC, mirroring it point for point. The Studio
+calls that RPC like any other admin read and hides the affordance when it
+reports no `AI` binding — the same capability-gating the SQL linter already uses.
+That keeps the browser bundle free of provider code, needs no new credential
+path, and inherits an audited, timeout-guarded, gracefully-degrading precedent
+instead of inventing a second one.
+
+**Still non-negotiable** (unchanged from below): generated SQL goes through the
+same `shared/sql-readonly.ts` gate as hand-typed SQL and is shown to the operator
+before it runs. Never auto-executed.
 
 ## Context (verified)
 
@@ -45,81 +74,58 @@ a failing query and its error back for a fix), table filtering, chart config fro
 a result set, and query-insight recommendations. The hook is optional; absent it,
 the AI affordances simply are not rendered.
 
-## Design
+## Design — SUPERSEDED by Phase 0
 
-**Studio ships no provider.** `StudioProps` gains
-`llm?: (request: LlmRequest) => Promise<LlmResponse>` over a discriminated union
-of tasks. Studio owns the prompts, the validation, and the UI; the host owns the
-model, the credentials, and the network. This mirrors how `schemaEditable`
-already gates the schema-authoring overlay to loopback dev hosts — capability in,
-feature out.
-
-**Fail-closed and invisible.** No `llm` prop ⇒ no AI buttons anywhere. Not
-disabled buttons, not upsells.
-
-**Generated SQL is never privileged.** Anything the model produces goes through
-the same `sql-console.ts` read-only gate as hand-typed SQL, and is **shown to the
-operator before it runs** — never auto-executed. The model is a drafting aid
-inside the existing security boundary, not a way around it.
-
-**Data egress is explicit.** Schema (table/column names) is sent for SQL and
-filter tasks; **result rows** would be sent for chart inference — a different
-category. Chart inference sends column names + inferred types + row _count_ by
-default, with row values only behind an explicit per-invocation opt-in, and the
-UI says plainly what is being sent.
-
-## Phase 0 — Contract + decision record
-
-- [ ] Write the `LlmRequest` / `LlmResponse` discriminated union (tasks:
-      `sql-generate`, `sql-fix`, `table-filter`, `chart-config`) and the
-      egress policy above into a short design note in this file.
-- [ ] Get the two Prerequisite answers on record. **STOP here until then.**
+The original sketch had `StudioProps` gain an `llm?: (request) => Promise<...>`
+prop, with the host owning the model. Phase 0 replaces it: the repo already
+solves this server-side (`issue-explainer.ts`), and routing through an admin RPC
+keeps provider code out of the browser bundle entirely. The security rule
+survives unchanged — generated SQL passes `shared/sql-readonly.ts` and is shown
+before it runs.
 
 ## Phase 1 — NL → SQL
 
-- [ ] `llm` prop threaded through `StudioProps` → context, with a
-      `useLlm()` hook returning `undefined` when unwired.
-- [ ] Prompt construction from the `SqlSchema` the editor already assembles
-      (`features/sql/sql-autocomplete.ts`) — table names always, columns for
-      probed tables.
-- [ ] Validation before display: the response must be a single statement that
-      passes `shared/sql-readonly.ts` (plan 201 Phase 1 extracts it; if 201 has
-      not landed, import from `sql-console.ts`'s exported gate rather than
-      duplicating the regex). One bounded retry on validation failure.
-- [ ] UI: a prompt input above the editor; the generated SQL lands **in the
-      editor, unexecuted**, with a diff-ish highlight of what changed.
+- [ ] `packages/do/src/sql-assistant.ts`, modelled on `issue-explainer.ts`: pure
+      over an injected `AI` binding, input caps, a fencing delimiter around the
+      operator's prompt, a timeout, and a pinned default model.
+- [ ] Ground the prompt in the shard's real schema (`listTables` +
+      `describeTables`), so the model names tables that exist.
+- [ ] Validate before returning: the response must be ONE statement that passes
+      `classifyStatement`. One bounded retry, then give up — never return
+      unvalidated SQL.
+- [ ] `__lunora_admin__:aiGenerateSql`, registered in the
+      `schema-history-reads.ts` lookup (it is a read), with `ShardDO` supplying
+      `env.AI` and writing the audit entry, exactly as `handleExplainIssue` does.
+- [ ] Studio: a prompt input above the editor; the result lands in the editor
+      **unexecuted**. The affordance is hidden when the RPC reports no binding —
+      same capability gating the linter uses.
 
 ## Phase 2 — Database-error correction
 
-- [ ] On a failed run with a generated statement in the editor, offer "fix this"
-      — feed statement + error message back as a `sql-fix` task. Bounded to 2
-      attempts, each shown before running. This is the affordance that makes
-      Phase 1 actually pay off.
+- [ ] On a failed run, offer "fix this": statement + error fed back for a repair.
+      Bounded to 2 attempts, each shown before running. This is what makes
+      Phase 1 pay off — the first draft is often one column name away.
 
 ## Phase 3 — NL → table filter
 
-- [ ] A prompt affordance on the data browser filter bar
-      (`features/data/data-filters.tsx`) producing a structured `FilterOperator`
-      predicate (not raw SQL) against the browsed table's `ColumnMeta`.
-      Structured output means the existing filter validation applies unchanged.
+- [ ] A prompt affordance on the data browser filter bar producing a STRUCTURED
+      `FilterClause[]` (not raw SQL) against the table's `ColumnMeta`, so the
+      existing filter validation applies unchanged.
 
 ## Phase 4 — Chart config from a result set
 
-- [ ] `sql-editor-panel.tsx` already has a `chart` result tab. Infer chart type +
-      axis mapping from the result's column names/types, render with `recharts`
-      (already a dependency).
-- [ ] Honour the egress policy: columns + types + row count by default; values
-      only on explicit opt-in.
-- [ ] Validate the returned config against the actual columns before rendering —
-      a hallucinated column name must degrade to "could not infer a chart", never
-      to a broken render.
+- [ ] Infer chart type + axis mapping for the editor's existing `chart` tab.
+- [ ] Honour the Phase 0 egress line: column names + inferred types + row COUNT
+      by default; row values only behind an explicit per-invocation opt-in.
+- [ ] Validate the returned config against the actual columns — a hallucinated
+      column must degrade to "could not infer a chart", never a broken render.
 
 ## Exit criteria
 
-- With no `llm` wired (the default for `@lunora/studio` consumers today), the
-  entire Studio UI is byte-identical to before this plan.
-- With `llm` wired, "show me the 10 most recent orders over $100" produces
-  runnable SQL in the editor that the operator must click Run on.
+- With no `AI` binding, the entire Studio UI is byte-identical to before this
+  plan — no disabled buttons, no upsell.
+- With a binding, "show me the 10 most recent orders over $100" produces runnable
+  SQL in the editor that the operator must click Run on.
 - A statement the model generates that violates the read-only gate is refused by
   Studio before it reaches the RPC — asserted by a test with a stubbed `llm`.
 - Every LLM-facing prompt builder is pure and unit-tested with a stub; no test
@@ -128,14 +134,15 @@ UI says plainly what is being sent.
 
 ## STOP conditions
 
-- **If the Prerequisite answers are not available**, do not proceed past Phase 0.
-  Guessing the credential model produces a surface that has to be redesigned.
 - **If chart inference cannot be made useful without row values**, stop and
   report rather than quietly widening the default egress.
+- **If grounding the prompt needs more schema than `describeTables` returns**,
+  stop before adding a new introspection RPC purely to feed a model.
 
 ## Non-goals
 
-- Studio shipping or bundling a model, or holding provider credentials.
+- Studio shipping or bundling a model, or holding provider credentials — the
+  browser bundle never sees a model or a key.
 - An agentic loop inside Studio (multi-step tool use, autonomous mutation).
   `@lunora/agent` + `@lunora/mcp` own that; this is single-shot assistance.
 - AI-generated _writes_. Every task here produces a read, a filter, or a chart.
