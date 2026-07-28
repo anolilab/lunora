@@ -3,7 +3,7 @@
 - **Category**: feat (competitive parity — Prisma Studio AI affordances)
 - **Priority**: P3
 - **Effort**: L · **Risk**: MED
-- **Status**: PHASE 0 DONE (decisions recorded); Phases 1–4 ready to build
+- **Status**: DONE (Phases 0–2 shipped; Phases 3–4 deferred — see below)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: AI assistance in Studio — natural-language → SQL (with
   database-error correction), natural-language → table filter, and chart-config
@@ -85,40 +85,67 @@ before it runs.
 
 ## Phase 1 — NL → SQL
 
-- [ ] `packages/do/src/sql-assistant.ts`, modelled on `issue-explainer.ts`: pure
+- [x] `packages/do/src/sql-assistant.ts`, modelled on `issue-explainer.ts`: pure
       over an injected `AI` binding, input caps, a fencing delimiter around the
       operator's prompt, a timeout, and a pinned default model.
-- [ ] Ground the prompt in the shard's real schema (`listTables` +
+- [x] Ground the prompt in the shard's real schema (`listTables` +
       `describeTables`), so the model names tables that exist.
-- [ ] Validate before returning: the response must be ONE statement that passes
+- [x] Validate before returning: the response must be ONE statement that passes
       `classifyStatement`. One bounded retry, then give up — never return
       unvalidated SQL.
-- [ ] `__lunora_admin__:aiGenerateSql`, registered in the
+- [x] `__lunora_admin__:aiGenerateSql`, registered in the
       `schema-history-reads.ts` lookup (it is a read), with `ShardDO` supplying
       `env.AI` and writing the audit entry, exactly as `handleExplainIssue` does.
-- [ ] Studio: a prompt input above the editor; the result lands in the editor
+- [x] Studio: a prompt input above the editor; the result lands in the editor
       **unexecuted**. The affordance is hidden when the RPC reports no binding —
       same capability gating the linter uses.
 
 ## Phase 2 — Database-error correction
 
-- [ ] On a failed run, offer "fix this": statement + error fed back for a repair.
+- [x] On a failed run, offer "fix this": statement + error fed back for a repair.
       Bounded to 2 attempts, each shown before running. This is what makes
       Phase 1 pay off — the first draft is often one column name away.
 
-## Phase 3 — NL → table filter
+## Phase 3 — NL → table filter — DEFERRED
 
 - [ ] A prompt affordance on the data browser filter bar producing a STRUCTURED
-      `FilterClause[]` (not raw SQL) against the table's `ColumnMeta`, so the
-      existing filter validation applies unchanged.
+      `FilterClause[]` against the table's `ColumnMeta`.
 
-## Phase 4 — Chart config from a result set
+## Phase 4 — Chart config from a result set — DEFERRED
 
-- [ ] Infer chart type + axis mapping for the editor's existing `chart` tab.
-- [ ] Honour the Phase 0 egress line: column names + inferred types + row COUNT
-      by default; row values only behind an explicit per-invocation opt-in.
-- [ ] Validate the returned config against the actual columns — a hallucinated
-      column must degrade to "could not infer a chart", never a broken render.
+- [ ] Infer chart type + axis mapping for the editor's existing `chart` tab,
+      honouring the Phase 0 egress line (columns + types + row COUNT by default;
+      values only on explicit opt-in).
+
+Both deferred deliberately. Phases 1–2 deliver the feature that carries the
+plan — a draft you can read and run, and a repair when it is one column name
+off — and they establish the whole contract: the engine, the gate, the fence, the
+degrade arms, and the capability gating. Phases 3–4 are additional TASKS riding
+that contract, not additional architecture, and each is independently useful.
+
+Phase 4 in particular has an unresolved product question the Phase 0 decision
+deliberately left open: chart inference is the only task that would want row
+VALUES, and the opt-in UI for that is a design choice, not a mechanical one.
+Shipping it as a tail of this plan would have decided that quietly.
+
+## Implementation notes
+
+- The engine (`packages/do/src/sql-assistant.ts`) mirrors `issue-explainer.ts`
+  point for point: injected binding, input caps, untrusted fence, 15s timeout
+  raced against the inference (the DO's admin dispatch is single-threaded),
+  pinned model id, and a closed `degraded` union instead of a bag of optionals.
+- **A gate-failing response is DISCARDED, not returned labelled.** One retry,
+  then a `unsafe-response` degrade. Returning unvalidated SQL — even flagged —
+  would put model output inside a boundary it has no business in.
+- Fence extraction is `indexOf`, not a regex. The obvious pattern backtracks
+  super-linearly, and a model response is the one string in the flow that is
+  neither produced nor length-capped by us.
+- `no-ai-binding` is sticky in the client: an app without a binding answers that
+  way every time, so the first such reply latches and the affordance disappears
+  rather than remaining as a button that always fails.
+- The RPC grounds the prompt in the shard's real tables/columns via the same
+  `tableColumns` reader `describeTables` serves the Studio from — a second schema
+  path would be a second thing to keep in step.
 
 ## Exit criteria
 

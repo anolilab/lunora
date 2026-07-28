@@ -137,6 +137,7 @@ import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
 import { runSocketPool } from "./socket-pool";
 import { foldTraces, SpanBuffer } from "./span-buffer";
+import { generateSql } from "./sql-assistant";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
@@ -6242,6 +6243,10 @@ abstract class ShardDO {
             return this.handleExplainIssue(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.aiGenerateSql) {
+            return this.handleGenerateSql(args);
+        }
+
         const triaged = await this.handleIssueTriageOp(functionPath, args);
 
         if (triaged !== undefined) {
@@ -6667,6 +6672,43 @@ abstract class ShardDO {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
         } else if (result.reason !== "no-ai-binding") {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
+        }
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiGenerateSql` — the SQL editor's opt-in
+     * natural-language draft / repair.
+     *
+     * Grounds the prompt in this shard's REAL tables and columns, so the model
+     * names things that exist rather than plausible fiction. The engine validates
+     * its own output against the same read-only gate `runSql` enforces, so what
+     * comes back here is already safe to hand the editor — and is handed over
+     * UNEXECUTED regardless.
+     *
+     * Audited like every other privileged admin action: an AI-drafted statement
+     * is still an operator asking the database a question.
+     */
+    private async handleGenerateSql(args: Record<string, unknown>): Promise<Response> {
+        this.ensureMigrated();
+
+        const sql = this.state.storage.sql as unknown as SqlExec;
+        // Reuse the same column reader `describeTables` serves the Studio from —
+        // a second schema path would be a second thing to keep in step.
+        const schema = listTables(sql).map((table) => {
+            return { columns: this.tableColumns(table.name).map((column) => column.name), table: table.name };
+        });
+        const result = await generateSql((this.env as Record<string, unknown> | undefined)?.["AI"], args, schema);
+
+        if (result.degraded) {
+            if (result.reason !== "no-ai-binding") {
+                this.recordAudit("aiGenerateSql", { detail: { reason: result.reason } });
+            }
+        } else {
+            // The statement itself is recorded: it is what the operator is about
+            // to be handed, and an audit trail that omits it explains nothing.
+            this.recordAudit("aiGenerateSql", { detail: { sql: result.sql } });
         }
 
         return jsonResponse({ result }, 200);

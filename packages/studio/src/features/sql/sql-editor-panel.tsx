@@ -15,7 +15,9 @@ import { recordShard } from "../../lib/shard-history";
 import { CellValue } from "../data/data-grid";
 import { ExportMenu } from "../data/grid-features";
 import formatSql from "./format-sql";
+import { useSqlAssistant } from "./hooks/use-sql-assistant";
 import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
+import { SqlAssistantBar } from "./sql-assistant-bar";
 import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
 import type { SqlDiagnostic } from "./sql-diagnostics";
 import { DiagnosticsOverlay, DiagnosticsRow, EDITOR_TEXT_CLASS } from "./sql-diagnostics-ui";
@@ -179,6 +181,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
+    const assistant = useSqlAssistant(shardKey);
 
     const autocomplete = useSqlAutocomplete(schema, editorRef, setDraft);
     const {
@@ -657,8 +660,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                 {/* Editor + results workspace — stacked, or split side-by-side. */}
                 <div className={workspaceClass}>
-                    {/* Line-numbered editor pane, with the diagnostics overlay + problems row. */}
+                    {/* Line-numbered editor pane, with the assistant bar, diagnostics overlay + problems row. */}
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        <SqlAssistantBar assistant={assistant} failed={error === null ? undefined : { error, sql: draft }} onGenerated={setDraft} />
                         <div className="flex min-h-0 min-w-0 flex-1">
                             <div
                                 aria-hidden="true"

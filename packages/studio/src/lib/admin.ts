@@ -32,6 +32,7 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    aiGenerateSql: "__lunora_admin__:aiGenerateSql",
     assignIssue: "__lunora_admin__:assignIssue",
     backRelationCounts: "__lunora_admin__:backRelationCounts",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
@@ -1308,6 +1309,16 @@ export interface SqlConsoleResult {
     rows: Record<string, unknown>[];
     truncated: boolean;
 }
+
+/**
+ * Payload of an `aiGenerateSql` admin call, mirroring `@lunora/do`'s
+ * `GenerateSqlResult`. A discriminated union on `degraded` so the ok arm's `sql`
+ * is guaranteed by the type rather than by convention.
+ */
+export type GenerateSqlResult = { degraded: false; sql: string } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
+export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
 
 /** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
 export interface BackRelation {
