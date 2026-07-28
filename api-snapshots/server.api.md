@@ -158,6 +158,18 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `DEFAULT_LIMIT` (const)
+
+```ts
+const DEFAULT_LIMIT = 25;
+```
+
+### `DEFAULT_MAX_LIMIT` (const)
+
+```ts
+const DEFAULT_MAX_LIMIT = 100;
+```
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -253,6 +265,19 @@ interface DefineIdentityOptions {
 }
 ```
 
+### `DefineListArgsConfig` (interface)
+
+```ts
+interface DefineListArgsConfig<F extends Record<string, Validator>, O extends string> {
+    readonly defaultLimit?: number;
+    readonly filter: F;
+    readonly maxLimit?: number;
+    readonly maxInValues?: number;
+    readonly maxOrderBy?: number;
+    readonly orderBy: ReadonlyArray<O>;
+}
+```
+
 ### `DefinePluginOptions` (interface)
 
 ```ts
@@ -332,6 +357,7 @@ type EnvShape = Record<string, Validator>;
 
 ```ts
 interface ExposeConfig {
+    readonly cache?: RestCacheConfig;
     readonly rest?: boolean;
 }
 ```
@@ -800,6 +826,60 @@ type LifecycleEventKind = "connect" | "disconnect";
 
 ```ts
 type LifecycleHandler = (context: MutationCtx, event: LifecycleEvent) => Promise<void> | void;
+```
+
+### `ListArgsSpec` (interface)
+
+```ts
+interface ListArgsSpec<F extends Record<string, Validator>, O extends string> {
+    readonly args: ListArgsValidators<F, O>;
+    readonly toQueryArgs: <TDocument>(args: ListArgsValue<F, O>) => QueryArgs$2<TDocument>;
+}
+```
+
+### `ListArgsValidators` (interface)
+
+```ts
+interface ListArgsValidators<F extends Record<string, Validator>, O extends string> {
+    cursor: ColumnValidator<null | number | string | undefined, null | number | string | undefined>;
+    limit: ColumnValidator<number | undefined, number | undefined>;
+    orderBy: ColumnValidator<ListOrderByEntry<O>[] | undefined, ListOrderByEntry<O>[] | undefined>;
+    where: ColumnValidator<ListWhere<F> | undefined, ListWhere<F> | undefined>;
+}
+```
+
+### `ListArgsValue` (interface)
+
+```ts
+interface ListArgsValue<F extends Record<string, Validator>, O extends string> {
+    cursor?: null | number | string;
+    limit?: number;
+    orderBy?: ListOrderByEntry<O>[];
+    where?: ListWhere<F>;
+}
+```
+
+### `ListFilterOperators` (type)
+
+```ts
+type ListFilterOperators<T> = WhereOperators<T>;
+```
+
+### `ListOrderByEntry` (interface)
+
+```ts
+interface ListOrderByEntry<O extends string> {
+    direction?: "asc" | "desc";
+    field: O;
+}
+```
+
+### `ListWhere` (type)
+
+```ts
+type ListWhere<F extends Record<string, Validator>> = {
+    [K in keyof F]?: Infer<F[K]> | ListFilterOperators<Infer<F[K]>>;
+};
 ```
 
 ### `LogFields` (type)
@@ -1473,6 +1553,12 @@ interface RelationDefinition {
     references: string;
     table: string;
 }
+```
+
+### `RestCacheConfig` (type)
+
+```ts
+type RestCacheConfig = RestCachePolicy;
 ```
 
 ### `RlsOptions` (interface)
@@ -2382,6 +2468,12 @@ const bindTableFacade: (writer: FacadeWriterLike, tableName: string) => FacadeEn
 const buildRlsReadRegistry: (functions: Iterable<unknown>) => RlsReadRegistry;
 ```
 
+### `clampLimit` (const)
+
+```ts
+const clampLimit: (limit: number | undefined, fallback: number, maxLimit: number) => number;
+```
+
 ### `composePluginMiddleware` (const)
 
 ```ts
@@ -2436,6 +2528,12 @@ const defineIdentity: <A extends ValidatorMap>(claims: InferValidatorMap<A> exte
 } ? A : never, options?: DefineIdentityOptions) => IdentityContract<InferValidatorMap<A> & {
     userId: string;
 }>;
+```
+
+### `defineListArgs` (const)
+
+```ts
+const defineListArgs: <F extends Record<string, Validator>, O extends string>(config: DefineListArgsConfig<F, O>) => ListArgsSpec<F, O>;
 ```
 
 ### `defineMigration` (const)
@@ -4141,6 +4239,7 @@ type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 
 ```ts
 interface ExposeConfig {
+    readonly cache?: RestCacheConfig;
     readonly rest?: boolean;
 }
 ```
@@ -4506,6 +4605,12 @@ interface RelationDefinition {
     references: string;
     table: string;
 }
+```
+
+### `RestCacheConfig` (type)
+
+```ts
+type RestCacheConfig = RestCachePolicy;
 ```
 
 ### `ScheduledFunctionDoc` (interface)

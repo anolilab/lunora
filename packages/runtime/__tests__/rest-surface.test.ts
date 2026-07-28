@@ -236,7 +236,20 @@ describe("createWorker — opt-in public REST surface", () => {
 
             expect(response.headers.get("cache-control")).toBe("public, max-age=60");
             expect(response.headers.get("cache-tag")).toBe("messages");
-            expect(response.headers.get("vary")).toBe("authorization, cookie");
+            expect(response.headers.get("vary")).toBe("authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
+        });
+
+        it("varies on the shard-key header, which selects which rows the caller sees", async () => {
+            expect.assertions(1);
+
+            const { namespace } = echoShard();
+            const worker = createWorker({ functions: cachingFunctions, shardDO: namespace });
+
+            const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+
+            // The query-string form is already in the URL; the header form is not,
+            // so without this one URL would map to every shard's body.
+            expect(response.headers.get("vary")).toContain("x-lunora-shard-key");
         });
 
         it("downgrades to private once the caller presents credentials, so a per-user body never reaches a shared cache", async () => {

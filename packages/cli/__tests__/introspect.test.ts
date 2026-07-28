@@ -1,3 +1,4 @@
+import { DiagnosticCategory, Project } from "ts-morph";
 import { describe, expect, it, vi } from "vitest";
 
 import { dialectFromUrl } from "../src/commands/introspect/connect";
@@ -152,7 +153,7 @@ describe("emitIntrospection — procedure modules", () => {
         expect(posts?.contents).toContain("export const get = c.query");
     });
 
-    it("publishes only index-backed columns as filterable, so the scaffold can't hand out a table scan", () => {
+    it("publishes only index-backed columns as filterable", () => {
         expect.assertions(2);
 
         const users = emitIntrospection(database, emitOptions).files.find((file) => file.path === "users.ts");
@@ -168,7 +169,7 @@ describe("emitIntrospection — procedure modules", () => {
 
         const posts = emitIntrospection(database, emitOptions).files.find((file) => file.path === "posts.ts");
         // Only the guidance comment may mention `.expose` — no emitted code calls it.
-        const code = (posts?.contents ?? "").split("\n").filter((line) => !line.trimStart().startsWith("*") && !line.trimStart().startsWith("/*"));
+        const code = (posts?.contents ?? "").split("\n").filter((line) => !["*", "/*", "//"].some((marker) => line.trimStart().startsWith(marker)));
 
         expect(code.some((line) => line.includes(".expose("))).toBe(false);
         expect(posts?.contents).toContain("Add `.expose({ rest: true })`");
@@ -177,9 +178,159 @@ describe("emitIntrospection — procedure modules", () => {
     it("omits procedure modules entirely when procedures are disabled", () => {
         expect.assertions(1);
 
-        const {files} = emitIntrospection(database, { ...emitOptions, procedures: false });
+        const { files } = emitIntrospection(database, { ...emitOptions, procedures: false });
 
         expect(files.map((file) => file.path)).toEqual(["schema.ts"]);
+    });
+});
+
+describe("emitIntrospection — hostile catalog identifiers", () => {
+    /** A database whose names contain every character that could break out of generated source. */
+    const hostile: IntrospectedDatabase = {
+        dialect: "postgres",
+        tables: [
+            {
+                columns: [
+                    { arrayDepth: 0, dataType: "text", name: 'evil"); process.exit(1); //', nullable: false },
+                    { arrayDepth: 0, dataType: "int4", name: "ref", nullable: false, references: { column: "id", table: 'other"' } },
+                ],
+                indexes: [{ columns: ['evil"); process.exit(1); //'], name: 'idx"', unique: false }],
+                name: 'tbl"',
+                primaryKey: ['evil"); process.exit(1); //'],
+            },
+            { columns: [{ arrayDepth: 0, dataType: "text", name: "a", nullable: false }], indexes: [], name: 'other"', primaryKey: [] },
+        ],
+    };
+
+    it("emits syntactically valid TypeScript even when every identifier is hostile", () => {
+        // schema.ts plus one procedure module per table.
+        expect.assertions(3);
+
+        // Substring assertions can't tell `\"` from `"`, so parse instead: the only
+        // property that actually matters is that no name can break out of the
+        // literal it lands in, and a syntax-error count of zero proves exactly that.
+        for (const file of emitIntrospection(hostile, emitOptions).files) {
+            const project = new Project({ useInMemoryFileSystem: true });
+            const source = project.createSourceFile(file.path, file.contents);
+
+            expect(
+                source.getPreEmitDiagnostics().filter((d) => d.getCategory() === DiagnosticCategory.Error && d.getCode() >= 1000 && d.getCode() < 2000),
+            ).toEqual([]);
+        }
+    });
+
+    it("escapes the payload rather than emitting it raw", () => {
+        expect.assertions(2);
+
+        const schema = emitIntrospection(hostile, emitOptions).files.find((file) => file.path === "schema.ts");
+        const contents = schema?.contents ?? "";
+
+        // Every occurrence of the injected quote is backslash-escaped.
+        expect(contents).toContain(String.raw`evil\"); process.exit(1); //`);
+        expect(contents).toContain(String.raw`v.id("other\"")`);
+    });
+
+    it("never writes outside the output directory, whatever the table is called", () => {
+        expect.assertions(2);
+
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [
+                    { columns: [{ arrayDepth: 0, dataType: "text", name: "a", nullable: false }], indexes: [], name: "../../../etc/passwd", primaryKey: [] },
+                ],
+            },
+            emitOptions,
+        );
+
+        expect(result.files.every((file) => !file.path.includes("/") && !file.path.includes(".."))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes("isn't usable as a filename"))).toBe(true);
+    });
+
+    it("reports a filename collision instead of silently overwriting one table with another", () => {
+        expect.assertions(1);
+
+        const columns = [{ arrayDepth: 0, dataType: "text", name: "a", nullable: false }];
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [
+                    { columns, indexes: [], name: "a.b", primaryKey: [] },
+                    { columns, indexes: [], name: "a+b", primaryKey: [] },
+                ],
+            },
+            emitOptions,
+        );
+
+        expect(result.warnings.some((warning) => warning.includes("collides with table"))).toBe(true);
+    });
+
+    it("uses bracket access for a table name that isn't a bare identifier", () => {
+        expect.assertions(2);
+
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [{ columns: [{ arrayDepth: 0, dataType: "text", name: "a", nullable: false }], indexes: [], name: "order-items", primaryKey: [] }],
+            },
+            emitOptions,
+        );
+        const procedures = result.files.find((file) => file.path !== "schema.ts")?.contents ?? "";
+
+        // `ctx.db."order-items"` would be a syntax error.
+        expect(procedures).toContain('ctx.db["order-items"]');
+        expect(procedures).not.toContain('ctx.db."order-items"');
+    });
+});
+
+describe("emitIntrospection — dialect handling", () => {
+    it("maps filter validators with the real dialect, not a hardcoded Postgres", () => {
+        expect.assertions(2);
+
+        const mysql: IntrospectedDatabase = {
+            dialect: "mysql",
+            tables: [
+                {
+                    columns: [{ arrayDepth: 0, dataType: "datetime", name: "created_at", nullable: false }],
+                    indexes: [{ columns: ["created_at"], name: "by_created", unique: false }],
+                    name: "events",
+                    primaryKey: [],
+                },
+            ],
+        };
+
+        const procedures = emitIntrospection(mysql, emitOptions).files.find((file) => file.path === "events.ts")?.contents ?? "";
+
+        // `datetime` is MySQL-only; under the old hardcoded Postgres map it silently became `v.any()`.
+        expect(procedures).toContain("created_at: v.timestamp(),");
+        expect(procedures).not.toContain("created_at: v.any(),");
+    });
+});
+
+describe("emitIntrospection — dangling foreign keys", () => {
+    it("demotes an FK whose target is not in the emitted schema, so the output still compiles", () => {
+        expect.assertions(3);
+
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [
+                    {
+                        columns: [{ arrayDepth: 0, dataType: "int4", name: "author_id", nullable: false, references: { column: "id", table: "users" } }],
+                        indexes: [],
+                        name: "posts",
+                        primaryKey: [],
+                    },
+                ],
+            },
+            emitOptions,
+        );
+        const schema = result.files.find((file) => file.path === "schema.ts")?.contents ?? "";
+
+        // `users` was filtered out by --tables, so `v.id("users")` would not resolve.
+        expect(schema).not.toContain('v.id("users")');
+        expect(schema).toContain("author_id: v.number(),");
+        expect(result.warnings.some((warning) => warning.includes("isn't in the generated schema"))).toBe(true);
     });
 });
 

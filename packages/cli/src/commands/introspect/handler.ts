@@ -11,12 +11,15 @@ import { connect, dialectFromUrl } from "./connect";
 import type { EmittedFile } from "./emit";
 import { emitIntrospection } from "./emit";
 import type { IntrospectOptions } from "./index";
+import type { SqlDialect } from "./model";
 import { readDatabase } from "./read-database";
 
 interface IntrospectCommandOptions {
     /** Inject an already-open connection (tests). When set, `url` is not read. */
     connection?: Connection;
     cwd?: string;
+    /** Dialect to pair with an injected `connection`. Ignored when connecting from `url`, where the scheme decides. */
+    dialect?: SqlDialect;
     /** Write nothing; print what would be written. */
     dryRun?: boolean;
     /** Overwrite files that already exist. */
@@ -92,7 +95,10 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
         return { code: 1, written: [] };
     }
 
-    const dialect = options.connection === undefined ? dialectFromUrl(options.url as string) : "postgres";
+    // With an injected connection there is no URL scheme to read the dialect from,
+    // so it has to be stated. `readDatabase` branches on it, and defaulting silently
+    // to Postgres would make the MySQL path unreachable through this seam.
+    const dialect = options.connection === undefined ? dialectFromUrl(options.url as string) : (options.dialect ?? "postgres");
     // Drivers resolve from the project, not the CLI install, so `cwd` matters.
     const connection = options.connection ?? (await connect(options.url as string, dialect, options.schema, cwd));
 
@@ -108,6 +114,14 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
 
     const selected =
         options.tables === undefined || options.tables.length === 0 ? database.tables : database.tables.filter((table) => options.tables?.includes(table.name));
+
+    // A typo in `--tables` would otherwise vanish silently, and the run would look
+    // like it succeeded while quietly skipping the table the user actually wanted.
+    for (const requested of options.tables ?? []) {
+        if (!database.tables.some((table) => table.name === requested)) {
+            options.logger.warn(`--tables: no table named "${requested}" exists in this schema — skipped.`);
+        }
+    }
 
     if (selected.length === 0) {
         options.logger.error("no tables found to introspect — check --schema and --tables.");

@@ -1,7 +1,7 @@
 import type { JsonSchema } from "@lunora/values";
 
-import type { RestFunctionKind } from "../../../shared/rest-surface";
-import { restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
+import type { RestCachePolicy, RestFunctionKind } from "../../../shared/rest-surface";
+import { cacheControlValue, cacheVaryValue, restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
 import { GENERATED_HEADER } from "./emit";
 import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
@@ -180,38 +180,50 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
  * a credentialed request is answered `private` regardless (see
  * `@lunora/runtime`'s `rest-cache`).
  */
-const cacheResponseHeaders = (cache: ExposeCacheIR | undefined): { headers?: Record<string, unknown> } => {
-    if (cache === undefined) {
+const cacheResponseHeaders = (cache: ExposeCacheIR | undefined, method: "get" | "post"): { headers?: Record<string, unknown> } => {
+    // Three reasons to document nothing, all of them "the runtime won't do this":
+    // caching isn't declared; the operation isn't a GET (a mutation/action is
+    // POST-only and `rest-cache` refuses to cache it); or the declaration used
+    // computed values discovery couldn't read, so any example emitted here would
+    // be invented. The spec under-documenting beats the spec contradicting the
+    // runtime — that fidelity is the whole point of deriving it from the source.
+    if (cache === undefined || method !== "get" || cache.scope === undefined || cache.maxAge === undefined) {
         return {};
     }
 
-    const directives = [cache.scope ?? "private", `max-age=${String(cache.maxAge ?? 0)}`];
-
-    if (cache.staleWhileRevalidate !== undefined) {
-        directives.push(`stale-while-revalidate=${String(cache.staleWhileRevalidate)}`);
-    }
+    // Same two functions the runtime uses to WRITE these headers, so the example
+    // and the served value cannot disagree — including on clamping.
+    const policy: RestCachePolicy = {
+        maxAge: cache.maxAge,
+        scope: cache.scope,
+        ...(cache.staleWhileRevalidate === undefined ? {} : { staleWhileRevalidate: cache.staleWhileRevalidate }),
+        ...(cache.tag === undefined ? {} : { tag: cache.tag }),
+        ...(cache.vary === undefined ? {} : { vary: cache.vary }),
+    };
 
     const headers: Record<string, unknown> = {
         "Cache-Control": {
             description:
-                cache.scope === "public"
+                policy.scope === "public"
                     ? "Caching policy. `public` applies only to an uncredentialed request — a request carrying `Authorization` or `Cookie` is always answered `private`."
                     : "Caching policy. Restricted to the caller's own cache; never stored by a shared/edge cache.",
-            schema: { example: directives.join(", "), type: "string" },
+            schema: { example: cacheControlValue(policy, policy.scope), type: "string" },
         },
     };
 
-    if (cache.tag !== undefined) {
+    if (policy.tag !== undefined) {
         headers["Cache-Tag"] = {
             description: "Purge tag for `ctx.cache.purge({ tags: [...] })`.",
-            schema: { example: cache.tag, type: "string" },
+            schema: { example: policy.tag, type: "string" },
         };
     }
 
-    if (cache.scope === "public" || cache.vary !== undefined) {
+    const vary = cacheVaryValue(policy);
+
+    if (vary !== undefined) {
         headers.Vary = {
-            description: "Request headers this response varies by.",
-            schema: { type: "string" },
+            description: "Request headers this response varies by. The endpoint's own negotiated headers are merged in at runtime.",
+            schema: { example: vary, type: "string" },
         };
     }
 
@@ -252,7 +264,7 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
                     },
                 },
                 description: "Successful result (TypeScript-inferred return shape, documented best-effort).",
-                ...cacheResponseHeaders(definition.expose?.cache),
+                ...cacheResponseHeaders(definition.expose?.cache, isQuery ? "get" : "post"),
             },
             default: { $ref: ERROR_COMPONENT_REF },
         },

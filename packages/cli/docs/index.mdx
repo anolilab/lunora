@@ -498,7 +498,9 @@ before shipping. Specifically:
   explicit `.expose({ rest: true })` decision you make after adding whatever auth
   or RLS the table needs — `introspect` cannot know who may read your data.
 - `list` is built on [`defineListArgs`](/docs/packages/server#list-endpoints), so
-  only index-backed columns are filterable and paging is keyset-based.
+  only index-backed columns are filterable and paging is keyset-based. That bounds
+  which columns a caller can reach, not the cost of every operator over them —
+  review the generated `filter` list before exposing the procedure.
 
 The driver is loaded on demand and is not a CLI dependency: install `pg` or
 `mysql2` in your project first.

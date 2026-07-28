@@ -5,6 +5,8 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+import type { RestCachePolicy } from "../../../shared/rest-surface";
+
 // Cache the namespace proxies and the per-function reference objects so that
 // `api.foo.bar` returns the *same* object on every access. React hooks
 // (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
@@ -489,20 +491,14 @@ interface X402ProcedureConfig {
 }
 
 /**
- * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
- * modifier (plan 167). Marks a procedure as deliberately published over the
- * public REST surface: the runtime mints a `/_lunora/rest/&lt;namespace>/&lt;fn>` route
- * that dispatches THROUGH the procedure (so `ctx.auth` / RLS / validators are
- * enforced), and the generated OpenAPI describes it. Everything is default-closed
- * — a procedure without this tag is unreachable over REST.
- */
-
-/**
  * HTTP caching for an exposed REST endpoint, declared as
  * `.expose({ rest: true, cache: { scope: "public", maxAge: 60 } })`. The runtime
- * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers — the
- * same header trio `httpRoute(...).cacheControl()` writes, so a `cache.tag` is
- * purgeable through the identical `ctx.cache.purge({ tags: [...] })` surface.
+ * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers, and a
+ * `cache.tag` is purgeable through `ctx.cache.purge({ tags: [...] })`.
+ *
+ * This is NOT equivalent to `httpRoute(...).cacheControl()`, which writes whatever
+ * value the author passes with no credential downgrade. That is the unguarded
+ * escape hatch; this is the guarded surface.
  *
  * Caching a procedure whose result depends on the caller is how a REST cache
  * turns into a data leak, so `scope` is enforced at runtime rather than trusted:
@@ -517,27 +513,16 @@ interface X402ProcedureConfig {
  * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
  * `mutation` / `action` is `POST`-only) that produced a 2xx.
  */
-interface RestCacheConfig {
-    /** `max-age` in seconds — how long a fresh response may be reused. */
-    readonly maxAge: number;
+type RestCacheConfig = RestCachePolicy;
 
-    /**
-     * `"public"` allows shared/edge caches to store the response (only ever for
-     * an uncredentialed request, per the downgrade rule above); `"private"`
-     * restricts it to the caller's own browser cache.
-     */
-    readonly scope: "private" | "public";
-
-    /** `stale-while-revalidate` in seconds — serve stale this long while refreshing behind the request. */
-    readonly staleWhileRevalidate?: number;
-
-    /** `Cache-Tag` value for tag-based purging via `ctx.cache.purge({ tags: [...] })`. */
-    readonly tag?: string;
-
-    /** Extra `Vary` header names, merged with the ones `scope` implies. */
-    readonly vary?: string;
-}
-
+/**
+ * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
+ * modifier (plan 167). Marks a procedure as deliberately published over the
+ * public REST surface: the runtime mints a `/_lunora/rest/&lt;namespace>/&lt;fn>` route
+ * that dispatches THROUGH the procedure (so `ctx.auth` / RLS / validators are
+ * enforced), and the generated OpenAPI describes it. Everything is default-closed
+ * — a procedure without this tag is unreachable over REST.
+ */
 interface ExposeConfig {
     /** Opt this endpoint's responses into HTTP caching. Omit to leave them uncached. */
     readonly cache?: RestCacheConfig;

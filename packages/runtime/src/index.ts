@@ -150,7 +150,6 @@ export type {
 export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
 export type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 export { applyJurisdiction, resolveShard } from "./resolve-shard";
-export type { RestCacheConfigLike } from "./rest-cache";
 export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./rest-cache";
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";

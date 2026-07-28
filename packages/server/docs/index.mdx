@@ -212,13 +212,18 @@ Three constraints are deliberate:
 - **Filterable columns are enumerated.** `filter` is an allow-list. `v.object`
   drops undeclared keys, so a caller cannot predicate on a column you didn't
   publish. Keep the list to indexed columns; `@lunora/advisor`'s
-  `filter-without-index` lint flags the static cases.
+  `filter-without-index` lint flags the static cases. This bounds _which_ columns
+  are reachable, not the cost of every operator: `contains` compiles to a
+  leading-wildcard `LIKE`, and `ne` / `notIn` / `isNull: false` are non-sargable
+  too, so all of them scan regardless of the index.
 - **No `AND` / `OR` / `NOT` trees.** A flat field⇒predicate map keeps every
   filter routable to an index. Compose richer logic inside the procedure.
 
 `limit` is clamped into `[1, maxLimit]` rather than rejected, and `orderBy`
 fields outside the allow-list are refused by the validator and re-checked in
-`toQueryArgs`.
+`toQueryArgs`. `in` / `notIn` arrays are capped at `maxInValues` (default 100)
+because each element becomes a bound parameter, and `orderBy` at `maxOrderBy`
+(default 8).
 
 `lunora introspect` emits `list` procedures built on this helper — see the
 [CLI docs](/docs/packages/cli#lunora-introspect).
@@ -238,12 +243,25 @@ export const listPublicPosts = c.query
 
 Caching a procedure-backed endpoint is how a REST cache turns into a data leak,
 since the procedure runs under `ctx.auth` and RLS. So `scope` is enforced, not
-trusted: **a request carrying an `Authorization` header or any `Cookie` is always
-answered `private`**, even under `scope: "public"`. A per-caller response can
-therefore never be stored in a shared or edge cache, and the worst a mis-declared
-`scope` costs you is a missed cache hit. `scope: "public"` additionally emits
-`Vary: authorization, cookie` so an intermediary can't hand the stored anonymous
-variant to a signed-in caller.
+trusted: **a request carrying `Authorization`, `Cookie`, or
+`Cf-Access-Jwt-Assertion` is always answered `private`**, even under
+`scope: "public"`. A per-caller response therefore never reaches a shared or edge
+cache, and the worst a mis-declared `scope` costs you is a missed cache hit.
+
+That check is a header list, and it cannot be exhaustive — `resolveIdentity`
+receives the whole request, so an app may authenticate on anything. **If your
+auth reads a header not in that list, declare it:**
+
+```ts
+.expose({ rest: true, cache: { scope: "public", maxAge: 60, credentialHeaders: ["x-api-key"] } })
+```
+
+Otherwise those callers read as anonymous and their responses are cached
+`public`. The emitted `Vary` also covers `x-lunora-shard-key` and
+`x-d1-bookmark`, which select _which_ rows a request sees. Treat `Vary` as a
+courtesy to well-behaved intermediaries rather than the safety mechanism —
+Cloudflare's cache honours it only for `Accept-Encoding`, so the real protection
+is the downgrade above.
 
 Headers are only ever applied to a cacheable exchange — a `GET` (so `query`
 procedures; a `mutation` / `action` is `POST`-only) that returned 2xx. An error

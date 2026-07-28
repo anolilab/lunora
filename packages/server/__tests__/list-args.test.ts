@@ -1,4 +1,4 @@
-import { v,ValidationError } from "@lunora/values";
+import { v, ValidationError } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import { parseValidatorMap } from "../src/functions";
@@ -131,6 +131,69 @@ describe("defineListArgs — no sortable columns declared", () => {
         // than assuming the validator already ran.
         expect(fixed.toQueryArgs({ orderBy: [{ field: "passwordHash" as never }] })).not.toHaveProperty("orderBy");
         expect(spec.toQueryArgs({ orderBy: [{ field: "passwordHash" as never }, { field: "score" }] }).orderBy).toEqual([{ score: "asc" }]);
+    });
+});
+
+describe("defineListArgs — toQueryArgs hardening", () => {
+    it("drops an undeclared field handed straight to toQueryArgs, bypassing the validator", () => {
+        expect.assertions(2);
+
+        // `toQueryArgs` is exported, so it cannot assume `.input()` already ran.
+        const args = spec.toQueryArgs({ where: { secretFlag: true, status: "open" } as never });
+
+        expect(args.where).toEqual({ status: "open" });
+        expect(args.where).not.toHaveProperty("secretFlag");
+    });
+
+    it("cannot be used to reach a prototype key", () => {
+        expect.assertions(2);
+
+        const hostile = JSON.parse('{"where":{"__proto__":{"polluted":true},"constructor":{"x":1},"status":"open"}}') as { where: never };
+        const args = spec.toQueryArgs(hostile);
+
+        expect(args.where).toEqual({ status: "open" });
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("reduces an operator object to recognised operators only", () => {
+        expect.assertions(1);
+
+        const args = spec.toQueryArgs({ where: { score: { gte: 10, sqlInjection: "1=1" } } as never });
+
+        expect(args.where).toEqual({ score: { gte: 10 } });
+    });
+
+    it("normalizes a nonsensical configured bound rather than emitting an out-of-contract limit", () => {
+        expect.assertions(3);
+
+        expect(defineListArgs({ filter: {}, maxLimit: 0, orderBy: [] }).toQueryArgs({ limit: 50 }).limit).toBe(1);
+        expect(defineListArgs({ filter: {}, maxLimit: 10.9, orderBy: [] }).toQueryArgs({ limit: 50 }).limit).toBe(10);
+        expect(defineListArgs({ filter: {}, defaultLimit: Number.NaN, orderBy: [] }).toQueryArgs({}).limit).toBe(25);
+    });
+});
+
+describe("defineListArgs — request-cost bounds", () => {
+    it("rejects an oversized `in` array, which would become one bound parameter each", () => {
+        expect.assertions(2);
+
+        expect(() => parse({ where: { status: { in: Array.from({ length: 100 }).fill("x") } } })).not.toThrow();
+        expect(() => parse({ where: { status: { in: Array.from({ length: 101 }).fill("x") } } })).toThrow(ValidationError);
+    });
+
+    it("honours a custom maxInValues", () => {
+        expect.assertions(1);
+
+        const tight = defineListArgs({ filter: { status: v.string() }, maxInValues: 2, orderBy: [] });
+
+        expect(() => parseValidatorMap(tight.args as never, { where: { status: { in: ["a", "b", "c"] } } }, "args")).toThrow(ValidationError);
+    });
+
+    it("caps how many orderBy entries reach the query", () => {
+        expect.assertions(1);
+
+        const wide = defineListArgs({ filter: {}, maxOrderBy: 2, orderBy: ["a", "b", "c"] });
+
+        expect(wide.toQueryArgs({ orderBy: [{ field: "a" }, { field: "b" }, { field: "c" }] }).orderBy).toHaveLength(2);
     });
 });
 

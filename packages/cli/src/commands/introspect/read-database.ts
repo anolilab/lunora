@@ -156,7 +156,9 @@ const assembleIndexes = (rows: ReadonlyArray<Record<string, unknown>>, dialect: 
         }
     }
 
-    return [...byName.entries()].map(([name, index]) => {return { columns: index.columns, name, unique: index.unique }});
+    return [...byName.entries()].map(([name, index]) => {
+        return { columns: index.columns, name, unique: index.unique };
+    });
 };
 
 /**

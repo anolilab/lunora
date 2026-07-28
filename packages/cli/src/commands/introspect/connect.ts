@@ -56,7 +56,15 @@ const loadDriver = (specifier: string, install: string, cwd: string): Record<str
         const projectRequire = createRequire(join(cwd, "noop.cjs"));
 
         return projectRequire(specifier) as Record<string, unknown>;
-    } catch {
+    } catch (error: unknown) {
+        // Only a genuine resolution failure means "not installed". A driver that IS
+        // present but throws while initialising (native binding mismatch, a broken
+        // transitive dep) must surface its own error — telling someone to install a
+        // package they already have sends them down the wrong path entirely.
+        if ((error as { code?: string } | undefined)?.code !== "MODULE_NOT_FOUND") {
+            throw error;
+        }
+
         throw new LunoraError(
             "INTERNAL",
             `\`lunora introspect\` needs the \`${install}\` driver to read this database, and it isn't installed.\n\nInstall it in your project:\n\n    pnpm add -D ${install}`,
@@ -125,7 +133,9 @@ const connect = async (url: string, dialect: SqlDialect, schemaOverride?: string
     }
 
     return {
-        close: async () => { await connection.end(); },
+        close: async () => {
+            await connection.end();
+        },
         execute: async (sql, parameters) => {
             const [rows] = await connection.execute(sql, [...parameters]);
 

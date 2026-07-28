@@ -30,6 +30,13 @@
  *     caller cannot smuggle a predicate over a column the author didn't publish.
  *     Keep the list to indexed columns — an unindexed filter is a table scan
  *     (`@lunora/advisor`'s `filter-without-index` lint flags the static cases).
+ *
+ *     Note what this does NOT promise: publishing only indexed columns bounds
+ *     WHICH columns are reachable, not the cost of every predicate over them.
+ *     `contains` compiles to a leading-wildcard `LIKE`, and `ne` / `notIn` /
+ *     `isNull: false` are likewise non-sargable — all of them scan whatever the
+ *     column's index would otherwise have narrowed. `maxInValues` and `maxLimit`
+ *     bound request size; they don't make a scan into a seek.
  *   - **No `AND` / `OR` / `NOT` trees.** A flat field⇒predicate map is what keeps
  *     every filter routable to an index; arbitrary boolean nesting is precisely
  *     what forces scans. Compose those server-side in the procedure instead.
@@ -41,7 +48,7 @@
 import type { ColumnValidator, Infer, Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
-import type { OrderBy, QueryArgs } from "./data-model";
+import type { OrderBy, QueryArgs, WhereOperators } from "./data-model";
 
 /** Default `limit` when the caller doesn't ask for one. */
 const DEFAULT_LIMIT = 25;
@@ -50,22 +57,25 @@ const DEFAULT_LIMIT = 25;
 const DEFAULT_MAX_LIMIT = 100;
 
 /**
- * Per-field predicate accepted for a declared filter column — mirrors
- * `WhereOperators` from the `ctx.db` `where` DSL exactly, so a parsed value is
- * passed straight through with no translation step to drift.
+ * Default ceiling on `in` / `notIn` array length.
+ *
+ * Each element becomes one bound parameter in the compiled statement, so an
+ * uncapped array turns a single ~1 MB request body into a statement with hundreds
+ * of thousands of parameters — past SQLite's variable ceiling, and expensive well
+ * before that. `limit` being carefully clamped while this stayed open was the
+ * larger hole of the two.
  */
-interface ListFilterOperators<T> {
-    contains?: string;
-    eq?: T;
-    gt?: T;
-    gte?: T;
-    in?: T[];
-    isNull?: boolean;
-    lt?: T;
-    lte?: T;
-    ne?: T;
-    notIn?: T[];
-}
+const DEFAULT_MAX_IN_VALUES = 100;
+
+/** Default ceiling on how many `orderBy` entries one request may ask for. */
+const DEFAULT_MAX_ORDER_BY = 8;
+
+/**
+ * Per-field predicate accepted for a declared filter column. An alias of the
+ * `ctx.db` `where` DSL's own operator type rather than a copy, so the two cannot
+ * drift as operators are added.
+ */
+type ListFilterOperators<T> = WhereOperators<T>;
 
 /** The `where` argument: each declared filter column, optionally, as a bare value or an operator object. */
 type ListWhere<F extends Record<string, Validator>> = {
@@ -80,7 +90,7 @@ interface ListOrderByEntry<O extends string> {
 
 /** The decoded arguments a {@link defineListArgs} endpoint receives. */
 interface ListArgsValue<F extends Record<string, Validator>, O extends string> {
-    cursor?: null | string;
+    cursor?: null | number | string;
     limit?: number;
     orderBy?: ListOrderByEntry<O>[];
     where?: ListWhere<F>;
@@ -96,8 +106,14 @@ interface DefineListArgsConfig<F extends Record<string, Validator>, O extends st
      */
     readonly filter: F;
 
+    /** Ceiling on `in` / `notIn` array length — one bound parameter each. Defaults to 100. */
+    readonly maxInValues?: number;
+
     /** Ceiling on `limit`; a larger request is clamped down, not rejected. Defaults to 100. */
     readonly maxLimit?: number;
+
+    /** Ceiling on how many `orderBy` entries a request may ask for. Defaults to 8. */
+    readonly maxOrderBy?: number;
 
     /** Allow-list of sortable columns. Pass `[]` to fix the order server-side. */
     readonly orderBy: ReadonlyArray<O>;
@@ -105,7 +121,7 @@ interface DefineListArgsConfig<F extends Record<string, Validator>, O extends st
 
 /** The validator map handed to `.input()`. Typed precisely so `args` infers end-to-end. */
 interface ListArgsValidators<F extends Record<string, Validator>, O extends string> {
-    cursor: ColumnValidator<null | string | undefined, null | string | undefined>;
+    cursor: ColumnValidator<null | number | string | undefined, null | number | string | undefined>;
     limit: ColumnValidator<number | undefined, number | undefined>;
     orderBy: ColumnValidator<ListOrderByEntry<O>[] | undefined, ListOrderByEntry<O>[] | undefined>;
     where: ColumnValidator<ListWhere<F> | undefined, ListWhere<F> | undefined>;
@@ -124,19 +140,23 @@ interface ListArgsSpec<F extends Record<string, Validator>, O extends string> {
 }
 
 /** Build the operator object accepted alongside a bare value for one filter column. */
-const operatorsValidator = (value: Validator): Validator =>
-    v.object({
+const operatorsValidator = (value: Validator, maxInValues: number): Validator => {
+    const bounded = (inner: Validator): Validator =>
+        v.optional(v.array(inner).check((items) => items.length <= maxInValues, { message: `at most ${String(maxInValues)} values` }));
+
+    return v.object({
         contains: v.optional(v.string()),
         eq: v.optional(value),
         gt: v.optional(value),
         gte: v.optional(value),
-        in: v.optional(v.array(value)),
+        in: bounded(value),
         isNull: v.optional(v.boolean()),
         lt: v.optional(value),
         lte: v.optional(value),
         ne: v.optional(value),
-        notIn: v.optional(v.array(value)),
+        notIn: bounded(value),
     });
+};
 
 /** Clamp a caller-supplied `limit` into `[1, maxLimit]`; a non-finite value falls back to `fallback`. */
 const clampLimit = (limit: number | undefined, fallback: number, maxLimit: number): number => {
@@ -148,18 +168,92 @@ const clampLimit = (limit: number | undefined, fallback: number, maxLimit: numbe
 };
 
 /**
+ * Normalize an author-supplied bound to a positive integer. `maxLimit: 0` or a
+ * fractional / `NaN` value would otherwise flow into {@link clampLimit} and
+ * produce a `limit` outside the documented `[1, maxLimit]` contract.
+ */
+const normalizeBound = (value: number | undefined, fallback: number): number => {
+    if (value === undefined || !Number.isFinite(value)) {
+        return fallback;
+    }
+
+    return Math.max(1, Math.floor(value));
+};
+
+/** The runtime spelling of `WhereOperators`' keys — the allow-list `toQueryArgs` rebuilds against. Keep in step with `data-model`'s `WhereOperators`. */
+const OPERATOR_KEYS = new Set(["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"]);
+
+/**
+ * Reduce a candidate predicate to recognised operators, or `undefined` when it
+ * isn't an operator object at all.
+ *
+ * The test is "does it name at least one operator", not "are all of its keys
+ * operators". Requiring all keys would let a MIXED object — `{ gte: 10, junk: … }`
+ * — fall through as a bare value and reach the where-compiler with the junk key
+ * still attached, which is precisely the case worth stopping. A plain object that
+ * names no operator at all is left alone, so an object-valued column can still be
+ * matched by equality.
+ */
+const asOperators = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return undefined;
+    }
+
+    const source = value as Record<string, unknown>;
+    const operators: Record<string, unknown> = {};
+
+    for (const operator of OPERATOR_KEYS) {
+        if (Object.hasOwn(source, operator)) {
+            operators[operator] = source[operator];
+        }
+    }
+
+    return Object.keys(operators).length === 0 ? undefined : operators;
+};
+
+/**
+ * Rebuild `where` from the declared allow-list before it reaches `ctx.db`.
+ *
+ * The validator map already enforces this for anything arriving through
+ * `.input()`, but `toQueryArgs` is exported and nothing stops a caller passing an
+ * object that never went through it. Note the direction of the loop: fields are
+ * taken FROM the allow-list rather than from the input, so an undeclared key
+ * — including `__proto__` or `constructor` — has no path into the output at all,
+ * and operator objects are reduced to recognised operators only.
+ */
+const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<string>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+
+    for (const field of filterable) {
+        if (!Object.hasOwn(where, field)) {
+            continue;
+        }
+
+        const value = where[field];
+        const operators = asOperators(value);
+
+        out[field] = operators ?? value;
+    }
+
+    return out;
+};
+
+/**
  * Declare the filter / sort / page arguments for a list endpoint, plus the
  * translation into `ctx.db.&lt;table>.findMany(...)` options. See the module docs
  * for the shape and the reasoning behind it.
  */
 const defineListArgs = <F extends Record<string, Validator>, O extends string>(config: DefineListArgsConfig<F, O>): ListArgsSpec<F, O> => {
-    const defaultLimit = config.defaultLimit ?? DEFAULT_LIMIT;
-    const maxLimit = config.maxLimit ?? DEFAULT_MAX_LIMIT;
+    const defaultLimit = normalizeBound(config.defaultLimit, DEFAULT_LIMIT);
+    const maxLimit = normalizeBound(config.maxLimit, DEFAULT_MAX_LIMIT);
+    const maxInValues = normalizeBound(config.maxInValues, DEFAULT_MAX_IN_VALUES);
+    const maxOrderBy = normalizeBound(config.maxOrderBy, DEFAULT_MAX_ORDER_BY);
 
+    const filterable = new Set(Object.keys(config.filter));
     const whereShape: Record<string, Validator> = {};
 
     for (const [field, validator] of Object.entries(config.filter)) {
-        whereShape[field] = v.optional(v.union(validator, operatorsValidator(validator)));
+        whereShape[field] = v.optional(v.union(validator, operatorsValidator(validator, maxInValues)));
     }
 
     // With no sortable columns declared the `field` slot must be unsatisfiable —
@@ -172,7 +266,10 @@ const defineListArgs = <F extends Record<string, Validator>, O extends string>(c
             : v.union(...config.orderBy.map((field) => v.literal(field)));
 
     const args = {
-        cursor: v.optional(v.union(v.string(), v.null())),
+        // A number is accepted because the REST router JSON-parses query-string
+        // values, so an all-digit cursor arrives as one; `toQueryArgs` restores it
+        // to the string `ctx.db` expects.
+        cursor: v.optional(v.union(v.string(), v.number(), v.null())),
         limit: v.optional(v.number()),
         orderBy: v.optional(
             v.array(
@@ -191,13 +288,18 @@ const defineListArgs = <F extends Record<string, Validator>, O extends string>(c
         // caller handing it an unparsed object.
         const orderBy = value.orderBy
             ?.filter((entry) => sortable.has(entry.field))
+            .slice(0, maxOrderBy)
             .map((entry) => ({ [entry.field]: entry.direction ?? "asc" }) as OrderBy<TDocument>);
 
+        // Same reasoning as `orderBy` above: rebuilt from the allow-list rather
+        // than trusted, because this function is reachable without the validator.
+        const where = value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable) as QueryArgs<TDocument>["where"]);
+
         return {
-            ...(value.cursor === undefined ? {} : { cursor: value.cursor }),
+            ...(value.cursor === undefined ? {} : { cursor: typeof value.cursor === "number" ? String(value.cursor) : value.cursor }),
             limit: clampLimit(value.limit, defaultLimit, maxLimit),
             ...(orderBy === undefined || orderBy.length === 0 ? {} : { orderBy }),
-            ...(value.where === undefined ? {} : { where: value.where as QueryArgs<TDocument>["where"] }),
+            ...(where === undefined ? {} : { where }),
         };
     };
 
@@ -205,4 +307,4 @@ const defineListArgs = <F extends Record<string, Validator>, O extends string>(c
 };
 
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere };
-export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT,defineListArgs };
+export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_IN_VALUES, DEFAULT_MAX_LIMIT, DEFAULT_MAX_ORDER_BY, defineListArgs, normalizeBound, sanitizeWhere };

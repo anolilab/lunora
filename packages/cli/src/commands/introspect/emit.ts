@@ -11,8 +11,9 @@
  *
  * Two rules shape the emitted procedures, both inherited from `defineListArgs`:
  * only columns an index can serve are published as filterable, and only indexed
- * columns (plus `_creationTime`) are sortable. That keeps the scaffold from
- * handing out a full-table scan on day one.
+ * columns (plus `_creationTime`) are sortable. That bounds which columns a caller
+ * can reach — though not the cost of every operator over them, since `contains`
+ * and the negative operators are non-sargable whatever the column.
  */
 import type { IntrospectedColumn, IntrospectedDatabase, IntrospectedTable, SqlDialect } from "./model";
 import { RESERVED_COLUMNS, validatorForColumn } from "./model";
@@ -46,8 +47,52 @@ const SEPARATOR_RUN = /[^\dA-Z]+(.)?/gi;
 /** A leading digit run, which can't start a JS identifier. */
 const LEADING_DIGITS = /^\d+/;
 
+/**
+ * Characters that may appear in an emitted filename; everything else — including
+ * `.`, so no `..` segment can survive — is folded to `_`.
+ */
+const PATH_UNSAFE = /[^\w-]/g;
+
+/**
+ * Emit `value` as a TypeScript string literal.
+ *
+ * EVERY identifier read out of the source database must go through this. Table,
+ * column, and index names are attacker-adjacent input — they're legal to quote in
+ * both Postgres and MySQL, so they can contain `"`, `\`, or a newline — and the
+ * output of this emitter is TypeScript the developer subsequently runs. Splicing
+ * a raw name into a quoted literal is a code-injection hole, not a cosmetic bug.
+ * `JSON.stringify` escapes quotes, backslashes, and control characters, and its
+ * output is a valid TS string literal.
+ */
+const literal = (value: string): string => JSON.stringify(value);
+
 /** Quote an object key when it isn't a bare JS identifier, so a `user-id` column still emits valid source. */
-const key = (name: string): string => (IDENTIFIER.test(name) ? name : JSON.stringify(name));
+const key = (name: string): string => (IDENTIFIER.test(name) ? name : literal(name));
+
+/**
+ * Emit a property access for `name`: `.orders` for a bare identifier, but
+ * `["order-items"]` otherwise. Dot notation with a quoted key is a syntax error,
+ * so this cannot just reuse {@link key}.
+ */
+const member = (name: string): string => (IDENTIFIER.test(name) ? `.${name}` : `[${literal(name)}]`);
+
+/**
+ * Neutralize a value interpolated into an emitted block comment. A name
+ * containing a comment terminator would otherwise close the comment early and let
+ * the rest of the name land in code position.
+ */
+const comment = (text: string): string => text.replaceAll("*/", String.raw`*\/`);
+
+/**
+ * Fold a table name into a safe single filename segment. A name is free to
+ * contain `/` or `..`, which would otherwise escape the output directory once
+ * joined — introspection must never write outside `lunora/`.
+ */
+const fileSegment = (name: string): string => {
+    const safe = name.replaceAll(PATH_UNSAFE, "_");
+
+    return safe === "" ? "table" : safe;
+};
 
 /** Derive a valid TS export/const name from a table name (`order_items` → `orderItems`). */
 const identifierFor = (name: string): string => {
@@ -84,8 +129,30 @@ const indexedColumns = (table: IntrospectedTable): string[] => {
     return [...names].filter((name) => !RESERVED_COLUMNS.has(name));
 };
 
+/**
+ * Resolve a column against the set of tables actually being emitted. A foreign
+ * key can point somewhere that isn't in the output — `--tables` selected a
+ * subset, or the FK crosses into another schema — and `v.id("absent")` would not
+ * resolve, so the whole generated schema would fail to type-check. Demote such a
+ * column to its plain scalar type instead and report it: a schema that compiles
+ * with one weaker column beats one that doesn't compile at all.
+ */
+const resolveReference = (column: IntrospectedColumn, present: ReadonlySet<string>, table: string, warnings: string[]): IntrospectedColumn => {
+    if (column.references === undefined || present.has(column.references.table)) {
+        return column;
+    }
+
+    warnings.push(
+        `${table}.${column.name}: references \`${column.references.table}\`, which isn't in the generated schema — emitted as a plain column instead of \`v.id(...)\`.`,
+    );
+
+    // Rebuilt field-by-field rather than rest-destructured: `references` is the
+    // one property being dropped, and naming it explicitly keeps that visible.
+    return { arrayDepth: column.arrayDepth, dataType: column.dataType, name: column.name, nullable: column.nullable };
+};
+
 /** Emit the `defineTable({...})` body plus its chained `.global()` / `.index()` calls for one table. */
-const tableSource = (table: IntrospectedTable, dialect: SqlDialect, warnings: string[]): string => {
+const tableSource = (table: IntrospectedTable, dialect: SqlDialect, present: ReadonlySet<string>, warnings: string[]): string => {
     const lines: string[] = [];
 
     for (const column of table.columns) {
@@ -97,11 +164,15 @@ const tableSource = (table: IntrospectedTable, dialect: SqlDialect, warnings: st
             continue;
         }
 
-        const { expression, known } = validatorForColumn(column, dialect);
+        const resolved = resolveReference(column, present, table.name, warnings);
+        const { expression, known } = validatorForColumn(resolved, dialect);
 
-        if (!known && column.references === undefined) {
+        if (!known && resolved.references === undefined) {
             warnings.push(`${table.name}.${column.name}: no mapping for SQL type \`${column.dataType}\` — emitted as \`v.any()\`.`);
-            lines.push(`        // TODO: \`${column.dataType}\` has no direct validator; narrow this.`);
+            // A line comment, so only a newline could break out — and `dataType`
+            // comes from a single `information_schema` type column, which can't
+            // contain one. Still routed through `comment` for uniformity.
+            lines.push(`        // TODO: \`${comment(column.dataType)}\` has no direct validator; narrow this.`);
         }
 
         lines.push(`        ${key(column.name)}: ${expression},`);
@@ -116,9 +187,9 @@ const tableSource = (table: IntrospectedTable, dialect: SqlDialect, warnings: st
     if (table.primaryKey.length > 0 && table.primaryKey.every((column) => !RESERVED_COLUMNS.has(column))) {
         // Lunora mints its own `_id`; the source primary key becomes a unique index
         // so the original identity is still enforced and still indexed.
-        const columns = table.primaryKey.map((column) => `"${column}"`).join(", ");
+        const columns = table.primaryKey.map((column) => literal(column)).join(", ");
 
-        chain.push(`        .index("by_${table.primaryKey.join("_")}", [${columns}], { unique: true })`);
+        chain.push(`        .index(${literal(`by_${table.primaryKey.join("_")}`)}, [${columns}], { unique: true })`);
     }
 
     for (const index of table.indexes) {
@@ -128,10 +199,10 @@ const tableSource = (table: IntrospectedTable, dialect: SqlDialect, warnings: st
             continue;
         }
 
-        const rendered = columns.map((column) => `"${column}"`).join(", ");
+        const rendered = columns.map((column) => literal(column)).join(", ");
         const options = index.unique ? ", { unique: true }" : "";
 
-        chain.push(`        .index(${JSON.stringify(index.name)}, [${rendered}]${options})`);
+        chain.push(`        .index(${literal(index.name)}, [${rendered}]${options})`);
     }
 
     return `    ${key(table.name)}: defineTable({\n${lines.join("\n")}\n    })\n${chain.join("\n")},`;
@@ -139,7 +210,8 @@ const tableSource = (table: IntrospectedTable, dialect: SqlDialect, warnings: st
 
 /** Emit the whole `schema.ts` module. */
 const schemaSource = (database: IntrospectedDatabase, options: EmitOptions, warnings: string[]): string => {
-    const tables = database.tables.map((table) => tableSource(table, database.dialect, warnings)).join("\n");
+    const present = new Set(database.tables.map((table) => table.name));
+    const tables = database.tables.map((table) => tableSource(table, database.dialect, present, warnings)).join("\n");
 
     return `/**
  * Generated by \`lunora introspect\` from an existing ${database.dialect === "postgres" ? "Postgres" : "MySQL"} database.
@@ -167,7 +239,13 @@ ${tables}
  * is a decision the developer makes per endpoint, after they've added whatever
  * auth or RLS the table needs.
  */
-const procedureSource = (table: IntrospectedTable, options: EmitOptions): string => {
+const procedureSource = (
+    table: IntrospectedTable,
+    dialect: SqlDialect,
+    options: EmitOptions,
+    present: ReadonlySet<string> = new Set([table.name]),
+    warnings: string[] = [],
+): string => {
     const name = identifierFor(table.name);
     const filterable = indexedColumns(table);
     const columns = new Map(usableColumns(table).map((column) => [column.name, column]));
@@ -182,17 +260,23 @@ const procedureSource = (table: IntrospectedTable, options: EmitOptions): string
 
             // Filters are always matched against a concrete value, so drop the
             // `v.optional(...)` wrapper the column carries for nullability.
-            const { expression } = validatorForColumn({ ...definition, nullable: false }, "postgres");
+            const resolved = resolveReference({ ...definition, nullable: false }, present, table.name, []);
+            const { expression, known } = validatorForColumn(resolved, dialect);
+
+            if (!known && resolved.references === undefined) {
+                warnings.push(`${table.name}.${column}: filter falls back to \`v.any()\` (no mapping for SQL type \`${definition.dataType}\`).`);
+            }
 
             return `        ${key(column)}: ${expression},`;
         })
         .filter((line) => line !== undefined);
 
-    const sortable = ['"_creationTime"', ...filterable.map((column) => `"${column}"`)].join(", ");
+    const sortable = [literal("_creationTime"), ...filterable.map((column) => literal(column))].join(", ");
+    const accessor = `ctx.db${member(table.name)}`;
 
     return `/**
- * Generated by \`lunora introspect\` for the \`${table.name}\` table — a starting
- * point you own and edit.
+ * Generated by \`lunora introspect\` for the \`${comment(table.name)}\` table — a
+ * starting point you own and edit.
  *
  * Both procedures are RPC-only. Add \`.expose({ rest: true })\` once you've decided
  * this data should be public, and gate them with your auth/RLS middleware first —
@@ -204,25 +288,33 @@ import { c } from "./_generated/server";
 
 const ${name}List = defineListArgs({
     // Only index-backed columns are published as filterable, so a caller cannot
-    // force a full-table scan through the argument surface.
+    // reach a column you did not choose to expose. Note that \`contains\` and the
+    // negative operators still scan — narrow this list, and review it, before
+    // adding \`.expose({ rest: true })\`.
     filter: {
 ${filters.join("\n")}
     },
     orderBy: [${sortable}],
 });
 
-export const list = c.query.input(${name}List.args).query(({ args, ctx }) => ctx.db.${key(table.name)}.findMany(${name}List.toQueryArgs(args)));
+export const list = c.query.input(${name}List.args).query(({ args, ctx }) => ${accessor}.findMany(${name}List.toQueryArgs(args)));
 
-export const get = c.query.input({ id: v.id("${table.name}") }).query(({ args, ctx }) => ctx.db.${key(table.name)}.get(args.id));
+export const get = c.query.input({ id: v.id(${literal(table.name)}) }).query(({ args, ctx }) => ${accessor}.get(args.id));
 `;
 };
 
 /** Emit every file for an introspected database. */
 const emitIntrospection = (database: IntrospectedDatabase, options: EmitOptions): EmitResult => {
     const warnings: string[] = [];
+    const present = new Set(database.tables.map((table) => table.name));
     const files: EmittedFile[] = [{ contents: schemaSource(database, options, warnings), path: "schema.ts" }];
 
     if (options.procedures) {
+        // Pre-seeded with the schema module's own name: a table literally called
+        // `schema` would otherwise mint a second `schema.ts`, and `--force` would
+        // overwrite the generated schema with a procedure module.
+        const claimed = new Map<string, string>([["schema", "the generated schema module"]]);
+
         for (const table of database.tables) {
             if (usableColumns(table).length === 0) {
                 warnings.push(`${table.name}: no usable columns — procedure module skipped.`);
@@ -230,7 +322,25 @@ const emitIntrospection = (database: IntrospectedDatabase, options: EmitOptions)
                 continue;
             }
 
-            files.push({ contents: procedureSource(table, options), path: `${table.name}.ts` });
+            const segment = fileSegment(table.name);
+
+            if (segment !== table.name) {
+                warnings.push(`${table.name}: written as \`${segment}.ts\` — the table name isn't usable as a filename.`);
+            }
+
+            // Two source names can fold onto one filename (`a-b` and `a.b` both
+            // become `a_b`). Silently overwriting the first would lose a table, so
+            // skip and say which pair collided.
+            const previous = claimed.get(segment);
+
+            if (previous !== undefined) {
+                warnings.push(`${table.name}: procedure module skipped — its filename \`${segment}.ts\` collides with table \`${previous}\`.`);
+
+                continue;
+            }
+
+            claimed.set(segment, table.name);
+            files.push({ contents: procedureSource(table, database.dialect, options, present, warnings), path: `${segment}.ts` });
         }
     }
 

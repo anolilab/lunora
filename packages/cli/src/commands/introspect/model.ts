@@ -160,7 +160,10 @@ const validatorForColumn = (column: IntrospectedColumn, dialect: SqlDialect): { 
     const mapped = table[column.dataType];
     // An FK is expressed as a branded id so the relationship survives into the
     // generated types; the underlying column stays a string/number in the database.
-    const base = column.references === undefined ? mapped : `v.id("${column.references.table}")`;
+    // The target name is a catalog identifier, so it is emitted as a JSON-escaped
+    // literal — a name containing `"` or `\` would otherwise break out of the
+    // string and inject code into the schema the developer later runs.
+    const base = column.references === undefined ? mapped : `v.id(${JSON.stringify(column.references.table)})`;
 
     let expression = base ?? "v.any()";
 

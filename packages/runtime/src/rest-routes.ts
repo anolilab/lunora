@@ -19,12 +19,11 @@
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { methodGuard } from "./method-guard";
-import type { RestCacheConfigLike } from "./rest-cache";
 import { applyRestCache } from "./rest-cache";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
-    expose?: RestExposure & { cache?: RestCacheConfigLike };
+    expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
 }
 
@@ -134,8 +133,9 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
         const allowed = entry.kind === "query" ? ["GET", "POST"] : ["POST"];
         // Read straight off the registry: the surface descriptor is the shared
         // path/method contract with the OpenAPI emitter and deliberately carries
-        // no response policy.
-        const cache = functions[entry.functionPath]?.expose?.cache;
+        // no response policy. `entry.functionPath` came out of this same map, so
+        // the lookup cannot miss.
+        const cache = (functions[entry.functionPath] as RestRegistryEntry).expose?.cache;
 
         routes[entry.path] = async (
             request: Request,

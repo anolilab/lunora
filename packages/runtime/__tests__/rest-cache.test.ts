@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { RestCacheConfigLike } from "../src/rest-cache";
-import { applyRestCache, mergeVary, requestCarriesCredentials, restCacheHeaders } from "../src/rest-cache";
+import type { RestCachePolicy } from "../../../shared/rest-surface";
+import { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "../src/rest-cache";
 
-const publicCache: RestCacheConfigLike = { maxAge: 60, scope: "public" };
+const publicCache: RestCachePolicy = { maxAge: 60, scope: "public" };
 const get = (init?: RequestInit): Request => new Request("https://app.example/_lunora/rest/messages/list", init);
 
 describe("restCacheHeaders", () => {
@@ -15,7 +15,8 @@ describe("restCacheHeaders", () => {
         expect(headers?.["cache-control"]).toBe("public, max-age=60");
         // The anonymous variant must be fenced off from credentialed callers, or a
         // shared cache could hand it to a signed-in user in place of their own data.
-        expect(headers?.vary).toBe("authorization, cookie");
+        // Shard/bookmark headers ride along because they change the body too.
+        expect(headers?.vary).toBe("authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
     });
 
     it("downgrades scope:public to private when the request carries an Authorization header", () => {
@@ -48,15 +49,35 @@ describe("restCacheHeaders", () => {
 
         const headers = restCacheHeaders({ ...publicCache, vary: "Accept-Language, AUTHORIZATION" }, get(), 200);
 
-        expect(headers?.vary).toBe("accept-language, authorization, cookie");
+        expect(headers?.vary).toBe("accept-language, authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
     });
 
-    it("omits Vary entirely for a private endpoint that declares none", () => {
+    it("still varies a private endpoint on the data-selecting headers", () => {
         expect.assertions(1);
 
-        const headers = restCacheHeaders({ maxAge: 60, scope: "private" }, get(), 200);
+        // `x-lunora-shard-key` picks WHICH rows come back; without it in Vary one
+        // URL maps to many bodies even in a per-caller cache.
+        expect(restCacheHeaders({ maxAge: 60, scope: "private" }, get(), 200)?.vary).toBe("x-d1-bookmark, x-lunora-shard-key");
+    });
 
-        expect(headers?.vary).toBeUndefined();
+    it("downgrades for a Cloudflare Access service token, which sends a header and no cookie", () => {
+        expect.assertions(1);
+
+        // `@lunora/cloudflare-access` reads `cf-access-jwt-assertion` BEFORE its
+        // cookie, so a machine client is identified by the header alone.
+        const headers = restCacheHeaders(publicCache, get({ headers: { "cf-access-jwt-assertion": "jwt" } }), 200);
+
+        expect(headers?.["cache-control"]).toBe("private, max-age=60");
+    });
+
+    it("downgrades on an app-declared credential header", () => {
+        expect.assertions(2);
+
+        const policy: RestCachePolicy = { ...publicCache, credentialHeaders: ["X-Api-Key"] };
+
+        expect(restCacheHeaders(policy, get({ headers: { "x-api-key": "k" } }), 200)?.["cache-control"]).toBe("private, max-age=60");
+        // ...and it joins Vary, so an intermediary keys on it too.
+        expect(restCacheHeaders(policy, get(), 200)?.vary).toContain("x-api-key");
     });
 
     it("refuses to cache a non-GET exchange", () => {
@@ -82,20 +103,13 @@ describe("restCacheHeaders", () => {
 });
 
 describe("requestCarriesCredentials", () => {
-    it("is false only when neither Authorization nor Cookie is present", () => {
-        expect.assertions(3);
+    it("is false only when no identity-bearing header is present", () => {
+        expect.assertions(4);
 
-        expect(requestCarriesCredentials(get())).toBe(false);
-        expect(requestCarriesCredentials(get({ headers: { authorization: "Bearer t" } }))).toBe(true); // secret-scanner:allow -- fake test fixture, not a real credential
-        expect(requestCarriesCredentials(get({ headers: { cookie: "a=b" } }))).toBe(true);
-    });
-});
-
-describe("mergeVary", () => {
-    it("returns undefined when every source is empty", () => {
-        expect.assertions(1);
-
-        expect(mergeVary(undefined, "", "  ,  ")).toBeUndefined();
+        expect(requestCarriesCredentials(get(), publicCache)).toBe(false);
+        expect(requestCarriesCredentials(get({ headers: { authorization: "Bearer t" } }), publicCache)).toBe(true); // secret-scanner:allow -- fake test fixture, not a real credential
+        expect(requestCarriesCredentials(get({ headers: { cookie: "a=b" } }), publicCache)).toBe(true);
+        expect(requestCarriesCredentials(get({ headers: { "cf-access-jwt-assertion": "jwt" } }), publicCache)).toBe(true);
     });
 });
 
@@ -118,6 +132,20 @@ describe("applyRestCache", () => {
         expect(result.status).toBe(200);
         expect(result.headers.get("cache-control")).toBe("public, max-age=60");
         await expect(result.json()).resolves.toEqual({ items: [1, 2] });
+    });
+
+    it("merges an existing Vary from the procedure response instead of replacing it", () => {
+        expect.assertions(3);
+
+        // A procedure that negotiated on `Accept-Language` must keep that Vary, or a
+        // shared cache could hand one language's body to a caller expecting another.
+        const original = Response.json({ ok: true }, { headers: { vary: "Accept-Language" } });
+        const result = applyRestCache(original, publicCache, get());
+        const vary = result.headers.get("vary") ?? "";
+
+        expect(vary).toContain("accept-language");
+        expect(vary).toContain("authorization");
+        expect(vary).toContain("cookie");
     });
 
     it("leaves an error response uncached", () => {

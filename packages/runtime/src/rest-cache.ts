@@ -9,83 +9,51 @@
  * "a per-caller response is never stored in a shared cache" structural — the
  * cost of a wrong `scope` is a missed cache hit, never a cross-user leak.
  *
- * Headers are the same trio `httpRoute(...).cacheControl()/.cacheTag()/.vary()`
- * writes (see `@lunora/server`'s `http.ts`), so a `cache.tag` declared here is
- * purgeable through the identical `ctx.cache.purge({ tags: [...] })` surface.
+ * The header VALUES are not computed here. `shared/rest-surface` owns
+ * `cacheControlValue` / `cacheVaryValue`, and the OpenAPI emitter documents the
+ * endpoint from those same two functions — so the published spec cannot drift
+ * from what this module actually sends. What lives here is only the part that
+ * needs a live `Request`: deciding the effective scope, and deciding whether the
+ * exchange is cacheable at all.
+ *
+ * Note the deliberate asymmetry with `httpRoute(...).cacheControl()` in
+ * `@lunora/server`: that writes whatever value the author passed, with no
+ * credential downgrade. It is the lower-level escape hatch; this is the guarded
+ * surface. Do not describe them as equivalent.
  */
-
-/** Mirror of `@lunora/server`'s `RestCacheConfig`, kept structural so the runtime needs no dependency on the server package. */
-interface RestCacheConfigLike {
-    readonly maxAge: number;
-    readonly scope: "private" | "public";
-    readonly staleWhileRevalidate?: number;
-    readonly tag?: string;
-    readonly vary?: string;
-}
+import type { RestCachePolicy } from "../../../shared/rest-surface";
+import { cacheControlValue, cacheVaryValue, credentialHeadersFor, mergeVary } from "../../../shared/rest-surface";
 
 /**
- * Request headers whose presence means "this response may be caller-specific".
- * `Authorization` covers bearer/basic auth; `Cookie` covers session cookies —
- * between them, every way a Lunora caller establishes identity over REST.
+ * True when the request presented credentials, i.e. the response must be treated
+ * as caller-specific. Checks the built-in identity headers plus anything the
+ * policy declares via `credentialHeaders` — an app whose `resolveIdentity` reads
+ * a bespoke header must say so, or its callers read as anonymous here.
  */
-const CREDENTIAL_HEADERS = ["authorization", "cookie"] as const;
-
-/** `Vary` names added under `scope: "public"` so a shared cache can't serve the anonymous variant to a credentialed caller. */
-const CREDENTIAL_VARY = CREDENTIAL_HEADERS;
-
-/** True when the request presented credentials, i.e. the response must be treated as caller-specific. */
-const requestCarriesCredentials = (request: Request): boolean => CREDENTIAL_HEADERS.some((header) => request.headers.has(header));
-
-/** Clamp an author-supplied seconds value to a non-negative integer; a non-finite value degrades to `0` (revalidate-always) rather than emitting `NaN`. */
-const seconds = (value: number): number => (Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0);
-
-/** Merge `Vary` header names case-insensitively, preserving first-seen order and dropping duplicates. */
-const mergeVary = (...sources: ReadonlyArray<string | undefined>): string | undefined => {
-    const names: string[] = [];
-
-    for (const source of sources) {
-        for (const raw of source?.split(",") ?? []) {
-            const name = raw.trim().toLowerCase();
-
-            if (name !== "" && !names.includes(name)) {
-                names.push(name);
-            }
-        }
-    }
-
-    return names.length === 0 ? undefined : names.join(", ");
-};
+const requestCarriesCredentials = (request: Request, policy: RestCachePolicy): boolean =>
+    credentialHeadersFor(policy).some((header) => request.headers.has(header));
 
 /**
  * Build the cache headers for one exchange, or `undefined` when the exchange
  * isn't cacheable at all (non-`GET`, or a non-2xx result — an error body must
  * never be stored as if it were the resource).
  *
- * The effective scope is `config.scope` narrowed by {@link requestCarriesCredentials};
+ * The effective scope is `policy.scope` narrowed by {@link requestCarriesCredentials};
  * `"public"` survives only for a genuinely anonymous request.
  */
-const restCacheHeaders = (config: RestCacheConfigLike, request: Request, status: number): Record<string, string> | undefined => {
+const restCacheHeaders = (policy: RestCachePolicy, request: Request, status: number): Record<string, string> | undefined => {
     if (request.method !== "GET" || status < 200 || status > 299) {
         return undefined;
     }
 
-    const scope = config.scope === "public" && !requestCarriesCredentials(request) ? "public" : "private";
-    const directives = [scope, `max-age=${String(seconds(config.maxAge))}`];
+    const effectiveScope = policy.scope === "public" && !requestCarriesCredentials(request, policy) ? "public" : "private";
+    const headers: Record<string, string> = { "cache-control": cacheControlValue(policy, effectiveScope) };
 
-    if (config.staleWhileRevalidate !== undefined) {
-        directives.push(`stale-while-revalidate=${String(seconds(config.staleWhileRevalidate))}`);
+    if (policy.tag !== undefined && policy.tag !== "") {
+        headers["cache-tag"] = policy.tag;
     }
 
-    const headers: Record<string, string> = { "cache-control": directives.join(", ") };
-
-    if (config.tag !== undefined && config.tag !== "") {
-        headers["cache-tag"] = config.tag;
-    }
-
-    // `Vary` is keyed off the DECLARED scope, not the effective one: the point is
-    // to fence the stored anonymous variant off from credentialed callers, and
-    // that fence has to be present on the anonymous response itself.
-    const vary = config.scope === "public" ? mergeVary(config.vary, ...CREDENTIAL_VARY) : mergeVary(config.vary);
+    const vary = cacheVaryValue(policy);
 
     if (vary !== undefined) {
         headers.vary = vary;
@@ -100,12 +68,12 @@ const restCacheHeaders = (config: RestCacheConfigLike, request: Request, status:
  * are carried over, the body is streamed through untouched). When the exchange
  * isn't cacheable the original response is returned as-is — no copy.
  */
-const applyRestCache = (response: Response, config: RestCacheConfigLike | undefined, request: Request): Response => {
-    if (config === undefined) {
+const applyRestCache = (response: Response, policy: RestCachePolicy | undefined, request: Request): Response => {
+    if (policy === undefined) {
         return response;
     }
 
-    const headers = restCacheHeaders(config, request, response.status);
+    const headers = restCacheHeaders(policy, request, response.status);
 
     if (headers === undefined) {
         return response;
@@ -114,11 +82,14 @@ const applyRestCache = (response: Response, config: RestCacheConfigLike | undefi
     const cached = new Response(response.body, response);
 
     for (const [name, value] of Object.entries(headers)) {
-        cached.headers.set(name, value);
+        // `Vary` is merged rather than replaced: the procedure's own response may
+        // already vary on `Accept-Language`, `Origin`, or another negotiated
+        // header, and dropping those would let a shared cache serve one variant in
+        // place of another. Every other header here is ours to state outright.
+        cached.headers.set(name, name === "vary" ? (mergeVary(cached.headers.get("vary") ?? undefined, value) ?? value) : value);
     }
 
     return cached;
 };
 
-export type { RestCacheConfigLike };
-export { applyRestCache, mergeVary, requestCarriesCredentials, restCacheHeaders };
+export { applyRestCache, requestCarriesCredentials, restCacheHeaders };

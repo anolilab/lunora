@@ -312,6 +312,41 @@ describe("emitOpenApi — opt-in public REST surface (plan 167)", () => {
         expect(headers?.["Cache-Control"]?.description).toContain("always answered `private`");
     });
 
+    it("omits cache headers on a mutation, which the runtime never caches", () => {
+        expect.assertions(1);
+
+        const document = buildOpenApiDocument({
+            functions: [
+                makeFunction({
+                    expose: { cache: { maxAge: 60, scope: "public" }, rest: true },
+                    exportName: "send",
+                    kind: "mutation",
+                }),
+            ],
+            httpRoutes: [],
+        });
+
+        const { paths } = document as { paths: Record<string, Record<string, { responses: Record<string, { headers?: unknown }> }>> };
+
+        // A mutation is POST-only, and `rest-cache` refuses to cache a non-GET —
+        // documenting a Cache-Control here would make the spec contradict the runtime.
+        expect(paths["/_lunora/rest/messages/send"]?.post?.responses["200"]?.headers).toBeUndefined();
+    });
+
+    it("omits cache headers when the declaration used values discovery could not read", () => {
+        expect.assertions(1);
+
+        const document = buildOpenApiDocument({
+            // `scope` read, `maxAge` computed — an emitted example would be invented.
+            functions: [makeFunction({ expose: { cache: { scope: "public" }, rest: true }, exportName: "list" })],
+            httpRoutes: [],
+        });
+
+        const { paths } = document as { paths: Record<string, Record<string, { responses: Record<string, { headers?: unknown }> }>> };
+
+        expect(paths["/_lunora/rest/messages/list"]?.get?.responses["200"]?.headers).toBeUndefined();
+    });
+
     it("omits the cache headers block entirely for an endpoint that declares no cache", () => {
         expect.assertions(1);
 

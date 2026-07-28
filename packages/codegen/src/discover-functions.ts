@@ -255,13 +255,17 @@ const cacheFromExposeLiteral = (literal: ObjectLiteralExpression): ExposeCacheIR
     const tag = stringProperty(initializer, "tag");
     const vary = stringProperty(initializer, "vary");
 
-    return {
+    const read: ExposeCacheIR = {
         ...(maxAge === undefined ? {} : { maxAge }),
         ...(scope === "private" || scope === "public" ? { scope } : {}),
         ...(staleWhileRevalidate === undefined ? {} : { staleWhileRevalidate }),
         ...(tag === undefined ? {} : { tag }),
         ...(vary === undefined ? {} : { vary }),
     };
+
+    // Nothing readable (every field computed) is reported as absent rather than as
+    // an empty object, so a consumer can't mistake "unreadable" for "declared".
+    return Object.keys(read).length === 0 ? undefined : read;
 };
 
 /**

@@ -6,6 +6,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
+import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -39,7 +40,6 @@ import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { createResourceAttributeResolver } from "./resource-detect";
-import type { RestCacheConfigLike } from "./rest-cache";
 import type { RestInvoke, RestRateLimit } from "./rest-routes";
 import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
@@ -205,7 +205,7 @@ interface FunctionRegistryEntry {
      * `cache` is the optional response-caching policy the REST router turns into
      * `Cache-Control` / `Cache-Tag` / `Vary` headers (see `rest-cache`).
      */
-    expose?: { readonly cache?: RestCacheConfigLike; readonly rest?: boolean };
+    expose?: RestExposure;
 
     /**
      * The generated registry carries `"stream"` alongside query/mutation/action;
