@@ -14,8 +14,8 @@ const codegenCommand: Command = {
     name: "codegen",
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
-        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
+        TARGET_OPTION,
     ],
 };
 

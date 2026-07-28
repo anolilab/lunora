@@ -24,9 +24,9 @@ const buildCommand: Command = {
     name: "build",
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
-        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
+        TARGET_OPTION,
     ],
 };
 

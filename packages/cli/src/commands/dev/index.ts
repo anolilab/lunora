@@ -31,8 +31,8 @@ const devCommand: Command = {
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
-        TARGET_OPTION,
         { description: "Studio server port (default 6173)", name: "port", type: Number },
+        TARGET_OPTION,
         { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
         {
             description: "Run the dev server as a managed background process (auto-enabled when an AI agent is detected; LUNORA_AGENT_MODE=0 disables)",

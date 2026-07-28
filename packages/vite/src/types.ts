@@ -43,7 +43,6 @@ export interface LunoraPluginOptions {
      * Defaults to `true`.
      */
     overlay?: boolean | OverlayPluginOptions;
-
     /** Project root containing the `lunora/` directory. Defaults to `process.cwd()`. */
     projectRoot?: string;
     /** Directory name (relative to `projectRoot`) containing `schema.ts` and function files. Defaults to `"lunora"`. */

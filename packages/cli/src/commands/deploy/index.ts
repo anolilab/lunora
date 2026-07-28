@@ -22,7 +22,6 @@ const deployCommand: Command = {
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
-        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         {
@@ -43,6 +42,7 @@ const deployCommand: Command = {
             name: "preview",
             type: Boolean,
         },
+        TARGET_OPTION,
         {
             description:
                 "Deploy to a temporary Cloudflare account when unauthenticated (wrangler deploy --temporary; live ~60min, then claim or it's deleted). Wrangler errors if you're already authenticated.",

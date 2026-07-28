@@ -19,7 +19,6 @@ const verifyCommand: Command = {
     options: [
         { description: "Treat breaking schema drift as a warning instead of a failure", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
-        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         {
             description: "Probe this deployment's /_lunora/health endpoint (off by default; keeps verify offline-safe)",
@@ -27,6 +26,7 @@ const verifyCommand: Command = {
             type: String,
         },
         { description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean },
+        TARGET_OPTION,
     ],
 };
 

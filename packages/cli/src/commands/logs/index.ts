@@ -20,10 +20,10 @@ const logsCommand: Command = {
     name: "logs",
     options: [
         { description: "Cloudflare environment name", name: "env", type: String },
-        TARGET_OPTION,
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Substring filter on log messages", name: "search", type: String },
         { description: "Filter by invocation status: ok, error, or canceled", name: "status", type: String },
+        TARGET_OPTION,
         {
             description: "Tail a temporary-account deployment when unauthenticated (wrangler tail --temporary). Errors if you're already authenticated.",
             name: "temporary",
