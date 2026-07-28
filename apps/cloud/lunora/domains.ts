@@ -5,7 +5,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
-import { dbRateLimit } from "./guards";
+import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -39,7 +39,7 @@ const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
 
 /** Add a hostname to a project (owner/admin) and mint its TXT verification token. */
 export const add = mutation
-    .use(dbRateLimit("provision"))
+    .use(rateLimit("provision"))
     .input({
         hostname: boundedString(LIMITS.hostname),
         organizationId: v.id("organizations"),
@@ -104,7 +104,7 @@ export const list = query
 
 /** Remove a domain (owner/admin). */
 export const remove = mutation
-    .use(dbRateLimit("api"))
+    .use(rateLimit("api"))
     .input({ id: v.id("domains"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
@@ -129,7 +129,7 @@ export const remove = mutation
  * hostname id once the 🌐 provisioning path creates it.
  */
 export const markVerified = mutation
-    .use(dbRateLimit("machine"))
+    .use(rateLimit("machine"))
     .input({
         customHostnameId: v.optional(boundedString(LIMITS.id)),
         id: v.id("domains"),
