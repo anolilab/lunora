@@ -22,17 +22,18 @@
 /* eslint-disable max-classes-per-file -- the role-split is three cohesive collaborators by design: a shared RelayLink base plus the OwnerRelay and RelayMember role classes. */
 
 import { LunoraError, toErrorBody } from "@lunora/errors";
-import type { ResolvedShape, ShapeSubscriptionQuery, ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "@lunora/shard-engine";
-import { awaitWsDrain, stableWireKey, trySendFrame } from "@lunora/shard-engine";
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
+import { stableWireKey } from "./reactive-cache";
 import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
 import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, encodeRowsPatch } from "./shape-global-diff";
+import { awaitWsDrain, trySendFrame } from "./subscription-delivery";
+import type { ResolvedShape, ShapeSubscriptionQuery, ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "./types";
 
 /** Fixed relay-fan when a shard promotes (per-deployment via `LUNORA_RELAY_FAN`). */
 const DEFAULT_RELAY_FAN = 2;

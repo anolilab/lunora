@@ -18,7 +18,7 @@
  * entries — new statements beyond the cap are silently dropped.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /** Reserved table name. Auto-hidden from the data browser by the `__lunora` prefix. */
 const QUERY_METRICS_TABLE = "__lunora_metrics_queries";

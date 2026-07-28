@@ -17,10 +17,10 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-migrations" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "@lunora/search-core";
-import { aggregateTableName, rankTableName, sortColumnName } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { aggregateTableName } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
@@ -32,6 +32,7 @@ import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
+import { rankTableName, sortColumnName } from "./rank";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {

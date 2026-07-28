@@ -8,10 +8,10 @@
  * The `SqlExec`/`SqlCursor` shapes are owned by `ctx-db.ts`; we import them
  * type-only (erased at runtime, so no import cycle).
  */
-import { renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
+import { renderSql } from "./drizzle";
 
 /**
  * Run a raw SQL statement. Routes through a `.call(sql, ...)` indirection rather

@@ -1,9 +1,9 @@
 /* eslint-disable no-restricted-syntax -- `sql\`…\`` is a drizzle tagged-template SQL builder, not a string conversion. */
-import type { SqlEngine } from "@lunora/shard-engine";
-import { renderSql } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
+import type { SqlEngine } from "../src/drizzle";
+import { renderSql } from "../src/drizzle";
 import type { WhereSqlStrategy } from "../src/where-sql";
 import { compileWhereSql } from "../src/where-sql";
 

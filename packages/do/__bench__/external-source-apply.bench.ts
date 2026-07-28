@@ -1,8 +1,8 @@
+import type { CdcChange, DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { CdcChange, DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * Plan 077 Phase 0 gate (design shipped in PR #80 `d5cf9151e`; §9 in git history): the cost of the

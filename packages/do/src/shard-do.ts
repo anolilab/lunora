@@ -2,36 +2,105 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import type { ShardHost, SocketHost } from "@lunora/platform";
 import type {
+    AdvisoryFinding,
+    AuditLogResult,
+    CdcChange,
+    ColumnMeta,
+    CreateWorkflowInstanceResult,
     DependencyTracker,
+    FanoutMetricsResult,
+    FilterClause,
+    FilterOperator,
+    FlagsResult,
+    FunctionCallStat,
+    FunctionStatsResult,
     LifecycleDispatchInfo,
     LifecycleEvent,
+    MaskPoliciesResult,
     MutationDelta,
+    OrderByClause,
+    OwnerRelay,
+    QueueMetadata,
+    QueuesResult,
     ReactiveCacheOptions,
+    RelayHost,
+    RelayMember,
     ResolvedShape,
+    RlsPoliciesResult,
     RpcRequest,
+    ShapePokePart,
+    ShapeRow,
+    ShapeRowOp,
     ShapeSubscriptionQuery,
     ShardRankPageResult,
     ShardSocketLike,
     SocketAttachment,
+    SqlExec,
+    StorageRulesResult,
+    StudioFeaturesResult,
     SubscriptionEnvelope,
     SubscriptionIdentity,
     SubscriptionQuery,
+    SubscriptionsResult,
+    TableIndexInfo,
     TransactionSqlLike,
+    WorkflowInstanceStatusResult,
+    WorkflowsResult,
 } from "@lunora/shard-engine";
 import {
+    ADMIN_FUNCTION_PREFIX,
+    ADMIN_FUNCTIONS,
+    advanceClientWatermark,
+    appendAuditEntry,
     awaitWsDrain,
+    buildPokeFrames,
+    bumpCdcEpoch,
+    CDC_LOG_TABLE,
     ConflictError,
     createDependencyTracker,
+    createFanoutCounters,
+    createRelayLink,
+    DEFAULT_MAX_RELAYS,
+    deleteGlobalShapeSnapshot,
+    deleteGlobalShapeSnapshotsForConnection,
+    diffGlobalMembership,
+    ensureAuditTable,
+    facetColumn,
+    findStorageReferences,
+    FLAGS_FUNCTION_PREFIX,
+    listTables,
+    MAX_PAGE_SIZE,
+    migrateClientWatermark,
+    minCdcSeq,
+    projectColumns,
     ReactiveCache,
     reactiveCacheKey,
+    readAuditLog,
+    readCdcChanges,
+    readCdcCursor,
+    readCdcEpoch,
+    readClientWatermark,
+    readGlobalShapeSnapshot,
+    readIdempotent,
+    readTablePage,
+    recordFanoutPass,
+    RELATION_FUNCTION_PREFIX,
     runSocketPool,
     SCAN_DEP,
+    selectMatchingIds,
+    selectShapeMemberIds,
+    selectShapeRows,
     sendDeltaFrames,
     ShardRunner,
     stableStringify,
     subscriptionListDeltas,
+    summarizeFanoutTopics,
+    summarizeSubscriptions,
     tableFromDepKey,
+    trimIdempotent,
     trySendFrame,
+    writeGlobalShapeSnapshot,
+    writeIdempotent,
 } from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
@@ -50,35 +119,12 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
-import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
 import { createShardHost, createSocketHost } from "./cloudflare-host";
 import type { CloudflareTracingLike, ContextFetch, ContextMetrics, ContextTracer, SpanCollection, SpanCollector, TraceAnchor } from "./context-telemetry";
 import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
-import type { CdcChange, SqlExec } from "./ctx-db";
-import {
-    advanceClientWatermark,
-    bumpCdcEpoch,
-    CDC_LOG_TABLE,
-    deleteGlobalShapeSnapshot,
-    deleteGlobalShapeSnapshotsForConnection,
-    migrateClientWatermark,
-    minCdcSeq,
-    readCdcChanges,
-    readCdcCursor,
-    readCdcEpoch,
-    readClientWatermark,
-    readGlobalShapeSnapshot,
-    readIdempotent,
-    selectShapeMemberIds,
-    selectShapeRows,
-    trimIdempotent,
-    writeGlobalShapeSnapshot,
-    writeIdempotent,
-} from "./ctx-db";
-import type { ShapeRow } from "./ctx-db-shapes";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
 import type { DatabaseInstrumentation, DatabaseTally } from "./database-telemetry";
@@ -92,45 +138,6 @@ import {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "./function-metrics";
-import type {
-    AdvisoryFinding,
-    AuditLogResult,
-    ColumnMeta,
-    CreateWorkflowInstanceResult,
-    FanoutMetricsResult,
-    FilterClause,
-    FilterOperator,
-    FlagsResult,
-    FunctionCallStat,
-    FunctionStatsResult,
-    MaskPoliciesResult,
-    OrderByClause,
-    QueueMetadata,
-    QueuesResult,
-    RlsPoliciesResult,
-    StorageRulesResult,
-    StudioFeaturesResult,
-    SubscriptionsResult,
-    TableIndexInfo,
-    WorkflowInstanceStatusResult,
-    WorkflowsResult,
-} from "./introspect";
-import {
-    ADMIN_FUNCTION_PREFIX,
-    ADMIN_FUNCTIONS,
-    createFanoutCounters,
-    facetColumn,
-    findStorageReferences,
-    FLAGS_FUNCTION_PREFIX,
-    listTables,
-    MAX_PAGE_SIZE,
-    readTablePage,
-    recordFanoutPass,
-    RELATION_FUNCTION_PREFIX,
-    selectMatchingIds,
-    summarizeFanoutTopics,
-    summarizeSubscriptions,
-} from "./introspect";
 import type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./issue-state";
 import { ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, upsertIssueState } from "./issue-state";
 import type { LogEntry } from "./log-buffer";
@@ -145,8 +152,6 @@ import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catcher";
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
-import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
-import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import {
     appendRequestLogEntry,
@@ -160,8 +165,6 @@ import {
 } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
-import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
-import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
 import { foldTraces, SpanBuffer } from "./span-buffer";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";

@@ -60,10 +60,12 @@
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.7",
         "@lunora/platform": "1.0.0-alpha.1",
+        "@lunora/search-core": "workspace:*",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/bindings": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

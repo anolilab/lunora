@@ -1,7 +1,7 @@
 import type { SocketAttachment } from "@lunora/shard-engine";
+import { migrateGlobalShapeSnapshot } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { migrateGlobalShapeSnapshot } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";

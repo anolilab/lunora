@@ -22,14 +22,15 @@
 /* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-shapes" mirrors its parent "ctx-db.ts" (the established public module name). */
 
-import type { WhereInput, WhereSqlStrategy } from "@lunora/shard-engine";
-import { compileWhereSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { DOC_COLUMN, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import type { WhereSqlStrategy } from "./where-sql";
+import { compileWhereSql } from "./where-sql";
+import type { WhereInput } from "./where-types";
 
 /** Flat JSON-blob `where` strategy: fields via `json_extract`, values via `serializeSqlValue`. Mirrors the query path's `doWhereSqlStrategy`. */
 const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };

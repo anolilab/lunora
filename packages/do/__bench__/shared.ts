@@ -1,6 +1,7 @@
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
+
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * Shared bench fixtures (visulima `__bench__/shared.ts` convention).

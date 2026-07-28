@@ -17,8 +17,8 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import { stableWireKey } from "@lunora/shard-engine";
 
+import { stableWireKey } from "./reactive-cache";
 import type { ShapeRowOp } from "./shape-global-diff";
 
 /**

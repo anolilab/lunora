@@ -133,41 +133,6 @@ export interface SubscriptionEnvelope {
         | "whisper_unsubscribe";
 }
 
-/**
- * The argument a connection-lifecycle hook receives. Structurally matches
- * `@lunora/server`'s `LifecycleEvent`; defined here so `@lunora/do` stays free of
- * a dependency on the API package. The DO forwards it verbatim as the hook's
- * `args`, and the generated handler casts it back to the typed shape.
- */
-export interface LifecycleEvent {
-    /** Stable per-socket id minted at upgrade, replayed verbatim on disconnect. */
-    connectionId: string;
-    /** App-supplied connection context from the client `connect` envelope. */
-    context?: Record<string, unknown>;
-    /** This DO's shard name. */
-    shardKey: string;
-    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
-    userId: string | null;
-}
-
-/**
- * Per-socket lifecycle dispatch payload assembled from the attachment at
- * connect/close: the {@link LifecycleEvent} the hooks receive plus the verified
- * identity to replay so each hook runs under the connecting user.
- */
-export interface LifecycleDispatchInfo {
-    event: LifecycleEvent;
-    identity: Record<string, unknown> | undefined;
-    userId: string | undefined;
-}
-
-export interface MutationDelta {
-    key: string;
-    op: "insert" | "update" | "delete";
-    row?: Record<string, unknown>;
-    table: string;
-}
-
 export interface RpcRequest {
     args?: Record<string, unknown>;
     functionPath: string;
@@ -342,3 +307,5 @@ export interface ShardSocketLike {
     /** Persist hibernation state, when the transport supports it. */
     serializeAttachment?: (value: unknown) => void;
 }
+
+export { type LifecycleDispatchInfo, type LifecycleEvent, type MutationDelta } from "./schema-types";

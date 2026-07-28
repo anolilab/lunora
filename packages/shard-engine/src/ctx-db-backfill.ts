@@ -16,26 +16,20 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 import { analyzedSearchText, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "@lunora/search-core";
-import type { AggregateIndexDefinitionLike, AggregateTally, RankIndexDefinitionLike } from "@lunora/shard-engine";
-import {
-    aggregateTableName,
-    encodeAggregateKey,
-    encodePartitionKey,
-    foldAggregateTally,
-    matchesRankStaticWhere,
-    matchesStaticWhere,
-    param,
-    rankTableName,
-    sortColumnName,
-} from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
 
+import { matchesStaticWhere } from "./aggregate-sql";
+import type { AggregateTally } from "./aggregate-tally";
+import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
 import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue, tryRowToDocument } from "./do-sql";
+import { param } from "./drizzle";
+import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
+import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and

@@ -12,11 +12,11 @@
 /* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc" mirrors its parent "ctx-db.ts" (the established public module name). */
 
-import { ConflictError } from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
 
 import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { ConflictError } from "./transaction";
 
 /** Reserved append-only changelog table backing CDC streaming export and replay-PITR. */
 const CDC_LOG_TABLE = "__cdc_log";

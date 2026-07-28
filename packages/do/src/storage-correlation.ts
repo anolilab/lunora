@@ -26,7 +26,7 @@
  * imported so the module's SQL stays self-contained and its bound-parameter
  * discipline is auditable in one place — mirroring `introspect.ts`'s own.
  */
-import type { SqlExec } from "./ctx-db";
+import type { SqlExec } from "@lunora/shard-engine";
 
 /** Hard ceiling on rows scanned per storage column, so one enormous table can't make the scan unbounded. */
 const DANGLING_SCAN_CAP = 5000;

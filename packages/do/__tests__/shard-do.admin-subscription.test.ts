@@ -1,8 +1,8 @@
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { mintWsAdminToken } from "../../../shared/ws-admin-token";
-import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";

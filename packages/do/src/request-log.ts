@@ -22,12 +22,12 @@
  */
 
 import { fingerprintError } from "@lunora/fingerprint";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 import { redact, standardRules } from "@visulima/redact";
 
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
-import type { SqlCursor, SqlExec } from "./ctx-db";
 import type { IssueSeverity, IssueStatus } from "./issue-state";
 import { readIssueStates } from "./issue-state";
 

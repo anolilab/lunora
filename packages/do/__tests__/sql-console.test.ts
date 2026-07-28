@@ -1,6 +1,6 @@
+import type { SqlExec } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import type { SqlExec } from "../src/ctx-db.js";
 import { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console.js";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */

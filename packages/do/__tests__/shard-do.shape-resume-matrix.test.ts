@@ -20,11 +20,10 @@
  * `buildShapeDiff` optimisation has a safety-net before and after.
  */
 
-import type { SocketAttachment } from "@lunora/shard-engine";
+import type { SocketAttachment, SqlExec } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations, trimCdcChanges } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import type { SqlExec } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations, trimCdcChanges } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";

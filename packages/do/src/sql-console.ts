@@ -1,6 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-
-import type { SqlExec } from "./ctx-db";
+import type { SqlExec } from "@lunora/shard-engine";
 
 /**
  * Result of a `__lunora_admin__:runSql` read-only query: the column names (from
