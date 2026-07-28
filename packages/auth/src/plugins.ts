@@ -66,6 +66,14 @@ export { passkey } from "@better-auth/passkey";
  * the setup and its security-relevant defaults.
  */
 export { scim } from "@better-auth/scim";
+
+/**
+ * Publish which plugins and social providers this deployment enabled, at
+ * `GET {basePath}/ui-config`, so an auth UI configures itself instead of making
+ * you restate the list client-side. Lunora's own, not a better-auth re-export.
+ */
+export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload } from "./ui-config";
+export { uiConfig } from "./ui-config";
 // `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox) has no
 // dedicated `better-auth/plugins/<name>` subpath in better-auth's exports map —
 // it ships only via the `better-auth/plugins` barrel, so it is re-exported from
