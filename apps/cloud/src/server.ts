@@ -637,6 +637,14 @@ const authOptions = (env: Env): LunoraAuthOptions => {
                 await mailer().send({ subject: "Verify your Lunora Cloud email", text: `Verify your email:\n${url}`, to: user.email });
             },
         },
+        // Resolve the client IP from Cloudflare's own header. Without this
+        // better-auth cannot determine an address, and its rate limiting silently
+        // degrades to a SINGLE shared bucket per path — so the throttle the line
+        // below claims to be "per-IP" was really global: one attacker hammering
+        // sign-in exhausted the limit for every legitimate user, and per-attacker
+        // brute-force protection did not exist. `cf-connecting-ip` is set by the
+        // edge and cannot be spoofed by the client on Workers.
+        advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } },
         plugins: [admin({ defaultRole: "user" }), twoFactor(), passkey()],
         // Built-in per-IP throttling on the auth endpoints (sign-in/up, reset).
         rateLimit: { enabled: true },
