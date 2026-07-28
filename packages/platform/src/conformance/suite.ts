@@ -512,12 +512,13 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             });
 
             it("returns a requeued job to the pending set with a fresh budget", async () => {
-                expect.assertions(3);
+                expect.assertions(4);
 
                 const host = await createHost();
 
                 if (host.scheduler?.list === undefined || host.scheduler.deadLetter === undefined || host.simulateDeadLetter === undefined) {
                     expect(host.simulateDeadLetter).toBeUndefined();
+                    expect(true).toBe(true);
                     expect(true).toBe(true);
                     expect(true).toBe(true);
                     host.cleanup?.();
@@ -541,6 +542,14 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 // ever retrying, so the requeue would look successful and change
                 // nothing.
                 expect(pending?.attempts).toBe(0);
+
+                // And it must LEAVE the dead-letter listing. Restoring it to
+                // pending while keeping the parked copy breaks the same
+                // disjointness the leg above pins — recovered once, listed
+                // forever, and recoverable again into a second live job.
+                const stillParked = await host.scheduler.deadLetter.list();
+
+                expect(stillParked.some((entry) => entry.id === job.id)).toBe(false);
 
                 host.cleanup?.();
             });
