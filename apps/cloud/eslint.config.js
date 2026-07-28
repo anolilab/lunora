@@ -16,6 +16,14 @@ export default createConfig(
             // fail on the missing module; that makes ignoring it here the only way
             // to keep it out of the lint surface. Matches apps/docs.
             "**/routeTree.gen.ts",
+            // Vendored shadcn / Base UI primitives — copied verbatim from
+            // packages/studio (or written to match them) so `shadcn add`/diff stays
+            // clean. Not hand-authored source, so the strict import/sort/style rules
+            // don't apply. Same exemption packages/studio uses for the same files.
+            "**/components/ui/**",
+            "**/lib/utils.ts",
+            // Vendored shadcn `use-mobile` hook, shipped with the sidebar block.
+            "**/hooks/use-mobile.ts",
             "**/test-results/**",
             "**/coverage/**",
             "**/.wrangler/**",

@@ -9,11 +9,11 @@ import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, Side
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { OrgId } from "../client/types";
 import { DashboardLayout } from "../client/DashboardLayout";
 import { OrgSwitcher } from "../client/OrgSwitcher";
 import { TAB_GROUPS, TABS } from "../client/tabs";
 import { TimeRangeProvider } from "../client/TimeRangeProvider";
+import type { OrgId } from "../client/types";
 import type { PaletteCommand } from "../client/use-command-palette";
 import { preload } from "../ssr/loader";
 
