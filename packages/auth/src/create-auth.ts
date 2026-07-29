@@ -73,6 +73,17 @@ const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean =
  *
  * CSRF/origin validation and `baseURL`-trusted-origins are already on by default
  * in better-auth, so we don't re-implement them here.
+ *
+ * That includes the common Workers shape with `baseURL` unset: better-auth trusts the
+ * request's own origin, recomputed per request, so sign-in works on a fresh deploy with
+ * nothing configured. CSRF still holds — the trusted origin is derived from the `Host`
+ * the browser connected to, which page JS cannot forge, so a cross-site `Origin` never
+ * matches. (The `BETTER_AUTH_URL` family and `BETTER_AUTH_TRUSTED_ORIGINS` can pre-empt
+ * or widen that list, but they are operator-set and not attacker-reachable.)
+ *
+ * Do **not** add a `trustedOrigins` default here on the assumption that the
+ * context-time list is empty — it is, and it doesn't matter. The mechanism and the
+ * pin live in `__tests__/trusted-origins.behaviour.test.ts`.
  */
 const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
     if (isWeakSecret(options.secret)) {
