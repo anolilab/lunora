@@ -23,9 +23,8 @@ const Probe = ({ draft }: { readonly draft: string }): ReactElement => {
 
     return (
         <ul>
-            {diagnostics.map((diagnostic, index) => (
-                // eslint-disable-next-line react-x/no-array-index-key -- diagnostics are positional in this probe
-                <li data-testid={`diag-${diagnostic.source}`} key={index}>
+            {diagnostics.map((diagnostic) => (
+                <li data-testid={`diag-${diagnostic.source}`} key={`${diagnostic.source}:${diagnostic.message}`}>
                     {diagnostic.message}
                 </li>
             ))}

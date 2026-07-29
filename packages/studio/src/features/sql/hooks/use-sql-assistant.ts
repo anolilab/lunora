@@ -16,9 +16,12 @@ const AI_GENERATE_SQL = adminRef(ADMIN_FUNCTIONS.aiGenerateSql);
 const AI_TABLE_FILTER = adminRef(ADMIN_FUNCTIONS.aiTableFilter);
 const AI_CHART_CONFIG = adminRef(ADMIN_FUNCTIONS.aiChartConfig);
 
-/** What the editor needs to render the assistant. */
+/** The three independent operations. Status is keyed by these so it never bleeds across them. */
+type AssistantTaskKey = "chart" | "filter" | "sql";
+
+/** What a surface needs to render one assistant affordance. */
 interface SqlAssistant {
-    /** Ask for a draft, or a repair when `failed` is supplied. Resolves to the statement, or undefined. */
+    /** Ask for a draft, or a repair when `failed` is supplied. */
     readonly generate: (prompt: string, failed?: { error: string; sql: string }) => Promise<string | undefined>;
 
     /**
@@ -26,38 +29,67 @@ interface SqlAssistant {
      * count only — row values are never sent (plan 202 Phase 0).
      */
     readonly inferChart: (result: { columns: string[]; rowCount: number; types?: Record<string, string> }) => Promise<AssistantChartConfig | undefined>;
-    readonly pending: boolean;
-    /** Why the last attempt produced nothing, cleared on the next attempt. */
-    readonly reason: GenerateSqlDegradedReason | undefined;
+    /** True while THAT task is in flight. */
+    readonly pending: (task: AssistantTaskKey) => boolean;
+    /** Why THAT task last produced nothing, cleared when it is retried. */
+    readonly reason: (task: AssistantTaskKey) => GenerateSqlDegradedReason | undefined;
     /** Translate a request into structured filter clauses for `table`. */
     readonly suggestFilter: (prompt: string, table: string) => Promise<FilterClause[] | undefined>;
-    /** True once the app has reported it has no AI binding — hide the affordance. */
+    /** True once the app has reported it has no AI binding — hide every affordance. */
     readonly unavailable: boolean;
 }
 
 /**
- * The SQL editor's natural-language assistant.
+ * The Studio's natural-language assistant, shared by the SQL editor and the data
+ * browser.
  *
- * The model runs server-side on the app's OWN Workers AI binding (see plan 202's
- * Phase 0) — the browser never sees a model or a key, and the statement is
+ * The model runs server-side on the app's OWN Workers AI binding (plan 202's
+ * Phase 0) — the browser never sees a model or a key, and generated SQL is
  * validated against the read-only gate before it ever gets here.
  *
- * **`no-ai-binding` is sticky.** An app without an `AI` binding will answer that
- * way every time, so the first such reply latches `unavailable` and the UI stops
- * offering the affordance rather than presenting a button that always fails.
- * Every other reason is transient and clears on the next attempt.
+ * **Status is per task.** A single `pending`/`reason` pair let a chart inference
+ * spin the SQL bar's button and a filter failure print its message under the
+ * editor; the three operations are unrelated and now report independently.
+ *
+ * **`no-ai-binding` is sticky.** An app without an `AI` binding answers that way
+ * every time, so the first such reply latches `unavailable` and every affordance
+ * disappears rather than staying as a button that always fails.
  */
 const useSqlAssistant = (shardKey: string): SqlAssistant => {
     const client = useLunora();
 
-    const [pending, setPending] = useState(false);
-    const [reason, setReason] = useState<GenerateSqlDegradedReason | undefined>(undefined);
+    const [pendingByTask, setPendingByTask] = useState<Partial<Record<AssistantTaskKey, boolean>>>({});
+    const [reasonByTask, setReasonByTask] = useState<Partial<Record<AssistantTaskKey, GenerateSqlDegradedReason>>>({});
     const [unavailable, setUnavailable] = useState(false);
+
+    const begin = useCallback((task: AssistantTaskKey): void => {
+        setPendingByTask((current) => {
+            return { ...current, [task]: true };
+        });
+        setReasonByTask((current) => {
+            return { ...current, [task]: undefined };
+        });
+    }, []);
+
+    const finish = useCallback((task: AssistantTaskKey, failure?: GenerateSqlDegradedReason): void => {
+        setPendingByTask((current) => {
+            return { ...current, [task]: false };
+        });
+
+        if (failure !== undefined) {
+            setReasonByTask((current) => {
+                return { ...current, [task]: failure };
+            });
+        }
+
+        if (failure === "no-ai-binding") {
+            setUnavailable(true);
+        }
+    }, []);
 
     const generate = useCallback(
         async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> => {
-            setPending(true);
-            setReason(undefined);
+            begin("sql");
 
             try {
                 const { result } = (await client.query(
@@ -66,91 +98,62 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
                     callOptions(shardKey),
                 )) as { result: GenerateSqlResult };
 
-                if (!result.degraded) {
-                    return result.sql;
-                }
+                finish("sql", result.degraded ? result.reason : undefined);
 
-                setReason(result.reason);
-
-                if (result.reason === "no-ai-binding") {
-                    setUnavailable(true);
-                }
-
-                return undefined;
+                return result.degraded ? undefined : result.sql;
             } catch {
-                setReason("ai-error");
+                finish("sql", "ai-error");
 
                 return undefined;
-            } finally {
-                setPending(false);
             }
         },
-        [client, shardKey],
+        [begin, client, finish, shardKey],
     );
 
     const suggestFilter = useCallback(
         async (prompt: string, table: string): Promise<FilterClause[] | undefined> => {
-            setPending(true);
-            setReason(undefined);
+            begin("filter");
 
             try {
                 const { result } = (await client.query(AI_TABLE_FILTER, { prompt, table }, callOptions(shardKey))) as { result: GenerateFilterResult };
 
-                if (!result.degraded) {
-                    return result.clauses;
-                }
+                finish("filter", result.degraded ? result.reason : undefined);
 
-                setReason(result.reason);
-
-                if (result.reason === "no-ai-binding") {
-                    setUnavailable(true);
-                }
-
-                return undefined;
+                return result.degraded ? undefined : result.clauses;
             } catch {
-                setReason("ai-error");
+                finish("filter", "ai-error");
 
                 return undefined;
-            } finally {
-                setPending(false);
             }
         },
-        [client, shardKey],
+        [begin, client, finish, shardKey],
     );
 
     const inferChart = useCallback(
         async (result: { columns: string[]; rowCount: number; types?: Record<string, string> }): Promise<AssistantChartConfig | undefined> => {
-            setPending(true);
-            setReason(undefined);
+            begin("chart");
 
             try {
                 // Deliberately only the shape — see the hook docblock.
                 const { result: inferred } = (await client.query(AI_CHART_CONFIG, result, callOptions(shardKey))) as { result: GenerateChartResult };
 
-                if (!inferred.degraded) {
-                    return inferred.chart;
-                }
+                finish("chart", inferred.degraded ? inferred.reason : undefined);
 
-                setReason(inferred.reason);
-
-                if (inferred.reason === "no-ai-binding") {
-                    setUnavailable(true);
-                }
-
-                return undefined;
+                return inferred.degraded ? undefined : inferred.chart;
             } catch {
-                setReason("ai-error");
+                finish("chart", "ai-error");
 
                 return undefined;
-            } finally {
-                setPending(false);
             }
         },
-        [client, shardKey],
+        [begin, client, finish, shardKey],
     );
+
+    const pending = useCallback((task: AssistantTaskKey): boolean => pendingByTask[task] === true, [pendingByTask]);
+    const reason = useCallback((task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task], [reasonByTask]);
 
     return { generate, inferChart, pending, reason, suggestFilter, unavailable };
 };
 
 export { useSqlAssistant };
-export type { SqlAssistant };
+export type { AssistantTaskKey, SqlAssistant };

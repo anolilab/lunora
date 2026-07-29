@@ -14,13 +14,14 @@ import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/in
 import { recordShard } from "../../lib/shard-history";
 import { CellValue } from "../data/data-grid";
 import { ExportMenu } from "../data/grid-features";
+import { EDITOR_TEXT_CLASS } from "./editor-spans";
 import formatSql from "./format-sql";
 import { useSqlAssistant } from "./hooks/use-sql-assistant";
 import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
 import { SqlAssistantBar } from "./sql-assistant-bar";
 import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
 import type { SqlDiagnostic } from "./sql-diagnostics";
-import { DiagnosticsOverlay, DiagnosticsRow, EDITOR_TEXT_CLASS } from "./sql-diagnostics-ui";
+import { DiagnosticsOverlay, DiagnosticsRow } from "./sql-diagnostics-ui";
 import type { HistoryEntry, SavedQuery } from "./sql-query-sidebar";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import { referencedTables, useSqlSchema } from "./sql-schema";
@@ -50,12 +51,22 @@ const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5re
 type ResultTab = "chart" | "explain" | "results";
 
 /**
- * One editor tab's ephemeral output — the last run's result/error plus which result
- * pane is shown. Kept as a single per-tab record (not three parallel maps) so a
- * write touches one entry and closing a tab is one `delete`.
+ * One editor tab's ephemeral output — the last run's result/error, the statement
+ * that failed, the inferred chart, and which result pane is shown. Kept as a
+ * single per-tab record (not parallel maps) so a write touches one entry and
+ * closing a tab is one `delete`.
+ *
+ * Everything here is per-TAB because everything here describes one tab's last
+ * run. Holding `failed`/`chart` as panel-wide state let a failure in tab A arm
+ * "Fix this" in tab B against a statement B never ran, and let A's inferred axes
+ * render over B's unrelated columns.
  */
 interface TabOutput {
+    /** Model-inferred chart for THIS tab's result, or undefined for the manual one. */
+    readonly chart?: AssistantChartConfig;
     readonly error: null | string;
+    /** THIS tab's last FAILED statement, frozen at failure time — see `run`. */
+    readonly failed?: { error: string; sql: string };
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
 }
@@ -144,7 +155,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const draft = activeTab.sql;
     const { activeId } = activeTab;
     const output = outputs[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
-    const { error, result } = output;
+    const { chart: inferredChart, error, failed: failedRun, result } = output;
     const tab = output.pane;
 
     // Patch the active tab's persisted fields (draft text and/or saved-query link).
@@ -152,22 +163,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setTabs((current) => current.map((each) => (each.id === activeTab.id ? { ...each, ...patch } : each)));
     };
 
-    // Replace the active tab's ephemeral result/error/pane in one shot. An omitted
-    // `pane` keeps whatever pane was showing (defaulting to "results").
-    const setActiveOutput = (next: { error: null | string; pane?: ResultTab; result: null | SqlConsoleResult }): void => {
+    // Merge a patch into the active tab's ephemeral output. Omitted keys keep
+    // their previous value; a key present as `undefined` clears it (which is how
+    // a fresh run drops the previous failure and inferred chart).
+    const patchActiveOutput = (patch: Partial<TabOutput>): void => {
         setOutputs((current) => {
             const previous = current[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
 
-            return { ...current, [activeTab.id]: { error: next.error, pane: next.pane ?? previous.pane, result: next.result } };
-        });
-    };
-
-    // Switch the active tab's result pane (Results/Chart) without touching its rows.
-    const setActivePane = (pane: ResultTab): void => {
-        setOutputs((current) => {
-            const previous = current[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
-
-            return { ...current, [activeTab.id]: { ...previous, pane } };
+            return { ...current, [activeTab.id]: { ...previous, ...patch } };
         });
     };
 
@@ -182,10 +185,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
     const assistant = useSqlAssistant(shardKey);
-    // The last statement that FAILED, frozen at failure time — see `run`.
-    const [failedRun, setFailedRun] = useState<{ error: string; sql: string } | undefined>(undefined);
-    // Model-inferred chart for the current result, or undefined for the manual one.
-    const [inferredChart, setInferredChart] = useState<AssistantChartConfig | undefined>(undefined);
 
     const inferChart = (): void => {
         if (result === null) {
@@ -200,7 +199,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 types: Object.fromEntries(result.columns.map((column) => [column, typeof (result.rows[0]?.[column] ?? "")])),
             });
 
-            setInferredChart(chart);
+            patchActiveOutput({ chart });
         };
 
         fireAndForget(apply());
@@ -258,17 +257,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
 
-            setFailedRun(undefined);
-            setInferredChart(undefined);
-            setActiveOutput({ error: null, pane: mode, result: next });
+            patchActiveOutput({ chart: undefined, error: null, failed: undefined, pane: mode, result: next });
             recordShard(shardKey);
             recordHistory(sql);
         } catch (error_: unknown) {
             // Capture the statement that actually failed. "Fix this" previously
             // read the live draft, so any edit after the failure asked the model
             // to repair text that never ran, against an error it never produced.
-            setFailedRun({ error: errorMessage(error_), sql });
-            setActiveOutput({ error: errorMessage(error_), pane: mode, result: null });
+            patchActiveOutput({ chart: undefined, error: errorMessage(error_), failed: { error: errorMessage(error_), sql }, pane: mode, result: null });
         } finally {
             setRunning(false);
         }
@@ -376,7 +372,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     // unlink with `null`), and clear that tab's stale result/error.
     const loadIntoActiveTab = (sql: string, savedId: null | string): void => {
         setTabs((current) => current.map((each) => (each.id === activeTab.id ? { ...each, activeId: savedId, sql } : each)));
-        setActiveOutput({ error: null, result: null });
+        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null });
     };
 
     const newQuery = (): void => {
@@ -524,7 +520,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     const showResults = (): void => {
-        setActivePane("results");
+        patchActiveOutput({ pane: "results" });
     };
 
     const showExplain = (): void => {
@@ -532,7 +528,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     const showChart = (): void => {
-        setActivePane("chart");
+        patchActiveOutput({ pane: "chart" });
     };
 
     const toggleSplit = (): void => {
@@ -747,11 +743,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                                 <button
                                     className={tabClass(false)}
                                     data-testid="sql-infer-chart"
-                                    disabled={assistant.pending}
+                                    disabled={assistant.pending("chart")}
                                     onClick={inferChart}
                                     type="button"
                                 >
-                                    {assistant.pending ? t("Thinking…") : t("Suggest chart")}
+                                    {assistant.pending("chart") ? t("Thinking…") : t("Suggest chart")}
                                 </button>
                             )}
                             <button className={tabClass(tab === "explain")} data-testid="sql-tab-explain" onClick={showExplain} type="button">

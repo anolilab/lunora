@@ -61,8 +61,19 @@ const SCHEMA_HISTORY_READS: Readonly<Record<string, AdminReadResolver>> = {
      * per relation, never one per row.
      */
     backRelationCounts: (sql, args, wildcard) => {
-        const ids = Array.isArray(args.ids) ? (args.ids as string[]) : [];
-        const relations = Array.isArray(args.relations) ? (args.relations as { column: string; table: string }[]) : [];
+        const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string") : [];
+        // Element-shape validated here, not cast: a hand-built payload with a
+        // non-string `table` would otherwise reach `quoteIdentifier` and throw a
+        // 500 rather than being skipped like every other unresolvable edge.
+        const relations = Array.isArray(args.relations)
+            ? args.relations.filter(
+                  (entry): entry is { column: string; table: string } =>
+                      typeof entry === "object" &&
+                      entry !== null &&
+                      typeof (entry as { table?: unknown }).table === "string" &&
+                      typeof (entry as { column?: unknown }).column === "string",
+              )
+            : [];
 
         return { result: readBackRelationCounts(sql, { ids, relations }), tables: new Set([wildcard]) };
     },

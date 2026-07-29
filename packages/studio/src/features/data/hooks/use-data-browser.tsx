@@ -165,6 +165,14 @@ interface DataBrowserModel {
     pageError: null | string;
     pageSize: number;
     previewRef: (target: string, id: string) => Promise<Record<string, unknown> | null>;
+
+    /**
+     * The shard the reads actually target — `shardKey` after the debounce. Anything
+     * that queries alongside the page (back-relation counts, say) must key on THIS,
+     * or it fires per keystroke and can resolve against a shard whose rows are not
+     * the ones on screen.
+     */
+    queryShardKey: string;
     rangeEnd: number;
     rangeStart: number;
     saveEdit: () => void;
@@ -922,6 +930,7 @@ const useDataBrowser = ({
         pageSize,
         rangeEnd,
         rangeStart,
+        queryShardKey: debouncedShard,
         saveEdit,
         selectedTable,
         selectTable,

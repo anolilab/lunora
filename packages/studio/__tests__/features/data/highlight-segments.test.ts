@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { highlightSegments } from "../../../src/features/data/data-grid";
+import { highlightSegments } from "../../../src/features/data/highlight-segments";
 
 /** The matched substrings, in order — what the operator actually sees marked. */
 const matched = (text: string, needle: string): string[] =>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { columnWindow, pinnedOffsets } from "../../../src/features/data/data-browser-grid";
+import { columnWindow, pinnedOffsets } from "../../../src/features/data/column-window";
 
 /** `count` columns of a uniform width, named `c0…cN`. */
 const columns = (count: number, width = 100): { getSize: () => number; id: string }[] =>

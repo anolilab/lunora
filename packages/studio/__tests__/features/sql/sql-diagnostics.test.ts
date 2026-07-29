@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { toSpans } from "../../../src/features/sql/editor-spans";
 import type { SqlSchema } from "../../../src/features/sql/sql-autocomplete";
 import { suggestionsFor } from "../../../src/features/sql/sql-autocomplete";
 import { maskNonCode } from "../../../src/features/sql/sql-context";
 import type { SqlDiagnostic } from "../../../src/features/sql/sql-diagnostics";
 import { lintDraft } from "../../../src/features/sql/sql-diagnostics";
-import { toSpans } from "../../../src/features/sql/sql-diagnostics-ui";
 
 const schema: SqlSchema = {
     columns: { messages: ["id", "body", "authorId"], users: ["id", "name"] },

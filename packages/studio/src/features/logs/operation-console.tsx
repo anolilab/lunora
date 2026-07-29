@@ -127,9 +127,14 @@ export const OperationConsole = ({
     const shown = useMemo(() => {
         const match = needle.trim().toLowerCase();
 
+        // One predicate, not two chained filters — the tape can hold thousands of
+        // entries and this re-runs on every keystroke.
         return entries
-            .filter((entry) => (shownFilter === "errors" ? entry.status === "error" : true))
-            .filter((entry) => match === "" || `${entry.functionPath} ${entry.summary} ${entry.shardKey}`.toLowerCase().includes(match))
+            .filter(
+                (entry) =>
+                    (shownFilter === "errors" ? entry.status === "error" : true) &&
+                    (match === "" || `${entry.functionPath} ${entry.summary} ${entry.shardKey}`.toLowerCase().includes(match)),
+            )
             .toReversed();
     }, [entries, needle, shownFilter]);
 
@@ -142,6 +147,10 @@ export const OperationConsole = ({
                 <Badge variant="secondary">{t("{count} calls", { count: entries.length })}</Badge>
                 {errorCount > 0 && <Badge variant="destructive">{t("{count} failed", { count: errorCount })}</Badge>}
                 <button
+                    // A toggle, not a command: without `aria-pressed` a screen
+                    // reader announces "Errors button" identically whether the
+                    // list is filtered or not, and the tint is the only cue.
+                    aria-pressed={shownFilter === "errors"}
                     className={cn("rounded px-2 py-0.5 text-xs outline-none hover:bg-accent focus-visible:bg-accent", shownFilter === "errors" && "bg-accent")}
                     data-testid="oc-filter-errors"
                     onClick={() => {

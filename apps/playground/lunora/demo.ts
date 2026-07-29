@@ -33,7 +33,10 @@ const DEPARTMENTS = ["design", "engineering", "finance", "ops", "sales"];
 export const seedDemo = internalMutation
     .input({ count: v.optional(v.number()), now: v.number() })
     .mutation(async ({ args, ctx }): Promise<{ created: number; total: number }> => {
-        const target = Math.min(Math.max(args.count ?? 250, 1), 2000);
+        // Floored: the validator accepts any number, and a fractional target
+        // would make the `existing.length >= target` guard and the row loop
+        // disagree about how many rows "done" means.
+        const target = Math.min(Math.max(Math.floor(args.count ?? 250), 1), 2000);
         const existing = await ctx.db.query("demoRecords").collect();
 
         if (existing.length >= target) {

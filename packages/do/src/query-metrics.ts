@@ -144,11 +144,17 @@ const ensureQueryMetricsTable = (sql: SqlExec): void => {
 };
 
 /**
- * The bucket most recently pruned, so the prune runs once per window instead of
- * once per statement. Module-scoped: a DO instance serves one shard, and a cold
- * start simply prunes again on the first write.
+ * The bucket most recently pruned PER SHARD, so the prune runs once per window
+ * instead of once per statement.
+ *
+ * Keyed by the storage handle rather than a module-level scalar: workerd hosts
+ * several Durable Object instances of the same class in one isolate, so a shared
+ * scalar lets a busy shard claim the window and every other shard on that
+ * isolate skip its prune entirely — the retention bound would then not hold,
+ * which is the one thing this marker exists to guarantee. A `WeakMap` means an
+ * evicted DO's entry is collected with it.
  */
-let lastPrunedBucket = 0;
+const lastPrunedBucket = new WeakMap<object, number>();
 
 /** Floor a timestamp to its bucket start. */
 const bucketFloor = (at: number): number => Math.floor(at / QUERY_BUCKET_MS) * QUERY_BUCKET_MS;
@@ -243,8 +249,8 @@ const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number,
         // row bound did not actually hold.
         const bucket = bucketFloor(now);
 
-        if (bucket !== lastPrunedBucket) {
-            lastPrunedBucket = bucket;
+        if (lastPrunedBucket.get(sql) !== bucket) {
+            lastPrunedBucket.set(sql, bucket);
             pruneQueryBuckets(sql, now);
         }
     } catch {

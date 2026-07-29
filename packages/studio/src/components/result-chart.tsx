@@ -33,11 +33,14 @@ const pickColumns = (result: SqlConsoleResult): { label: null | string; value: n
 const SqlResultChart = ({ axes, result }: { readonly axes?: { x: string; y: string[] }; readonly result: SqlConsoleResult }): ReactElement => {
     const t = useT();
     const picked = pickColumns(result);
+    // A set, not repeated `columns.includes`: the `y` scan below is a lookup per
+    // candidate, and a wide result makes that quadratic on every render.
+    const present = new Set(result.columns);
     // A model-suggested pair overrides the heuristic, but only for columns the
     // result actually has — `axes` is already validated server-side, and this is
     // the second gate so a stale suggestion cannot blank the chart.
-    const label = axes !== undefined && result.columns.includes(axes.x) ? axes.x : picked.label;
-    const value = axes?.y.find((column) => result.columns.includes(column)) ?? picked.value;
+    const label = axes !== undefined && present.has(axes.x) ? axes.x : picked.label;
+    const value = axes?.y.find((column) => present.has(column)) ?? picked.value;
 
     const data =
         value === null

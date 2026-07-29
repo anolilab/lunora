@@ -88,8 +88,16 @@ interface SqlDiagnostic {
  */
 const SQLITE_NEAR = /near "([^"]*)": syntax error/iu;
 
-/** A `SCAN &lt;table>` step in a SQLite query plan — a full table scan, no index used. */
-const PLAN_SCAN = /^SCAN (?:TABLE )?([^\s(]+)/u;
+/**
+ * A `SCAN <table>` step in a SQLite query plan — a full table scan, no index used.
+ *
+ * `CONSTANT ROW` and `SUBQUERY n` are excluded: SQLite emits `SCAN CONSTANT ROW`
+ * for a constant select and `SCAN SUBQUERY 1` for a materialized subquery, so
+ * matching them warned "full table scan on `CONSTANT`" for statements that read
+ * no table at all — a false warning is how an always-on linter loses its
+ * credibility.
+ */
+const PLAN_SCAN = /^SCAN (?:TABLE )?(?!CONSTANT\b|SUBQUERY\b)([^\s(]+)/u;
 
 /** Rows a SQLite `EXPLAIN QUERY PLAN` returns; only `detail` is rendered. */
 interface PlanRow {

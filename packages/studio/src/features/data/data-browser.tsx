@@ -353,6 +353,7 @@ export const DataBrowser = ({
         pageError,
         previewRef,
         pageSize,
+        queryShardKey,
         rangeEnd,
         rangeStart,
         saveEdit,
@@ -422,18 +423,25 @@ export const DataBrowser = ({
         [columnsByTable, selectedTable],
     );
     const enabledBackRelations = useMemo(() => new Set(backRelationsOn[selectedTable ?? ""]), [backRelationsOn, selectedTable]);
-    const pageIds = useMemo(
-        () =>
-            (page?.rows ?? [])
-                .map((row) => {
-                    const id = row._id ?? row.id;
+    const pageIds = useMemo(() => {
+        // One pass, not map-then-filter: a page is up to a few hundred rows and
+        // this re-derives on every page change.
+        const ids: string[] = [];
 
-                    return typeof id === "string" ? id : "";
-                })
-                .filter((id) => id !== ""),
-        [page],
-    );
-    const backRelationCounts = useBackRelations(enabledBackRelations, availableBackRelations, pageIds, shardKey);
+        for (const row of page?.rows ?? []) {
+            const id = row._id ?? row.id;
+
+            if (typeof id === "string" && id !== "") {
+                ids.push(id);
+            }
+        }
+
+        return ids;
+    }, [page]);
+    // The DEBOUNCED shard, matching the page these ids came from — the live one
+    // would refetch per keystroke and could count children on a shard other than
+    // the one whose rows are on screen.
+    const backRelationCounts = useBackRelations(enabledBackRelations, availableBackRelations, pageIds, queryShardKey);
 
     const onToggleBackRelation = useCallback(
         (key: string): void => {
@@ -455,9 +463,6 @@ export const DataBrowser = ({
     // `selectedTable` is null before a table is chosen; key on "" so the lookup
     // is total and no pins are ever attributed to the wrong table.
     const pinKey = selectedTable ?? "";
-    // The URL wins when it names pins — a shared link to a wide table is only
-    // useful if it arrives with the same columns frozen. Browser storage is the
-    // per-browser default for when the link doesn't carry any.
     // STORAGE wins, with the URL as the seed for a table nobody has pinned on
     // this browser yet. The precedence was the other way round, which made every
     // pin/unpin a no-op for the rest of the session whenever `?pins=` was

@@ -3,12 +3,13 @@ import { useState } from "react";
 
 import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
+import type { GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
 
 /** Operator-facing copy per failure reason. `no-ai-binding` never reaches here — the bar is hidden. */
-const reasonMessage = (reason: NonNullable<SqlAssistant["reason"]>): string => {
+const reasonMessage = (reason: GenerateSqlDegradedReason): string => {
     if (reason === "unsafe-response") {
         return "The model returned a statement that is not read-only, so it was discarded.";
     }
@@ -43,6 +44,11 @@ export const SqlAssistantBar = ({
         return null;
     }
 
+    // Only THIS surface's task — a chart inference running in the editor below
+    // must not spin this button or print its error here.
+    const pending = assistant.pending("sql");
+    const reason = assistant.reason("sql");
+
     const submit = (repair: boolean): void => {
         const text = prompt.trim();
 
@@ -68,7 +74,7 @@ export const SqlAssistantBar = ({
                     aria-label={t("Describe the query you want")}
                     className="h-7 flex-1 text-xs"
                     data-testid="sql-assistant-prompt"
-                    disabled={assistant.pending}
+                    disabled={pending}
                     onChange={(event) => {
                         setPrompt(event.target.value);
                     }}
@@ -84,16 +90,16 @@ export const SqlAssistantBar = ({
                 <button
                     className={cn(
                         "rounded-md border border-border px-2 py-1 text-xs outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
-                        assistant.pending && "opacity-60",
+                        pending && "opacity-60",
                     )}
                     data-testid="sql-assistant-generate"
-                    disabled={assistant.pending || prompt.trim() === ""}
+                    disabled={pending || prompt.trim() === ""}
                     onClick={() => {
                         submit(false);
                     }}
                     type="button"
                 >
-                    {assistant.pending ? t("Thinking…") : t("Draft SQL")}
+                    {pending ? t("Thinking…") : t("Draft SQL")}
                 </button>
                 {/* The repair affordance is what makes drafting pay off — a first
                     draft is often one column name away from correct. */}
@@ -101,7 +107,7 @@ export const SqlAssistantBar = ({
                     <button
                         className="rounded-md border border-border px-2 py-1 text-xs outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
                         data-testid="sql-assistant-fix"
-                        disabled={assistant.pending}
+                        disabled={pending}
                         onClick={() => {
                             submit(true);
                         }}
@@ -111,9 +117,9 @@ export const SqlAssistantBar = ({
                     </button>
                 )}
             </div>
-            {assistant.reason !== undefined && (
+            {reason !== undefined && (
                 <p className="text-[11px] text-muted-foreground" data-testid="sql-assistant-reason" role="status">
-                    {reasonMessage(assistant.reason)}
+                    {reasonMessage(reason)}
                 </p>
             )}
         </div>
