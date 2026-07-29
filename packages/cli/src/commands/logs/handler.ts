@@ -72,7 +72,7 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
         return { code: 1, descriptor: undefined, error: "no toolchain" };
     }
 
-    const tailCommand = driver.toolchain.tail({
+    const tailCommand = driver.toolchain.tail?.({
         environment: env,
         format: options.format,
         search: options.search,
@@ -80,6 +80,15 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
         temporary: options.temporary,
         worker: options.worker,
     });
+
+    if (tailCommand === undefined) {
+        // A target whose logs come from somewhere other than a CLI — a provider
+        // API, or the control plane's own pipeline. Said out loud rather than
+        // exiting 0 having tailed nothing.
+        options.logger.error(`logs: deploy target "${driver.id}" has no log-tail command`);
+
+        return { code: 1, descriptor: undefined, error: "no tail command" };
+    }
 
     const exec = execArgsFor(detectPackageManager(cwd), tailCommand.tool, tailCommand.args);
     const descriptor: SpawnDescriptor = {

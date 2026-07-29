@@ -503,14 +503,25 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
 
     const { toolchain } = resolveDeployDriver(target);
 
-    if (toolchain === undefined) {
-        logger.error("deploy target has no command-line toolchain; cannot push secrets");
+    if (toolchain?.secretPut === undefined) {
+        // Either the target has no CLI at all, or it has one with no secret
+        // step — an IaC-backed target declares secrets as resources inside its
+        // program instead. Reported rather than skipped: a silent no-op here
+        // would look like the secrets were pushed.
+        logger.error("deploy target has no command-line secret step; push secrets through the target's own tooling");
 
         return false;
     }
 
     for (const key of keys) {
         const secretCommand = toolchain.secretPut({ environment: options.env, key, temporary: options.temporary });
+
+        if (secretCommand === undefined) {
+            logger.error(`deploy target has no secret command for "${key}"`);
+
+            return false;
+        }
+
         const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
 
         // `wrangler secret put <name>` reads the value from stdin, so the generated

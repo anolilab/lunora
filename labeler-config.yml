@@ -49,6 +49,9 @@
 "package: db":
     - changed-files:
           - any-glob-to-any-file: "packages/db/**/*"
+"package: deploy-alchemy":
+    - changed-files:
+          - any-glob-to-any-file: "packages/deploy-alchemy/**/*"
 "package: dispatch":
     - changed-files:
           - any-glob-to-any-file: "packages/dispatch/**/*"

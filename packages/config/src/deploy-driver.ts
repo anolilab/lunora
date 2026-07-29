@@ -170,12 +170,24 @@ export interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     /** The command that runs a local dev server. */
     dev: (request: DevRequest) => ToolchainCommand;
-    /** The command that lists remote secret names. */
-    secretList: (request: SecretRequest) => ToolchainCommand;
-    /** The command that writes one secret. Its value is passed on stdin, never argv. */
-    secretPut: (request: SecretRequest) => ToolchainCommand;
-    /** The command that tails live logs. */
-    tail: (request: TailRequest) => ToolchainCommand;
+
+    /**
+     * The command that lists remote secret names, or `undefined` for a target
+     * with no such step.
+     *
+     * Optional because not every target manages secrets through a CLI: an
+     * IaC-backed one declares them as resources inside its program, so there is
+     * no separate command to run. Absent means "this target has no CLI for
+     * this", which a caller must report rather than paper over — silently
+     * skipping a secret push would look like success.
+     */
+    secretList?: (request: SecretRequest) => ToolchainCommand | undefined;
+
+    /** The command that writes one secret, or `undefined`. Its value is passed on stdin, never argv. See {@link DriverToolchain.secretList}. */
+    secretPut?: (request: SecretRequest) => ToolchainCommand | undefined;
+
+    /** The command that tails live logs, or `undefined` for a target whose logs come from elsewhere. */
+    tail?: (request: TailRequest) => ToolchainCommand | undefined;
 }
 
 /** Options every driver method receives. */
@@ -225,6 +237,28 @@ export interface DeployDriver {
      * must fold a failed step into a warning rather than throwing.
      */
     provision: (context: DriverContext) => Promise<ProvisionResult>;
+
+    /**
+     * Where this driver can execute.
+     *
+     * `"any"` means the driver is pure — it builds argv and reads files and
+     * would run inside a Worker. `"node"` means it needs a real Node process:
+     * child processes, a filesystem, native modules.
+     *
+     * Stated because it is otherwise invisible until it breaks. An
+     * IaC-backed driver pulls in a Node-shaped dependency tree — `alchemy@0.93`
+     * alone brings `wrangler`, `miniflare`, `esbuild`, `execa`, `glob`,
+     * `open`, `proper-lockfile` and `signal-exit` — none of which survive a
+     * workerd bundle. A control plane that runs in a Worker must therefore be
+     * able to ask *before* importing, and split its work: the pure half
+     * (routing, secret writes, teardown calls) in the Worker, convergence in a
+     * container. Without this field that split is a comment in a design doc
+     * and a bundle error in CI.
+     *
+     * Defaults to `"node"` when absent — the safe assumption, since a driver
+     * that forgot to declare is more likely to be the heavy kind.
+     */
+    readonly runtime?: "any" | "node";
 
     /**
      * The host's command-line surface, or `undefined` for a host that has none.

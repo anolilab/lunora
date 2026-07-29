@@ -297,6 +297,7 @@ interface DeployDriver {
     infer: (context: DriverContext) => Promise<ResourceGraph>;
     readonly name: string;
     provision: (context: DriverContext) => Promise<ProvisionResult>;
+    readonly runtime?: "any" | "node";
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -462,9 +463,9 @@ interface DriverContext {
 interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     dev: (request: DevRequest) => ToolchainCommand;
-    secretList: (request: SecretRequest) => ToolchainCommand;
-    secretPut: (request: SecretRequest) => ToolchainCommand;
-    tail: (request: TailRequest) => ToolchainCommand;
+    secretList?: (request: SecretRequest) => ToolchainCommand | undefined;
+    secretPut?: (request: SecretRequest) => ToolchainCommand | undefined;
+    tail?: (request: TailRequest) => ToolchainCommand | undefined;
 }
 ```
 
@@ -1545,6 +1546,12 @@ const isRecordedProcessCurrent: (state: DevServerState) => boolean;
 const isRemoteEnvEnabled: (value: string | undefined) => boolean;
 ```
 
+### `isWorkerdSafeDriver` (const)
+
+```ts
+const isWorkerdSafeDriver: (driver: DeployDriver) => boolean;
+```
+
 ### `materializeRemoteWranglerConfig` (const)
 
 ```ts
@@ -1715,6 +1722,12 @@ const reconcileWranglerCompatibilityDate: (projectRoot: string) => ReconcileComp
 
 ```ts
 const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<string>) => ReconcileResult;
+```
+
+### `registerDeployDriver` (const)
+
+```ts
+const registerDeployDriver: (driver: DeployDriver) => void;
 ```
 
 ### `requiredSecrets` (const)

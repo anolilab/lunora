@@ -76,6 +76,9 @@ const TIER_1 = [
     "platform",
     "platform-cloudflare",
     "shard-engine",
+    // A deploy driver's surface is a contract two things depend on: the CLI
+    // that resolves it, and the control plane that decides where it may run.
+    "deploy-alchemy",
 ];
 
 const TIER_2 = [
