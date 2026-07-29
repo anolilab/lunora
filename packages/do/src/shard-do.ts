@@ -6721,6 +6721,7 @@ abstract class ShardDO {
     /** The AI-assistant admin writes, keyed by function path. */
     private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
         return {
+            [ADMIN_FUNCTIONS.aiAvailable]: () => Promise.resolve(this.handleAiAvailable()),
             [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
             [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
             [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
@@ -6746,6 +6747,27 @@ abstract class ShardDO {
         }
 
         return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiAvailable` — does this deployment have an `AI`
+     * binding at all?
+     *
+     * The studio asks ONCE on mount so it can decide whether to paint the
+     * assistant affordances. Without it the only way to find out was to issue a
+     * real request and read `no-ai-binding` off the failure — which meant an app
+     * with no binding rendered "Draft SQL" and "Suggest chart" buttons that did
+     * nothing until the operator clicked one, and only then made them vanish.
+     *
+     * Deliberately NOT part of `studioFeatures()`: those flags are computed at
+     * codegen time from imports and declared dependencies, while a binding is a
+     * runtime property of `env`. Folding a runtime probe into that codegen-owned
+     * contract would make its drift guard meaningless.
+     *
+     * No model call, no audit entry — it reads one property off `env`.
+     */
+    private handleAiAvailable(): Response {
+        return jsonResponse({ result: { available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined } }, 200);
     }
 
     /**

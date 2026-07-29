@@ -1,7 +1,9 @@
 import { useLunora } from "@lunora/react";
 import { useCallback, useState } from "react";
 
+import { useAdminQuery } from "../../../hooks/use-admin-query";
 import type {
+    AiAvailableResult,
     AssistantChartConfig,
     FilterClause,
     GenerateChartResult,
@@ -11,6 +13,9 @@ import type {
 } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions } from "../../../lib/internal";
+
+/** Stable empty args, so the availability query is not re-keyed every render. */
+const NO_ARGS: Record<string, unknown> = {};
 
 const AI_GENERATE_SQL = adminRef(ADMIN_FUNCTIONS.aiGenerateSql);
 const AI_TABLE_FILTER = adminRef(ADMIN_FUNCTIONS.aiTableFilter);
@@ -60,7 +65,13 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
 
     const [pendingByTask, setPendingByTask] = useState<Partial<Record<AssistantTaskKey, boolean>>>({});
     const [reasonByTask, setReasonByTask] = useState<Partial<Record<AssistantTaskKey, GenerateSqlDegradedReason>>>({});
-    const [unavailable, setUnavailable] = useState(false);
+    // Asked ONCE, on mount, so an app with no `AI` binding never paints a button
+    // that can only fail. Before this the sole signal was a `no-ai-binding` reply
+    // to a real request, so the affordances rendered, did nothing on the first
+    // click, and only then disappeared.
+    const availability = useAdminQuery<AiAvailableResult>(ADMIN_FUNCTIONS.aiAvailable, NO_ARGS, { shardKey });
+    const [latched, setLatched] = useState(false);
+    const unavailable = latched || availability.data?.available === false;
 
     const begin = useCallback((task: AssistantTaskKey): void => {
         setPendingByTask((current) => {
@@ -83,7 +94,7 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
         }
 
         if (failure === "no-ai-binding") {
-            setUnavailable(true);
+            setLatched(true);
         }
     }, []);
 

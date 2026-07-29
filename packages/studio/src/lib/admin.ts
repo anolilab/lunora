@@ -32,6 +32,7 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    aiAvailable: "__lunora_admin__:aiAvailable",
     aiChartConfig: "__lunora_admin__:aiChartConfig",
     aiGenerateSql: "__lunora_admin__:aiGenerateSql",
     aiTableFilter: "__lunora_admin__:aiTableFilter",
@@ -1327,6 +1328,11 @@ export interface AssistantChartConfig {
     kind: "area" | "bar" | "line";
     x: string;
     y: string[];
+}
+
+/** Whether the deployment has an `AI` binding — the gate for every assistant affordance. */
+export interface AiAvailableResult {
+    available: boolean;
 }
 
 /** Payload of an `aiChartConfig` call. */

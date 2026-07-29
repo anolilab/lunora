@@ -13,6 +13,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 const ADMIN_FUNCTIONS: {
+    readonly aiAvailable: "__lunora_admin__:aiAvailable";
     readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";

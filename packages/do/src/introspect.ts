@@ -49,6 +49,7 @@ const FLAGS_FUNCTION_PREFIX = "__lunora_flags__:";
  */
 const ADMIN_FUNCTIONS = {
     applyCdc: "__lunora_admin__:applyCdc",
+    aiAvailable: "__lunora_admin__:aiAvailable",
     aiChartConfig: "__lunora_admin__:aiChartConfig",
     aiGenerateSql: "__lunora_admin__:aiGenerateSql",
     aiTableFilter: "__lunora_admin__:aiTableFilter",
