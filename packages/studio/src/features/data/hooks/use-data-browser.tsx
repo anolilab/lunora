@@ -261,6 +261,9 @@ const resolveStagedChanges = (page: TablePage | null, staged: StagedEditsModel["
     return changes;
 };
 
+/** Whether a column is editable in place — every column but the meta ones. */
+const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
+
 const useDataBrowser = ({
     initialFilters,
     initialOrderBy,
@@ -627,8 +630,6 @@ const useDataBrowser = ({
     };
 
     // ── Inline cell editing → staged buffer → preview-diff → commit ──────────
-    const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
-
     const startCellEdit = (targetRow: string, column: string): void => {
         setEditingCell({ column, rowId: targetRow });
     };

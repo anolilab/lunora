@@ -61,6 +61,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
         }
 
         setBusy(false);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the read targets `shardKey` (state seeded from the prop), which is listed; depending on the prop would ignore the operator's own shard edit
     }, [client, shardKey]);
 
     useEffect(() => {

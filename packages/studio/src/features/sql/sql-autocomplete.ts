@@ -241,11 +241,13 @@ const suggestionsFor = (value: string, caret: number, schema: SqlSchema): Sugges
     });
     const columnHits = takeColumnMatches(schema, span.text, MAX_SUGGESTIONS);
 
-    const keywordHits: Suggestion[] = KEYWORDS.filter(
-        (keyword) => span.text !== "" && matches(keyword, span.text) && keyword.toLowerCase() !== span.text.toLowerCase(),
-    ).map((keyword) => {
-        return { kind: "keyword" as const, label: keyword };
-    });
+    // One pass over the keyword table, not `.filter().map()`: this runs on every
+    // keystroke against ~100 keywords, so the second walk is pure overhead.
+    const keywordHits: Suggestion[] = KEYWORDS.flatMap((keyword) =>
+        span.text !== "" && matches(keyword, span.text) && keyword.toLowerCase() !== span.text.toLowerCase()
+            ? [{ kind: "keyword" as const, label: keyword }]
+            : [],
+    );
 
     const ordered = prefersColumns(value, span.start) ? [...columnHits, ...tableHits, ...keywordHits] : [...tableHits, ...columnHits, ...keywordHits];
 

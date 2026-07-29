@@ -84,10 +84,18 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
         ensure(policy.table).cells[policy.on] = { procedure: policy.procedure };
     }
 
+    // Deduped through a Set, not `maskedColumns.includes`: the check is inside the
+    // loop, so the array scan made it quadratic in the number of masked columns
+    // on one table.
+    const seenMasked = new Map<string, Set<string>>();
+
     for (const column of maskColumns) {
         const row = ensure(column.table);
+        const seen = seenMasked.get(column.table) ?? new Set<string>();
 
-        if (!row.maskedColumns.includes(column.column)) {
+        if (!seen.has(column.column)) {
+            seen.add(column.column);
+            seenMasked.set(column.table, seen);
             row.maskedColumns.push(column.column);
         }
     }

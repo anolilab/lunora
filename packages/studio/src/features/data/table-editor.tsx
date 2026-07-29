@@ -70,6 +70,16 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
  * URL and browser back/forward moves between tables and tiers. The browsers push on
  * selection and re-open whatever the URL names.
  */
+/** Copy the current deep link. A no-op where the clipboard API is unavailable (insecure context). */
+const onCopyLink = (): void => {
+    try {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
+        fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
+    } catch {
+        /* clipboard unavailable (insecure context) — nothing to copy to */
+    }
+};
+
 export const TableEditor = ({ editable = false, initialShardKey }: TableEditorProps): ReactElement => {
     const client = useLunora();
     const navigate = useNavigate();
@@ -153,6 +163,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
                 }),
             );
         }
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `tier` and `tableParameter` ARE `view.tier` / `view.table`, destructured above and listed in the deps
     }, [globalTableNames, navigate, tableParameter, tier]);
 
     // Switch tier via the schema dropdown: write `?schema=…` and clear `?table` (the
@@ -246,15 +257,6 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
 
     // Copy the current view's full URL to the clipboard. Best-effort: a missing/
     // throwing clipboard (insecure context) is swallowed — the URL is still in the bar.
-    const onCopyLink = (): void => {
-        try {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
-            fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
-        } catch {
-            /* clipboard unavailable (insecure context) — nothing to copy to */
-        }
-    };
-
     // Persist the current view under a name, then refresh the toolbar's list.
     const onSaveQuery = (name: string, snapshot: DataView): void => {
         setSavedQueries(saveQuery(name, snapshot));

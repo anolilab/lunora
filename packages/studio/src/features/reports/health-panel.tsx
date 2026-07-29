@@ -349,6 +349,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         setScheduler(result.scheduler);
 
         inFlightRef.current = false;
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `rootShard` is derived from the prop and listed in the deps
     }, [client, recentShards, rootShard]);
 
     useEffect(() => {

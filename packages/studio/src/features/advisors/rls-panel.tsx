@@ -30,13 +30,21 @@ interface TableCoverage {
 /** Fold the flat policy list into one row per table, in alphabetical table order. */
 const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
     const byTable = new Map<string, TableCoverage>();
+    // Procedure names are deduped through a Set, not `procedures.includes`: the
+    // check sits inside the fold, so the array scan made it quadratic in the
+    // number of policies on one table.
+    const seenProcedures = new Map<string, Set<string>>();
 
     for (const policy of policies) {
         const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: [], table: policy.table };
 
         coverage.operations.add(policy.on);
 
-        if (!coverage.procedures.includes(policy.procedure)) {
+        const seen = seenProcedures.get(policy.table) ?? new Set<string>();
+
+        if (!seen.has(policy.procedure)) {
+            seen.add(policy.procedure);
+            seenProcedures.set(policy.table, seen);
             coverage.procedures.push(policy.procedure);
         }
 

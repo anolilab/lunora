@@ -114,6 +114,23 @@ const StatCard = ({
  * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
  * remount.
  */
+/** A duration for display: `—` when there is none, microseconds under a millisecond. */
+const formatMs = (ms: number): string => {
+    if (ms <= 0) {
+        return "—";
+    }
+
+    if (ms < 1) {
+        return `${(ms * 1000).toFixed(0)}μs`;
+    }
+
+    if (ms < 1000) {
+        return `${ms.toFixed(1)}ms`;
+    }
+
+    return `${(ms / 1000).toFixed(2)}s`;
+};
+
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -241,22 +258,6 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const latencyPercentiles = metrics ? computeLatencyPercentiles(metrics) : { p90: 0, p95: 0 };
 
     // Format a millisecond duration for the P90/P95 stat cards.
-    const formatMs = (ms: number): string => {
-        if (ms <= 0) {
-            return "—";
-        }
-
-        if (ms < 1) {
-            return `${(ms * 1000).toFixed(0)}μs`;
-        }
-
-        if (ms < 1000) {
-            return `${ms.toFixed(1)}ms`;
-        }
-
-        return `${(ms / 1000).toFixed(2)}s`;
-    };
-
     // Enriched query stats — derived when the snapshot contains `queryStats`.
     // `MetricsSnapshot` extends `ShardMetrics` with the optional `queryStats`
     // field surfaced by post-feature workers. Use an `in` guard to narrow safely
@@ -273,6 +274,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         }
 
         return enrichQueryStats(snapQs);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `metrics` is derived from `data` above and listed in the deps
     }, [metrics]);
 
     // The shown tab, falling back to overview when the active shard/snapshot has no

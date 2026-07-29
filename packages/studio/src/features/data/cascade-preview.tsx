@@ -123,10 +123,9 @@ const fetchRelatedRows = async (
 ): Promise<{ capNote: string | undefined; rowCount: number; rowIds: string[] }> => {
     try {
         const page = await readPage(table, rowId);
-        const rowIds = page.rows
-            .map((r) => extractRowId(r))
-            .filter(Boolean)
-            .slice(0, MAX_ROWS_PER_TABLE);
+        // One pass: `.map().filter(Boolean)` walked the page twice and, worse, did
+        // not narrow away the empty ids — `flatMap` does both.
+        const rowIds = page.rows.flatMap((r) => extractRowId(r) || []).slice(0, MAX_ROWS_PER_TABLE);
         // This read runs the COUNT (no `skipCount`), so `total` is present; the
         // `?? 0` only satisfies the now-optional `TablePage.total` type.
         const total = page.total ?? 0;

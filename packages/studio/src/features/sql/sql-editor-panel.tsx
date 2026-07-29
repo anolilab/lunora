@@ -113,6 +113,13 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
  * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
  * tables (use the Data grid's inline edit for mutations).
  */
+/** One result-pane tab's classes, selected or not. */
+const tabClass = (selected: boolean): string =>
+    `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
+
+/** The tab the editor opens with on a fresh browser: the first template. */
+const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
+
 export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -124,7 +131,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     // Multiple editor tabs: each persisted tab owns its draft + the saved-query
     // it mirrors; the result/error/pane are kept per tab in ephemeral maps so a
     // reload restores the open tabs (and their text) but re-runs for results.
-    const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
     const { activeId: activeTabId, setActiveId: setActiveTabId, setTabs, tabs } = usePersistedTabs(seedTab);
 
     // One ephemeral output record per tab id (result + error + result-pane). Not
@@ -539,9 +545,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const onSearchChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
     };
-
-    const tabClass = (selected: boolean): string =>
-        `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
 
     // Editor + results share a flex container; `splitView` flips its axis (and the
     // results pane from a bottom band to a right column) — the only layout change.

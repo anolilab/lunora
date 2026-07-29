@@ -143,6 +143,9 @@ const triggerDownload = (url: string, filename: string): void => {
  * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
  * stay presentational.
  */
+/** Selection identity for a bucket object: its full key. */
+const keyOf = (object: StorageObject): string => object.key;
+
 const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): FileBrowserModel => {
     const client = useLunora();
 
@@ -355,7 +358,6 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         };
     }, [client, keysSignature, referenceShard]);
 
-    const keyOf = (object: StorageObject): string => object.key;
     const {
         allSelected,
         clear: clearSelection,

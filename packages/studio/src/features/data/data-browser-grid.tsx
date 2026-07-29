@@ -531,6 +531,11 @@ const EditableCell = ({
  * TanStack's resize handler. `draggedRef` carries the column id being dragged
  * between the source's `dragstart` and the target's `drop`.
  */
+/** Accept the drop — without `preventDefault` the browser refuses the target. */
+const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
+    event.preventDefault();
+};
+
 const GridHeaderCell = ({
     draggedRef,
     header,
@@ -552,10 +557,6 @@ const GridHeaderCell = ({
     const onDragStart = (): void => {
         // eslint-disable-next-line no-param-reassign -- a ref's `.current` is mutable by design; it carries the drag source across handlers
         draggedRef.current = header.column.id;
-    };
-
-    const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
-        event.preventDefault();
     };
 
     const onDrop = (): void => {
@@ -1021,6 +1022,7 @@ const useDataBrowserTable = (
     // `rows ?? []` would hand a fresh `[]` every render — react-table then resets +
     // re-renders forever, hard-hanging the data tab. Memoizing pins the empty array
     // (and the loaded page's rows) to one reference until the rows actually change.
+    // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `rows` IS `page?.rows`, destructured above and listed in the deps
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
     // Row selection (for bulk delete / export-of-selected) and column visibility

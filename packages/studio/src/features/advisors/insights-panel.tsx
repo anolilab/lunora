@@ -406,6 +406,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         });
 
         return [...staticRows, ...runtimeRows, ...insightRows];
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `advisories` IS `advisoriesQuery.data?.advisories`, destructured above and listed in the deps
     }, [advisories, insights, jumpToSchemaIndex, runtimeRows, t]);
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;

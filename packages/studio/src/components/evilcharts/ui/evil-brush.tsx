@@ -222,6 +222,7 @@ const EvilBrush = ({
                 return adjusted;
             });
         }
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `totalPoints` IS `data.length`, computed above and listed in the deps
     }, [totalPoints, isControlled]);
 
     // ── Clamping & committing ───────────────────────────────────────────────

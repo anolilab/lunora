@@ -124,7 +124,9 @@ const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
                         callOptions(targetShard),
                     )) as TablePage;
 
-                    pools[ref] = page.rows.map((row) => extractId(row)).filter(Boolean);
+                    // One pass, and `flatMap` narrows away the empty ids that
+                    // `.filter(Boolean)` only removes at runtime.
+                    pools[ref] = page.rows.flatMap((row) => extractId(row) || []);
                 } catch {
                     // FK pool unavailable — the column will be skipped.
                     pools[ref] = [];
