@@ -60,7 +60,16 @@ export default createConfig(
         files: ["src/solid/**/*.{ts,tsx}", "__tests__/solid/**/*.{ts,tsx}"],
         languageOptions: { parserOptions: { project: "./tsconfig.solid.json", tsconfigRootDir: import.meta.dirname } },
         rules: {
-            // Solid compiles JSX too, but none of React's hook/component rules apply.
+            /*
+             * `packages/solid` lints its own `.tsx` with none of these overrides,
+             * which can look like they are unnecessary here. The difference is
+             * that this package really does depend on React — it ships a React
+             * port — so the shared config turns the React rule set on for the
+             * whole package, including the Solid files beside it.
+             *
+             * Solid compiles JSX too, but none of React's hook/component rules
+             * describe it.
+             */
             "react-hooks/exhaustive-deps": "off",
             "react-hooks/rules-of-hooks": "off",
             "react/no-unknown-property": "off",
@@ -161,6 +170,14 @@ export default createConfig(
     /*
      * Svelte components. Same reasoning as Vue: the parser makes the file
      * readable, `svelte-check` keeps owning the types.
+     */
+    /*
+     * `flat/recommended` for Svelte but `flat/essential` for Vue, because the
+     * tiers do not mean the same thing. Vue's `recommended` layers 33 formatting
+     * rules (`html-indent`, `html-quotes`, `max-attributes-per-line`, …) on top
+     * of its correctness set; Svelte's `recommended` is 39 rules that are almost
+     * all correctness, with its formatting rules turned off separately by
+     * `flat/prettier` below.
      */
     ...sveltePlugin.configs["flat/recommended"].map((entry) => ({ ...entry, files: ["src/svelte/**/*.svelte", "__tests__/svelte/**/*.svelte"] })),
     {
