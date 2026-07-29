@@ -1,22 +1,27 @@
 <script setup lang="ts">
-import { ref, useId } from "vue";
+import { computed, ref, useId } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS } from "../core/labels";
 import { createMembersController } from "../core/members";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const context = useAuthUI();
-const t = context.localization;
-const enabled = isFlowEnabled(context, "organization", "MembersCard");
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "organization", "MembersCard"));
 // Generated, not hard-coded: two cards on one page must not collide.
 const uid = useId();
 const roleId = `${uid}-role`;
-const { actions, state } = useController((context_) => createMembersController(context_, { autoLoad: enabled }));
+// Read inside the factory rather than captured: `useController` re-runs it when
+// the discovered context lands, and a gated-off card must not fire the resource
+// auto-load just to render nothing.
+const { actions, state } = useController((context_) => createMembersController(context_, { autoLoad: enabled.value }));
 
 const email = ref("");
 const role = ref<string>("member");

@@ -6,14 +6,14 @@
  * setup controller.
  */
 import type { Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed } from "@angular/core";
 
-import type { TwoFactorSetupActions, TwoFactorSetupState } from "../core/two-factor-setup";
 import { isFlowEnabled } from "../core/flow-gate";
+import type { TwoFactorSetupActions, TwoFactorSetupState } from "../core/two-factor-setup";
 import { createTwoFactorSetupController } from "../core/two-factor-setup";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
-import { injectAuthUI } from "./provider";
+import { injectAuthUIContext } from "./provider";
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -21,7 +21,7 @@ import { injectAuthUI } from "./provider";
     selector: "lunora-two-factor-setup-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             @if (state().step === "enabled") {
                 <lunora-auth-card [title]="t.twoFactorSetup">
                     <lunora-auth-banner [error]="state().error" [success]="t.twoFactorEnabled" />
@@ -82,9 +82,9 @@ import { injectAuthUI } from "./provider";
     `,
 })
 class TwoFactorSetupCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "twoFactor", "TwoFactorSetupCard");
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "twoFactor", "TwoFactorSetupCard"));
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createTwoFactorSetupController, { context: this.context });
     protected readonly state: Signal<TwoFactorSetupState> = this.bridge.state;
     protected readonly actions: TwoFactorSetupActions = this.bridge.actions;

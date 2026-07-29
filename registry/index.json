@@ -22,6 +22,11 @@
             "title": "Auth — Clerk"
         },
         {
+            "description": "Styled transactional email templates for the Lunora auth flows — verify address, reset password, magic link, one-time code, organization invitation, and the security notices that follow a change. Rendered server-side by @lunora/mail, so they are the same mail whichever frontend framework you use.",
+            "name": "auth-emails",
+            "title": "Auth — Email templates"
+        },
+        {
             "description": "Passwordless magic-link sign-in for Lunora auth. Wires better-auth's magicLink plugin on top of the base `auth` item and delivers the sign-in link through @lunora/mail (captured into the studio Mail tab in dev).",
             "name": "auth-magic-link",
             "title": "Auth — Magic link"

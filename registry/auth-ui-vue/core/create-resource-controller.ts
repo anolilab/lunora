@@ -9,53 +9,102 @@ import { mapAuthError } from "./map-error";
 import { createStore } from "./store";
 import type { FlowStatus } from "./types";
 
-interface ResourceState<T> {
+/**
+ * `extra` is a slice of flow-specific state that must live in *this* store
+ * rather than beside it — a search term, a total, a cursor.
+ *
+ * It exists because the alternative does not work: composing two stores means
+ * `getState` builds a fresh object on every call, which silently breaks React's
+ * `useSyncExternalStore` reference check. Keeping the extra fields here means
+ * one snapshot, one stable reference, and no flow having to re-implement the
+ * engine to carry two more properties.
+ *
+ * A nested field rather than an intersection: `Partial&lt;A & B>` is not assignable
+ * from `{ busy: true }` while `B` is an unresolved generic, so an intersection
+ * would need a cast at every internal update. Nesting keeps all of them honest.
+ */
+interface ResourceState<T, TExtra extends object = Record<never, never>> {
     /** A mutation (revoke, remove, …) is in flight. */
     busy: boolean;
     error?: string;
+    /** Flow-specific state that has to share this snapshot. */
+    extra: TExtra;
     items: ReadonlyArray<T>;
     /** The initial (or refetch) load is in flight. */
     loading: boolean;
     status: FlowStatus;
 }
 
-interface ResourceHandle<T> {
+interface ResourceHandle<T, TExtra extends object = Record<never, never>> {
     destroy: () => void;
-    getState: () => ResourceState<T>;
+    getState: () => ResourceState<T, TExtra>;
     /** Run a mutation, then refetch the list. Errors surface on `state.error`. */
     mutate: (run: () => Promise<unknown>) => Promise<void>;
+
+    /**
+     * `mutate`, reporting whether it actually ran and succeeded.
+     *
+     * For callers that *act* on success — a navigation, say. They must not
+     * re-read `state.error` instead: it is cleared at the start of every
+     * attempt, and `mutate` is a silent no-op while another is in flight, so a
+     * double-clicked button reads "fine" for a mutation that never happened.
+     */
+    mutateOk: (run: () => Promise<unknown>) => Promise<boolean>;
+
+    /**
+     * Merge into the flow-specific slice. Does not refetch — call `refetch` if
+     * it changes the query.
+     *
+     * It writes into `state.extra`, so it cannot reach `busy`/`items`/`status`
+     * even when handed a wider object than its parameter type describes.
+     */
+    patch: (extra: Partial<TExtra>) => void;
     refetch: () => Promise<void>;
     subscribe: (onChange: () => void) => () => void;
 }
 
-interface ResourceOptions {
+interface ResourceOptions<TExtra extends object = Record<never, never>> {
     /** Load immediately on creation (default true). */
     autoLoad?: boolean;
+    /** Starting value for the flow-specific slice. */
+    initialExtra?: TExtra;
 }
 
-const createResourceController = <T>(
+const createResourceController = <T, TExtra extends object = Record<never, never>>(
     context: ControllerContext,
-    load: (context: ControllerContext) => Promise<ReadonlyArray<T>>,
-    options: ResourceOptions = {},
-): ResourceHandle<T> => {
-    const store = createStore<ResourceState<T>>({ busy: false, items: [], loading: true, status: "idle" });
+    load: (context: ControllerContext, extra: TExtra) => Promise<{ extra?: Partial<TExtra>; items: ReadonlyArray<T> }>,
+    options: ResourceOptions<TExtra> = {},
+): ResourceHandle<T, TExtra> => {
+    const store = createStore<ResourceState<T, TExtra>>({
+        busy: false,
+        extra: options.initialExtra ?? ({} as TExtra),
+        items: [],
+        loading: true,
+        status: "idle",
+    });
 
     const refetch = async (): Promise<void> => {
         store.update({ error: undefined, loading: true, status: "submitting" });
 
         try {
-            const items = await load(context);
+            const result = await load(context, store.get().extra);
+            // A loader that needs no extra state just returns the array.
+            const { extra: patched, items } = Array.isArray(result) ? { extra: undefined, items: result } : result;
 
             store.update({ items, loading: false, status: "success" });
+
+            if (patched !== undefined) {
+                store.update(patched);
+            }
         } catch (error) {
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), loading: false, status: "error" });
         }
     };
 
-    const mutate = async (run: () => Promise<unknown>): Promise<void> => {
+    const mutateOk = async (run: () => Promise<unknown>): Promise<boolean> => {
         if (store.get().busy) {
-            return;
+            return false;
         }
 
         store.update({ busy: true, error: undefined });
@@ -64,9 +113,13 @@ const createResourceController = <T>(
             await run();
             store.update({ busy: false });
             await refetch();
+
+            return true;
         } catch (error) {
             context.onError?.(error);
             store.update({ busy: false, error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });
+
+            return false;
         }
     };
 
@@ -77,7 +130,13 @@ const createResourceController = <T>(
     return {
         destroy: store.clear,
         getState: store.get,
-        mutate,
+        mutate: async (run: () => Promise<unknown>) => {
+            await mutateOk(run);
+        },
+        mutateOk,
+        patch: (next: Partial<TExtra>) => {
+            store.update({ extra: { ...store.get().extra, ...next } });
+        },
         refetch,
         subscribe: store.subscribe,
     };

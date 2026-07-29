@@ -7,13 +7,17 @@
  */
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
 
+import { providerLabel } from "../core/labels";
+import { passwordRequirements, passwordScore } from "../core/password-policy";
 import type { FieldState } from "../core/types";
+import type { AvailabilityStatus } from "../core/username-availability";
 import { injectAuthUI, injectAuthUILink } from "./provider";
 
-/** `{ "--border": "red" }` → `--border:red`, or null when unthemed. */
+/** `{ "--border": "red" }` → `--border:red`, or undefined when unthemed. */
 const serializeThemeVariables = (variables: Readonly<Record<string, string>>): string | null => {
     const entries = Object.entries(variables);
 
+    // eslint-disable-next-line unicorn/no-null -- Angular removes an attribute binding on `null`; `undefined` leaves it in place.
     return entries.length === 0 ? null : entries.map(([property, value]) => `${property}:${value}`).join(";");
 };
 
@@ -56,6 +60,13 @@ class AuthCardComponent {
 
 let fieldIdCounter = 0;
 
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    fieldIdCounter += 1;
+
+    return `${prefix}${String(fieldIdCounter)}`;
+};
+
 /** A labelled text input wired to a core {@link FieldState}. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -85,7 +96,7 @@ let fieldIdCounter = 0;
 })
 class AuthFieldComponent {
     readonly autoComplete = input<string>();
-    readonly blurred = output<void>();
+    readonly blurred = output();
     readonly changed = output<string>();
     readonly field = input.required<FieldState>();
     readonly label = input.required<string>();
@@ -93,7 +104,7 @@ class AuthFieldComponent {
     readonly placeholder = input<string>();
     readonly type = input<"email" | "password" | "text">("text");
 
-    protected readonly id = `lunora-auth-field-${(fieldIdCounter += 1)}`;
+    protected readonly id = nextId("lunora-auth-field-");
     protected readonly errorId = `${this.id}-error`;
     protected readonly showError = computed(() => this.field().touched && this.field().error !== undefined);
 }
@@ -134,7 +145,15 @@ class FormBannerComponent {
     readonly success = input<string>();
 }
 
-/** OAuth provider buttons. Rendered only when the caller passes providers. */
+/**
+ * OAuth provider buttons. Rendered only when there are providers — which, with
+ * server discovery on, is whatever `socialProviders` the deployment configured.
+ *
+ * The provider's brand mark is left to CSS: each button carries a
+ * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
+ * set with a stylesheet rule and this package ships no SVG payload for a list of
+ * providers it can't know in advance.
+ */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-social-buttons",
@@ -143,8 +162,12 @@ class FormBannerComponent {
         @if (providers().length > 0) {
             <div class="lunora-auth-social">
                 @for (provider of providers(); track provider) {
-                    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="select.emit(provider)">
-                        Continue with {{ labelFor(provider) }}
+                    <button class="lunora-auth-button lunora-auth-button--secondary lunora-auth-social__button" type="button" (click)="select.emit(provider)">
+                        <span aria-hidden="true" [class]="'lunora-auth-social__icon lunora-auth-social__icon--' + provider"></span>
+                        <span class="lunora-auth-social__label">{{ t.signInWith }} {{ providerLabel(provider) }}</span>
+                        @if (lastUsed() === provider) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
                     </button>
                 }
             </div>
@@ -152,12 +175,40 @@ class FormBannerComponent {
     `,
 })
 class SocialButtonsComponent {
+    /** Highlight the provider used last on this device, when known. */
+    readonly lastUsed = input<string>();
     readonly providers = input.required<ReadonlyArray<string>>();
     readonly select = output<string>();
 
-    protected labelFor(provider: string): string {
-        return provider.charAt(0).toUpperCase() + provider.slice(1);
-    }
+    protected readonly t = injectAuthUI().localization;
+
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly providerLabel = providerLabel;
+}
+
+/**
+ * A loading placeholder sized in rows. Purely decorative, and hidden from the
+ * accessibility tree: the region it fills is already announced as busy by the
+ * card that owns it, and a screen reader has no use for "three grey boxes".
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-auth-skeleton",
+    standalone: true,
+    template: `
+        <div class="lunora-auth-skeleton" aria-hidden="true">
+            @for (row of rowIndexes(); track row) {
+                <span class="lunora-auth-skeleton__row"></span>
+            }
+        </div>
+    `,
+})
+class SkeletonComponent {
+    readonly rows = input(3);
+
+    // Placeholders have no identity, so the track key is the index — the list is
+    // fixed-length and never reordered.
+    protected readonly rowIndexes = computed(() => Array.from({ length: this.rows() }, (_unused, index) => index));
 }
 
 /** A labelled visual separator ("or"). */
@@ -175,7 +226,7 @@ class AuthDividerComponent {
     readonly label = input("or");
 }
 
-/** Internal link using the provider's `link` hook when present, else a plain `<a>`. */
+/** Internal link using the provider's `link` hook when present, else a plain `&lt;a>`. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-link",
@@ -199,13 +250,89 @@ class AuthLinkComponent {
     }
 }
 
+/**
+ * The live requirement checklist under a password field.
+ *
+ * A checklist rather than a bare strength bar: "weak" tells someone their
+ * password is unacceptable without telling them what to change. The bar is
+ * derived from the same requirements so the two can never disagree.
+ *
+ * `aria-live="polite"` on the list, because the ticks change as the user types
+ * and a screen reader should hear progress without being interrupted mid-word.
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-auth-password-strength",
+    standalone: true,
+    template: `
+        @if (value() !== "") {
+            <div class="lunora-auth-strength">
+                <div class="lunora-auth-strength__bar">
+                    <span class="lunora-auth-strength__fill" [style.width.%]="fillPercent()"></span>
+                </div>
+                <ul class="lunora-auth-strength__list" aria-live="polite">
+                    @for (requirement of requirements(); track requirement.label) {
+                        <li class="lunora-auth-strength__item" [class.lunora-auth-strength__item--met]="requirement.met">
+                            <span aria-hidden="true">{{ requirement.met ? "✓" : "○" }}</span> {{ requirement.label }}
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+    `,
+})
+class PasswordStrengthComponent {
+    readonly value = input.required<string>();
+
+    private readonly context = injectAuthUI();
+
+    // `computed`, not a field initializer: a signal input cannot be read while
+    // the class is being constructed, and this has to re-derive per keystroke.
+    protected readonly requirements = computed(() => passwordRequirements(this.value(), this.context.localization, this.context.password));
+    protected readonly fillPercent = computed(() => Math.round(passwordScore(this.requirements()) * 100));
+}
+
+/**
+ * Whether a username is free, shown as the user types.
+ *
+ * Advisory only — the check races the submit and the server stays the
+ * authority — so a failed check ("unknown") reads as nothing rather than as a
+ * rejection.
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: "lunora-auth-username-availability",
+    standalone: true,
+    template: `
+        @if (status() !== "idle" && status() !== "unknown") {
+            <p [class]="'lunora-auth-availability lunora-auth-availability--' + status()" role="status">{{ message() }}</p>
+        }
+    `,
+})
+class UsernameAvailabilityComponent {
+    readonly status = input.required<AvailabilityStatus>();
+
+    protected readonly t = injectAuthUI().localization;
+
+    protected readonly message = computed(() => {
+        if (this.status() === "checking") {
+            return this.t.usernameChecking;
+        }
+
+        return this.status() === "taken" ? this.t.usernameTaken : this.t.usernameAvailable;
+    });
+}
+
 export {
     AuthCardComponent,
     AuthDividerComponent,
     AuthFieldComponent,
     AuthLinkComponent,
     FormBannerComponent,
+    PasswordStrengthComponent,
     serializeThemeVariables,
+    SkeletonComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
+    UsernameAvailabilityComponent,
 };

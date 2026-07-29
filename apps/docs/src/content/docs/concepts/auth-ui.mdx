@@ -104,14 +104,52 @@ revoke other sessions), `PasskeysCard` (list, add, remove), `TwoFactorSetupCard`
 (password → TOTP URI + backup codes → verify → enabled), `DeleteAccountCard`,
 `SignOutButton`.
 
+`UserButton` is the avatar menu (with `UserAvatar` and `UserView` if you want
+the pieces), `AvatarCard` adds photo upload, `LinkedAccountsCard` links and
+unlinks OAuth providers, `SetUsernameCard` claims a username, and
+`AppearanceCard` is light / dark / system.
+
 Organizations:
 
-`OrganizationsCard` (list, create, switch, delete), `MembersCard` (members and
-pending invitations: invite, change role, remove, cancel), and
-`OrganizationSettingsCard` (rename the active org, edit its slug and logo).
+`OrganizationsCard` (list, create, switch, leave, delete), `MembersCard` (members
+and pending invitations: invite, change role, remove, cancel),
+`OrganizationSettingsCard` (rename the active org, edit its slug and logo),
+`OrganizationLogoCard` (logo upload), `TeamsCard`, `UserInvitationsCard` (the
+invitations waiting for you) and `AcceptInvitationCard` (the screen an invitation
+link lands on).
+
+Plugin-backed, each rendering only when its plugin is enabled:
+
+`MultiSessionCard` (switch between accounts signed in on this device),
+`AdminUsersCard` (search, ban, change role, impersonate),
+`DeviceAuthorizationCard` (approve a TV or CLI by code), `BackupCodesCard`,
+`UsernameSignInCard`, `PhoneSignInCard`, `AnonymousButton`, `OneTap`, and
+`Captcha`.
+
+Email verification: `VerifyEmailCard` (the page the link lands on) and
+`ResendVerificationCard`.
+
+`ErrorToaster` is optional and mounts once in your app shell. It shows only the
+errors that have no card to land in — a social sign-in that failed to redirect,
+a failed unlink — because everything else already renders on its own card's
+banner.
 
 Each is independent — mount the ones you want, on the routes you want. There is
 no router, layout, or shell imposed on you.
+
+### One route instead of ten
+
+`AuthView` maps a URL segment to the right card, so you can host every auth
+screen on a single route:
+
+```tsx
+// e.g. /auth/:view — sign-in, sign-up, forgot-password, magic-link, …
+<AuthView view={params.view} />
+```
+
+The segments are yours to rename through the provider's `viewPaths`. An
+unrecognized segment falls back to the sign-in card rather than rendering
+nothing.
 
 `TwoFactorSetupCard` renders the `otpauth://` URI and the backup codes as text
 rather than pulling in a QR library. If you want a QR code, render one from the
@@ -146,10 +184,138 @@ the plugin array.) For the server side, run `lunora add auth-magic-link` or
 `lunora add auth-otp`, and see
 [`@lunora/auth/plugins`](/docs/packages/auth/plugins) for the rest.
 
-**That file is the only place you declare a flow.** The cards read the plugin
-set off your client, so a card whose flow is off renders nothing rather than
-failing at call time — and says why in the console during development. Override
-the detection either way with the provider's `plugins` prop.
+### The server can just tell it
+
+The list above declares your **client** plugins. It does not have to be the only
+place a flow is declared, because the server already knows what it runs — add
+`uiConfig()` to your auth instance and the screens configure themselves:
+
+```ts
+import { uiConfig } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    // …
+    plugins: [uiConfig()],
+});
+```
+
+`lunora add auth` wires this in for you. It serves a public
+`GET /api/auth/ui-config` describing which plugins are enabled, which social
+providers are configured, and whether password sign-in and sign-up are open —
+only facts a sign-in page reveals by existing. Your session policy, rate limits
+and user-field schemas are **not** in it.
+
+The practical effect: **add a social provider server-side and its button
+appears**, with no second list to keep in sync. `social` on the provider becomes
+an override for pinning or reordering, not a requirement.
+
+The two answers are combined rather than ranked. A card renders when the server
+has the endpoint **and** your client registered the plugin that drives it — they
+answer different halves, and a flow with only one half is broken in a way a
+rendered card would hide (`passkey` without `passkeyClient()` has a live endpoint
+and no WebAuthn ceremony to reach it). A card whose flow is off renders nothing
+rather than failing at call time, and says why in the console during development.
+
+Without `uiConfig()` mounted, discovery degrades silently and your client's list
+is the only source — exactly the previous behaviour. Override either way with the
+provider's `plugins` prop, or turn discovery off with `discover={false}`.
+
+## Password rules
+
+The rule that matters is your server's — better-auth rejects what it rejects.
+A UI with its own hard-coded minimum is guessing: set it lower and the user is
+told "too short" only after a round-trip; set it higher and you refuse passwords
+the server would have taken. So the policy is config, and you match it to
+`emailAndPassword`:
+
+```tsx
+<AuthUIProvider
+    authClient={authClient}
+    password={{ minLength: 12, requireDigit: true, requireUppercase: true }}
+>
+```
+
+Every password field validates against it, and `<PasswordStrength>` renders the
+live checklist under the sign-up field. It is a checklist rather than a bare
+"weak / strong" bar on purpose — a bar tells someone their password is
+unacceptable without telling them what to change. The bar that _is_ there is
+derived from the same requirements, so the two can never disagree.
+
+Unset, the policy is better-auth's own default: 8–128 characters and no
+composition rules.
+
+## Username availability
+
+With the `username` plugin on, `<SignUpCard>` and `<SetUsernameCard>` check
+availability as the user types, so a taken name surfaces before the submit
+rather than as a failed sign-up with the whole form to re-check.
+
+It is debounced, and a slow answer for an earlier value is discarded rather than
+applied — that out-of-order race is how these end up confidently reporting the
+wrong thing. The result is advisory: the name can still be taken between the
+check and the submit, so the server stays the authority and a failed check never
+blocks a submit on its own.
+
+## Being an OAuth provider
+
+Everywhere else your app is the OAuth _client_ — the user signs in to you. With
+`@better-auth/oauth-provider` wired server-side, it can be the authorization
+server too, and two screens are yours to host:
+
+`ConsentCard` is what a third-party application redirects the user into. It
+names the application, lists exactly the scopes being requested, and offers
+Allow and Deny. `AuthorizedAppsCard` is where that consent can be taken back.
+
+```tsx
+// e.g. /oauth/consent — the id arrives as ?consent_id=
+<ConsentCard />
+```
+
+Both are deliberately plain, and two properties are enforced in the controller
+rather than left to the view: nothing is ever pre-approved (an auto-accepting
+consent screen is indistinguishable from no consent screen), and denying is
+exactly as cheap as allowing. If the request can't be loaded, the screen resolves
+to _no decision_ rather than to a default — a broken consent screen must not
+become an approving one.
+
+Turn it on with `oauthProvider: true` in `lunora/auth-ui/client.ts` alongside the
+server plugin.
+
+## Avatar and logo uploads
+
+`user.image` and `organization.logo` are plain string columns in better-auth, so
+this package has no opinion about where the bytes live. Give the provider an
+upload handler and `AvatarCard` / `OrganizationLogoCard` switch from a URL field
+to a file picker:
+
+```tsx
+<AuthUIProvider
+    authClient={authClient}
+    avatar={{ maxSize: 2 * 1024 * 1024, upload: async (file) => uploadToR2(file) }}
+>
+```
+
+Return the URL to store. Without a handler neither card renders, and the URL
+fields on `ProfileCard` / `OrganizationSettingsCard` remain the way to set one.
+
+## Email templates
+
+`lunora add auth-emails` copies styled templates for the mail these flows send —
+verify address, reset password, magic link, one-time code, organization
+invitation, and the security notices after a change — into
+`lunora/auth/emails.tsx`. They are rendered by your Worker through
+`@lunora/mail`, so they are the same mail whichever frontend framework you use:
+
+```tsx
+import { renderEmail } from "@lunora/mail";
+import { ResetPasswordEmail } from "./emails";
+
+const { html, text } = await renderEmail(<ResetPasswordEmail url={url} />);
+```
+
+They are a separate item rather than part of the screens because they pull in
+`react` + `@react-email/render` server-side, which an app happy with the base
+`auth` item's plain-text bodies has no reason to take on.
 
 ## The other frameworks
 

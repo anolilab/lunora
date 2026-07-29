@@ -23,11 +23,13 @@ export * from "../core";
  * // a route component
  * import { SignInCardComponent } from "./lunora/auth-ui/angular";
  *
- * @Component({ imports: [SignInCardComponent], template: `<lunora-sign-in-card />` })
+ * `@Component`({ imports: [SignInCardComponent], template: `&lt;lunora-sign-in-card />` })
  * export class SignInPage {}
  * ```
  */
+export { AppearanceCardComponent, AvatarCardComponent, LinkedAccountsCardComponent, SetUsernameCardComponent } from "./account-cards";
 export {
+    AnonymousButtonComponent,
     EmailOtpCardComponent,
     ForgotPasswordCardComponent,
     MagicLinkCardComponent,
@@ -36,20 +38,33 @@ export {
     SignUpCardComponent,
     TwoFactorCardComponent,
 } from "./auth-cards";
+export { AuthViewComponent, PhoneSignInCardComponent, UsernameSignInCardComponent } from "./auth-view";
 export type { ControllerSignalOptions, ControllerSignalResult } from "./controller-signal";
 export { controllerSignal } from "./controller-signal";
-export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent } from "./organization";
+export { CaptchaComponent, ErrorToasterComponent, OneTapComponent, OrganizationLogoCardComponent } from "./extras";
+export { AuthorizedAppsCardComponent, ConsentCardComponent } from "./oauth-provider";
+export { MembersCardComponent, OrganizationsCardComponent, OrganizationSettingsCardComponent } from "./organization";
+export {
+    AdminUsersCardComponent,
+    BackupCodesCardComponent,
+    DeviceAuthorizationCardComponent,
+    MultiSessionCardComponent,
+    TeamsCardComponent,
+} from "./plugin-cards";
 export {
     AuthCardComponent,
     AuthDividerComponent,
     AuthFieldComponent,
     AuthLinkComponent,
     FormBannerComponent,
+    PasswordStrengthComponent,
+    SkeletonComponent,
     SocialButtonsComponent,
     SubmitButtonComponent,
+    UsernameAvailabilityComponent,
 } from "./primitives";
 export type { AuthUIAngularConfig, AuthUIAngularContext } from "./provider";
-export { AUTH_UI_CONTEXT, injectAuthUI, injectAuthUILink, provideAuthUI } from "./provider";
+export { AUTH_UI_CONTEXT, injectAuthUI, injectAuthUIContext, injectAuthUILink, provideAuthUI } from "./provider";
 export {
     ChangeEmailCardComponent,
     ChangePasswordCardComponent,
@@ -60,3 +75,5 @@ export {
     SignOutButtonComponent,
 } from "./settings-cards";
 export { TwoFactorSetupCardComponent } from "./two-factor-setup-card";
+export { UserAvatarComponent, UserButtonComponent, UserViewComponent } from "./user-button";
+export { AcceptInvitationCardComponent, ResendVerificationCardComponent, UserInvitationsCardComponent, VerifyEmailCardComponent } from "./verify-invite-cards";

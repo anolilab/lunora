@@ -70,6 +70,21 @@ const createFormController = <TField extends string>(context: ControllerContext,
 
     const store = createStore<FormState<TField>>(initialState());
 
+    /*
+     * Which `load` is current. `reset()` can start a second one while the first
+     * is still in flight, and without this the slower response wins — restoring
+     * older server data over the newer read.
+     */
+    let generation = 0;
+
+    /**
+     * Fields the user has typed into. Not `FieldState.touched` — that means
+     * "has been blurred", which drives error display and stays false while
+     * someone is still typing. This is the narrower question `load` needs:
+     * may a late prefill still overwrite this value?*
+     */
+    const edited = new Set<TField>();
+
     const state = (): FormState<TField> => store.get();
 
     const values = (): Record<TField, string> => {
@@ -85,6 +100,8 @@ const createFormController = <TField extends string>(context: ControllerContext,
     const validateField = (name: TField): string | undefined => options.fields[name].validate?.(state().fields[name].value, values(), context.localization);
 
     const setField = (name: TField, value: string): void => {
+        edited.add(name);
+
         // Editing after a terminal state returns the form to idle and clears the
         // top-level banner; the edited field's own error clears too.
         const current = state();
@@ -163,27 +180,49 @@ const createFormController = <TField extends string>(context: ControllerContext,
         }
     };
 
-    const reset = (): void => {
-        store.set(initialState());
-    };
-
-    /** Re-run `prefill` and seed the fields in one transition. */
+    /**
+     * Re-run `prefill` and seed the fields in one transition.
+     *
+     * A resolved prefill never overwrites a field the user has already typed
+     * into, and never seeds at all once a submit is in flight or has done. Both
+     * guards exist because `prefill` is a network read racing a human: a slow
+     * `getSession` that lands after someone typed — or after they *saved* —
+     * would otherwise silently restore the old value over their edit, which
+     * reads as "the save didn't work". The race widens with anything else on the
+     * page that also reads the session, so it is not a theoretical one.
+     */
     const load = async (): Promise<void> => {
         if (!options.prefill) {
             return;
         }
 
+        generation += 1;
+
+        const ticket = generation;
+
         store.set({ ...state(), loading: true });
 
         try {
             const seeded = await options.prefill(context);
+
+            if (ticket !== generation) {
+                return;
+            }
+
             const current = state();
+
+            if (current.status === "submitting" || current.status === "success") {
+                store.set({ ...current, loading: false });
+
+                return;
+            }
+
             const fields = { ...current.fields };
 
             for (const name of fieldNames) {
                 const value = seeded[name];
 
-                if (value !== undefined) {
+                if (value !== undefined && !edited.has(name)) {
                     fields[name] = { ...fields[name], error: undefined, touched: false, value };
                 }
             }
@@ -191,7 +230,21 @@ const createFormController = <TField extends string>(context: ControllerContext,
             store.set({ ...current, fields, loading: false });
         } catch (error) {
             context.onError?.(error);
-            store.set({ ...state(), loading: false });
+
+            if (ticket === generation) {
+                store.set({ ...state(), loading: false });
+            }
+        }
+    };
+
+    const reset = (): void => {
+        edited.clear();
+        store.set(initialState());
+
+        // `initialState()` restores `loading: true` for a prefilled form, so
+        // without re-running the load the form spins forever.
+        if (options.prefill) {
+            void load();
         }
     };
 

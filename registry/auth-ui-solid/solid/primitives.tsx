@@ -1,7 +1,11 @@
 import type { JSX } from "solid-js";
-import { createUniqueId, For, Show } from "solid-js";
+import { createUniqueId, For, Index, Show } from "solid-js";
 
+import { providerLabel } from "../core/labels";
+import type { PasswordRequirement } from "../core/password-policy";
+import { passwordRequirements, passwordScore } from "../core/password-policy";
 import type { FieldState } from "../core/types";
+import type { AvailabilityStatus } from "../core/username-availability";
 import { useAuthUI, useAuthUILink } from "./provider";
 
 /** Card shell: heading, optional description, and body. */
@@ -124,7 +128,7 @@ const FormBanner = (props: FormBannerProps): JSX.Element => (
     </Show>
 );
 
-/** Internal link using the provider's framework `Link` when present, else `<a>`. */
+/** Internal link using the provider's framework `Link` when present, else `&lt;a>`. */
 interface AuthLinkProps {
     children: JSX.Element;
     href: string;
@@ -148,32 +152,62 @@ const AuthLink = (props: AuthLinkProps): JSX.Element => {
     );
 };
 
-/** OAuth provider buttons. Rendered only when the caller passes providers. */
+/**
+ * OAuth provider buttons. Rendered only when there are providers — which, with
+ * server discovery on, is whatever `socialProviders` the deployment configured.
+ *
+ * The provider's brand mark is left to CSS: each button carries a
+ * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
+ * set with a stylesheet rule and this package ships no SVG payload for a list of
+ * providers it can't know in advance.
+ */
 interface SocialButtonsProps {
+    /** Highlight the provider used last on this device, when known. */
+    lastUsed?: string;
     onSelect: (provider: string) => void;
     providers: ReadonlyArray<string>;
 }
 
-const labelFor = (provider: string): string => provider.charAt(0).toUpperCase() + provider.slice(1);
+const SocialButtons = (props: SocialButtonsProps): JSX.Element => {
+    const { localization: t } = useAuthUI();
 
-const SocialButtons = (props: SocialButtonsProps): JSX.Element => (
-    <Show when={props.providers.length > 0}>
-        <div class="lunora-auth-social">
-            <For each={props.providers}>
-                {(provider) => (
-                    <button
-                        class="lunora-auth-button lunora-auth-button--secondary"
-                        onClick={() => {
-                            props.onSelect(provider);
-                        }}
-                        type="button"
-                    >
-                        Continue with {labelFor(provider)}
-                    </button>
-                )}
-            </For>
-        </div>
-    </Show>
+    return (
+        <Show when={props.providers.length > 0}>
+            <div class="lunora-auth-social">
+                <For each={props.providers}>
+                    {(provider) => (
+                        <button
+                            class="lunora-auth-button lunora-auth-button--secondary lunora-auth-social__button"
+                            onClick={() => {
+                                props.onSelect(provider);
+                            }}
+                            type="button"
+                        >
+                            <span aria-hidden="true" class={`lunora-auth-social__icon lunora-auth-social__icon--${provider}`} />
+                            <span class="lunora-auth-social__label">{`${t.signInWith} ${providerLabel(provider)}`}</span>
+                            <Show when={props.lastUsed === provider}>
+                                <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                            </Show>
+                        </button>
+                    )}
+                </For>
+            </div>
+        </Show>
+    );
+};
+
+/**
+ * A loading placeholder sized in rows. Purely decorative, and hidden from the
+ * accessibility tree: the region it fills is already announced as busy by the
+ * card that owns it, and a screen reader has no use for "three grey boxes".
+ *
+ * `Index` rather than `For`: the rows have no identity to key on, and `For`
+ * would try to diff a list of indistinguishable placeholders.
+ */
+const Skeleton = (props: { rows?: number }): JSX.Element => (
+    <div aria-hidden="true" class="lunora-auth-skeleton">
+        <Index each={Array.from({ length: props.rows ?? 3 })}>{() => <span class="lunora-auth-skeleton__row" />}</Index>
+    </div>
 );
 
 /** A labelled visual separator ("or"). */
@@ -183,5 +217,75 @@ const AuthDivider = (props: { label?: string }): JSX.Element => (
     </div>
 );
 
+/**
+ * The live requirement checklist under a password field.
+ *
+ * A checklist rather than a bare strength bar: "weak" tells someone their
+ * password is unacceptable without telling them what to change. The bar is
+ * derived from the same requirements so the two can never disagree.
+ *
+ * `aria-live="polite"` on the list, because the ticks change as the user types
+ * and a screen reader should hear progress without being interrupted mid-word.
+ */
+const PasswordStrength = (props: { value: string }): JSX.Element => {
+    const { localization, password } = useAuthUI();
+    // Functions, not values: `props.value` changes on every keystroke, and only
+    // a read inside a tracked scope re-derives the checklist.
+    const requirements = (): ReadonlyArray<PasswordRequirement> => passwordRequirements(props.value, localization, password);
+    const fillWidth = (): string => `${String(Math.round(passwordScore(requirements()) * 100))}%`;
+
+    return (
+        <Show when={props.value !== ""}>
+            <div class="lunora-auth-strength">
+                <div class="lunora-auth-strength__bar">
+                    <span class="lunora-auth-strength__fill" style={{ width: fillWidth() }} />
+                </div>
+                {/*
+                 * `Index` rather than `For`: the policy fixes the rules and their
+                 * order, so a row's identity is its position — what changes as the
+                 * user types is the tick, not the list. `For` would rebuild every
+                 * row on each keystroke, because the requirement objects are
+                 * rebuilt with it.
+                 */}
+                <ul aria-live="polite" class="lunora-auth-strength__list">
+                    <Index each={requirements()}>
+                        {(requirement) => (
+                            <li class={`lunora-auth-strength__item${requirement().met ? " lunora-auth-strength__item--met" : ""}`}>
+                                <span aria-hidden="true">{requirement().met ? "✓" : "○"}</span> {requirement().label}
+                            </li>
+                        )}
+                    </Index>
+                </ul>
+            </div>
+        </Show>
+    );
+};
+
+/**
+ * Whether a username is free, shown as the user types.
+ *
+ * Advisory only — the check races the submit and the server stays the
+ * authority — so a failed check ("unknown") reads as nothing rather than as a
+ * rejection.
+ */
+const UsernameAvailability = (props: { status: AvailabilityStatus }): JSX.Element => {
+    const { localization: t } = useAuthUI();
+    const message = (): string => {
+        if (props.status === "checking") {
+            return t.usernameChecking;
+        }
+
+        return props.status === "taken" ? t.usernameTaken : t.usernameAvailable;
+    };
+
+    return (
+        <Show when={props.status !== "idle" && props.status !== "unknown"}>
+            <p class={`lunora-auth-availability lunora-auth-availability--${props.status}`} role="status">
+                {message()}
+            </p>
+        </Show>
+    );
+};
+
 export type { AuthCardProps, FieldProps };
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton, themeStyle };
+export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, PasswordStrength, Skeleton, SocialButtons, SubmitButton, themeStyle, UsernameAvailability };

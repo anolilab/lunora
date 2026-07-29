@@ -193,3 +193,66 @@ test("sign-out button clears the session and returns to the sign-in card", async
 
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
+
+/*
+ * `<UserButton>` is the one new component whose behaviour is browser-shaped
+ * rather than form-shaped: a disclosure with Escape and outside-click handling,
+ * and focus returned to the trigger. jsdom exercises the same code, but focus
+ * and real event ordering are exactly what it models loosely — so it is worth a
+ * pass here and the rest of the new cards are not.
+ */
+test("user button opens, closes on Escape, and returns focus to the trigger", async ({ page }) => {
+    const email = `authui-userbutton-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    const trigger = page.getByRole("button", { name: email, exact: true });
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await trigger.click();
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // The menu shows who is signed in, which is the whole reason it exists.
+    await expect(page.getByText(email).first()).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    // Focus must come back, or a keyboard user is stranded where the menu was.
+    await expect(trigger).toBeFocused();
+});
+
+test("user button closes on an outside click without stealing focus back", async ({ page }) => {
+    const email = `authui-outside-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    const trigger = page.getByRole("button", { name: email, exact: true });
+
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    // Clicking elsewhere is the user moving on, so the menu closes. The focus
+    // half of that contract (it is deliberately *not* yanked back, unlike
+    // Escape) is left to the jsdom suite: asserting it here would be asserting
+    // how a browser blurs on mousedown over a non-focusable element, which is
+    // not our behaviour to pin.
+    // The open menu overlays the cards directly beneath the trigger, so click
+    // the last one in the column — an element that is genuinely outside it.
+    await page.getByRole("heading", { name: "Delete account" }).click();
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+});
+
+test("signing out from the user button clears the session", async ({ page }) => {
+    const email = `authui-menu-signout-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    await page.getByRole("button", { name: email, exact: true }).click();
+    // Scoped to the menu: <SignOutButton> further down the page has the same name.
+    await page.locator(".lunora-auth-userbutton__menu").getByRole("button", { name: "Sign out", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeHidden();
+});

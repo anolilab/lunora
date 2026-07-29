@@ -23,7 +23,7 @@ const createResetPasswordController = (context: ControllerContext, options: Rese
             confirmPassword: {
                 validate: (value, values, localization) => (value === values.password ? undefined : localization.passwordMismatch),
             },
-            password: { validate: (value, _values, localization) => validatePassword(value, localization) },
+            password: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
         },
         submit: async (values, context_) => {
             assertOk(
