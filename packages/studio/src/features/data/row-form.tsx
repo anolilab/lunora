@@ -83,7 +83,16 @@ const NumberField = ({ column, onChange, value }: FieldProps): ReactElement => {
         }
     };
 
-    return <input className={FIELD_INPUT} data-testid={`db-field-${column}`} onChange={onInput} type="number" value={typeof value === "number" ? value : ""} />;
+    return (
+        <input
+            aria-label={column}
+            className={FIELD_INPUT}
+            data-testid={`db-field-${column}`}
+            onChange={onInput}
+            type="number"
+            value={typeof value === "number" ? value : ""}
+        />
+    );
 };
 
 /** Timestamp field → a `datetime-local` picker mapping to/from epoch-ms. */
@@ -98,6 +107,7 @@ const DateField = ({ column, onChange, value }: FieldProps): ReactElement => {
 
     return (
         <input
+            aria-label={column}
             className={FIELD_INPUT}
             data-testid={`db-field-${column}`}
             onChange={onInput}
@@ -113,7 +123,16 @@ const TextField = ({ column, onChange, value }: FieldProps): ReactElement => {
         onChange(column, event.target.value);
     };
 
-    return <input className={FIELD_INPUT} data-testid={`db-field-${column}`} onChange={onInput} type="text" value={typeof value === "string" ? value : ""} />;
+    return (
+        <input
+            aria-label={column}
+            className={FIELD_INPUT}
+            data-testid={`db-field-${column}`}
+            onChange={onInput}
+            type="text"
+            value={typeof value === "string" ? value : ""}
+        />
+    );
 };
 
 /**
@@ -142,6 +161,7 @@ const JsonField = ({ column, onChange, value }: FieldProps): ReactElement => {
     return (
         <div className="flex flex-col gap-1">
             <textarea
+                aria-label={column}
                 className={cn(FIELD_INPUT, "min-h-16", error && "border-destructive")}
                 data-testid={`db-field-${column}`}
                 onChange={onInput}

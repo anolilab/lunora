@@ -406,6 +406,7 @@ const CellEditor = ({
 
     return (
         <input
+            aria-label={column}
             className="w-full rounded border border-ring bg-background px-1 py-0.5 font-mono text-xs outline-none"
             data-testid={`db-cell-input-${recordId}-${column}`}
             defaultValue={formatCell(initial)}

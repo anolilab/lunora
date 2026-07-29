@@ -59,6 +59,7 @@ const ChartLegendContent = ({
 
                     return (
                         <div
+                            aria-pressed={isClickable ? selected === key : undefined}
                             className={cn(
                                 "[&>svg]:text-muted-foreground flex items-center gap-1.5 transition-opacity [&>svg]:h-3 [&>svg]:w-3",
                                 !isSelected && "opacity-30",
@@ -72,6 +73,20 @@ const ChartLegendContent = ({
 
                                 onSelectChange?.(selected === key ? null : key);
                             }}
+                            // Filtering a series by clicking its legend entry has to be
+                            // reachable from the keyboard too: Enter/Space are what a
+                            // button would answer to, and `role`/`tabIndex` only apply
+                            // when the legend is actually interactive.
+                            onKeyDown={(event) => {
+                                if (!isClickable || (event.key !== "Enter" && event.key !== " ")) {
+                                    return;
+                                }
+
+                                event.preventDefault();
+                                onSelectChange?.(selected === key ? null : key);
+                            }}
+                            role={isClickable ? "button" : undefined}
+                            tabIndex={isClickable ? 0 : undefined}
                         >
                             {itemConfig?.icon && !hideIcon ? (
                                 <itemConfig.icon />
