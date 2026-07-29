@@ -21,30 +21,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `AUTH_METRICS_BUCKETS_TABLE` (const)
-
-```ts
-const AUTH_METRICS_BUCKETS_TABLE = "__lunora_auth_metrics_buckets";
-```
-
-### `AUTH_METRICS_BUCKET_MS` (const)
-
-```ts
-const AUTH_METRICS_BUCKET_MS = 6e4;
-```
-
-### `AUTH_METRICS_BUCKET_RETENTION` (const)
-
-```ts
-const AUTH_METRICS_BUCKET_RETENTION = 1440;
-```
-
-### `AUTH_METRICS_TABLE` (const)
-
-```ts
-const AUTH_METRICS_TABLE = "__lunora_auth_metrics";
-```
-
 ### `AdvisoriesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -73,14 +49,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `AiRunBinding` (interface)
-
-```ts
-interface AiRunBinding {
-    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
-}
-```
-
 ### `ApplyOnDeleteOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -92,28 +60,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `AuditLogResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AuthMetrics` (interface)
-
-```ts
-interface AuthMetrics {
-    attempts: number;
-    failureRate: number;
-    failures: number;
-    history: AuthMetricsBucket[];
-    sinceMs: number;
-}
-```
-
-### `AuthMetricsBucket` (interface)
-
-```ts
-interface AuthMetricsBucket {
-    attempts: number;
-    bucketMs: number;
-    failures: number;
-}
-```
 
 ### `BroadcastDelta` (type)
 
@@ -165,22 +111,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `ContextMetrics` (interface)
-
-```ts
-interface ContextMetrics {
-    count: (name: string, value?: number, attributes?: LogFields) => void;
-    gauge: (name: string, value: number, attributes?: LogFields) => void;
-    record: (name: string, value: number, attributes?: LogFields) => void;
-}
-```
-
-### `ContextTracer` (type)
-
-```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions) => Promise<T>;
-```
-
 ### `CountArgs` (type)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -197,12 +127,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";
-```
-
-### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
-
-```ts
-const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 ```
 
 ### `DEFAULT_MAX_RELATION_KEYS` (const)
@@ -244,37 +168,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `DeployInfo` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ExplainIssueArgs` (interface)
-
-```ts
-interface ExplainIssueArgs {
-    culprit?: string;
-    model?: string;
-    sampleMessage: string;
-    title?: string;
-}
-```
-
-### `ExplainIssueDegradedReason` (type)
-
-```ts
-type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
-```
-
-### `ExplainIssueGrounding` (interface)
-
-```ts
-interface ExplainIssueGrounding {
-    groundedId?: string;
-}
-```
-
-### `ExplainIssueResult` (type)
-
-```ts
-type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
-```
 
 ### `ExportRow` (interface)
 
@@ -334,36 +227,6 @@ interface ExternalSourceLike {
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `FUNCTION_METRICS_BUCKETS_TABLE` (const)
-
-```ts
-const FUNCTION_METRICS_BUCKETS_TABLE = "__lunora_metrics_buckets";
-```
-
-### `FUNCTION_METRICS_BUCKET_MS` (const)
-
-```ts
-const FUNCTION_METRICS_BUCKET_MS = 6e4;
-```
-
-### `FUNCTION_METRICS_BUCKET_RETENTION` (const)
-
-```ts
-const FUNCTION_METRICS_BUCKET_RETENTION = 1440;
-```
-
-### `FUNCTION_METRICS_INDEX_TABLE` (const)
-
-```ts
-const FUNCTION_METRICS_INDEX_TABLE = "__lunora_metrics_index";
-```
-
-### `FUNCTION_METRICS_TABLE` (const)
-
-```ts
-const FUNCTION_METRICS_TABLE = "__lunora_metrics";
-```
-
 ### `FacetColumnOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -391,26 +254,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `FunctionCallStat` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FunctionMetricBucket` (interface)
-
-```ts
-interface FunctionMetricBucket {
-    bucketMs: number;
-    calls: number;
-    errors: number;
-}
-```
-
-### `FunctionMetricIndexHit` (interface)
-
-```ts
-interface FunctionMetricIndexHit {
-    index: string;
-    reads: number;
-    table: string;
-}
-```
 
 ### `FunctionStatsResult` (interface)
 
@@ -512,44 +355,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `LogBuffer` (class)
-
-```ts
-class LogBuffer {
-    constructor(capacity?: number);
-    get size(): number;
-    clear(): void;
-    entries(): LogEntry[];
-    push(entry: LogEntry): void;
-}
-```
-
-### `LogEntry` (interface)
-
-```ts
-interface LogEntry {
-    exitCode?: number;
-    fields?: Record<string, unknown>;
-    functionPath?: string;
-    instance?: string;
-    level: LogLevel;
-    message: string;
-    timestamp: number;
-}
-```
-
-### `LogEventInput` (type)
-
-```ts
-type LogEventInput = LogEvent;
-```
-
-### `LogLevel` (type)
-
-```ts
-type LogLevel = ContextLogLevel;
-```
-
 ### `LogSink` (type)
 
 ```ts
@@ -574,18 +379,6 @@ const MAIL_TABLE = "__lunora_mail";
 const MAX_SQL_ROWS = 1e3;
 ```
 
-### `MIN_ADMIN_TOKEN_LENGTH` (const)
-
-```ts
-const MIN_ADMIN_TOKEN_LENGTH = 24;
-```
-
-### `MIN_AUTH_SECRET_LENGTH` (const)
-
-```ts
-const MIN_AUTH_SECRET_LENGTH = 32;
-```
-
 ### `MaskColumnMetadata` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -600,16 +393,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 interface MaterializeResult {
     applied: number;
     nextBaseline: Map<string, string>;
-}
-```
-
-### `MetricsDeps` (interface)
-
-```ts
-interface MetricsDeps {
-    functionPath: string;
-    record: (event: MetricEvent) => void;
-    shardKey: string | undefined;
 }
 ```
 
@@ -817,30 +600,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `ReadTablePageOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RecordAuthEventInput` (interface)
-
-```ts
-interface RecordAuthEventInput {
-    outcome: "fail" | "ok";
-    ts: number;
-}
-```
-
-### `RecordFunctionMetricInput` (interface)
-
-```ts
-interface RecordFunctionMetricInput {
-    conflicted?: boolean;
-    durationMs: number;
-    errored: boolean;
-    errorMessage?: string;
-    indexHits?: ReadonlyArray<IndexHit>;
-    path: string;
-    scannedTables?: ReadonlyArray<string>;
-    ts: number;
-}
-```
 
 ### `RecordMailInput` (interface)
 
@@ -1077,36 +836,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `SearchIndexDefinitionLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SecurityAuditResult` (interface)
-
-```ts
-interface SecurityAuditResult {
-    findings: SecurityFinding[];
-}
-```
-
-### `SecurityFinding` (interface)
-
-```ts
-interface SecurityFinding {
-    detail?: Record<string, unknown>;
-    kind: SecurityFindingKind;
-    level: SecurityFindingLevel;
-}
-```
-
-### `SecurityFindingKind` (type)
-
-```ts
-type SecurityFindingKind = "admin-token-weak" | "auth-secret-weak" | "cookies-insecure" | "cors-wildcard-credentials" | "csrf-disabled" | "dev-args-unredacted" | "security-headers-disabled" | "ws-gate-open";
-```
-
-### `SecurityFindingLevel` (type)
-
-```ts
-type SecurityFindingLevel = "error" | "info" | "warning";
-```
 
 ### `SelectMatchingIdsOptions` (interface)
 
@@ -1380,23 +1109,6 @@ type SourceRefresh = "manual" | {
 };
 ```
 
-### `SpanHandle` (interface)
-
-```ts
-interface SpanHandle {
-    addEvent: (name: string, attributes?: LogFields) => void;
-    addLink: (link: SpanLink) => void;
-    recordEvaluation: (evaluation: EvaluationInput) => void;
-    recordException: (error: unknown) => void;
-    setAttribute: (key: string, value: LogFields[string]) => void;
-    setAttributes: (fields: LogFields) => void;
-    spanContext: () => {
-        spanId: string;
-        traceId: string;
-    };
-}
-```
-
 ### `SqlConsoleResult` (interface)
 
 ```ts
@@ -1523,30 +1235,6 @@ interface TelemetrySink {
     traceFetch?: boolean | {
         propagate?: ((url: URL) => boolean) | boolean;
     };
-}
-```
-
-### `TraceAnchor` (interface)
-
-```ts
-interface TraceAnchor {
-    rootSpanId: string;
-    sampled?: boolean;
-    traceId: string;
-}
-```
-
-### `TracerDeps` (interface)
-
-```ts
-interface TracerDeps {
-    anchor: TraceAnchor;
-    functionPath: string;
-    fuseCloudflareSpans?: boolean;
-    record: (span: SpanEvent) => void;
-    resolveCloudflareTracing?: CloudflareTracingResolver;
-    shardKey: string | undefined;
-    userId: () => string | undefined;
 }
 ```
 
@@ -1689,12 +1377,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `buildSecurityAudit` (const)
-
-```ts
-const buildSecurityAudit: (rawEnv: unknown) => SecurityAuditResult;
-```
-
 ### `buildSeekWhere` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1726,12 +1408,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `createDependencyTracker` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `createMetrics` (const)
-
-```ts
-const createMetrics: (deps: MetricsDeps) => ContextMetrics;
-```
 
 ### `createShardAlarms` (const)
 
@@ -1765,12 +1441,6 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `createTracer` (const)
-
-```ts
-const createTracer: (deps: TracerDeps) => ContextTracer;
-```
-
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
@@ -1792,23 +1462,6 @@ const diffExternalSource: (pulled: ReadonlyArray<Record<string, unknown>>, basel
 }) => ExternalSourceDiffResult;
 ```
 
-### `dispatchRootSpan` (const)
-
-```ts
-const dispatchRootSpan: (input: {
-    anchor: TraceAnchor;
-    collected?: SpanCollection;
-    durationMs: number;
-    failure: {
-        thrown: unknown;
-    } | undefined;
-    functionPath: string;
-    shardKey: string | undefined;
-    startTs: number;
-    userId: string | undefined;
-}) => SpanEvent;
-```
-
 ### `encodeAggregateKey` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1825,28 +1478,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `ensureAuthMetricsTables` (const)
-
-```ts
-const ensureAuthMetricsTables: (sql: SqlExec) => void;
-```
-
-### `ensureFunctionMetricsTables` (const)
-
-```ts
-const ensureFunctionMetricsTables: (sql: SqlExec) => void;
-```
-
 ### `ensureMailTable` (const)
 
 ```ts
 const ensureMailTable: (sql: SqlExec) => void;
-```
-
-### `explainIssue` (const)
-
-```ts
-const explainIssue: (binding: unknown, args: Record<string, unknown>) => Promise<ExplainIssueResult>;
 ```
 
 ### `exportShardRows` (const)
@@ -1958,12 +1593,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `parseExplainIssueArgs` (const)
-
-```ts
-const parseExplainIssueArgs: (args: Record<string, unknown>) => ExplainIssueArgs;
-```
-
 ### `parseExportShardArgs` (const)
 
 ```ts
@@ -2010,12 +1639,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `readAuthMetrics` (const)
-
-```ts
-const readAuthMetrics: (sql: SqlExec) => AuthMetrics;
-```
-
 ### `readBookmark` (const)
 
 ```ts
@@ -2042,35 +1665,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 const readExternalSourceBaseline: (sql: SqlExec, table: string, columns?: ReadonlyArray<string>) => Map<string, string>;
 ```
 
-### `readFunctionMetricBuckets` (const)
-
-```ts
-const readFunctionMetricBuckets: (sql: SqlExec, path?: string) => (FunctionMetricBucket & {
-    path: string;
-})[];
-```
-
-### `readFunctionMetricIndexHits` (const)
-
-```ts
-const readFunctionMetricIndexHits: (sql: SqlExec) => FunctionMetricIndexHit[];
-```
-
-### `readFunctionMetrics` (const)
-
-```ts
-const readFunctionMetrics: (sql: SqlExec) => FunctionCallStat[];
-```
-
-### `readFunctionMetricsTotals` (const)
-
-```ts
-const readFunctionMetricsTotals: (sql: SqlExec) => {
-    errors: number;
-    requests: number;
-};
-```
-
 ### `readMigrationStatus` (const)
 
 ```ts
@@ -2081,24 +1675,12 @@ const readMigrationStatus: (sql: SqlExec, id?: string) => MigrationStatusRow[];
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `recordAuthEvent` (const)
-
-```ts
-const recordAuthEvent: (sql: SqlExec, input: RecordAuthEventInput) => void;
-```
-
 ### `recordCapturedMail` (const)
 
 ```ts
 const recordCapturedMail: (sql: SqlExec, input: RecordMailInput, capturedAt: number) => {
     id: string;
 };
-```
-
-### `recordFunctionMetric` (const)
-
-```ts
-const recordFunctionMetric: (sql: SqlExec, input: RecordFunctionMetricInput) => void;
 ```
 
 ### `renderSql` (const)

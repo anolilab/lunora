@@ -16,18 +16,6 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import";
-export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
-export {
-    AUTH_METRICS_BUCKET_MS,
-    AUTH_METRICS_BUCKET_RETENTION,
-    AUTH_METRICS_BUCKETS_TABLE,
-    AUTH_METRICS_TABLE,
-    ensureAuthMetricsTables,
-    readAuthMetrics,
-    recordAuthEvent,
-} from "./auth-metrics";
-export type { ContextMetrics, ContextTracer, MetricsDeps, SpanHandle, TraceAnchor, TracerDeps } from "./context-telemetry";
-export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -49,37 +37,16 @@ export type { IncrementalMaterializeResult, MaterializeResult } from "./external
 export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
 export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
-export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
-export {
-    ensureFunctionMetricsTables,
-    FUNCTION_METRICS_BUCKET_MS,
-    FUNCTION_METRICS_BUCKET_RETENTION,
-    FUNCTION_METRICS_BUCKETS_TABLE,
-    FUNCTION_METRICS_INDEX_TABLE,
-    FUNCTION_METRICS_TABLE,
-    readFunctionMetricBuckets,
-    readFunctionMetricIndexHits,
-    readFunctionMetrics,
-    readFunctionMetricsTotals,
-    recordFunctionMetric,
-} from "./function-metrics";
-export type { AiRunBinding, ExplainIssueArgs, ExplainIssueDegradedReason, ExplainIssueGrounding, ExplainIssueResult } from "./issue-explainer";
-export { DEFAULT_EXPLAIN_ISSUE_MODEL, explainIssue, parseExplainIssueArgs } from "./issue-explainer";
-export type { LogEntry, LogLevel } from "./log-buffer";
-export { LogBuffer } from "./log-buffer";
 export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
 export { serveRelationFanout } from "./relation-fanout";
-export type { LogEventInput } from "./request-log";
 // The search core moved out of this package. It used to be re-exported from
 // here so `@lunora/sql-store` could reuse it, which turned two dozen internal
 // contracts into permanent public API for no reason other than cross-package
 // reach. `guardWriter` left for the same reason and now lives in
 // `@lunora/shard-engine`, which re-exports it.
-export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
-export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
@@ -295,3 +262,11 @@ export { NotFoundError } from "@lunora/shard-engine";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "@lunora/shard-engine";
 export { createDependencyTracker, depKey, SCAN_DEP } from "@lunora/shard-engine";
 export { ConflictError } from "@lunora/shard-engine";
+
+// Observability is NOT re-exported from here. It lives in `@lunora/observability`
+// and consumers import it from there directly.
+//
+// Re-exporting it would put this package back in the middle of a dependency it
+// does not own: every symbol that package adds would silently widen this one's
+// frozen surface, and a second host would reach telemetry *through* the
+// Cloudflare package — the exact coupling the extraction removed.

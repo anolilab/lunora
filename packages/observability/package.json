@@ -1,16 +1,14 @@
 {
-    "name": "@lunora/do",
-    "version": "1.0.0-alpha.55",
-    "description": "Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
+    "name": "@lunora/observability",
+    "version": "1.0.0-alpha.0",
+    "description": "Host-neutral telemetry storage and read models for Lunora, backing the Studio's Logs, Traces, Metrics and Issues views",
     "keywords": [
-        "cloudflare",
-        "durable-objects",
-        "hibernation",
         "lunora",
-        "shard",
-        "sqlite",
-        "websocket",
-        "workers"
+        "metrics",
+        "observability",
+        "opentelemetry",
+        "telemetry",
+        "tracing"
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
@@ -22,13 +20,12 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
-        "directory": "packages/do"
+        "directory": "packages/observability"
     },
     "files": [
         "./dist",
         "README.md",
-        "LICENSE.md",
-        "__assets__"
+        "LICENSE.md"
     ],
     "type": "module",
     "sideEffects": false,
@@ -48,40 +45,33 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
-        "fallow:audit": "fallow audit",
-        "fallow:dead-code": "fallow dead-code",
-        "fallow:health": "fallow health --score"
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.9",
-        "@lunora/observability": "workspace:*",
-        "@lunora/platform": "workspace:*",
-        "@lunora/platform-cloudflare": "workspace:*",
-        "@lunora/search-core": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@lunora/fingerprint": "workspace:*",
         "@lunora/shard-engine": "workspace:*",
-        "drizzle-orm": "catalog:drizzle"
+        "@visulima/redact": "catalog:redact"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
-        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.13",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test",
-        "wrangler": "catalog:cloudflare"
+        "vitest": "catalog:test"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

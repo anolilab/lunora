@@ -30,6 +30,16 @@ import { findIssueSolution, flattenHint, LunoraError } from "@lunora/errors";
  * `@cf/meta/llama-3.1-8b-instruct`: a deprecated model-id makes `binding.run`
  * throw, which would silently degrade every explain to `"ai-error"`.
  */
+
+/**
+ * Fallback model id when neither the caller nor the request names one.
+ *
+ * A Workers AI id, which makes it the *host's* default rather than this
+ * package's — a second host runs different models and must be able to say so.
+ * `explainIssue` therefore takes `defaultModel`, and this constant is only what
+ * the Cloudflare host happens to pass. Kept exported so that host has a name to
+ * pass rather than a string literal.
+ */
 export const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 /** Cap the raw error text fed to the model so a pathological message can't blow the prompt budget. */
@@ -70,7 +80,7 @@ export interface AiRunBinding {
 export interface ExplainIssueArgs {
     /** The Issue's culprit (`&lt;file>:&lt;function>` or `container:&lt;name>`), for grounding context. */
     culprit?: string;
-    /** Optional Workers AI model-id override; defaults to {@link DEFAULT_EXPLAIN_ISSUE_MODEL}. */
+    /** Per-request model-id override; falls back to the caller's `defaultModel`, then {@link DEFAULT_EXPLAIN_ISSUE_MODEL}. */
     model?: string;
     /** A representative raw error message for the Issue — the fact the explanation is grounded in. Required. */
     sampleMessage: string;
@@ -258,7 +268,7 @@ const runExplainIssueModel = async (
  * `binding` is `unknown` so the caller can hand over `env.AI` untyped — the shape
  * check lives here rather than at each call site.
  */
-export const explainIssue = async (binding: unknown, args: Record<string, unknown>): Promise<ExplainIssueResult> => {
+export const explainIssue = async (binding: unknown, args: Record<string, unknown>, options: { defaultModel?: string } = {}): Promise<ExplainIssueResult> => {
     const parsed = parseExplainIssueArgs(args);
 
     // Ground on the canonical catalog fact, re-derived server-side (never trust
@@ -271,7 +281,7 @@ export const explainIssue = async (binding: unknown, args: Record<string, unknow
         return { ...grounding, degraded: true, reason: "no-ai-binding" };
     }
 
-    const model = parsed.model ?? DEFAULT_EXPLAIN_ISSUE_MODEL;
+    const model = parsed.model ?? options.defaultModel ?? DEFAULT_EXPLAIN_ISSUE_MODEL;
 
     let explanation: string | undefined;
 

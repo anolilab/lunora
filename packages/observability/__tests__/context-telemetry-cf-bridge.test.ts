@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CloudflareSpanLike, CloudflareTracingLike, SpanHandle, TracerDeps } from "../src/context-telemetry";
+import type { HostSpanLike, HostTracingLike, SpanHandle, TracerDeps } from "../src/context-telemetry";
 import { createTracer } from "../src/context-telemetry";
 
 /**
  * Unit coverage for the opt-in Cloudflare custom-spans bridge in
  * {@link createTracer}. The bridge is deliberately injectable
- * (`fuseCloudflareSpans` + `resolveCloudflareTracing`) so it can be exercised in
+ * (`fuseHostSpans` + `resolveHostTracing`) so it can be exercised in
  * plain Node with a fake/undefined `tracing` — no `cloudflare:workers`, no DO.
  */
 
 /** A fake CF custom span that records every `setAttribute` write. */
-const makeFakeSpan = (isTraced = true): CloudflareSpanLike & { readonly writes: [string, unknown][] } => {
+const makeFakeSpan = (isTraced = true): HostSpanLike & { readonly writes: [string, unknown][] } => {
     const writes: [string, unknown][] = [];
 
     return {
@@ -24,7 +24,7 @@ const makeFakeSpan = (isTraced = true): CloudflareSpanLike & { readonly writes: 
 };
 
 /** A fake `tracing` namespace whose `enterSpan` runs the callback with `span`. */
-const makeFakeTracing = (span: CloudflareSpanLike): CloudflareTracingLike & { readonly names: string[] } => {
+const makeFakeTracing = (span: HostSpanLike): HostTracingLike & { readonly names: string[] } => {
     const names: string[] = [];
 
     return {
@@ -59,13 +59,13 @@ describe("createTracer cloudflare custom-spans bridge", () => {
     it("no-ops (default off): never resolves tracing, records unchanged", async () => {
         expect.assertions(4);
 
-        const resolveCloudflareTracing = vi.fn<() => Promise<CloudflareTracingLike>>(async () => makeFakeTracing(makeFakeSpan()));
-        const { recorded, trace } = setup({ resolveCloudflareTracing });
+        const resolveHostTracing = vi.fn<() => Promise<HostTracingLike>>(async () => makeFakeTracing(makeFakeSpan()));
+        const { recorded, trace } = setup({ resolveHostTracing });
 
         const result = await trace("stripe.charge", () => "ok");
 
         expect(result).toBe("ok");
-        expect(resolveCloudflareTracing).not.toHaveBeenCalled();
+        expect(resolveHostTracing).not.toHaveBeenCalled();
         expect(recorded).toHaveLength(1);
         expect(recorded[0]).toMatchObject({ functionPath: "messages:list", name: "stripe.charge", ok: true });
     });
@@ -73,13 +73,13 @@ describe("createTracer cloudflare custom-spans bridge", () => {
     it("no-ops when the flag is on but tracing resolves to undefined", async () => {
         expect.assertions(3);
 
-        const resolveCloudflareTracing = vi.fn<() => Promise<undefined>>(async () => undefined);
-        const { recorded, trace } = setup({ fuseCloudflareSpans: true, resolveCloudflareTracing });
+        const resolveHostTracing = vi.fn<() => Promise<undefined>>(async () => undefined);
+        const { recorded, trace } = setup({ fuseHostSpans: true, resolveHostTracing });
 
         const result = await trace("span", () => 7);
 
         expect(result).toBe(7);
-        expect(resolveCloudflareTracing).toHaveBeenCalledTimes(1);
+        expect(resolveHostTracing).toHaveBeenCalledTimes(1);
         expect(recorded).toHaveLength(1);
     });
 
@@ -87,8 +87,8 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         expect.assertions(2);
 
         // Probe must reject a partial `tracing` without throwing.
-        const resolveCloudflareTracing = async () => ({ enterSpan: undefined }) as unknown as CloudflareTracingLike;
-        const { recorded, trace } = setup({ fuseCloudflareSpans: true, resolveCloudflareTracing });
+        const resolveHostTracing = async () => ({ enterSpan: undefined }) as unknown as HostTracingLike;
+        const { recorded, trace } = setup({ fuseHostSpans: true, resolveHostTracing });
 
         const result = await trace("span", () => "still-runs");
 
@@ -102,8 +102,8 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         const span = makeFakeSpan();
         const tracing = makeFakeTracing(span);
         const { trace } = setup({
-            fuseCloudflareSpans: true,
-            resolveCloudflareTracing: async () => tracing,
+            fuseHostSpans: true,
+            resolveHostTracing: async () => tracing,
         });
 
         const result = await trace("stripe.charge", () => "done", { attempt: 2, mode: "live", nested: { skip: true } });
@@ -127,8 +127,8 @@ describe("createTracer cloudflare custom-spans bridge", () => {
 
         const span = makeFakeSpan(false);
         const { recorded, trace } = setup({
-            fuseCloudflareSpans: true,
-            resolveCloudflareTracing: async () => makeFakeTracing(span),
+            fuseHostSpans: true,
+            resolveHostTracing: async () => makeFakeTracing(span),
         });
 
         await trace("span", () => undefined);
@@ -144,8 +144,8 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         const span = makeFakeSpan();
         const tracing = makeFakeTracing(span);
         const { recorded, trace } = setup({
-            fuseCloudflareSpans: true,
-            resolveCloudflareTracing: async () => tracing,
+            fuseHostSpans: true,
+            resolveHostTracing: async () => tracing,
         });
 
         const boom = new Error("kaboom");
@@ -187,8 +187,8 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         await off.trace("span", body, { start: 1 });
 
         const on = setup({
-            fuseCloudflareSpans: true,
-            resolveCloudflareTracing: async () => makeFakeTracing(makeFakeSpan()),
+            fuseHostSpans: true,
+            resolveHostTracing: async () => makeFakeTracing(makeFakeSpan()),
         });
 
         await on.trace("span", body, { start: 1 });
@@ -199,15 +199,15 @@ describe("createTracer cloudflare custom-spans bridge", () => {
     it("swallows a setAttribute throw without failing the handler or losing the record", async () => {
         expect.assertions(2);
 
-        const explodingSpan: CloudflareSpanLike = {
+        const explodingSpan: HostSpanLike = {
             isTraced: true,
             setAttribute: () => {
                 throw new Error("attribute sink down");
             },
         };
         const { recorded, trace } = setup({
-            fuseCloudflareSpans: true,
-            resolveCloudflareTracing: async () => makeFakeTracing(explodingSpan),
+            fuseHostSpans: true,
+            resolveHostTracing: async () => makeFakeTracing(explodingSpan),
         });
 
         const result = await trace("span", () => "safe");

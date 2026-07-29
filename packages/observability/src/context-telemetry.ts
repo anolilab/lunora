@@ -142,13 +142,22 @@ export interface TraceAnchor {
 }
 
 /**
- * Minimal structural shape of one **Cloudflare custom span** — the object CF's
+ * Minimal structural shape of one **host-native custom span** — the object a
  * `tracing.enterSpan(name, (span) => …)` callback receives (GA 2026-06-16). Only
  * the surface the bridge touches is declared, so `@lunora/do` needs no runtime
  * dependency on `cloudflare:workers`; the real platform span is structurally
  * assignable.
  */
-export interface CloudflareSpanLike {
+
+/**
+ * A host-supplied span, structurally.
+ *
+ * Named for the role rather than the provider: this is whatever the runtime's
+ * own tracer hands back, and Cloudflare's `enterSpan` callback argument is one
+ * shape that satisfies it. Kept structural so no provider type is imported —
+ * the repo's documented `*Like` pattern.
+ */
+export interface HostSpanLike {
     /**
      * Whether this span is actually being recorded by the runtime's sampler.
      * `false` off the traced path (unsampled) — the bridge skips its
@@ -165,18 +174,18 @@ export interface CloudflareSpanLike {
  * `cloudflare:workers`. `enterSpan` opens a custom span that auto-nests under the
  * runtime's ambient span and ends when `callback` settles.
  */
-export interface CloudflareTracingLike {
-    enterSpan: <T>(name: string, callback: (span: CloudflareSpanLike) => T) => T;
+export interface HostTracingLike {
+    enterSpan: <T>(name: string, callback: (span: HostSpanLike) => T) => T;
 }
 
 /**
  * Resolves CF's `tracing` namespace, or `undefined` when it is unavailable —
- * off-Cloudflare, on a compat date predating custom spans, or when
+ * on a host with no native tracer, on a Cloudflare compat date predating custom spans, or when
  * `tracing.enterSpan` is not a function. **Injected, never imported here**, so the
  * tracer stays pure and unit-testable without `cloudflare:workers`; the shard
  * supplies the real resolver, tests a fake or `undefined`.
  */
-export type CloudflareTracingResolver = () => CloudflareTracingLike | Promise<CloudflareTracingLike | undefined> | undefined;
+export type HostTracingResolver = () => HostTracingLike | Promise<HostTracingLike | undefined> | undefined;
 
 /** What {@link createTracer} needs from the shard to build a span. */
 export interface TracerDeps {
@@ -188,8 +197,8 @@ export interface TracerDeps {
 
     /**
      * **Opt-in, EXPERIMENTAL, default off.** When `true` *and*
-     * {@link TracerDeps.resolveCloudflareTracing} yields a working
-     * `tracing.enterSpan`, each `ctx.trace` span is ALSO emitted as a Cloudflare
+     * {@link TracerDeps.resolveHostTracing} yields a working
+     * `tracing.enterSpan`, each `ctx.trace` span is ALSO emitted as a host-native
      * **custom span**, so it nests inside CF's native binding/fetch/handler trace
      * tree on the hosted path. This only ADDS a CF-side span — the recorded
      * {@link SpanEvent} (our `SpanBuffer`/`otlpSink`) is untouched and remains the
@@ -199,18 +208,18 @@ export interface TracerDeps {
      * {@link createTracer} for the double-export and Durable-Object async-context
      * caveats.
      */
-    fuseCloudflareSpans?: boolean;
+    fuseHostSpans?: boolean;
 
     /** Hand a finished span to the buffer + sink. */
     record: (span: SpanEvent) => void;
 
     /**
      * Injected resolver for CF's `tracing` namespace (see
-     * {@link CloudflareTracingResolver}). Only consulted when
-     * {@link TracerDeps.fuseCloudflareSpans} is `true`, so the default path never
+     * {@link HostTracingResolver}). Only consulted when
+     * {@link TracerDeps.fuseHostSpans} is `true`, so the default path never
      * calls it.
      */
-    resolveCloudflareTracing?: CloudflareTracingResolver;
+    resolveHostTracing?: HostTracingResolver;
 
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
@@ -239,8 +248,8 @@ export interface MetricsDeps {
  * ever reaching CF's `setAttribute`, which takes `string | number | boolean |
  * undefined`.
  */
-export const applyCloudflareSpanAttributes = (
-    span: CloudflareSpanLike,
+export const applyHostSpanAttributes = (
+    span: HostSpanLike,
     meta: {
         attributes: Record<string, LogFields[string]>;
         durationMs: number;
@@ -389,7 +398,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }): S
  * time would file the re-run's spans under the mutation's trace.
  *
  * **Cloudflare custom-spans bridge (opt-in, EXPERIMENTAL).** When
- * `deps.fuseCloudflareSpans` is `true` and `deps.resolveCloudflareTracing` yields
+ * `deps.fuseHostSpans` is `true` and `deps.resolveHostTracing` yields
  * a working `tracing.enterSpan` (`cloudflare:workers`, GA 2026-06-16), each span
  * body runs inside a CF custom span so our span nests under CF's native
  * binding/fetch/handler trace tree on the hosted path, and the finished span's
@@ -423,7 +432,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }): S
  * waterfall is unaffected.
  */
 export const createTracer = (deps: TracerDeps): ContextTracer => {
-    const { anchor, fuseCloudflareSpans, functionPath, record, resolveCloudflareTracing, shardKey, userId } = deps;
+    const { anchor, fuseHostSpans, functionPath, record, resolveHostTracing, shardKey, userId } = deps;
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
@@ -445,9 +454,9 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
-            // `cfSpan` only receives a MIRROR of the finished span's attributes —
+            // `hostSpan` only receives a MIRROR of the finished span's attributes —
             // it never alters, gates, or replaces what we record.
-            const runRecorded = async (cfSpan?: CloudflareSpanLike): Promise<T> => {
+            const runRecorded = async (hostSpan?: HostSpanLike): Promise<T> => {
                 let ok = true;
                 let error: SpanEvent["error"];
 
@@ -514,9 +523,9 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // Mirror onto the CF custom span, in its OWN guard so a
                     // `setAttribute` throw can neither skip our recording above nor
                     // escape into the handler.
-                    if (cfSpan !== undefined) {
+                    if (hostSpan !== undefined) {
                         try {
-                            applyCloudflareSpanAttributes(cfSpan, {
+                            applyHostSpanAttributes(hostSpan, {
                                 attributes: merged,
                                 durationMs,
                                 error,
@@ -537,8 +546,8 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             // run the recorded body inside it, so our span nests under CF's native
             // trace tree. The probe returns `undefined` off-CF / on older compat /
             // unsampled, in which case this is a safe no-op.
-            if (fuseCloudflareSpans === true && resolveCloudflareTracing !== undefined) {
-                const cfTracing = await resolveCloudflareTracing();
+            if (fuseHostSpans === true && resolveHostTracing !== undefined) {
+                const cfTracing = await resolveHostTracing();
 
                 if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
                     return await cfTracing.enterSpan(name, (span) => runRecorded(span));

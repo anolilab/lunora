@@ -1,15 +1,14 @@
 /* eslint-disable unicorn/prefer-single-call -- `buffer.push` is SpanBuffer's single-arg method, not Array#push; combining the calls would silently drop all but the first event */
 import { LunoraError } from "@lunora/errors";
+import type { ContextMetrics, ContextTracer } from "@lunora/observability";
+import { createMetrics, createTracer, foldTraces, SpanBuffer } from "@lunora/observability";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
-import type { ContextMetrics, ContextTracer } from "../src/context-telemetry";
-import { createMetrics, createTracer } from "../src/context-telemetry";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import { foldTraces, SpanBuffer } from "../src/span-buffer";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "test-admin-token-that-is-long-enough";
