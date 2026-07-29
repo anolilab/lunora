@@ -71,7 +71,12 @@ const FlagsPanel = ({ initialShardKey = "" }: FlagsPanelProps): ReactElement => 
 
     // Only the successfully-parsed context is part of the query key, so an
     // in-progress / malformed edit keeps the last good evaluation on screen.
-    const args = useMemo(() => (context === undefined ? {} : { context }), [context]);
+    //
+    // Not memoized: `useAdminQuery` hashes the key deeply (TanStack) and keys its
+    // subscription effect on a JSON signature, so a fresh object per render costs
+    // nothing — and the manual memo here was the one thing stopping React Compiler
+    // from optimizing this component at all.
+    const args = context === undefined ? {} : { context };
 
     const { data, error, errorSource, liveError } = useAdminQuery<FlagsResult>(ADMIN_FUNCTIONS.listFlags, args, { live: true, shardKey: initialShardKey });
 

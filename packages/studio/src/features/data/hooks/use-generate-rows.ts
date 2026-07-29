@@ -134,9 +134,9 @@ const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
             setFkPools(pools);
         } catch (error_) {
             setError((error_ as Error).message);
-        } finally {
-            setLoading(false);
         }
+
+        setLoading(false);
     };
 
     const openDialog = (targetTable: string, targetShard: string): void => {

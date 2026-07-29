@@ -76,6 +76,7 @@ const useSqlDiagnostics = (draft: string, schema: SqlSchema, shardKey: string): 
 
     useEffect(() => {
         if (skipServer) {
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async lint with a supersede token so a stale reply cannot underline moved text
             setServerDiagnostics([]);
 
             return undefined;

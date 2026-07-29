@@ -107,7 +107,14 @@ export const GlobalDataBrowser = ({
     // page/facet fetches and the poll tick read the latest set without re-binding.
     const [filters, setFilters] = useState<GlobalFilterClause[]>([]);
     const filtersRef = useRef(filters);
-    filtersRef.current = filters;
+
+    // Mirrored in an EFFECT, not during render: React may render without
+    // committing, and a render-phase write would publish a value from a render
+    // that never became the UI. The handlers below still assign directly — a
+    // write inside an event handler is already outside render.
+    useEffect(() => {
+        filtersRef.current = filters;
+    });
 
     // Datasette-style per-column value/count summaries the operator has toggled on.
     // Opt-in per column (faceting a wide column is costly); each reflects the active

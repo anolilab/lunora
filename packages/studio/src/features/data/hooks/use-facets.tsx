@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { FacetResult } from "../../../lib/admin";
 import { errorMessage, fireAndForget } from "../../../lib/internal";
@@ -48,7 +48,13 @@ interface UseFacets {
 export const useFacets = (): UseFacets => {
     const [facets, setFacets] = useState<Record<string, FacetState>>({});
     const facetsRef = useRef(facets);
-    facetsRef.current = facets;
+
+    // Mirrored in an EFFECT, not during render: React may render without
+    // committing, and a render-phase write would publish a value from a render
+    // that never became the UI.
+    useEffect(() => {
+        facetsRef.current = facets;
+    });
 
     // Per-column monotonic fetch id. `refetchFacets` fires on every filter/search/
     // shard/table change while older fetches may still be in flight, so a slow

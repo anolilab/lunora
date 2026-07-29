@@ -81,18 +81,28 @@ function SidebarProvider({
     };
 
     // Adds a keyboard shortcut to toggle the sidebar.
+    //
+    // The shortcut is an EFFECT EVENT, not a dependency: `toggleSidebar` (and the
+    // `setOpen` it closes over) is rebuilt every render, so listing it tore down
+    // and re-registered the window listener on every single render. An effect
+    // event always sees the latest values without being a dep, so the listener is
+    // now bound once for the provider's lifetime.
+    const onShortcut = React.useEffectEvent(() => {
+        toggleSidebar();
+    });
+
     React.useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
-                toggleSidebar();
+                onShortcut();
             }
         };
 
         globalThis.addEventListener("keydown", handleKeyDown);
 
         return () => globalThis.removeEventListener("keydown", handleKeyDown);
-    }, [toggleSidebar]);
+    }, []);
 
     // We add a state so that we can do data-state="expanded" or "collapsed".
     // This makes it easier to style the sidebar with Tailwind classes.

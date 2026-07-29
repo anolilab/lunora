@@ -109,9 +109,9 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         } catch (error) {
             setRunResult(null);
             setRunError(errorMessage(error));
-        } finally {
-            setRunning(false);
         }
+
+        setRunning(false);
     };
 
     const runMigration = (): void => {

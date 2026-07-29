@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 
 import { newId, usePersistedList, usePersistedValue } from "../../lib/browser-storage";
 
@@ -58,23 +58,24 @@ const usePersistedTabs = (
 
     // Seed exactly one tab the first time storage is empty, and persist it so the
     // panel's edits (which write through `setTabs`) land on a tab that's actually
-    // in the list. A ref keeps the seed stable across the seeding re-render.
-    const seedTab = useRef<null | SqlTab>(null);
-
-    if (stored.length === 0 && seedTab.current === null) {
-        seedTab.current = seed();
-    }
+    // in the list.
+    //
+    // A lazy `useState` initialiser, not a ref written during render: the seed has
+    // to survive the render that persists it AND be readable while building
+    // `tabs` below, and a ref that is both written and read mid-render is exactly
+    // the impure-render shape React makes no ordering guarantees about. The
+    // initialiser runs once per mount; when storage already has tabs the seed is
+    // simply never used.
+    const [seedTab] = useState<SqlTab>(seed);
 
     useEffect(() => {
-        if (stored.length === 0 && seedTab.current !== null) {
-            const initial = seedTab.current;
-
-            setTabs([initial]);
+        if (stored.length === 0) {
+            setTabs([seedTab]);
         }
-    }, [setTabs, stored.length]);
+    }, [seedTab, setTabs, stored.length]);
 
     // Never hand the panel an empty list while the seed is being persisted.
-    const tabs = stored.length === 0 && seedTab.current !== null ? [seedTab.current] : stored;
+    const tabs = stored.length === 0 ? [seedTab] : stored;
     const activeId = tabs.some((tab) => tab.id === activeRaw) ? activeRaw : (tabs[0]?.id ?? "");
 
     return { activeId, setActiveId, setTabs, tabs };

@@ -93,9 +93,9 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
             }
         } catch (error) {
             setResult({ kind: "error", message: error instanceof Error ? error.message : String(error) });
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const onSubmitTable = (): void => {

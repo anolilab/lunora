@@ -309,6 +309,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
     const rootShard = initialShardKey ?? "";
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect and the fan-out timer depend on this, so a fresh one re-fires them every render
     const refresh = useCallback(async (): Promise<void> => {
         if (inFlightRef.current) {
             return;
@@ -363,11 +364,18 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
         // Within the cooldown: coalesce the rest of the burst into one trailing run
         // at the interval edge (only if one isn't already scheduled).
-        trailingTimerRef.current ??= setTimeout(() => {
-            trailingTimerRef.current = null;
-            lastFanOutRef.current = Date.now();
-            fireAndForget(refresh());
-        }, MIN_FANOUT_INTERVAL_MS - elapsed);
+        // An explicit `if`, not `??=`: React Compiler cannot lower `??=`, and one
+        // unsupported operator bails the WHOLE component out of auto-memoization.
+        // The ref is `null | Timeout`, so the two forms are equivalent, and the
+        // compiler bail-out costs more than the extra line reads.
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- `??=` is unsupported by React Compiler's HIR lowering; see above
+        if (trailingTimerRef.current === null) {
+            trailingTimerRef.current = setTimeout(() => {
+                trailingTimerRef.current = null;
+                lastFanOutRef.current = Date.now();
+                fireAndForget(refresh());
+            }, MIN_FANOUT_INTERVAL_MS - elapsed);
+        }
     };
 
     useEffect(

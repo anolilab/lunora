@@ -17,6 +17,7 @@ export function useIsMobile(): boolean {
         };
 
         mql.addEventListener("change", onChange);
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- matchMedia subscription: synchronising with an external system is the effect's purpose
         setIsMobile(globalThis.innerWidth < MOBILE_BREAKPOINT);
 
         return () => {

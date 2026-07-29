@@ -491,6 +491,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     // hundreds of <div>s. See the jsdom note on `flooredRectObserver`.
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
         count: activeCount,
         estimateSize: () => ROW_HEIGHT,

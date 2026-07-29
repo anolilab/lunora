@@ -58,12 +58,13 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
             setCurrent(result.current);
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     }, [client, shardKey]);
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async refresh of the current bookmark, not derived state
         fireAndForget(refresh());
     }, [refresh]);
 
@@ -114,9 +115,9 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 } catch (error_) {
                     setPreview(null);
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -134,9 +135,9 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                     await refresh();
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };

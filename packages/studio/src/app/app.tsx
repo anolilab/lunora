@@ -168,6 +168,7 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
     // controlled input; the client rebuilds at most once per typing pause.
     const debouncedToken = useDebounced(token, 300);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is the LunoraClient — a fresh one per render opens a new WebSocket
     const client = useMemo(() => {
         // A supplied client (dev mock / embedding) wins — render the chrome
         // against it and don't build or own a real one. It is still wrapped for

@@ -228,6 +228,7 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
             return undefined;
         }
 
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- opens the live subscription channel — synchronising with an external system is the effect's purpose
         setLiveError(undefined);
 
         // One tape entry per CHANNEL: opened here, counted on each push, closed

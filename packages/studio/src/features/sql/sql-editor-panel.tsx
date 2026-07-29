@@ -265,9 +265,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
             // read the live draft, so any edit after the failure asked the model
             // to repair text that never ran, against an error it never produced.
             patchActiveOutput({ chart: undefined, error: errorMessage(error_), failed: { error: errorMessage(error_), sql }, pane: mode, result: null });
-        } finally {
-            setRunning(false);
         }
+
+        setRunning(false);
     };
 
     const onRun = (): void => {

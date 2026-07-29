@@ -292,7 +292,14 @@ const useDataBrowser = ({
     const [filters, setFilters] = useState<EditableFilter[]>(() => toEditableFilters(initialFilters ?? []));
     const filtersRef = useRef<EditableFilter[]>(filters);
 
-    filtersRef.current = filters;
+    // Mirrored in an EFFECT, not during render: React may render without
+    // committing (a concurrent re-render, an offscreen pass), and a render-phase
+    // write would publish a value from a render that never became the UI. No dep
+    // array so it tracks every commit, and declared here — ahead of every effect
+    // that reads the ref — because effects run in declaration order.
+    useEffect(() => {
+        filtersRef.current = filters;
+    });
 
     // Facets (Datasette-style per-column value/count summaries): the columns the
     // operator has toggled into the facet sidebar, each with its loaded summary.
@@ -468,9 +475,13 @@ const useDataBrowser = ({
     const refetchFacetsRef = useRef(refetchFacets);
     const onViewChangeRef = useRef(onViewChange);
 
-    facetFetcherRef.current = facetFetcher;
-    refetchFacetsRef.current = refetchFacets;
-    onViewChangeRef.current = onViewChange;
+    // Mirrored in an effect for the same reason as `filtersRef` above, and
+    // declared ahead of the two effects that read these so it commits first.
+    useEffect(() => {
+        facetFetcherRef.current = facetFetcher;
+        refetchFacetsRef.current = refetchFacets;
+        onViewChangeRef.current = onViewChange;
+    });
 
     // Refetch every toggled-on facet when the active view (filters / search / shard
     // / table) changes, so the summaries always reflect the previewed rows. The
@@ -527,10 +538,14 @@ const useDataBrowser = ({
     const initialSearchRef = useRef(initialSearch);
     const initialShardKeyRef = useRef(initialShardKey);
 
-    initialFiltersRef.current = initialFilters;
-    initialOrderByRef.current = initialOrderBy;
-    initialSearchRef.current = initialSearch;
-    initialShardKeyRef.current = initialShardKey;
+    // Mirrored in an effect (see `filtersRef`), declared ahead of the re-seed
+    // effect below that reads them.
+    useEffect(() => {
+        initialFiltersRef.current = initialFilters;
+        initialOrderByRef.current = initialOrderBy;
+        initialSearchRef.current = initialSearch;
+        initialShardKeyRef.current = initialShardKey;
+    });
 
     // Re-seed the per-table local view state whenever the open table changes — an
     // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
@@ -613,9 +628,9 @@ const useDataBrowser = ({
             pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
-        } finally {
-            setCommitting(false);
         }
+
+        setCommitting(false);
     };
 
     const discardStaged = (): void => {
@@ -733,6 +748,7 @@ const useDataBrowser = ({
     // hook owns only the derived react-table/virtualizer wiring.
     // Reverse relations are derived from schema metadata (see `back-relations.ts`)
     // and passed in as extra column defs; only the ones switched on are resolved.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: feeds the grid's `columnDefs`, and react-table resets column sizing and row selection whenever `columns` changes identity
     const activeBackRelations = useMemo(
         () => (selectedTable === null ? [] : (resolveBackRelations?.(selectedTable) ?? [])),
         [resolveBackRelations, selectedTable],

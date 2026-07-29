@@ -91,7 +91,13 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     // deep-link load (`/data?table=…`) fires a `navigate({ to: "/data" })` that
     // clobbers an in-flight tab switch — you couldn't leave the data tab.
     const searchRef = useRef(search);
-    searchRef.current = search;
+
+    // Mirrored in an EFFECT, not during render: React may render without
+    // committing, and a render-phase write would publish a value from a render
+    // that never became the UI.
+    useEffect(() => {
+        searchRef.current = search;
+    });
 
     // True while the data route is the active one. The URL-mirroring callbacks below
     // all `navigate({ to: "/data" })`; some fire from deferred effects/microtasks that

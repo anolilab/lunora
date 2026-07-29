@@ -249,6 +249,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async schema load, re-run when the debounced shard settles
         fireAndForget(refresh(debouncedShard));
         fireAndForget(refreshGlobal());
     }, [refresh, refreshGlobal, debouncedShard]);
@@ -336,6 +337,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
 
         if (tables.some((table) => table.name === initialTable)) {
             appliedTable.current = initialTable;
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- deep-link sync: expands `initialTable` once the async tables arrive, guarded against re-firing by a ref
             fireAndForget(toggle(initialTable));
         }
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
@@ -420,6 +422,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
         }
 
         fireAndForget(
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- lazy column probe gated on view + shard, not derived state
             probeSchema(
                 shardKey,
                 tables.map((table) => table.name),

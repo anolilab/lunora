@@ -304,6 +304,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // cache key. Previously the panel only reloaded on mount + visibility change, so
     // typing a different shard key never re-fetched the enumeration either.
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- drives an imperative enumeration over the debounced shard — an async load, not derived state
         fireAndForget(enumerateShard(debouncedShard));
     }, [debouncedShard, enumerateShard]);
 

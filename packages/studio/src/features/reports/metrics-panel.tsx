@@ -206,6 +206,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
         const shards = shardsToAggregate(shardKey, loadRecentShards());
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
         try {
             const results = await Promise.all(
                 shards.map(async (shard): Promise<ShardMetricsResult> => {

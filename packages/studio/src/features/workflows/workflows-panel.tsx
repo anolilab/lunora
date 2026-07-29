@@ -141,9 +141,9 @@ const WorkflowsPanel = (): ReactElement => {
             setInstanceIdInput("");
         } catch (error_: unknown) {
             setStartError(errorMessage(error_));
-        } finally {
-            setStarting(false);
         }
+
+        setStarting(false);
     };
 
     const startInstance = (): void => {
@@ -159,9 +159,9 @@ const WorkflowsPanel = (): ReactElement => {
             upsertInstance({ error: result.error, exportName, id: result.id, output: result.output, status: result.status });
         } catch (error_: unknown) {
             setStartError(errorMessage(error_));
-        } finally {
-            setRefreshingId(null);
         }
+
+        setRefreshingId(null);
     };
 
     const onSelectedExportChange = (event: ChangeEvent<HTMLSelectElement>): void => {

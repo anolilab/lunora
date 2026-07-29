@@ -301,6 +301,7 @@ const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: Reac
 
         setExporting("png");
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the export must clear its in-flight marker on the throw path, and adding a catch just to satisfy the compiler would swallow the failure
         try {
             await exportDiagramAsPng(viewport, nodes, `${testIdPrefix}-schema-diagram.png`);
         } finally {
@@ -317,6 +318,7 @@ const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: Reac
 
         setExporting("svg");
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the export must clear its in-flight marker on the throw path, and adding a catch just to satisfy the compiler would swallow the failure
         try {
             await exportDiagramAsSvg(viewport, nodes, `${testIdPrefix}-schema-diagram.svg`);
         } finally {
@@ -327,6 +329,7 @@ const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: Reac
     const handleJson = (): void => {
         setExporting("json");
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the export must clear its in-flight marker on the throw path, and adding a catch just to satisfy the compiler would swallow the failure
         try {
             exportDiagramAsJson(nodes, getEdges(), `${testIdPrefix}-schema-diagram.json`);
         } finally {
@@ -389,6 +392,7 @@ export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables,
     // The tables actually drawn: kept by the active tier toggles and matching the
     // find-table query (case-insensitive substring). Edges to a filtered-out table
     // drop automatically, since `buildEdges` only sees the visible set.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: the re-seed effects below key on it, and this component bails out of the compiler anyway (see the try/finally above)
     const visibleTables = useMemo<DiagramTable[]>(() => {
         const needle = query.trim().toLowerCase();
 
@@ -403,6 +407,7 @@ export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables,
         () => buildNodes(visibleTables, columnsError ?? false, nodeClasses ?? EMPTY_NODE_CLASSES),
         [visibleTables, columnsError, nodeClasses],
     );
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: the re-seed effects below key on it, and this component bails out of the compiler anyway (see the try/finally above)
     const seededEdges = useMemo(() => buildEdges(visibleTables), [visibleTables]);
     // Identifies the current seed by VALUE, so the re-fit fires when the graph
     // actually changes rather than on every render.

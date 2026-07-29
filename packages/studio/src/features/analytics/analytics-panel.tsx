@@ -161,6 +161,7 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
     // Resolve the query runner: an explicit override wins (tests); otherwise build
     // a SQL client from the token config. `null` when neither is available — the
     // panel then renders the config-needed empty state and never fetches.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: feeds `load`, which an effect depends on; a fresh one re-fires the query every render
     const run = useMemo<((sql: string) => Promise<AnalyticsSqlResult>) | null>(() => {
         if (runQuery !== undefined) {
             return runQuery;
@@ -175,6 +176,7 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
         return (sql: string) => client.query(sql);
     }, [config, runQuery]);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect depends on this, so a fresh one re-runs the load every render
     const load = useCallback(
         async (token: { cancelled: boolean }): Promise<void> => {
             if (run === null) {

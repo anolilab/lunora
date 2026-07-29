@@ -72,6 +72,7 @@ const useBackRelations = (
     useEffect(() => {
         const token = { cancelled: false };
 
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async fetch with a cancellation token, which is what effects are for
         fireAndForget(load(token));
 
         return () => {

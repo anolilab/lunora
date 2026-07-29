@@ -1038,6 +1038,7 @@ const useDataBrowserTable = (
     // (drag-to-reorder) and sizing (drag-to-resize) are managed internally by
     // TanStack — a stale order referencing a previous table's columns is simply
     // ignored, so the columns fall back to default order on a fresh table.
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Table returns functions the compiler refuses to memoize; the alternative is not using the library
     const table = useReactTable<TableRow>({
         columnResizeMode: "onChange",
         columns: columnDefs,

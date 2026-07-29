@@ -212,6 +212,7 @@ const EvilBrush = ({
 
     useEffect(() => {
         if (!isControlled) {
+            // react-doctor-disable-next-line react-doctor/no-impure-state-updater -- the ref write is the value being returned, so a repeated updater run writes the same bytes; hoisting it out would need the previous range this updater exists to read
             setInternalRange((previous) => {
                 const adjusted = {
                     startIndex: Math.min(previous.startIndex, Math.max(0, totalPoints - 1)),
@@ -290,6 +291,7 @@ const EvilBrush = ({
         if (isControlled && !isDragging) {
             const syncedRange = { startIndex: controlledStart, endIndex: controlledEnd };
 
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- controlled/uncontrolled sync: mirrors the controlled range while not dragging, and there is no render-derivable value to use instead
             setInternalRange(syncedRange);
             lastCommittedRef.current = syncedRange;
         }
@@ -629,6 +631,7 @@ function useEvilBrush<TData extends Record<string, unknown>>({
     const deferredRange = React.useDeferredValue(range);
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- resets the window when the dataset length changes; a key-reset would remount the chart and drop its drag state
         setRange({
             startIndex: 0,
             endIndex: Math.max(0, data.length - 1),

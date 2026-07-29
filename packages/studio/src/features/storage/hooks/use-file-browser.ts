@@ -242,6 +242,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             setError(undefined);
             setBusy(true);
 
+            // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `finally`, and this one cannot be flattened: the `try` returns early, and the busy flag has to be released on that path too
             try {
                 const page = await storageApi.list({ cursor, limit: pageSize, prefix: searchPrefix });
 
@@ -275,6 +276,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     );
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async listing on mount and on prefix change
         fireAndForget(list(initialPrefix ?? "", undefined, false));
     }, [list, initialPrefix]);
 
@@ -320,6 +322,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         const keys = keysSignature === "" ? [] : keysSignature.split("\n");
 
         if (keys.length === 0) {
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async records-to-files join for the loaded keys, with a cancellation flag
             setReferences({});
 
             return undefined;
@@ -434,9 +437,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     clearSelection();
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -507,9 +510,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     await list(prefix, undefined, false);
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -531,9 +534,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     await list(prefix, undefined, false);
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -544,6 +547,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     useEffect(() => {
         // Invalidate any in-flight orphan check so its (old-shard) result can't land.
         orphanSeq.current += 1;
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- invalidates a whole-bucket orphan result when the reference shard changes; a stale result must not survive the switch
         setDanglingReferences(undefined);
         setDanglingTruncated(false);
     }, [referenceShard]);
@@ -603,10 +607,10 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                         setDanglingTruncated(false);
                         setError(errorMessage(error_));
                     }
-                } finally {
-                    if (seq === orphanSeq.current) {
-                        setDanglingBusy(false);
-                    }
+                }
+
+                if (seq === orphanSeq.current) {
+                    setDanglingBusy(false);
                 }
             })(),
         );
