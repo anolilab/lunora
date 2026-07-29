@@ -1,5 +1,5 @@
 /**
- * **Prototype.** better-auth over a Durable Object's own SQLite, rather than D1.
+ * better-auth over a Durable Object's own SQLite, rather than D1.
  *
  * ## Why this exists
  *
@@ -15,14 +15,27 @@
  * `ShardDO.runInTransaction` already relies on. Backing better-auth with DO storage
  * therefore satisfies SCIM without leaving Cloudflare's first-party stack.
  *
- * ## Status and the trade it makes
+ * ## Status
  *
- * This is a prototype, not a recommended default. It puts `user` / `session` (and the
- * SCIM tables) inside **one** Durable Object, which changes the shape of the system:
- * writes serialise through a single object rather than spreading across D1, the object
- * holds them in its own SQLite, and backup/export follows the DO path instead of D1's.
- * That is a deliberate architectural choice, not a drop-in swap — measure it before
- * moving an existing deployment.
+ * `@experimental`; D1 remains the recommended default. Experimental here is about the
+ * signature, not the primitive: the transaction path is covered by a workerd suite over
+ * the real `state.storage.transaction`, but the export sits outside the api-snapshot gate
+ * and the 1.0 SemVer promise, so it can churn.
+ *
+ * What makes it a deliberate choice rather than a drop-in swap:
+ *
+ * - **Topology.** `user` / `session` and the SCIM tables live inside **one** object, so
+ *   writes serialise through it, its storage limits apply, and backup/export follows the
+ *   DO path rather than D1's.
+ * - **No `ensureMigrated`** — better-auth's migrator is kysely-only, so the object
+ *   materialises its own schema (see `authDoSchemaStatements`).
+ * - **No sharding** — there is one auth object.
+ * - **`authAdmin` degrades.** The studio's auth admin pages read the auth tables from the
+ *   worker, which DO storage does not permit, so they report "not configured" rather than
+ *   returning data. The audit feed still works (the worker reads it back over an internal
+ *   route).
+ *
+ * Measure it before moving an existing deployment. Full picture: `docs/index.mdx`.
  *
  * ```ts
  * // Inside a Durable Object (`this.state` / `this.ctx`), with the constructor's

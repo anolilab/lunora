@@ -152,7 +152,7 @@ const lunoraAuthAdapter = (store: AuthStore, runInTransaction?: TransactionRunne
 const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof lunoraAuthAdapter> => lunoraAuthAdapter(createSqlAuthStore(d1Executor(d1)));
 
 /**
- * Prototype: a better-auth `database` backed by a Durable Object's own SQLite —
+ * A better-auth `database` backed by a Durable Object's own SQLite —
  * `lunoraAuthAdapter(createSqlAuthStore(doExecutor(storage)), doTransactionRunner(storage))`.
  *
  * Unlike `lunoraD1Adapter` this one exposes real transactions, so plugins that
