@@ -359,10 +359,13 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
  * capabilities. Tabs absent from this map are always shown (core surfaces). The
  * flags come from `useStudioFeatures` (the `__lunora_admin__:studioFeatures` RPC,
  * statically discovered by codegen). `storage` gates both the file browser and
- * the access-rules view; `scheduler` gates the scheduled-jobs view.
+ * the access-rules view; `scheduler` gates the scheduled-jobs view; `auth` gates
+ * all five auth pages — including the audit trail, whose `getAuthAuditLog` RPC
+ * answers `AUTH_AUDIT_NOT_CONFIGURED` without `@lunora/auth`'s reader wired.
  */
 const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
     analytics: "analytics",
+    authAudit: "auth",
     authConfig: "auth",
     authSessions: "auth",
     containers: "containers",
@@ -370,6 +373,7 @@ const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
     flags: "flags",
     kv: "kv",
     mail: "mail",
+    notifications: "notifications",
     organizations: "auth",
     payments: "payments",
     queues: "queues",

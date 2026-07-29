@@ -2255,6 +2255,7 @@ interface StudioFeaturesResult {
     flags: boolean;
     kv: boolean;
     mail: boolean;
+    notifications: boolean;
     payments: boolean;
     queues: boolean;
     scheduler: boolean;

@@ -159,6 +159,15 @@ const CAPABILITY_ROWS = [
     // `mail` is import-only — no `ctx.mail` helper (mail is reached through its own
     // client), so only a `@lunora/mail` import flips it.
     { key: "mail", moduleSpecifier: "@lunora/mail" },
+    // `@lunora/notify` exposes TWO ctx facades — `ctx.notify` and its `ctx.push`
+    // sub-facade alias — but `contextProperty` holds one name, so the probe
+    // anchors on `notify`. That loses nothing: both facades only exist when the
+    // app declares `lunora/notify.ts`, which imports `@lunora/notify` and is
+    // itself scanned, so a `ctx.push`-only handler is still caught by the import
+    // arm (and by the declared-dependency arm in `buildStudioFeatures`). Its ctx
+    // fields are hand-wired in `emit.ts` off the `lunora/notify.ts` signal, so no
+    // `serverCtxField` here — declaring one would emit the fields twice.
+    { contextProperty: "notify", key: "notify", moduleSpecifier: "@lunora/notify" },
     {
         appMethod: { configKey: "payment", doc: "Wire the payment options backing `ctx.payments`.", method: "payment" },
         contextProperty: "payments",

@@ -440,6 +440,8 @@ interface StudioFeaturesResult {
     kv: boolean;
     /** `@lunora/mail` is imported by a `lunora/` source or a declared dependency. */
     mail: boolean;
+    /** `@lunora/notify` / `ctx.notify` is used (a `lunora/notify.ts` config counts), or it is a declared dependency. */
+    notifications: boolean;
 
     /**
      * `@lunora/payment` is used (import or `ctx.payments`), or the app declares the store's

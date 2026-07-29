@@ -528,6 +528,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "flags": false,
     "kv": false,
     "mail": false,
+    "notifications": false,
     "payments": false,
     "queues": false,
     "scheduler": true,
