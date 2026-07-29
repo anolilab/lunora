@@ -2,6 +2,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
+import type { DriftChange } from "../../../../../shared/schema-snapshot";
 import { ErrorAlert } from "../../components/error-alert";
 import type { StorageTier } from "../../components/storage-tier";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -112,6 +113,52 @@ const DiffVerdict = ({ breaking, count, first }: { readonly breaking: number; re
             )}
         </div>
     );
+};
+
+/** The three verbs a change can carry, in the order the list groups them. */
+const CHANGE_ACTIONS = ["added", "changed", "removed"] as const;
+
+type ChangeAction = (typeof CHANGE_ACTIONS)[number];
+
+/**
+ * Split a change discriminator into its verb and its subject kind.
+ *
+ * The `summary` string already reads "added table channels", but rendering seven
+ * of those stacks the same two words down the left edge and buries the only
+ * varying part — the identifier — mid-sentence. Splitting on `type` (the
+ * machine-readable field, not the prose) lets the verb become a group heading and
+ * the kind a fixed-width column, so the names line up as something you can scan.
+ */
+const CHANGE_SHAPE: Readonly<Record<DriftChange["type"], { action: ChangeAction; kind: string }>> = {
+    addedIndex: { action: "added", kind: "index" },
+    addedOptionalField: { action: "added", kind: "field?" },
+    addedRelation: { action: "added", kind: "relation" },
+    addedRequiredField: { action: "added", kind: "field" },
+    addedTable: { action: "added", kind: "table" },
+    changedFieldKind: { action: "changed", kind: "field kind" },
+    changedIndex: { action: "changed", kind: "index" },
+    changedJurisdiction: { action: "changed", kind: "jurisdiction" },
+    changedShardMode: { action: "changed", kind: "shard mode" },
+    fieldOptionalToRequired: { action: "changed", kind: "field → required" },
+    fieldRequiredToOptional: { action: "changed", kind: "field → optional" },
+    removedField: { action: "removed", kind: "field" },
+    removedIndex: { action: "removed", kind: "index" },
+    removedRelation: { action: "removed", kind: "relation" },
+    removedTable: { action: "removed", kind: "table" },
+};
+
+/**
+ * The identifier a change is about, with the prose stripped.
+ *
+ * `summary` leads with the verb and kind ("added table channels"), which the row
+ * now renders as structure — so repeating them in the text would say everything
+ * twice. Falls back to the full summary when the leading words do not match,
+ * because a summary the diff model words differently must still be readable.
+ */
+const changeSubject = (change: DriftChange, kind: string): string => {
+    const prefix = `${CHANGE_SHAPE[change.type].action} ${kind} `;
+
+    return change.summary.startsWith(prefix) ? change.summary.slice(prefix.length) : change.summary;
 };
 
 /** Small mono section label — the tertiary layer's only chrome. */
@@ -259,29 +306,61 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
                         <SchemaDiagram fill nodeClasses={nodeClasses} tables={diagramTables} testIdPrefix="sh" />
                     </div>
                 ) : (
-                    <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="sh-changes">
-                        {changes.map((change) => (
-                            <li
-                                className="flex items-baseline gap-3 border-s-2 py-2 ps-3 text-[13px] transition-colors hover:bg-accent/30"
-                                key={`${change.type}-${change.summary}`}
-                            >
-                                {/* No badge. Every row of a safe migration said
-                                    "safe", so the chip carried no information
-                                    while dominating the row. Severity is a rule
-                                    on the left edge and colour on the value. */}
-                                <span
-                                    aria-hidden="true"
-                                    className={cn("-ms-3 h-3.5 w-0.5 shrink-0 self-center", change.severity === "breaking" ? "bg-destructive" : "bg-border")}
-                                />
-                                {change.severity === "breaking" && (
-                                    <span className="font-mono text-[10px] tracking-widest text-destructive uppercase">{t("breaking")}</span>
-                                )}
-                                <span className={cn("min-w-0", change.severity === "breaking" ? "text-foreground" : "text-muted-foreground")}>
-                                    {change.summary}
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
+                    <div className="min-h-0 flex-1 overflow-y-auto" data-testid="sh-changes">
+                        {CHANGE_ACTIONS.map((action) => {
+                            const inGroup = changes.filter((change) => CHANGE_SHAPE[change.type].action === action);
+
+                            if (inGroup.length === 0) {
+                                return null;
+                            }
+
+                            return (
+                                <section className="mb-6" key={action}>
+                                    {/* The verb, hoisted out of seven identical
+                                        row prefixes into one heading. */}
+                                    <div className="flex items-baseline gap-2 pb-2 font-mono text-[10px] tracking-widest text-muted-foreground/70 uppercase">
+                                        {t(action)}
+                                        <span className="tabular-nums">{inGroup.length}</span>
+                                    </div>
+
+                                    <ul>
+                                        {inGroup.map((change) => {
+                                            const { kind } = CHANGE_SHAPE[change.type];
+                                            const breaking = change.severity === "breaking";
+
+                                            return (
+                                                <li
+                                                    className="flex items-baseline gap-4 border-s-2 py-1.5 ps-3 transition-colors hover:bg-accent/30"
+                                                    key={`${change.type}-${change.summary}`}
+                                                >
+                                                    {/* Severity is a rule on the edge, not a badge:
+                                                        every row of a safe migration said "safe", so
+                                                        the chip carried no information. */}
+                                                    <span
+                                                        aria-hidden="true"
+                                                        className={cn("-ms-3 h-3 w-0.5 shrink-0 self-center", breaking ? "bg-destructive" : "bg-transparent")}
+                                                    />
+                                                    {/* Fixed width so the identifiers below form one
+                                                        scannable column instead of ragged prose. */}
+                                                    <span className="w-32 shrink-0 font-mono text-[10px] tracking-widest text-muted-foreground/70 uppercase">
+                                                        {kind}
+                                                    </span>
+                                                    <span className={cn("min-w-0 font-mono text-[13px]", breaking ? "text-destructive" : "text-foreground")}>
+                                                        {changeSubject(change, kind)}
+                                                    </span>
+                                                    {breaking && (
+                                                        <span className="ms-auto shrink-0 font-mono text-[10px] tracking-widest text-destructive uppercase">
+                                                            {t("breaking")}
+                                                        </span>
+                                                    )}
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                </section>
+                            );
+                        })}
+                    </div>
                 )}
             </div>
         </div>

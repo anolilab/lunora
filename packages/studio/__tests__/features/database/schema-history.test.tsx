@@ -94,9 +94,17 @@ describe("schemaHistoryPanel", () => {
         // assertion and inflates the count.
         const changes = await screen.findByTestId("sh-changes");
 
+        // The verb and the kind are now structure (a group heading and a
+        // fixed-width column) rather than one prose string, so assert on the
+        // parts: `posts` was added, and it was added as a table.
         await waitFor(() => {
-            expect(changes.textContent).toContain("added table posts");
+            expect(changes.textContent).toContain("posts");
         });
+
+        const text = (changes.textContent ?? "").toLowerCase();
+
+        expect(text).toContain("added");
+        expect(text).toContain("table");
     });
 
     it("treats the first recorded version as all-new rather than diffing against nothing", async () => {

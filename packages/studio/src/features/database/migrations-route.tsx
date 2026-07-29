@@ -57,7 +57,7 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
 
     return (
         <div className="flex min-h-0 flex-1 flex-col" data-testid="lunora-migrations">
-            <div className="flex shrink-0 items-center gap-1 border-b border-border px-1" data-testid="mg-panes" role="tablist">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border px-3" data-testid="mg-panes" role="tablist">
                 {tab("diagram", t("Diagram"), "mg-pane-diagram")}
                 {tab("changes", t("Changes"), "mg-pane-changes")}
                 {tab("data", t("Data migrations"), "mg-pane-data")}
@@ -65,9 +65,9 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
 
             {/* Only the selected pane is mounted, so the React Flow canvas is not
                 measuring and re-fitting behind a form nobody is looking at. */}
-            <div className="flex min-h-0 flex-1 flex-col pt-4">
+            <div className="flex min-h-0 flex-1 flex-col px-4 pt-4">
                 {pane === "data" ? (
-                    <div className="min-h-0 flex-1 overflow-y-auto">
+                    <div className="min-h-0 flex-1 overflow-y-auto px-1">
                         <MigrationsPanel initialShardKey={initialShardKey} />
                     </div>
                 ) : (
