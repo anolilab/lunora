@@ -3238,7 +3238,7 @@ const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>) => void;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean) => void;
 ```
 
 ### `runShardMigrations` (const)
