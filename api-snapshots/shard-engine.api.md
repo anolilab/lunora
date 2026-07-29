@@ -2946,7 +2946,7 @@ const runDrizzle: <Row = Record<string, unknown>>(exec: SqlExec, query: SQL) => 
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>) => void;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean) => void;
 ```
 
 ### `runShardMigrations` (const)

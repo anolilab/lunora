@@ -375,23 +375,45 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
  * before the row hits SQL.
  *
  * Skips fields the validator doesn't declare a `parse` for (the structural
- * fakes used in DO/D1 unit tests omit it) and skips fields absent from the
- * document. The shape is iterated, not the document, so unknown fields pass
- * through untouched — they're part of the JSON-blob shape but not part of the
- * schema's declared columns.
+ * fakes used in DO/D1 unit tests omit it), fields absent from the document, and
+ * — only when `tolerateStoredNull` is set, i.e. on the patch path — a `null` on
+ * an optional field (see below). The shape is iterated, not the document, so
+ * unknown fields pass through untouched — they're part of the JSON-blob shape
+ * but not part of the schema's declared columns.
  *
  * Lives here (alongside `applyOnDelete`) rather than in each backend's
  * `ctx-db.ts` so DO + D1 share one implementation instead of two drift-prone
  * copies. The signature is intentionally `validator.parse?` so the unit-test
  * fakes (which never carry a runtime parser) keep working.
  */
-const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
+const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull = false): void => {
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!(field in document)) {
             continue;
         }
 
         if (typeof validator.parse !== "function") {
+            continue;
+        }
+
+        // A `null` on an OPTIONAL field is skipped like an absent field, but ONLY on
+        // the patch path, where the document is `{...existing, ...patch}` and the null
+        // may well be one the store itself produced: `onDelete: "set null"` writes the
+        // FK as null by design, and a `.global()` read returns SQL NULL for every
+        // column that was never set. `v.optional(x)` admits `undefined` and rejects
+        // `null`, so validating those would fail a patch of one field because of a
+        // *different* column nobody touched.
+        //
+        // Insert and replace stay strict, because there the whole document is
+        // caller-supplied — tolerating null on those paths would let a caller persist
+        // an explicit `null` into a column the generated types promise is
+        // `T | undefined`, which on the DO backend is a *distinct* stored value (the
+        // document is JSON-serialized whole, so `"x": null` is not an absent key) and
+        // would reintroduce the very null-vs-undefined hazard this guard exists for.
+        //
+        // Required fields are unaffected on every path: a null there is a genuine
+        // violation and still throws.
+        if (tolerateStoredNull && document[field] === null && validator.kind === "optional") {
             continue;
         }
 
