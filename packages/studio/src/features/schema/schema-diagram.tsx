@@ -231,17 +231,50 @@ const MINIMAP_MIN_TABLES = 12;
  * Re-fitting discards a manual pan, which is consistent: the re-seed it follows
  * already discards manual drags.
  */
-const FitOnSeed = ({ seedKey }: { readonly seedKey: string }): null => {
+const FitOnSeed = ({ containerRef, seedKey }: { readonly containerRef: React.RefObject<HTMLElement | null>; readonly seedKey: string }): null => {
     const initialized = useNodesInitialized();
     const { fitView } = useReactFlow();
 
     useEffect(() => {
-        if (initialized) {
-            // `duration: 0` — a fit is a correction, not a transition; animating
-            // it reads as the graph drifting on its own.
-            fireAndForget(fitView({ duration: 0, padding: 0.14 }));
+        if (!initialized) {
+            return undefined;
         }
-    }, [fitView, initialized, seedKey]);
+
+        // `duration: 0` — a fit is a correction, not a transition; animating it
+        // reads as the graph drifting on its own.
+        const fit = (): void => {
+            // `maxZoom` above 1 on purpose. React Flow refuses to scale UP past
+            // 1:1 by default, so a small schema fitted to a large canvas sat as a
+            // postage stamp in the middle of it — which is what this looked like
+            // even once the fit itself was correct. Capped at 1.6 so a two-table
+            // schema does not render as billboard text.
+            fireAndForget(fitView({ duration: 0, maxZoom: 1.6, padding: 0.14 }));
+        };
+
+        fit();
+
+        const node = containerRef.current;
+
+        if (node === null) {
+            return undefined;
+        }
+
+        // `fitView` solves for the container size AT CALL TIME, so a single fit
+        // when the nodes are measured is not enough: this canvas lives in a flex
+        // column that is still settling on that frame, and the graph ended up
+        // fitted to a box a third of the final size and offset to one side.
+        // Re-fitting on resize also covers the sidebar collapsing and the window
+        // changing, which previously left the graph stranded in the same way.
+        const observer = new ResizeObserver(() => {
+            fit();
+        });
+
+        observer.observe(node);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [containerRef, fitView, initialized, seedKey]);
 
     return null;
 };
@@ -490,7 +523,7 @@ export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables,
                         />
                     )}
                     <DiagramExportPanel containerRef={canvasRef} testIdPrefix={testIdPrefix} />
-                    <FitOnSeed seedKey={seedKey} />
+                    <FitOnSeed containerRef={canvasRef} seedKey={seedKey} />
                 </ReactFlow>
             </div>
         </section>

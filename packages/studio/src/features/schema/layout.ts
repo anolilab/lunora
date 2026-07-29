@@ -20,6 +20,18 @@ const COLUMN_GAP = 112;
 const ROW_GAP = 36;
 /** Outer padding around the laid-out cluster. */
 const PADDING = 24;
+
+/**
+ * Tallest a single column may grow before it wraps into a sibling column.
+ *
+ * Without a cap, a schema whose tables share one dependency depth — the common
+ * case, since most tables have no outgoing foreign key — stacked into a single
+ * strip one node wide and thousands of pixels tall. `fitView` then correctly
+ * solved for that aspect ratio and zoomed the whole graph down to an unreadable
+ * sliver against a mostly empty canvas. Wrapping keeps the cluster roughly as
+ * wide as it is tall, which is the shape a viewport actually has.
+ */
+const MAX_COLUMN_HEIGHT = 720;
 /** Height of a node's header row. */
 const HEADER_HEIGHT = 38;
 /** Height of one column row in a node's body. */
@@ -90,15 +102,47 @@ const computeDepths = (tables: ReadonlyArray<string>, edges: ReadonlyArray<Schem
  */
 const computeLayout = (tables: ReadonlyArray<string>, edges: ReadonlyArray<SchemaEdge>, columnCounts: ReadonlyMap<string, number>): NodePosition[] => {
     const depth = computeDepths(tables, edges);
-    const offsetByColumn = new Map<number, number>();
-    const nodes: NodePosition[] = [];
+
+    // Group by dependency depth first, preserving input order so the result stays
+    // deterministic and the operator's drags start from a stable seed.
+    const byDepth = new Map<number, string[]>();
 
     for (const name of tables) {
-        const column = depth.get(name) ?? 0;
-        const y = offsetByColumn.get(column) ?? PADDING;
+        const at = depth.get(name) ?? 0;
+        const bucket = byDepth.get(at);
 
-        nodes.push({ name, x: PADDING + column * (NODE_WIDTH + COLUMN_GAP), y });
-        offsetByColumn.set(column, y + nodeHeight(columnCounts.get(name) ?? 0) + ROW_GAP);
+        if (bucket === undefined) {
+            byDepth.set(at, [name]);
+        } else {
+            bucket.push(name);
+        }
+    }
+
+    const nodes: NodePosition[] = [];
+    // Each depth may need several side-by-side sub-columns once it wraps, so a
+    // depth's x offset depends on how many sub-columns every shallower depth
+    // actually used — not on the depth number itself.
+    let columnCursor = 0;
+
+    for (const at of [...byDepth.keys()].toSorted((left, right) => left - right)) {
+        let subColumn = 0;
+        let y = PADDING;
+
+        for (const name of byDepth.get(at) ?? []) {
+            const height = nodeHeight(columnCounts.get(name) ?? 0);
+
+            // Wrap only if something is already in this sub-column: a single node
+            // taller than the cap still gets its own column rather than an empty one.
+            if (y > PADDING && y + height > MAX_COLUMN_HEIGHT) {
+                subColumn += 1;
+                y = PADDING;
+            }
+
+            nodes.push({ name, x: PADDING + (columnCursor + subColumn) * (NODE_WIDTH + COLUMN_GAP), y });
+            y += height + ROW_GAP;
+        }
+
+        columnCursor += subColumn + 1;
     }
 
     return nodes;

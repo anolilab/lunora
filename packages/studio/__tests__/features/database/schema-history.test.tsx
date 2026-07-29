@@ -1,6 +1,6 @@
 import { LunoraProvider } from "@lunora/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -58,7 +58,7 @@ const createClient = (options: { failHistory?: boolean; versions?: typeof VERSIO
  */
 const renderPanel = (mock: MockClientHooks, initialUrl = "/migrations"): ReactElement => {
     const rootRoute = createRootRoute();
-    const migrationsRoute = createRoute({ component: () => <SchemaHistoryPanel />, getParentRoute: () => rootRoute, path: "/migrations" });
+    const migrationsRoute = createRoute({ component: () => <SchemaHistoryPanel pane="changes" />, getParentRoute: () => rootRoute, path: "/migrations" });
     const router = createRouter({ history: createMemoryHistory({ initialEntries: [initialUrl] }), routeTree: rootRoute.addChildren([migrationsRoute]) });
 
     return (
@@ -87,10 +87,6 @@ describe("schemaHistoryPanel", () => {
         expect.hasAssertions();
 
         render(renderPanel(createClient()));
-
-        // The canvas and the change list are two tabs over the same diff, and the
-        // canvas is the default — open the list before reading it.
-        fireEvent.click(await screen.findByTestId("sh-pane-changes"));
 
         // v2 adds `posts` on top of v1's `users` — the change list is the shared
         // DriftChange[], the same verdict the deploy gate blocks on. Awaited via

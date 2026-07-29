@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import type { StorageTier } from "../../components/storage-tier";
@@ -17,6 +17,12 @@ import type { DiffTable, TableStatus } from "./schema-diff-model";
 import { buildSchemaDiffModel, snapshotFromJson } from "./schema-diff-model";
 
 interface SchemaHistoryPanelProps {
+    /**
+     * Which reading of the diff to show. CONTROLLED by the route, because its
+     * tab strip also selects the sibling Data-migrations pane — one flat row of
+     * tabs beats a tab inside a tab.
+     */
+    readonly pane: "changes" | "diagram";
     /** Shard key whose ledger is shown. Defaults to the root shard. */
     readonly shardKey?: string;
 }
@@ -127,7 +133,7 @@ const RailLabel = ({ children }: { readonly children: string }): ReactElement =>
  * verdict `lunora deploy`'s drift gate blocks on, so the UI and the gate cannot
  * tell different stories.
  */
-export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): ReactElement => {
+export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelProps): ReactElement => {
     const t = useT();
 
     const navigate = useNavigate();
@@ -138,9 +144,6 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
     const setPicked = (version: string): void => {
         fireAndForget(navigate({ search: { version }, to: "/migrations" }));
     };
-
-    // Which reading of the diff is on screen. Defaults to the canvas.
-    const [pane, setPane] = useState<"changes" | "diagram">("diagram");
 
     const historyQuery = useAdminQuery<SchemaVersionsResult>(ADMIN_FUNCTIONS.schemaHistory, {}, { shardKey });
     const versions = historyQuery.data?.versions ?? [];
@@ -223,16 +226,6 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
 
     const changes = model?.changes ?? [];
 
-    // Tabbed, not stacked. The canvas and the change list are two different
-    // readings of the SAME diff, and stacking them made each fight the other for
-    // vertical space — the list ended up a scrolling strip and then fell below
-    // the fold entirely. Only one is ever the thing you are looking at.
-    const paneClass = (active: boolean): string =>
-        cn(
-            "border-b-2 px-3 py-2 font-mono text-[11px] tracking-widest uppercase outline-none transition-colors",
-            active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-        );
-
     return (
         <div className="flex min-h-0 flex-1 gap-6" data-testid="lunora-schema-history">
             {/* Tertiary: the rail is scenery. A single hairline separates it from
@@ -260,34 +253,6 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
                     count={previousHash === undefined ? diagramTables.length : changes.length}
                     first={previousHash === undefined}
                 />
-
-                <div className="flex shrink-0 items-center gap-1 border-b border-border" data-testid="sh-panes" role="tablist">
-                    <button
-                        aria-selected={pane === "diagram"}
-                        className={paneClass(pane === "diagram")}
-                        data-testid="sh-pane-diagram"
-                        onClick={() => {
-                            setPane("diagram");
-                        }}
-                        role="tab"
-                        type="button"
-                    >
-                        {t("Diagram")}
-                    </button>
-                    <button
-                        aria-selected={pane === "changes"}
-                        className={paneClass(pane === "changes")}
-                        data-testid="sh-pane-changes"
-                        onClick={() => {
-                            setPane("changes");
-                        }}
-                        role="tab"
-                        type="button"
-                    >
-                        {t("Changes")}
-                        <span className="ms-2 tabular-nums text-muted-foreground">{changes.length}</span>
-                    </button>
-                </div>
 
                 {pane === "diagram" ? (
                     <div className="flex min-h-0 flex-1 flex-col">
