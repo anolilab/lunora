@@ -1063,7 +1063,7 @@ deliberately on Cloudflare Workflows — different substrate, not a reuse.
 
 ## Wave 15 — competitive gap analysis (Prisma Studio, baseline `865a9a4c`, 2026-07-28)
 
-User-requested pass over `packages/studio` vs
+A requested pass over `packages/studio`, compared against
 [prisma/studio](https://github.com/prisma/studio) (`@prisma/studio-core`, OSS),
 grounded against that repo's source tree and its normative `Architecture/*.md`
 docs rather than its README. Prisma Studio is a **database** tool with 7 views

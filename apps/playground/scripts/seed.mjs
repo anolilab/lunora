@@ -22,7 +22,7 @@ const count = Number(process.argv[2] ?? "250");
 const now = Number(process.env.LUNORA_SEED_NOW ?? Date.now());
 
 if (!Number.isFinite(count) || !Number.isFinite(now)) {
-    throw new Error("seed: count and LUNORA_SEED_NOW must be numbers");
+    throw new TypeError("seed: count and LUNORA_SEED_NOW must be numbers");
 }
 
 // `process.execPath`, not "node": resolving the interpreter off PATH is both a
