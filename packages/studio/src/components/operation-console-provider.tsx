@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useMemo, useState } from "react";
+import { createContext, use, useState } from "react";
 
 /** How a caller wants the console opened. */
 interface OpenConsoleOptions {
@@ -100,9 +100,15 @@ export const OperationConsoleProvider = ({ children }: { readonly children: Reac
         };
     });
 
-    const value = useMemo<OperationConsoleValue>(() => {
-        return { ...actions, focusSeq: state.focusSeq, open: state.open, shown: state.shown };
-    }, [actions, state]);
+    /*
+     * Built inline, NOT memoized. React Compiler is enabled for this package and
+     * auto-memoizes the context value (which is why the repo's eslint config
+     * turns `react/jsx-no-constructed-context-values` off), and unlike the
+     * load-bearing memos elsewhere in the Studio a bail-out here costs a wasted
+     * consumer render — not a re-seeding effect loop. `actions` is already
+     * identity-stable, so the value only changes when `state` does.
+     */
+    const value: OperationConsoleValue = { ...actions, focusSeq: state.focusSeq, open: state.open, shown: state.shown };
 
     return <OperationConsoleContext value={value}>{children}</OperationConsoleContext>;
 };

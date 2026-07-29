@@ -275,15 +275,13 @@ const ColumnsMenu = ({
                         {allVisible ? t("Hide all") : t("Show all")}
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
+                    {/* One pass, not `.filter().map()`: reverse-relation columns are
+                        toggled below in their own group — listing them here too would
+                        offer two switches for one column — and a wide table walks this
+                        list on every open. */}
                     {table
                         .getAllLeafColumns()
-                        // Reverse-relation columns are toggled below, in their own
-                        // group — listing them here too would offer two switches
-                        // for one column.
-                        .filter((column) => !column.id.startsWith("__back__:"))
-                        .map((column) => (
-                            <ColumnToggle column={column} key={column.id} />
-                        ))}
+                        .flatMap((column) => (column.id.startsWith("__back__:") ? [] : [<ColumnToggle column={column} key={column.id} />]))}
                 </DropdownMenuGroup>
                 {backRelations.length > 0 && onToggleBackRelation !== undefined && (
                     <DropdownMenuGroup>

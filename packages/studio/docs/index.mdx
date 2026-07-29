@@ -244,8 +244,11 @@ omitted from the `<Studio>` shell.
 
 The studio also hides the pages for optional `@lunora/*` packages your app
 doesn't use — Payments, Mail, Notifications, Files + Access Rules, Vectors,
-Scheduler, and Workflows — so you never land on a page that errors with "unknown
-table" or renders an empty shell. This is
+Scheduler, and Workflows — so you never land on a page for a package you never
+installed, which would error with "unknown table" or render a shell with nothing
+behind it. Gating is about _unused packages_, not about emptiness: a page for a
+package you do use still shows its own empty state when there is genuinely
+nothing to list yet (Notifications with no registered devices, say). This is
 automatic: codegen statically detects which features a deployment wires up and
 emits the result into the generated `ShardDO`, which the studio reads once over
 the `__lunora_admin__:studioFeatures` RPC.

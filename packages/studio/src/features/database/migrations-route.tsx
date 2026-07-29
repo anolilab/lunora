@@ -10,6 +10,26 @@ import { SchemaHistoryPanel } from "./schema-history";
 type MigrationsPane = "changes" | "data" | "diagram";
 
 /**
+ * One tab's classes, active or not.
+ *
+ * Mono caps keeps the strip in the tertiary register — it names the views, it is
+ * not the content. The refinements over a plain underline: tracking pulled back
+ * from `widest` (at 11px mono that read as shouting), the active rule in the
+ * aurora accent rather than flat foreground, and a hover wash so the inactive
+ * tabs are visibly hittable rather than dead text. `focus-visible` restores the
+ * keyboard ring that `outline-none` removes.
+ *
+ * Module scope, not a closure inside the component: it reads nothing but its
+ * argument, so rebuilding it per render is pure waste.
+ */
+const tabClass = (active: boolean): string =>
+    cn(
+        "-mb-px border-b-2 px-3 py-2.5 font-mono text-[11px] tracking-wider uppercase transition-colors outline-none",
+        "hover:bg-accent/40 focus-visible:bg-accent/40",
+        active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+    );
+
+/**
  * The Migrations page: one flat row of tabs over three readings of migration
  * state — the schema canvas, the schema diff, and hand-written data migrations.
  *
@@ -33,18 +53,6 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
     const t = useT();
 
     const [pane, setPane] = useState<MigrationsPane>("diagram");
-
-    // Mono caps keeps the strip in the tertiary register — it names the views, it
-    // is not the content. The refinements over a plain underline: tracking pulled
-    // back from `widest` (at 11px mono that read as shouting), the active rule in
-    // the aurora accent rather than flat foreground, and a hover wash so the
-    // inactive tabs are visibly hittable rather than dead text.
-    const tabClass = (active: boolean): string =>
-        cn(
-            "-mb-px border-b-2 px-3 py-2.5 font-mono text-[11px] tracking-wider uppercase transition-colors outline-none",
-            "hover:bg-accent/40 focus-visible:bg-accent/40",
-            active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-        );
 
     const tab = (key: MigrationsPane, label: string, testId: string, count?: number): ReactElement => (
         <button
