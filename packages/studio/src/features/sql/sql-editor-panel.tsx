@@ -112,7 +112,7 @@ const tabClass = (selected: boolean): string =>
 /** The tab the editor opens with on a fresh browser: the first template. */
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~840 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~839 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately and tracked in #230, which lists all ten with their sizes and a suggested order
 export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

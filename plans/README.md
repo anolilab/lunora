@@ -149,6 +149,15 @@ commits are the record).
 | 073  | Dedup identity-independent reactive query runs across sockets  | perf      | P2  | M      | MED  | DONE — `dd340715` (#70): `isIdentityIndependent()` + `resolveReactiveOutcomeDeduped()` + flush-local `reactiveRunCache`; negative RLS test confirms no cross-identity leak |
 | 074  | Extract shared socket-pool helper (dedup poke worker pools)    | tech-debt | P3  | S      | LOW  | DONE — `dd340715` (#70): `do/src/socket-pool.ts` `runSocketPool()`; both `refreshSubscriptions`/`pokeShapeSubscribers` call it; `socket-pool.test.ts`                      |
 
+- **Deferred out of the wave: decomposing ten oversized studio panels.** The
+  react-doctor sweep that closed this wave took `packages/studio` from 232
+  findings to 0, but ten `no-giant-component` findings were suppressed rather
+  than fixed — splitting a panel is its own refactor with its own review.
+  Tracked in [#230](https://github.com/anolilab/lunora/issues/230), which lists
+  all ten with their line counts, a suggested order, and a definition of done;
+  each suppression comment cites it. `data-browser-grid.tsx` (1157 lines) is
+  above the repo's 1k guidance for the same reason and rides along.
+
 ### Recommended execution order & dependencies
 
 - **First, the quick wins (no deps):** 064, 065, 066 — small, isolated,

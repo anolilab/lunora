@@ -284,7 +284,7 @@ const DataBrowserViewControls = ({
  * touches the server — pagination still flows through `readTablePage`. All of
  * that state lives in {@link useDataBrowser}; this component is just the markup.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~811 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~810 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately and tracked in #230, which lists all ten with their sizes and a suggested order
 export const DataBrowser = ({
     editable = false,
     globalTableNames,

@@ -381,7 +381,7 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
  * For the raw, un-attributed request firehose (which Lunora deliberately does
  * NOT re-stream), a deep-link to Cloudflare Workers Observability is provided.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~801 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~800 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately and tracked in #230, which lists all ten with their sizes and a suggested order
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
     const t = useT();
 

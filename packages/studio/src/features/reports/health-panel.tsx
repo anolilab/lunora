@@ -289,7 +289,7 @@ const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[];
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
 // react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~641 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~640 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately and tracked in #230, which lists all ten with their sizes and a suggested order
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

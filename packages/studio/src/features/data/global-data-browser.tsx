@@ -85,7 +85,7 @@ const chipValue = (value: unknown): string => {
  * table sidebar + a bordered grid with a paginated footer — and gated by the
  * server's `LUNORA_ADMIN_TOKEN`.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~458 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~452 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately and tracked in #230, which lists all ten with their sizes and a suggested order
 export const GlobalDataBrowser = ({
     initialTable,
     onSelectTable,

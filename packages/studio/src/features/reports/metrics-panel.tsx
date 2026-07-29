@@ -131,7 +131,7 @@ const formatMs = (ms: number): string => {
  * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
  * remount.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~493 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~492 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately and tracked in #230, which lists all ten with their sizes and a suggested order
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
