@@ -1233,6 +1233,46 @@ const withAuthPlugins: <Auth extends LunoraAuth>(auth: Auth, options?: WithAuthP
 
 ## `@lunora/auth/plugins`
 
+### `UiConfigOptions` (interface)
+
+```ts
+interface UiConfigOptions {
+    expose?: {
+        organization?: boolean;
+        plugins?: boolean;
+        socialProviders?: boolean;
+    };
+    extraProviders?: string[];
+    path?: string;
+}
+```
+
+### `UiConfigOrganization` (interface)
+
+```ts
+interface UiConfigOrganization {
+    allowUserToCreate: boolean;
+    enabled: boolean;
+    invitationLimit?: number;
+    limit?: number;
+    membershipLimit?: number;
+    roles: boolean;
+    teams: boolean;
+}
+```
+
+### `UiConfigPayload` (interface)
+
+```ts
+interface UiConfigPayload {
+    emailAndPassword: boolean;
+    organization?: UiConfigOrganization;
+    plugins?: string[];
+    signUp: boolean;
+    socialProviders?: string[];
+}
+```
+
 ### `admin` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1333,6 +1373,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `uiConfig` (const)
+
+```ts
+const uiConfig: (options?: UiConfigOptions) => BetterAuthPlugin;
+```
+
 ### `username` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1346,6 +1392,7 @@ interface CreateLunoraAuthClientOptions {
     [option: string]: unknown;
     baseURL?: string;
     extraPlugins?: LunoraAuthClientPlugin[];
+    oneTapClientId?: string;
     plugins?: LunoraAuthPluginToggles;
 }
 ```
@@ -1361,11 +1408,18 @@ type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 ```ts
 interface LunoraAuthPluginToggles {
     admin?: boolean;
+    anonymous?: boolean;
+    deviceAuthorization?: boolean;
     emailOtp?: boolean;
+    lastLoginMethod?: boolean;
     magicLink?: boolean;
+    multiSession?: boolean;
+    oauthProvider?: boolean;
     organization?: boolean;
     passkey?: boolean;
+    phoneNumber?: boolean;
     twoFactor?: boolean;
+    username?: boolean;
 }
 ```
 
@@ -1428,6 +1482,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `oauthProviderClient` (const)
 
 Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
+
+### `oneTapClient` (const)
+
+Re-exported from `better-auth` — signature tracked at its source.
 
 ### `oneTimeTokenClient` (const)
 

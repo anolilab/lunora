@@ -8,12 +8,15 @@
  */
 import type { ControllerContext } from "./config";
 import { assertOk } from "./map-error";
+import { notifyError } from "./notify-error";
 
 const signInWithSocial = async (context: ControllerContext, provider: string): Promise<void> => {
     try {
         assertOk(await context.authClient.signIn.social({ callbackURL: context.redirects.afterSignIn, provider }));
     } catch (error) {
-        context.onError?.(error);
+        // A failed social redirect leaves the user on the same page with no
+        // explanation, so this is one of the paths that needs a toast.
+        notifyError(context, error, context.localization.signInFailed);
     }
 };
 

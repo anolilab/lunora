@@ -33,7 +33,7 @@ const withProvider = <T>(fake: FakeClient, run: () => T, extra: Record<string, u
     return runInInjectionContext(TestBed.inject(Injector), run);
 };
 
-// eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
+// One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetFlowWarnings();
     TestBed.resetTestingModule();

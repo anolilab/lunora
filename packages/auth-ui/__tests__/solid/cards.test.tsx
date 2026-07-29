@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthUIConfig } from "../../src/core";
 import { resetFlowWarnings } from "../../src/core";
-import { MagicLinkCard, SignInCard } from "../../src/solid";
+import { MagicLinkCard, SignInCard, SignUpCard } from "../../src/solid";
 import { AuthUIProvider } from "../../src/solid/provider";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
 
@@ -75,6 +75,30 @@ describe("solid flow gate", () => {
     });
 });
 
+describe("solid PasswordStrength", () => {
+    it("re-derives the checklist as the password is typed", () => {
+        expect.assertions(4);
+
+        const { container } = renderCard(() => <SignUpCard />, bareClient().client);
+
+        // Nothing to show for an empty field.
+        expect(container.querySelector(".lunora-auth-strength")).toBeNull();
+
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "short" } });
+
+        const unmet = container.querySelector(".lunora-auth-strength__item") as HTMLElement;
+
+        expect(unmet.className).not.toContain("lunora-auth-strength__item--met");
+        expect(unmet.textContent).toContain("At least 8 characters");
+
+        // The requirements are read through a function, not captured once, so
+        // the same node flips to met.
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+
+        expect((container.querySelector(".lunora-auth-strength__item") as HTMLElement).className).toContain("lunora-auth-strength__item--met");
+    });
+});
+
 describe("solid theme", () => {
     it("applies only the changed tokens to the card", () => {
         expect.assertions(2);
@@ -82,7 +106,9 @@ describe("solid theme", () => {
         const { container } = renderCard(
             () => <SignInCard />,
             bareClient().client,
-            (defaults) => ({ ...defaults, primary: "rebeccapurple" }),
+            (defaults) => {
+                return { ...defaults, primary: "rebeccapurple" };
+            },
         );
         const card = container.querySelector(".lunora-auth-card") as HTMLElement;
 

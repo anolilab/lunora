@@ -7,12 +7,15 @@
  * receives. Keeping resolution here means the five framework providers share one
  * defaulting path instead of each re-implementing it.
  */
-import { derivePluginFlags } from "./flow-gate";
+import type { DiscoveredConfig } from "./discovery";
+import { PLUGIN_ID_TO_FLOW } from "./discovery";
+import { derivePluginFlags, FLOW_NAMES } from "./flow-gate";
 import type { Localization } from "./localization";
 import { resolveLocalization } from "./localization";
+import type { PasswordPolicy } from "./password-policy";
 import type { ThemeTokens } from "./theme";
 import { resolveThemeVariables } from "./theme";
-import type { AuthClient } from "./types";
+import type { AnyAuthClient, AuthClient } from "./types";
 
 /** better-auth's default mount path; matches `DEFAULT_AUTH_BASE_PATH` in the `@lunora/client` package. */
 const DEFAULT_BASE_PATH = "/api/auth";
@@ -28,19 +31,35 @@ interface NavAdapter {
 }
 
 /**
- * Which optional flows/cards render. Left unset, each flag comes from what
- * `lunora/auth-ui/client.ts` registered for this client (see `flow-gate.ts`), so
- * enabling a plugin there is enough — you don't restate it here. Set a flag
- * explicitly to override that in either direction.
+ * Which optional flows/cards render.
+ *
+ * Left unset, each flag is derived — from the server's `uiConfig()` endpoint
+ * when it answers, and from what `lunora/auth-ui/client.ts` registered for this
+ * client, ANDed together (see {@link resolvePlugins}). Set a flag explicitly to
+ * override both, in either direction.
  */
 interface PluginFlags {
     admin?: boolean;
+    anonymous?: boolean;
+
+    /**
+     * better-auth ships no `apiKey` plugin as of 1.7, so nothing sets this
+     * automatically. It exists so an app running a fork or a later release can
+     * turn the cards on explicitly.
+     */
     apiKey?: boolean;
+    deviceAuthorization?: boolean;
     emailOtp?: boolean;
+    lastLoginMethod?: boolean;
     magicLink?: boolean;
+    multiSession?: boolean;
+    oauthProvider?: boolean;
+    oneTap?: boolean;
     organization?: boolean;
     passkey?: boolean;
+    phoneNumber?: boolean;
     twoFactor?: boolean;
+    username?: boolean;
 }
 
 interface RedirectConfig {
@@ -54,13 +73,73 @@ interface RedirectConfig {
     twoFactor?: string;
 }
 
+/**
+ * URL segments `&lt;AuthView>` maps to cards, so an app can host every auth screen
+ * on one route (`/auth/:view`) instead of wiring ten of them.
+ */
+interface ViewPaths {
+    acceptInvitation?: string;
+    deviceAuthorization?: string;
+    emailOtp?: string;
+    forgotPassword?: string;
+    magicLink?: string;
+    resetPassword?: string;
+    signIn?: string;
+    signUp?: string;
+    twoFactor?: string;
+    verifyEmail?: string;
+}
+
+/**
+ * How avatars are stored. Without an `upload`, the profile card offers a URL
+ * field — better-auth stores `user.image` as a string and has no opinion about
+ * where the bytes live. With one, it offers a file picker and stores whatever
+ * URL the handler returns: R2 via `@lunora/storage`, an S3 signed PUT, a data
+ * URI for a toy app.
+ */
+interface AvatarConfig {
+    /** Reject files larger than this, in bytes. Defaults to 2 MiB. */
+    maxSize?: number;
+    upload?: (file: File) => Promise<string>;
+}
+
 /** The user-facing config passed to a framework `&lt;AuthUIProvider>`. */
 interface AuthUIConfig {
-    authClient: AuthClient;
+    authClient: AnyAuthClient;
+    avatar?: AvatarConfig;
     /** Defaults to `/api/auth`. */
     basePath?: string;
+
+    /**
+     * Ask the server which plugins and social providers are enabled, via the
+     * `uiConfig()` better-auth plugin. On by default; it degrades silently to
+     * the client-side registration when the endpoint isn't mounted.
+     */
+    discover?: boolean;
+
+    /**
+     * Password rules, meant to mirror what your server enforces. Left unset it
+     * is better-auth's own default (8–128, no composition rules); set it to
+     * whatever `emailAndPassword` is configured with so the form and the server
+     * agree. See `password-policy.ts`.
+     */
+
+    /**
+     * How a forgotten password is recovered.
+     *
+     * `"link"` (the default) posts to `/request-password-reset`, which needs
+     * `emailAndPassword.sendResetPassword` server-side. `"otp"` uses the
+     * `emailOTP` plugin instead — a *different endpoint with a different
+     * payload*. An app configured for one and asking for the other gets "Reset
+     * password isn't enabled", which names neither the cause nor the fix.
+     *
+     * Explicit rather than inferred: both can be configured at once, and only
+     * the app knows which flow it means to offer.
+     */
+    forgotPassword?: { method?: "link" | "otp" };
     localization?: Partial<Localization>;
     nav: NavAdapter;
+
     /** Surfaced to `onError`; the flow still sets `formError` for display. */
     onError?: (error: unknown) => void;
 
@@ -71,9 +150,40 @@ interface AuthUIConfig {
      * trigger `useAuth` on its own.
      */
     onSessionChange?: () => void;
+
+    /** Organization UI options. Server-derived sub-features are separate. */
+    organization?: {
+        /**
+         * Force the custom-roles cards on. Same reasoning as `teams` below.
+         */
+        roles?: boolean;
+
+        /**
+         * Show the slug field when creating or editing an organization.
+         * Defaults to true. Turn it off for apps that don't put the slug in a
+         * URL — it is an implementation detail there, and the create form
+         * derives one from the name anyway.
+         */
+        showSlug?: boolean;
+
+        /**
+         * Force the teams cards on, regardless of what the server discloses.
+         *
+         * Needed because teams are detected from the server's table map and
+         * have no client-side equivalent to fall back on: a deployment that
+         * withholds the organization block (`uiConfig({ expose })`) would
+         * otherwise lose `&lt;TeamsCard>` from every port with no way to restore it.
+         */
+        teams?: boolean;
+    };
+    password?: PasswordPolicy;
     plugins?: PluginFlags;
     redirects?: RedirectConfig;
-    /** OAuth providers to render social buttons for (server-side config required). */
+
+    /**
+     * OAuth providers to render social buttons for. Left unset, the providers
+     * the server reports are used; set it to pin the list or to reorder it.
+     */
     social?: ReadonlyArray<string>;
 
     /**
@@ -82,36 +192,100 @@ interface AuthUIConfig {
      * own design tokens keep flowing through everything you leave alone.
      */
     theme?: (defaults: ThemeTokens) => ThemeTokens;
+    viewPaths?: ViewPaths;
 }
 
 /** The fully-resolved context every controller receives. */
 interface ControllerContext {
     authClient: AuthClient;
+    avatar: AvatarConfig;
     basePath: string;
+    /** Whether the password form renders. Server-derived when discovery answers. */
+    credentials: boolean;
+    /** Which password-reset transport the app uses; see the config field of the same name. */
+    forgotPasswordMethod: "link" | "otp";
     localization: Localization;
     nav: NavAdapter;
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
+    /** Organization sub-features, server-derived when discovery answers. */
+    organization: {
+        /** False when the server forbids ordinary users from creating one. */
+        allowUserToCreate: boolean;
+        invitationLimit?: number;
+        /** Max organizations per user, when the server sets one. */
+        limit?: number;
+        membershipLimit?: number;
+        roles: boolean;
+        showSlug: boolean;
+        teams: boolean;
+    };
+    password: PasswordPolicy;
     plugins: Required<PluginFlags>;
     redirects: Required<RedirectConfig>;
+    /** Whether the sign-up card offers to create an account. */
+    signUp: boolean;
     social: ReadonlyArray<string>;
     /** Changed theme tokens as inline custom properties; empty when unthemed. */
     themeVariables: Readonly<Record<string, string>>;
+    viewPaths: Required<ViewPaths>;
 }
 
-/** Explicit flags win; anything left unset comes from the client's registration. */
-const resolvePlugins = (authClient: AuthClient, plugins?: PluginFlags): Required<PluginFlags> => {
-    const registered = derivePluginFlags(authClient);
+/** Default avatar cap: big enough for a photo off a phone, small enough to not wedge a Worker. */
+const DEFAULT_AVATAR_MAX_SIZE = 2 * 1024 * 1024;
 
-    return {
-        admin: plugins?.admin ?? registered.admin,
-        apiKey: plugins?.apiKey ?? registered.apiKey,
-        emailOtp: plugins?.emailOtp ?? registered.emailOtp,
-        magicLink: plugins?.magicLink ?? registered.magicLink,
-        organization: plugins?.organization ?? registered.organization,
-        passkey: plugins?.passkey ?? registered.passkey,
-        twoFactor: plugins?.twoFactor ?? registered.twoFactor,
-    };
+/** Turn the server's plugin-id list into flow flags. Ids the UI has no card for are ignored. */
+const flagsFromDiscovery = (plugins: ReadonlyArray<string>): Partial<Record<keyof PluginFlags, boolean>> => {
+    const flags: Partial<Record<keyof PluginFlags, boolean>> = {};
+
+    for (const flow of FLOW_NAMES) {
+        flags[flow] = false;
+    }
+
+    for (const id of plugins) {
+        const flow = PLUGIN_ID_TO_FLOW[id] as keyof PluginFlags | undefined;
+
+        if (flow !== undefined) {
+            flags[flow] = true;
+        }
+    }
+
+    return flags;
+};
+
+/**
+ * Combine the sources of truth for each flow.
+ *
+ * Explicit config wins outright. Otherwise the server's answer and the client's
+ * registration are ANDed *when both are known*, because they answer different
+ * halves of the question — the server knows the endpoint exists, the client
+ * registration knows the client plugin that drives it was installed. A flow with
+ * only one half is broken in a way a rendered card would hide: `passkey` without
+ * `passkeyClient()` has a live endpoint and no WebAuthn ceremony to reach it.
+ */
+const resolvePlugins = (authClient: AnyAuthClient, plugins?: PluginFlags, discovered?: DiscoveredConfig): Required<PluginFlags> => {
+    const registered = derivePluginFlags(authClient);
+    // Only when the server actually disclosed a plugin list. Withholding it must
+    // read as "no opinion" and defer to the registration, not as "none enabled".
+    const disclosedPlugins = discovered?.plugins;
+    const fromServer = disclosedPlugins === undefined ? undefined : flagsFromDiscovery(disclosedPlugins);
+    const resolved = {} as Required<PluginFlags>;
+
+    for (const flow of FLOW_NAMES) {
+        const explicit = plugins?.[flow];
+
+        if (explicit !== undefined) {
+            resolved[flow] = explicit;
+
+            continue;
+        }
+
+        const server = fromServer?.[flow];
+
+        resolved[flow] = server === undefined ? registered[flow] : server && registered[flow];
+    }
+
+    return resolved;
 };
 
 const resolveRedirects = (redirects?: RedirectConfig): Required<RedirectConfig> => {
@@ -123,21 +297,72 @@ const resolveRedirects = (redirects?: RedirectConfig): Required<RedirectConfig> 
     };
 };
 
-/** Normalize a user-facing config into a fully-defaulted controller context. */
-const resolveContext = (config: AuthUIConfig): ControllerContext => {
+const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
     return {
-        authClient: config.authClient,
+        acceptInvitation: viewPaths?.acceptInvitation ?? "accept-invitation",
+
+        deviceAuthorization: viewPaths?.deviceAuthorization ?? "device",
+        emailOtp: viewPaths?.emailOtp ?? "email-otp",
+        // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the forgot-password screen, not a credential.
+        forgotPassword: viewPaths?.forgotPassword ?? "forgot-password", // secret-scanner:allow -- a URL segment, not a credential.
+        magicLink: viewPaths?.magicLink ?? "magic-link",
+        // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the reset-password screen, not a credential.
+        resetPassword: viewPaths?.resetPassword ?? "reset-password",
+        signIn: viewPaths?.signIn ?? "sign-in",
+        signUp: viewPaths?.signUp ?? "sign-up",
+        twoFactor: viewPaths?.twoFactor ?? "two-factor",
+        verifyEmail: viewPaths?.verifyEmail ?? "verify-email",
+    };
+};
+
+/**
+ * Normalize a user-facing config into a fully-defaulted controller context.
+ *
+ * `discovered` is the settled result of `discoverAuthConfig`, or undefined while
+ * it is in flight or unavailable. Providers re-run this when it lands, so the
+ * first paint uses the client's registration and the second the server's.
+ */
+const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): ControllerContext => {
+    return {
+        /*
+         * The one narrowing cast in the package, and it is load-bearing rather
+         * than lazy. `AnyAuthClient` is what an app can actually satisfy (see
+         * its docblock); `AuthClient` is what the controllers call. The bridge
+         * between them is the flow gate: a controller that reaches for
+         * `authClient.organization.*` only ever runs behind
+         * `isFlowEnabled(context, "organization", …)`, which is false unless
+         * the client registered that plugin — so the namespace exists by the
+         * time anything touches it. Widening `AuthClient` instead would push a
+         * `?.` onto every call in every controller and lose the type that makes
+         * those calls checkable at all.
+         */
+        authClient: config.authClient as AuthClient,
+        avatar: { maxSize: config.avatar?.maxSize ?? DEFAULT_AVATAR_MAX_SIZE, upload: config.avatar?.upload },
         basePath: config.basePath ?? DEFAULT_BASE_PATH,
+        credentials: discovered?.emailAndPassword ?? true,
+        forgotPasswordMethod: config.forgotPassword?.method ?? "link",
         localization: resolveLocalization(config.localization),
         nav: config.nav,
         onError: config.onError,
         onSessionChange: config.onSessionChange,
-        plugins: resolvePlugins(config.authClient, config.plugins),
+        organization: {
+            allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,
+            invitationLimit: discovered?.organization?.invitationLimit,
+            limit: discovered?.organization?.limit,
+            membershipLimit: discovered?.organization?.membershipLimit,
+            roles: config.organization?.roles ?? discovered?.organization?.roles ?? false,
+            showSlug: config.organization?.showSlug ?? true,
+            teams: config.organization?.teams ?? discovered?.organization?.teams ?? false,
+        },
+        password: config.password ?? {},
+        plugins: resolvePlugins(config.authClient, config.plugins, discovered),
         redirects: resolveRedirects(config.redirects),
-        social: config.social ?? [],
+        signUp: discovered?.signUp ?? true,
+        social: config.social ?? discovered?.socialProviders ?? [],
         themeVariables: resolveThemeVariables(config.theme),
+        viewPaths: resolveViewPaths(config.viewPaths),
     };
 };
 
-export type { AuthUIConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig };
-export { DEFAULT_BASE_PATH, resolveContext };
+export type { AuthUIConfig, AvatarConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig, ViewPaths };
+export { DEFAULT_AVATAR_MAX_SIZE, DEFAULT_BASE_PATH, resolveContext };

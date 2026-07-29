@@ -33,7 +33,9 @@ type PasskeysController = Controller<ResourceState<AuthPasskey>, PasskeysActions
 const createPasskeysController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): PasskeysController => {
     const resource = createResourceController<AuthPasskey>(
         context,
-        async (context_) => assertOk(await context_.authClient.passkey.listUserPasskeys()).data ?? [],
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.passkey.listUserPasskeys()).data ?? [] };
+        },
         options,
     );
 

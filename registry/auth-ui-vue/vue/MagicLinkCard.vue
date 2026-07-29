@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { computed } from "vue";
+
 import { isFlowEnabled } from "../core/flow-gate";
 import { createMagicLinkController } from "../core/magic-link";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
@@ -18,9 +20,11 @@ withDefaults(
     },
 );
 
-const context = useAuthUI();
-const t = context.localization;
-const enabled = isFlowEnabled(context, "magicLink", "MagicLinkCard");
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "magicLink", "MagicLinkCard"));
 const { actions, state } = useController(createMagicLinkController);
 </script>
 

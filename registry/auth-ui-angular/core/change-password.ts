@@ -15,7 +15,7 @@ const createChangePasswordController = (context: ControllerContext): FormControl
                 validate: (value, values, localization) => (value === values.newPassword ? undefined : localization.passwordMismatch),
             },
             currentPassword: { validate: (value, _values, localization) => required(value, localization.passwordRequired) },
-            newPassword: { validate: (value, _values, localization) => validatePassword(value, localization) },
+            newPassword: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
         },
         submit: async (values, context_) => {
             assertOk(

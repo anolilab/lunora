@@ -8,6 +8,7 @@
     import AuthUIProvider from "../../src/svelte/AuthUIProvider.svelte";
     import MagicLinkCard from "../../src/svelte/MagicLinkCard.svelte";
     import SignInCard from "../../src/svelte/SignInCard.svelte";
+    import SignUpCard from "../../src/svelte/SignUpCard.svelte";
 
     let {
         authClient,
@@ -16,7 +17,7 @@
         theme,
     }: {
         authClient: AuthUIConfig["authClient"];
-        card: "magic-link" | "sign-in";
+        card: "magic-link" | "sign-in" | "sign-up";
         nav: AuthUIConfig["nav"];
         theme?: AuthUIConfig["theme"];
     } = $props();
@@ -25,6 +26,8 @@
 <AuthUIProvider {authClient} {nav} {theme}>
     {#if card === "sign-in"}
         <SignInCard />
+    {:else if card === "sign-up"}
+        <SignUpCard />
     {:else}
         <MagicLinkCard />
     {/if}

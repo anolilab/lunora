@@ -136,5 +136,23 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
     };
 };
 
+/**
+ * The shared secret out of an `otpauth://` URI.
+ *
+ * Scanning the QR is the happy path, but a desktop authenticator, a hardware
+ * token, or anyone whose camera won't focus needs the key itself — and the URI
+ * is not it: pasting the whole `otpauth://…` string into most apps fails.
+ */
+const totpSecret = (totpUri?: string): string | undefined => {
+    if (totpUri === undefined || totpUri === "") {
+        return undefined;
+    }
+
+    const query = totpUri.slice(totpUri.indexOf("?") + 1);
+    const secret = new URLSearchParams(query).get("secret");
+
+    return secret === null || secret === "" ? undefined : secret;
+};
+
 export type { TwoFactorSetupActions, TwoFactorSetupController, TwoFactorSetupState };
-export { createTwoFactorSetupController };
+export { createTwoFactorSetupController, totpSecret };

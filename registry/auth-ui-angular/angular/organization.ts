@@ -1,5 +1,3 @@
-let organizationFieldId = 0;
-
 /**
  * Organization cards, mirroring the React `organization.tsx` 1:1: an
  * organizations list with a create form (name + auto-slug), and a members list
@@ -7,21 +5,30 @@ let organizationFieldId = 0;
  * signals; the lists come from the core controllers.
  */
 import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import type { ResourceState } from "../core/create-resource-controller";
-import type { MembersActions, MembersState } from "../core/members";
-import type { OrganizationsActions } from "../core/organization-list";
-import type { OrganizationSettingsField } from "../core/organization-settings";
-import type { AuthOrganization, FormActions, FormState } from "../core/types";
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS, slugify } from "../core/labels";
+import type { MembersActions, MembersState } from "../core/members";
 import { createMembersController } from "../core/members";
+import type { OrganizationsActions } from "../core/organization-list";
 import { createOrganizationsController } from "../core/organization-list";
+import type { OrganizationSettingsField } from "../core/organization-settings";
 import { createOrganizationSettingsController } from "../core/organization-settings";
+import type { AuthOrganization, FormActions, FormState } from "../core/types";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
-import { injectAuthUI } from "./provider";
+import { injectAuthUIContext } from "./provider";
+
+let organizationFieldId = 0;
+
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    organizationFieldId += 1;
+
+    return `${prefix}${String(organizationFieldId)}`;
+};
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -29,7 +36,7 @@ import { injectAuthUI } from "./provider";
     selector: "lunora-organizations-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.organizations">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
@@ -78,11 +85,11 @@ import { injectAuthUI } from "./provider";
 })
 class OrganizationsCardComponent {
     // Per-instance ids: two cards on one page must not collide.
-    protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationsCard");
-    protected readonly t = this.context.localization;
-    private readonly bridge = controllerSignal((context) => createOrganizationsController(context, { autoLoad: this.enabled }), { context: this.context });
+    protected readonly uid = nextId("lunora-auth-");
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "OrganizationsCard"));
+    protected readonly t = this.context().localization;
+    private readonly bridge = controllerSignal((context) => createOrganizationsController(context, { autoLoad: this.enabled() }), { context: this.context });
     protected readonly state: Signal<ResourceState<AuthOrganization>> = this.bridge.state;
     protected readonly actions: OrganizationsActions = this.bridge.actions;
 
@@ -112,7 +119,7 @@ class OrganizationsCardComponent {
     selector: "lunora-members-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.members">
                 <lunora-auth-banner [error]="state().error" />
 
@@ -183,11 +190,11 @@ class OrganizationsCardComponent {
 })
 class MembersCardComponent {
     // Per-instance ids: two cards on one page must not collide.
-    protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "organization", "MembersCard");
-    protected readonly t = this.context.localization;
-    private readonly bridge = controllerSignal((context) => createMembersController(context, { autoLoad: this.enabled }), { context: this.context });
+    protected readonly uid = nextId("lunora-auth-");
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "MembersCard"));
+    protected readonly t = this.context().localization;
+    private readonly bridge = controllerSignal((context) => createMembersController(context, { autoLoad: this.enabled() }), { context: this.context });
     protected readonly state: Signal<MembersState> = this.bridge.state;
     protected readonly actions: MembersActions = this.bridge.actions;
 
@@ -214,7 +221,7 @@ class MembersCardComponent {
     selector: "lunora-organization-settings-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.organizationSettings">
                 @if (state().loading) {
                     <p class="lunora-auth-card__description">…</p>
@@ -253,10 +260,10 @@ class OrganizationSettingsCardComponent implements OnInit {
     /** Defaults to the user's active organization. */
     readonly organizationId = input<string>();
 
-    private readonly context = injectAuthUI();
-    private readonly destroyRef = inject(DestroyRef);
-    protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationSettingsCard");
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    private readonly injector = inject(Injector);
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "organization", "OrganizationSettingsCard"));
+    protected readonly t = this.context().localization;
     protected state!: Signal<FormState<OrganizationSettingsField>>;
     protected actions!: FormActions<OrganizationSettingsField>;
 
@@ -265,8 +272,8 @@ class OrganizationSettingsCardComponent implements OnInit {
     // every instance to the active organization.
     ngOnInit(): void {
         const bridge = controllerSignal(
-            (context) => createOrganizationSettingsController(context, { autoLoad: this.enabled, organizationId: this.organizationId() }),
-            { context: this.context, destroyRef: this.destroyRef },
+            (context) => createOrganizationSettingsController(context, { autoLoad: this.enabled(), organizationId: this.organizationId() }),
+            { context: this.context, injector: this.injector },
         );
 
         this.state = bridge.state;
@@ -274,4 +281,4 @@ class OrganizationSettingsCardComponent implements OnInit {
     }
 }
 
-export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent };
+export { MembersCardComponent, OrganizationsCardComponent, OrganizationSettingsCardComponent };

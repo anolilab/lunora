@@ -56,6 +56,7 @@ export { jwtClient } from "better-auth/client/plugins";
 export { lastLoginMethodClient } from "better-auth/client/plugins";
 export { magicLinkClient } from "better-auth/client/plugins";
 export { multiSessionClient } from "better-auth/client/plugins";
+export { oneTapClient } from "better-auth/client/plugins";
 export { oneTimeTokenClient } from "better-auth/client/plugins";
 export { organizationClient } from "better-auth/client/plugins";
 export { phoneNumberClient } from "better-auth/client/plugins";

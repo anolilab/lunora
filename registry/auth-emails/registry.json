@@ -1,0 +1,10 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "auth-emails",
+    "title": "Auth — Email templates",
+    "description": "Styled transactional email templates for the Lunora auth flows — verify address, reset password, magic link, one-time code, organization invitation, and the security notices that follow a change. Rendered server-side by @lunora/mail, so they are the same mail whichever frontend framework you use.",
+    "docs": "Import a template in lunora/auth/index.ts and render it with @lunora/mail's `renderEmail`, replacing the plain-text body the base `auth` item scaffolds:\n\n```tsx\nimport { renderEmail } from \"@lunora/mail\";\nimport { ResetPasswordEmail } from \"./emails\";\n\nsendResetPassword: async ({ url, user }) => {\n    const { html, text } = await renderEmail(<ResetPasswordEmail url={url} />);\n    await sendAuthEmail(env, { html, subject: \"Reset your password\", text, to: user.email });\n},\n```\n\nEvery template takes an optional `product` prop for the masthead. The file is yours — restyle it freely; it uses inline styles only because mail clients strip <style> blocks.",
+    "requires": ["auth"],
+    "deps": { "@lunora/mail": "workspace:*", "@react-email/render": "2.1.0", "react": "19.2.8" },
+    "files": [{ "from": "emails.tsx", "merge": "create-or-skip", "to": "lunora/auth/emails.tsx" }]
+}
