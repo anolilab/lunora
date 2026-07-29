@@ -125,10 +125,11 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     };
 
     useEffect(() => {
-        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async reload; the coupled detail close is justified in the eslint-disable below
-        // eslint-disable-next-line react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change -- the effect drives an async reload; closing any open detail is coupled to that fetch (no render-derivable value, and a key-reset would remount and drop the status filter)
+        /* eslint-disable react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change -- the effect drives an async reload; closing any open detail is coupled to that fetch (no render-derivable value, and a key-reset would remount and drop the status filter) */
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect, react-doctor/no-chain-state-updates -- async reload; the coupled detail close is justified in the eslint-disable above
         setDetail(null);
         fireAndForget(load());
+        /* eslint-enable react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change */
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the workflow or status filter changes
     }, [workflowName, statusFilter]);
 

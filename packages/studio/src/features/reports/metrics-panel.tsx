@@ -202,8 +202,10 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         lastRequestsRef.current = next.requests;
 
         if (shardChanged) {
-            // eslint-disable-next-line react-x/set-state-in-effect -- resetting the per-shard series is part of folding a new snapshot into derived stream state, not an unconditional mount-time reset.
+            /* eslint-disable react-x/set-state-in-effect -- resetting the per-shard series is part of folding a new snapshot into derived stream state, not an unconditional mount-time reset. */
+            // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- the two updates belong to different phases of one async aggregate (start vs result) and cannot be written together
             setHistory([]);
+            /* eslint-enable react-x/set-state-in-effect */
 
             return;
         }

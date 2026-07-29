@@ -288,6 +288,7 @@ const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[];
     };
 };
 
+// react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

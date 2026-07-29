@@ -120,6 +120,7 @@ const ContainersPanel = (): ReactElement => {
                                             {row.detail ?? "—"}
                                         </TableCell>
                                         <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">{row.exitCode ?? "—"}</TableCell>
+                                        {/* react-doctor-disable-next-line react-doctor/no-locale-format-in-render -- the studio is a client-only SPA with no SSR pass, so there is no server locale to mismatch against */}
                                         <TableCell className="text-xs tabular-nums text-muted-foreground">{new Date(row.timestamp).toLocaleString()}</TableCell>
                                     </TableRow>
                                 ))}

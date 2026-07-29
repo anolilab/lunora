@@ -808,9 +808,12 @@ const DataBrowserTableView = ({
     };
 
     // Keep the focused row in view as it moves past the virtual window's edge.
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- scroll-sync effect: it drives the virtualizer's imperative scrollToIndex from the COMMITTED `active` cell, so the row exists before we scroll to it — see the eslint-disable inside
     useEffect(() => {
         /* eslint-disable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent -- scroll-sync effect: drives the virtualizer's imperative scrollToIndex from the committed `active` cell so the focused row is rendered before we scroll to it, and so programmatic `active` changes (not just keydown) stay in view */
         if (active !== null) {
+            // react-doctor-disable-next-line react-doctor/no-pass-live-state-to-parent -- same scroll-sync effect: `scrollToIndex` is the virtualizer's imperative handle, not parent state
+            // react-doctor-disable-next-line react-doctor/no-prop-callback-in-effect -- same scroll-sync effect: `scrollToIndex` is the virtualizer's imperative handle, not parent state
             scrollToIndex(active.row);
         }
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent */

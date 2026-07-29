@@ -174,6 +174,7 @@ const schemaTabClass = (active: boolean): string =>
  * configured the global section simply reports it, and the shard section still
  * works.
  */
+// react-doctor-disable-next-line react-doctor/prefer-useReducer -- the six values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
 export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: SchemaViewerProps): ReactElement => {
     const client = useLunora();
     const t = useT();

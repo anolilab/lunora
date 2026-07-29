@@ -171,8 +171,10 @@ const resolveCascadeNode = async (
         // For each matching row id, collect child impacts (bounded to first 10 sampled ids).
         for (const childRelation of childRelations) {
             for (const id of rowIds.slice(0, 10)) {
-                // eslint-disable-next-line no-await-in-loop -- sequential tree walk
+                /* eslint-disable no-await-in-loop -- sequential tree walk */
+                // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: the preview walks the relation graph in order, and a parallel burst would hammer one shard for a UI hint
                 const child = await resolveCascadeNode(childRelation.table, id, childRelation, cascadeMap, visited, depth + 1, readPage);
+                /* eslint-enable no-await-in-loop */
 
                 if (child.rowCount > 0 || depth === 0) {
                     children.push(child);

@@ -431,8 +431,10 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             (async (): Promise<void> => {
                 try {
                     for (const key of selected) {
-                        // eslint-disable-next-line no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key
+                        /* eslint-disable no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key */
+                        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: R2 deletes are ordered so a failure pins the offending key instead of leaving a half-applied batch
                         await storageApi.remove(key);
+                        /* eslint-enable no-await-in-loop */
                     }
 
                     await list(prefix, undefined, false);
@@ -550,7 +552,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         // Invalidate any in-flight orphan check so its (old-shard) result can't land.
         orphanSeq.current += 1;
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- invalidates a whole-bucket orphan result when the reference shard changes; a stale result must not survive the switch
+        // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- invalidating the orphan result is one logical reset split across two pieces of state; merging them would mean a wider state object for no behavioural gain
         setDanglingReferences(undefined);
+        // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- invalidating the orphan result is one logical reset split across two pieces of state; merging them would mean a wider state object for no behavioural gain
         setDanglingTruncated(false);
     }, [referenceShard]);
 

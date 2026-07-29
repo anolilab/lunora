@@ -65,6 +65,7 @@ export const usePersistedList = function <T>(key: string): [T[], Dispatch<SetSta
     useEffect(() => {
         if (keyRef.current !== key) {
             keyRef.current = key;
+            // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- the write and the persisted-value update are deliberately separate: one is React state, the other is localStorage, and they cannot be one update
             setValue(loadJsonArray<T>(key));
 
             return;

@@ -1,6 +1,7 @@
 "use client";
 
 import type { MotionValue } from "motion/react";
+// react-doctor-disable-next-line react-doctor/use-lazy-motion -- `m` + LazyMotion needs a provider above every consumer; this package exports individual panels that hosts mount without the studio shell, so a missing provider would throw at runtime in someone else's app
 import { motion, useMotionValue, useMotionValueEvent, useSpring, useTransform } from "motion/react";
 import type { ComponentProps } from "react";
 import * as React from "react";
@@ -293,6 +294,7 @@ const EvilBrush = ({
             const syncedRange = { startIndex: controlledStart, endIndex: controlledEnd };
 
             // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- controlled/uncontrolled sync: mirrors the controlled range while not dragging, and there is no render-derivable value to use instead
+            // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change -- controlled/uncontrolled sync: the internal range has to follow the controlled prop while the user is not dragging, and there is no render-derivable value to use instead
             setInternalRange(syncedRange);
             lastCommittedRef.current = syncedRange;
         }
@@ -465,6 +467,7 @@ const MiniChart = ({
     variant: EvilBrushVariant;
 }): React.ReactElement => {
     const gradients = Object.entries(chartConfig)
+        // react-doctor-disable-next-line react-doctor/js-set-map-lookups -- `keys` is the chart's series list — a handful of entries, walked once at render, so a Set costs more than it saves
         .filter(([key]) => keys.includes(key))
         .map(([dataKey, config]) => {
             return {

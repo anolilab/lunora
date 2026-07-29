@@ -193,8 +193,10 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
                 });
 
                 try {
-                    // eslint-disable-next-line no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit.
+                    /* eslint-disable no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit. */
+                    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: each read is a separate worker round-trip and firing them together would burst the very analytics endpoint being measured
                     const result = await run(panel.sql(dataset));
+                    /* eslint-enable no-await-in-loop */
 
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
                     if (!token.cancelled) {

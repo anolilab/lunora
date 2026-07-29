@@ -2,7 +2,7 @@ import type { AdvisorShardTraffic } from "@lunora/advisor";
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
@@ -313,13 +313,22 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // tabbing back from your editor after a schema save (by which point the dev
     // worker has reloaded with the new `LUNORA_ADVISORIES`) re-pulls everything,
     // so advisories land fresh without a manual Refresh.
+    //
+    // The refresh itself is an EFFECT EVENT: it reads five values that change on
+    // nearly every render, and listing them as deps tore down and re-registered
+    // the `visibilitychange` listener each time. An effect event always sees the
+    // latest values without being a dep, so the listener is bound once.
+    const refreshOnVisible = useEffectEvent((): void => {
+        metricsQuery.refetch();
+        functionsQuery.refetch();
+        advisoriesQuery.refetch();
+        fireAndForget(enumerateShard(debouncedShard));
+    });
+
     useEffect(() => {
         const onVisible = (): void => {
             if (document.visibilityState === "visible") {
-                metricsQuery.refetch();
-                functionsQuery.refetch();
-                advisoriesQuery.refetch();
-                fireAndForget(enumerateShard(debouncedShard));
+                refreshOnVisible();
             }
         };
 
@@ -328,7 +337,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         return () => {
             document.removeEventListener("visibilitychange", onVisible);
         };
-    }, [advisoriesQuery, debouncedShard, enumerateShard, functionsQuery, metricsQuery]);
+    }, []);
 
     // Deep-link the "add the index" jump: open the Schema tab with the scanned
     // table pre-selected (`/schema?table=<name>`) so the operator lands on its
