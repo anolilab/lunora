@@ -1,7 +1,7 @@
 import type { ScheduleRecord } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -46,6 +46,19 @@ const sortByDue = (records: ScheduleRecord[]): ScheduleRecord[] => records.toSor
  * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
  * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */
+/** How to cancel a job, or `undefined` when the panel is read-only: the host's canceller wins; otherwise the client can cancel what it also lists. A custom loader without a canceller stays read-only. */
+const jobCanceller = (
+    client: ReturnType<typeof useLunora>,
+    cancelJob: ScheduledJobsProps["cancelJob"],
+    loadJobs: ScheduledJobsProps["loadJobs"],
+): ((id: string) => Promise<{ cancelled: boolean }>) | undefined => {
+    if (cancelJob !== undefined) {
+        return cancelJob;
+    }
+
+    return loadJobs === undefined ? (id: string) => client.cancelScheduledJob(id) : undefined;
+};
+
 export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -89,13 +102,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     // Cancelling is available when the host supplies a canceller, or when the
     // panel is sourcing jobs from the client (then the client can cancel too).
     // A custom `loadJobs` without a `cancelJob` stays read-only.
-    const cancelImpl = useMemo<((id: string) => Promise<{ cancelled: boolean }>) | undefined>(() => {
-        if (cancelJob !== undefined) {
-            return cancelJob;
-        }
-
-        return loadJobs === undefined ? (id: string) => client.cancelScheduledJob(id) : undefined;
-    }, [cancelJob, client, loadJobs]);
+    const cancelImpl = jobCanceller(client, cancelJob, loadJobs);
 
     // The live push wins once it lands; otherwise the polled one-shot read.
     const jobs = liveJobs ?? jobsQuery.data;

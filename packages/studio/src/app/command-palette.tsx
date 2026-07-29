@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useT } from "../i18n/i18n-context";
 import { fireAndForget } from "../lib/internal";
@@ -88,6 +88,17 @@ const CommandRow = ({ active, index, item, onActivate, onSelect }: CommandRowPro
  * studio's Base UI dialog primitive — no `cmdk`/extra dependency — with a small
  * arrow-key + Enter affordance over the filtered list.
  */
+/** Items whose label or group contains `query` (case-insensitive); every item when the query is blank. */
+const matchingItems = (items: ReadonlyArray<CommandItem>, query: string): ReadonlyArray<CommandItem> => {
+    const needle = query.trim().toLowerCase();
+
+    if (needle === "") {
+        return items;
+    }
+
+    return items.filter((item) => item.label.toLowerCase().includes(needle) || item.group.toLowerCase().includes(needle));
+};
+
 const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
@@ -119,15 +130,7 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
         };
     }, []);
 
-    const filtered = useMemo<ReadonlyArray<CommandItem>>(() => {
-        const needle = query.trim().toLowerCase();
-
-        if (needle === "") {
-            return items;
-        }
-
-        return items.filter((item) => item.label.toLowerCase().includes(needle) || item.group.toLowerCase().includes(needle));
-    }, [items, query]);
+    const filtered = matchingItems(items, query);
 
     // Reset state each time the palette opens so it never reopens mid-filter.
     const onOpenChange = (next: boolean): void => {

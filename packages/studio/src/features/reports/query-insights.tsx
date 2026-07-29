@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -101,6 +101,33 @@ interface QueryInsightsProps {
  *
  * Sort options: total time (default), avg time, execution count, rows read.
  */
+/** Statements ordered by the selected column, worst first. Copies before sorting — the prop array is not ours to reorder. */
+const sortStats = (queryStats: QueryInsightsProps["queryStats"], sortField: SortField): QueryInsightsProps["queryStats"] => {
+    const copy = [...queryStats];
+
+    copy.sort((a, b) => {
+        switch (sortField) {
+            case "avgTime": {
+                return b.avgDurationMs - a.avgDurationMs;
+            }
+
+            case "execCount": {
+                return b.execCount - a.execCount;
+            }
+
+            case "rowsRead": {
+                return b.rowsRead - a.rowsRead;
+            }
+
+            default: {
+                return b.totalDurationMs - a.totalDurationMs;
+            }
+        }
+    });
+
+    return copy;
+};
+
 export const QueryInsights = ({ queryStats }: QueryInsightsProps): ReactElement => {
     const t = useT();
     const [sortField, setSortField] = useState<SortField>("totalTime");
@@ -112,31 +139,7 @@ export const QueryInsights = ({ queryStats }: QueryInsightsProps): ReactElement 
         }
     };
 
-    const sorted = useMemo(() => {
-        const copy = [...queryStats];
-
-        copy.sort((a, b) => {
-            switch (sortField) {
-                case "avgTime": {
-                    return b.avgDurationMs - a.avgDurationMs;
-                }
-
-                case "execCount": {
-                    return b.execCount - a.execCount;
-                }
-
-                case "rowsRead": {
-                    return b.rowsRead - a.rowsRead;
-                }
-
-                default: {
-                    return b.totalDurationMs - a.totalDurationMs;
-                }
-            }
-        });
-
-        return copy;
-    }, [queryStats, sortField]);
+    const sorted = sortStats(queryStats, sortField);
 
     const critical = queryStats.filter((q) => performanceLevel(q.avgDurationMs) === "critical").length;
     const moderate = queryStats.filter((q) => performanceLevel(q.avgDurationMs) === "warning").length;

@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
@@ -205,6 +205,62 @@ interface DataBrowserModel {
  * from the component so behavior, fetch sequencing, and effect dependencies are
  * unchanged — the component is now just markup wiring.
  */
+/** The `readTablePage` arguments for the displayed view. */
+const toPageArgs = (
+    table: string,
+    filters: ReadonlyArray<EditableFilter>,
+    search: string,
+    sorting: SortingState,
+    pageSize: number,
+    offset: number,
+): Record<string, unknown> => {
+    return {
+        filters: toFilterClauses(filters),
+        limit: pageSize,
+        offset,
+        orderBy: toOrderBy(sorting),
+        search,
+        // The page read skips the COUNT — the total rides a separate
+        // predicate-keyed query (`countArgs`) that page navigation never
+        // re-keys, so paging no longer re-runs the full-table COUNT.
+        skipCount: true,
+        table,
+    };
+};
+
+/** The predicate-only arguments for the row-count read, so paging never re-keys the COUNT. */
+const toCountArgs = (table: string, filters: ReadonlyArray<EditableFilter>, search: string): Record<string, unknown> => {
+    return {
+        filters: toFilterClauses(filters),
+        limit: 1,
+        search,
+        table,
+    };
+};
+
+/** Resolve the staged buffer against the loaded page for the old-to-new diff. */
+const resolveStagedChanges = (page: TablePage | null, staged: StagedEditsModel["staged"]): StagedChange[] => {
+    const rowsById = new Map<string, TableRow>();
+
+    for (const row of page?.rows ?? []) {
+        const id = rowId(row);
+
+        if (id !== null) {
+            rowsById.set(id, row);
+        }
+    }
+
+    const changes: StagedChange[] = [];
+
+    for (const [id, columns] of Object.entries(staged)) {
+        for (const [column, newValue] of Object.entries(columns)) {
+            changes.push({ column, newValue, oldValue: rowsById.get(id)?.[column], rowId: id });
+        }
+    }
+
+    return changes;
+};
+
 const useDataBrowser = ({
     initialFilters,
     initialOrderBy,
@@ -330,20 +386,7 @@ const useDataBrowser = ({
     const tables = tablesQuery.data ?? null;
     const tablesError = tablesQuery.error;
 
-    const pageArgs = useMemo<Record<string, unknown>>(() => {
-        return {
-            filters: toFilterClauses(filters),
-            limit: pageSize,
-            offset,
-            orderBy: toOrderBy(sorting),
-            search,
-            // The page read skips the COUNT — the total rides a separate
-            // predicate-keyed query (`countArgs`) that page navigation never
-            // re-keys, so paging no longer re-runs the full-table COUNT.
-            skipCount: true,
-            table: selectedTable ?? "",
-        };
-    }, [filters, pageSize, offset, sorting, search, selectedTable]);
+    const pageArgs = toPageArgs(selectedTable ?? "", filters, search, sorting, pageSize, offset);
 
     // The row count, split off the page read and keyed on the PREDICATE alone
     // (table / filters / search) — no `offset`, `pageSize`, or `orderBy`, since a
@@ -354,14 +397,7 @@ const useDataBrowser = ({
     // it on the same key (it shares the page read's table dependency), so the
     // displayed total stays correct. `limit: 1` keeps the (ignored) row fetch
     // minimal — only `.total` is read.
-    const countArgs = useMemo<Record<string, unknown>>(() => {
-        return {
-            filters: toFilterClauses(filters),
-            limit: 1,
-            search,
-            table: selectedTable ?? "",
-        };
-    }, [filters, search, selectedTable]);
+    const countArgs = toCountArgs(selectedTable ?? "", filters, search);
 
     // `keepPreviousData` is off: the placeholder isn't identity-aware, so holding
     // the last page across a `selectedTable` / `debouncedShard` change would render
@@ -396,12 +432,9 @@ const useDataBrowser = ({
     // filters/sort/search so the new table opens clean). The selection itself is
     // derived from the URL, and the per-table local view state is re-seeded by the
     // `tableParam`-change effect below — so this is just the navigation.
-    const selectTable = useCallback(
-        (table: string): void => {
-            onSelectTable?.(table);
-        },
-        [onSelectTable],
-    );
+    const selectTable = (table: string): void => {
+        onSelectTable?.(table);
+    };
 
     // Follow a foreign-key cell: navigate to the target table with the referenced
     // id pre-filled as the search, so an operator can traverse relations by
@@ -434,16 +467,14 @@ const useDataBrowser = ({
     // ── Facets (Datasette-style per-column value/count summaries) ───────────
     // The per-view fetcher the shared hook drives: one `FACET_COLUMN` query over the
     // given shard/filters/search. `FacetResult` is the on-the-wire summary shape.
-    const facetFetcher = useCallback(
+    const facetFetcher =
         (shard: string, table: string, activeFilters: EditableFilter[], searchQuery: string): FacetFetcher =>
-            (column) =>
-                client.query(
-                    FACET_COLUMN,
-                    { column, filters: toFilterClauses(activeFilters), search: searchQuery, table },
-                    callOptions(shard),
-                ) as Promise<FacetResult>,
-        [client],
-    );
+        (column) =>
+            client.query(
+                FACET_COLUMN,
+                { column, filters: toFilterClauses(activeFilters), search: searchQuery, table },
+                callOptions(shard),
+            ) as Promise<FacetResult>;
 
     // Toggle a column into / out of the facet sidebar. Turning it on seeds a
     // loading slot and fetches its summary for the current view; turning it off
@@ -639,27 +670,7 @@ const useDataBrowser = ({
     };
 
     // Resolve the staged buffer against the loaded page for the old→new diff.
-    const stagedChanges = useMemo<StagedChange[]>(() => {
-        const rowsById = new Map<string, TableRow>();
-
-        for (const row of page?.rows ?? []) {
-            const id = rowId(row);
-
-            if (id !== null) {
-                rowsById.set(id, row);
-            }
-        }
-
-        const changes: StagedChange[] = [];
-
-        for (const [id, columns] of Object.entries(stagedEdits.staged)) {
-            for (const [column, newValue] of Object.entries(columns)) {
-                changes.push({ column, newValue, oldValue: rowsById.get(id)?.[column], rowId: id });
-            }
-        }
-
-        return changes;
-    }, [page, stagedEdits.staged]);
+    const stagedChanges = resolveStagedChanges(page, stagedEdits.staged);
 
     // Search / filters / sort / page-size changes flow straight into `pageArgs`, so
     // the page query refetches on its own. Each input's handler resets offset to the

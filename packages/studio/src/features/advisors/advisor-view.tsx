@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
@@ -111,19 +111,22 @@ const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
  * findings, with a centered per-tab empty state. The Security and Performance
  * advisors both render through this so they stay visually identical.
  */
+/** Count the advisories at each level, so the level tabs can show their totals. */
+const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> => {
+    const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
+
+    for (const row of rows ?? []) {
+        tally[row.level] += 1;
+    }
+
+    return tally;
+};
+
 export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
     const t = useT();
     const [active, setActive] = useState<AdvisorLevel>("error");
 
-    const counts = useMemo<Record<AdvisorLevel, number>>(() => {
-        const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
-
-        for (const row of rows ?? []) {
-            tally[row.level] += 1;
-        }
-
-        return tally;
-    }, [rows]);
+    const counts = tallyByLevel(rows);
 
     const visible = (rows ?? []).filter((row) => row.level === active);
 

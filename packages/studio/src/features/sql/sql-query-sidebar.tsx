@@ -1,5 +1,4 @@
 import type { ChangeEvent, MouseEvent, ReactElement, RefObject } from "react";
-import { useMemo } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
@@ -125,6 +124,13 @@ interface SqlQuerySidebarProps {
  * presentation — the panel owns the query/history state and all the handlers; this
  * just lays them out and filters the Private list by the search box.
  */
+/** Saved queries whose name contains `search` (case-insensitive); all of them when it is blank. */
+const matchingQueries = (queries: ReadonlyArray<SavedQuery>, search: string): SavedQuery[] => {
+    const needle = search.trim().toLowerCase();
+
+    return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
+};
+
 const SqlQuerySidebar = ({
     activeId,
     history,
@@ -140,11 +146,7 @@ const SqlQuerySidebar = ({
     search,
 }: SqlQuerySidebarProps): ReactElement => {
     const t = useT();
-    const filtered = useMemo<SavedQuery[]>(() => {
-        const needle = search.trim().toLowerCase();
-
-        return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
-    }, [queries, search]);
+    const filtered = matchingQueries(queries, search);
 
     return (
         <aside className="flex h-full w-64 shrink-0 flex-col border-e border-border bg-sidebar">

@@ -28,6 +28,7 @@ const useNavLabels = (): NavLabels => {
     // document-title effect as a dependency, so a fresh object every render would
     // re-set `document.title` on every render. `t` is stable per locale, so this
     // rebuilds exactly when the locale changes.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: the shell feeds this object to the document-title effect as a dependency, so a fresh one re-sets `document.title` every render
     const tabLabel = useMemo(() => {
         return {
             agents: t("Agents"),

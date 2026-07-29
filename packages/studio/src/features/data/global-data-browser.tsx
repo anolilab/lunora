@@ -1,7 +1,7 @@
 import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { MouseEvent, ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -177,22 +177,19 @@ export const GlobalDataBrowser = ({
     // when the same value bounces back in via the `initialTable` prop.
     const appliedInitialTable = useRef<string | undefined>(undefined);
 
-    const selectTable = useCallback(
-        (table: string): void => {
-            setSelectedTable(table);
-            appliedInitialTable.current = table;
-            // A fresh table means the previous drill-down filters and facets no longer apply.
-            setFilters([]);
-            filtersRef.current = [];
-            clearFacets();
-            // Reset to the first page in the handler (not an effect); the page query
-            // refetches itself once `selectedTable`/`offset`/`filters` change.
-            setOffset(0);
-            // Mirror the selection to the URL so it's shareable and back/forward works.
-            onSelectTable?.(table);
-        },
-        [clearFacets, onSelectTable],
-    );
+    const selectTable = (table: string): void => {
+        setSelectedTable(table);
+        appliedInitialTable.current = table;
+        // A fresh table means the previous drill-down filters and facets no longer apply.
+        setFilters([]);
+        filtersRef.current = [];
+        clearFacets();
+        // Reset to the first page in the handler (not an effect); the page query
+        // refetches itself once `selectedTable`/`offset`/`filters` change.
+        setOffset(0);
+        // Mirror the selection to the URL so it's shareable and back/forward works.
+        onSelectTable?.(table);
+    };
 
     // Toggle a column into / out of the facet sidebar. Turning it on seeds a loading
     // slot and fetches its summary for the active view; turning it off drops it. With

@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
@@ -82,7 +82,7 @@ const FlagsPanel = ({ initialShardKey = "" }: FlagsPanelProps): ReactElement => 
 
     const loaded = data !== undefined;
     const configured = data?.configured ?? false;
-    const flags = useMemo(() => (Array.isArray(data?.flags) ? [...data.flags].toSorted((a, b) => a.key.localeCompare(b.key)) : []), [data]);
+    const flags = Array.isArray(data?.flags) ? [...data.flags].toSorted((a, b) => a.key.localeCompare(b.key)) : [];
 
     let body: ReactElement;
 

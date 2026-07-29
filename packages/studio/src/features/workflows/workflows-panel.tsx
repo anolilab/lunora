@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -59,6 +59,15 @@ const formatPayload = (instance: ObservedInstance): string => {
  * to the observed-instances table, whose "Refresh" re-reads the instance-status
  * admin RPC (`binding.get(id).status()`).
  */
+/** The effective selection: the operator's pick while it still exists, else the first declared workflow. Derived rather than synced in an effect, so a codegen that drops the selected workflow re-defaults on the next render. */
+const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selectedExport: string): string => {
+    if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
+        return selectedExport;
+    }
+
+    return workflows[0]?.exportName ?? "";
+};
+
 const WorkflowsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -76,25 +85,18 @@ const WorkflowsPanel = (): ReactElement => {
     const [refreshingId, setRefreshingId] = useState<null | string>(null);
 
     const loaded = data !== undefined;
-    const workflows = useMemo<WorkflowMetadata[]>(
-        () => (Array.isArray(data?.workflows) ? [...data.workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : []),
-        [data],
-    );
+    const workflows: WorkflowMetadata[] = Array.isArray(data?.workflows)
+        ? [...data.workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName))
+        : [];
 
     // Derive the effective selection rather than syncing it in an effect: fall
     // back to the first declared workflow until the user picks one (and re-default
     // if the current pick disappears after a codegen).
-    const selectedExportName = useMemo<string>(() => {
-        if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
-            return selectedExport;
-        }
-
-        return workflows[0]?.exportName ?? "";
-    }, [workflows, selectedExport]);
+    const selectedExportName = effectiveExportName(workflows, selectedExport);
 
     // The metadata row for the active selection — its deployed `name` is what the
     // REST instance-history proxy addresses.
-    const selectedWorkflow = useMemo(() => workflows.find((workflow) => workflow.exportName === selectedExportName), [workflows, selectedExportName]);
+    const selectedWorkflow = workflows.find((workflow) => workflow.exportName === selectedExportName);
 
     // Merge a freshly observed instance into the table, replacing any prior row
     // for the same (workflow, id) so a refresh updates in place rather than dupes.

@@ -49,6 +49,7 @@ const ChartTooltipContent = ({
     }): React.ReactElement => {
     const { config } = useChart();
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- this returns JSX built from seven closure values (payload, config, label, the two formatters, and both class names); hoisting it would mean a seven-parameter helper or a component, and this is vendored evilcharts code kept close to upstream
     const tooltipLabel = React.useMemo(() => {
         if (hideLabel || !payload?.length) {
             return null;

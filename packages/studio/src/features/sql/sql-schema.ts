@@ -1,5 +1,5 @@
 import { useLunora } from "@lunora/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -19,6 +19,11 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
  * absent. Re-loads when `shardKey` changes; a fast shard switch discards a stale
  * in-flight list via the cancel token.
  */
+/** Pair the table list with its column map — the shape the editor's completion source reads. */
+const toSchema = (tables: string[], columns: Record<string, string[]>): { columns: Record<string, string[]>; tables: string[] } => {
+    return { columns, tables };
+};
+
 const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
     const client = useLunora();
 
@@ -85,9 +90,7 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
     // Referentially stable while the data is unchanged, so consumers (the
     // autocomplete's `refresh` callback and the panel's probe-refresh effect)
     // can depend on it without re-firing after every render.
-    const schema = useMemo(() => {
-        return { columns, tables };
-    }, [columns, tables]);
+    const schema = toSchema(tables, columns);
 
     return { probe, schema };
 };

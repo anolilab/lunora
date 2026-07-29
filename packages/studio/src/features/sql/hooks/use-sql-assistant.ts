@@ -1,5 +1,5 @@
 import { useLunora } from "@lunora/react";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import type {
@@ -73,16 +73,16 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
     const [latched, setLatched] = useState(false);
     const unavailable = latched || availability.data?.available === false;
 
-    const begin = useCallback((task: AssistantTaskKey): void => {
+    const begin = (task: AssistantTaskKey): void => {
         setPendingByTask((current) => {
             return { ...current, [task]: true };
         });
         setReasonByTask((current) => {
             return { ...current, [task]: undefined };
         });
-    }, []);
+    };
 
-    const finish = useCallback((task: AssistantTaskKey, failure?: GenerateSqlDegradedReason): void => {
+    const finish = (task: AssistantTaskKey, failure?: GenerateSqlDegradedReason): void => {
         setPendingByTask((current) => {
             return { ...current, [task]: false };
         });
@@ -96,72 +96,61 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
         if (failure === "no-ai-binding") {
             setLatched(true);
         }
-    }, []);
+    };
 
-    const generate = useCallback(
-        async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> => {
-            begin("sql");
+    const generate = async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> => {
+        begin("sql");
 
-            try {
-                const { result } = (await client.query(
-                    AI_GENERATE_SQL,
-                    { failedError: failed?.error, failedSql: failed?.sql, prompt },
-                    callOptions(shardKey),
-                )) as { result: GenerateSqlResult };
+        try {
+            const { result } = (await client.query(AI_GENERATE_SQL, { failedError: failed?.error, failedSql: failed?.sql, prompt }, callOptions(shardKey))) as {
+                result: GenerateSqlResult;
+            };
 
-                finish("sql", result.degraded ? result.reason : undefined);
+            finish("sql", result.degraded ? result.reason : undefined);
 
-                return result.degraded ? undefined : result.sql;
-            } catch {
-                finish("sql", "ai-error");
+            return result.degraded ? undefined : result.sql;
+        } catch {
+            finish("sql", "ai-error");
 
-                return undefined;
-            }
-        },
-        [begin, client, finish, shardKey],
-    );
+            return undefined;
+        }
+    };
 
-    const suggestFilter = useCallback(
-        async (prompt: string, table: string): Promise<FilterClause[] | undefined> => {
-            begin("filter");
+    const suggestFilter = async (prompt: string, table: string): Promise<FilterClause[] | undefined> => {
+        begin("filter");
 
-            try {
-                const { result } = (await client.query(AI_TABLE_FILTER, { prompt, table }, callOptions(shardKey))) as { result: GenerateFilterResult };
+        try {
+            const { result } = (await client.query(AI_TABLE_FILTER, { prompt, table }, callOptions(shardKey))) as { result: GenerateFilterResult };
 
-                finish("filter", result.degraded ? result.reason : undefined);
+            finish("filter", result.degraded ? result.reason : undefined);
 
-                return result.degraded ? undefined : result.clauses;
-            } catch {
-                finish("filter", "ai-error");
+            return result.degraded ? undefined : result.clauses;
+        } catch {
+            finish("filter", "ai-error");
 
-                return undefined;
-            }
-        },
-        [begin, client, finish, shardKey],
-    );
+            return undefined;
+        }
+    };
 
-    const inferChart = useCallback(
-        async (result: { columns: string[]; rowCount: number; types?: Record<string, string> }): Promise<AssistantChartConfig | undefined> => {
-            begin("chart");
+    const inferChart = async (result: { columns: string[]; rowCount: number; types?: Record<string, string> }): Promise<AssistantChartConfig | undefined> => {
+        begin("chart");
 
-            try {
-                // Deliberately only the shape — see the hook docblock.
-                const { result: inferred } = (await client.query(AI_CHART_CONFIG, result, callOptions(shardKey))) as { result: GenerateChartResult };
+        try {
+            // Deliberately only the shape — see the hook docblock.
+            const { result: inferred } = (await client.query(AI_CHART_CONFIG, result, callOptions(shardKey))) as { result: GenerateChartResult };
 
-                finish("chart", inferred.degraded ? inferred.reason : undefined);
+            finish("chart", inferred.degraded ? inferred.reason : undefined);
 
-                return inferred.degraded ? undefined : inferred.chart;
-            } catch {
-                finish("chart", "ai-error");
+            return inferred.degraded ? undefined : inferred.chart;
+        } catch {
+            finish("chart", "ai-error");
 
-                return undefined;
-            }
-        },
-        [begin, client, finish, shardKey],
-    );
+            return undefined;
+        }
+    };
 
-    const pending = useCallback((task: AssistantTaskKey): boolean => pendingByTask[task] === true, [pendingByTask]);
-    const reason = useCallback((task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task], [reasonByTask]);
+    const pending = (task: AssistantTaskKey): boolean => pendingByTask[task] === true;
+    const reason = (task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task];
 
     return { generate, inferChart, pending, reason, suggestFilter, unavailable };
 };

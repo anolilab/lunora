@@ -1,5 +1,4 @@
 import type { ReactElement } from "react";
-import { useMemo } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
@@ -61,7 +60,7 @@ const ContainersPanel = (): ReactElement => {
     const { data, error, liveError } = useAdminQuery<{ entries?: unknown }>(ADMIN_FUNCTIONS.getLogs, {}, { live: true, shardKey: "" });
 
     const loaded = data !== undefined;
-    const rows = useMemo(() => foldContainerInstances(entriesOf(data)), [data]);
+    const rows = foldContainerInstances(entriesOf(data));
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-containers-panel">

@@ -1,7 +1,7 @@
 import type { SchedulerStatus } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import ConnectionBadge from "../../components/connection-badge";
 import { LiveError } from "../../components/live-status";
@@ -278,6 +278,16 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
  * live: a root-shard `getMetrics` subscription drives a full cross-shard re-pull
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
+/** Attempts and failures as parallel series for the auth sparkline. */
+const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[]; failures: number[] } => {
+    const buckets = auth?.history ?? [];
+
+    return {
+        attempts: buckets.map((bucket) => bucket.attempts),
+        failures: buckets.map((bucket) => bucket.failures),
+    };
+};
+
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -413,14 +423,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const topErrors = recentErrors.slice(0, RECENT_ERROR_LIMIT);
 
     const trend = requestErrorSeries(totals?.history);
-    const authTrend = useMemo(() => {
-        const buckets = auth?.history ?? [];
-
-        return {
-            attempts: buckets.map((bucket) => bucket.attempts),
-            failures: buckets.map((bucket) => bucket.failures),
-        };
-    }, [auth?.history]);
+    const authTrend = authSeries(auth);
 
     // Functions that have run, worst error-rate first, then by call volume.
     const worstFunctions = functions

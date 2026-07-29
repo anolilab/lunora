@@ -1,7 +1,7 @@
 import { useLunora } from "@lunora/react";
 import type { QueryKey } from "@tanstack/react-query";
 import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/internal";
 import { operationLog } from "../lib/operation-log";
@@ -276,14 +276,11 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 const useInvalidateAdmin = (): ((path: string, args?: Record<string, unknown>, shardKey?: string) => void) => {
     const queryClient = useQueryClient();
 
-    return useCallback(
-        (path: string, args?: Record<string, unknown>, shardKey?: string): void => {
-            const queryKey = args === undefined ? ["lunora-admin", path] : adminQueryKey(path, args, shardKey ?? "");
+    return (path: string, args?: Record<string, unknown>, shardKey?: string): void => {
+        const queryKey = args === undefined ? ["lunora-admin", path] : adminQueryKey(path, args, shardKey ?? "");
 
-            fireAndForget(queryClient.invalidateQueries({ queryKey }));
-        },
-        [queryClient],
-    );
+        fireAndForget(queryClient.invalidateQueries({ queryKey }));
+    };
 };
 
 export { adminQueryKey, useAdminQuery, useClientQuery, useInvalidateAdmin };
