@@ -505,7 +505,12 @@ export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables,
                             </div>
                         </div>
                     </Panel>
-                    <Panel position="bottom-left">
+                    {/* Bottom-CENTRE, not bottom-left. React Flow docks its zoom
+                        controls bottom-left by default, so the legend sat on top
+                        of them: the fit-view button's dashed-square icon showed
+                        through just left of "Shard-local" (reading as a broken
+                        glyph), and the +/− buttons crowded the legend's edge. */}
+                    <Panel position="bottom-center">
                         <Legend />
                     </Panel>
                     <Controls showInteractive={false} />

@@ -65,9 +65,13 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
 
             {/* Only the selected pane is mounted, so the React Flow canvas is not
                 measuring and re-fitting behind a form nobody is looking at. */}
-            <div className="flex min-h-0 flex-1 flex-col px-4 pt-4">
+            <div className="flex min-h-0 flex-1 flex-col pt-4">
                 {pane === "data" ? (
-                    <div className="min-h-0 flex-1 overflow-y-auto px-1">
+                    // The inset is THIS pane's, not the container's: the schema
+                    // panes own their edges — the version rail runs to the left
+                    // edge and the canvas is a full-bleed surface — so padding on
+                    // the shared wrapper indented those too.
+                    <div className="min-h-0 flex-1 overflow-y-auto px-4">
                         <MigrationsPanel initialShardKey={initialShardKey} />
                     </div>
                 ) : (
