@@ -252,8 +252,11 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
 
                 {/* The canvas carries no border — it already reads as a distinct
                     surface, and boxing it doubled the chrome. */}
-                <div className="min-h-0 flex-[3]">
-                    <SchemaDiagram nodeClasses={nodeClasses} tables={diagramTables} testIdPrefix="sh" />
+                {/* flex-[2] against the list's flex-1 — the canvas gets the
+                    larger share but no longer a hardcoded height that pushed the
+                    verdict below the fold. */}
+                <div className="flex min-h-0 flex-[2] flex-col">
+                    <SchemaDiagram fill nodeClasses={nodeClasses} tables={diagramTables} testIdPrefix="sh" />
                 </div>
 
                 {/* Was a 160px strip with its own scrollbar — the third nested

@@ -3,7 +3,7 @@
 import { Download01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { Edge, NodeTypes } from "@xyflow/react";
-import { Background, Controls, MiniMap, Panel, ReactFlow, useEdgesState, useNodes, useNodesState, useReactFlow } from "@xyflow/react";
+import { Background, Controls, MiniMap, Panel, ReactFlow, useEdgesState, useNodes, useNodesInitialized, useNodesState, useReactFlow } from "@xyflow/react";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -16,6 +16,7 @@ import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
+import { cn } from "../../lib/utils";
 import type { DatabaseSchemaNodeType } from "./database-schema-node";
 import { DatabaseSchemaNode } from "./database-schema-node";
 import { exportDiagramAsJson, exportDiagramAsPng, exportDiagramAsSvg } from "./diagram-export";
@@ -53,6 +54,17 @@ const EMPTY_NODE_CLASSES: Readonly<Record<string, string>> = {};
 interface SchemaDiagramProps {
     /** True when the typed-column probe failed — nodes show a "columns unavailable" hint instead of an empty `—`. */
     readonly columnsError?: boolean;
+
+    /**
+     * Fill the flex parent instead of standing at a fixed height.
+     *
+     * Off by default: the Schema page renders inside the studio's page-scrolled
+     * content area, where there is no resolved height to fill and a `h-full`
+     * canvas would collapse. The Migrations page opts in — it owns its viewport
+     * height (see `FULL_HEIGHT_TABS`) and shares it with the change list, so a
+     * hardcoded canvas height there pushed the verdict below the fold.
+     */
+    readonly fill?: boolean;
 
     /**
      * Extra CSS classes per table name, applied to that table's node. Used by the
@@ -199,6 +211,41 @@ const Legend = (): ReactElement => {
     );
 };
 
+/** Below this many tables a minimap costs more attention than it saves. */
+const MINIMAP_MIN_TABLES = 12;
+
+/**
+ * Re-fit the viewport whenever the canvas is re-seeded.
+ *
+ * The `fitView` PROP only fits on mount. These nodes are re-seeded by an effect
+ * every time their source changes — and the big one is asynchronous: columns are
+ * probed after the first paint, so the mount-time fit measured empty
+ * header-only nodes and never ran again. The result was the whole graph stranded
+ * to one side at the wrong zoom, which is what this fixes.
+ *
+ * Keyed on `seedKey` AND `useNodesInitialized`: the latter drops to false while
+ * React Flow measures a new node set and flips back to true once it has real
+ * dimensions, so the fit always runs against measured nodes rather than racing
+ * them. Must be a CHILD of `ReactFlow` — these hooks need its provider.
+ *
+ * Re-fitting discards a manual pan, which is consistent: the re-seed it follows
+ * already discards manual drags.
+ */
+const FitOnSeed = ({ seedKey }: { readonly seedKey: string }): null => {
+    const initialized = useNodesInitialized();
+    const { fitView } = useReactFlow();
+
+    useEffect(() => {
+        if (initialized) {
+            // `duration: 0` — a fit is a correction, not a transition; animating
+            // it reads as the graph drifting on its own.
+            fireAndForget(fitView({ duration: 0, padding: 0.14 }));
+        }
+    }, [fitView, initialized, seedKey]);
+
+    return null;
+};
+
 /**
  * Export toolbar rendered inside the React Flow canvas via `Panel`.
  *
@@ -300,7 +347,7 @@ const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: Reac
  * cycle-safe) so the diagram opens stable, then the operator can drag nodes.
  * Read-only — connecting is disabled.
  */
-export const SchemaDiagram = ({ columnsError, nodeClasses, tables, testIdPrefix }: SchemaDiagramProps): ReactElement => {
+export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables, testIdPrefix }: SchemaDiagramProps): ReactElement => {
     const t = useT();
 
     const [tierFilter, setTierFilter] = useState<TierVisibility>(ALL_TIERS);
@@ -323,6 +370,9 @@ export const SchemaDiagram = ({ columnsError, nodeClasses, tables, testIdPrefix 
         [visibleTables, columnsError, nodeClasses],
     );
     const seededEdges = useMemo(() => buildEdges(visibleTables), [visibleTables]);
+    // Identifies the current seed by VALUE, so the re-fit fires when the graph
+    // actually changes rather than on every render.
+    const seedKey = visibleTables.map((table) => table.name).join(",");
 
     const [nodes, setNodes, onNodesChange] = useNodesState<DatabaseSchemaNodeType>(seededNodes);
     const [flowEdges, setEdges, onEdgesChange] = useEdgesState(seededEdges);
@@ -366,9 +416,9 @@ export const SchemaDiagram = ({ columnsError, nodeClasses, tables, testIdPrefix 
     }
 
     return (
-        <section className="flex flex-col gap-2" data-testid={`${testIdPrefix}-section`}>
+        <section className={cn("flex flex-col", fill && "min-h-0 flex-1")} data-testid={`${testIdPrefix}-section`}>
             <div
-                className="h-[560px] w-full overflow-hidden rounded-xl border border-border bg-muted/20 shadow-xs"
+                className={cn("w-full overflow-hidden border border-border bg-muted/20", fill ? "min-h-0 flex-1" : "h-[560px]")}
                 data-testid={`${testIdPrefix}-canvas`}
                 ref={canvasRef}
             >
@@ -426,8 +476,21 @@ export const SchemaDiagram = ({ columnsError, nodeClasses, tables, testIdPrefix 
                         <Legend />
                     </Panel>
                     <Controls showInteractive={false} />
-                    <MiniMap pannable zoomable />
+                    {/* Only once the graph outgrows the viewport. Below that it
+                        was an unstyled white block covering the legend, to
+                        navigate seven nodes you could already see. */}
+                    {visibleTables.length > MINIMAP_MIN_TABLES && (
+                        <MiniMap
+                            className="!border !border-border !bg-card"
+                            maskColor="var(--color-muted)"
+                            nodeColor="var(--color-muted-foreground)"
+                            nodeStrokeWidth={0}
+                            pannable
+                            zoomable
+                        />
+                    )}
                     <DiagramExportPanel containerRef={canvasRef} testIdPrefix={testIdPrefix} />
+                    <FitOnSeed seedKey={seedKey} />
                 </ReactFlow>
             </div>
         </section>
