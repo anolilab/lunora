@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 
 import type { ConsoleShown } from "../../components/operation-console-provider";
 import { Badge } from "../../components/ui/badge";
@@ -31,10 +31,14 @@ const OperationRow = ({ entry, focused }: { readonly entry: OperationEntry; read
 
     // Bring the entry an error surface pointed at into view, via a ref callback
     // rather than an effect: the callback re-attaches exactly when `focused`
-    // flips (its identity is memoized on it), so the scroll fires when the row
-    // mounts into an opening drawer AND when focus moves to another row — and
-    // never on an unrelated re-render, which would fight the operator's own
-    // scrolling.
+    // flips, so the scroll fires when the row mounts into an opening drawer AND
+    // when focus moves to another row — and never on an unrelated re-render,
+    // which would fight the operator's own scrolling.
+    //
+    // The `useCallback` is therefore BEHAVIOUR, not a perf hint: a fresh identity
+    // makes React detach and re-attach the ref every render, re-scrolling the
+    // viewport under the operator's hands. Kept explicit rather than trusting the
+    // compiler, because a bail-out here is a visible bug.
     const scrollWhenFocused = useCallback(
         (node: HTMLLIElement | null): void => {
             if (node !== null && focused) {
@@ -124,19 +128,17 @@ export const OperationConsole = ({
     const entries = useOperationLog();
     const [needle, setNeedle] = useState<string>("");
 
-    const shown = useMemo(() => {
-        const match = needle.trim().toLowerCase();
-
-        // One predicate, not two chained filters — the tape can hold thousands of
-        // entries and this re-runs on every keystroke.
-        return entries
-            .filter(
-                (entry) =>
-                    (shownFilter === "errors" ? entry.status === "error" : true) &&
-                    (match === "" || `${entry.functionPath} ${entry.summary} ${entry.shardKey}`.toLowerCase().includes(match)),
-            )
-            .toReversed();
-    }, [entries, needle, shownFilter]);
+    const match = needle.trim().toLowerCase();
+    // One predicate, not two chained filters — the tape can hold thousands of
+    // entries and this re-runs on every keystroke. Nothing downstream depends on
+    // the array's identity, so React Compiler owns the memoization.
+    const shown = entries
+        .filter(
+            (entry) =>
+                (shownFilter === "errors" ? entry.status === "error" : true) &&
+                (match === "" || `${entry.functionPath} ${entry.summary} ${entry.shardKey}`.toLowerCase().includes(match)),
+        )
+        .toReversed();
 
     const errorCount = entries.filter((entry) => entry.status === "error").length;
 

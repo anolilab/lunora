@@ -95,7 +95,7 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
     };
 
     const historyQuery = useAdminQuery<SchemaVersionsResult>(ADMIN_FUNCTIONS.schemaHistory, {}, { shardKey });
-    const versions = useMemo(() => historyQuery.data?.versions ?? [], [historyQuery.data]);
+    const versions = historyQuery.data?.versions ?? [];
 
     // The selection is DERIVED, not synced in an effect: default to the newest
     // version, and fall back to it whenever the picked hash is not in the current
@@ -119,6 +119,12 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
         { enabled: previousHash !== undefined, shardKey },
     );
 
+    // The next three MEMOS ARE LOAD-BEARING, unlike `versions` above. They flow
+    // into `SchemaDiagram`, whose react-flow node/edge state is re-seeded by an
+    // effect keyed on those props' identity — hand it a fresh object each render
+    // and the effect sets state on every render, which is an infinite loop rather
+    // than a slow one. React Compiler would keep them stable; a bail-out must not
+    // be able to hang the page.
     const model = useMemo(() => {
         const after = snapshotFromJson(afterQuery.data?.version?.snapshotJson);
 

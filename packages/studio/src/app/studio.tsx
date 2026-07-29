@@ -12,14 +12,13 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
+import { createContext, lazy, Suspense, use, useEffect } from "react";
 
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
 import { OperationConsoleProvider, useOperationConsole } from "../components/operation-console-provider";
 import RulesBanner from "../components/rules-banner";
 import { EnsureThemeProvider } from "../components/theme-provider";
-import { ThemeToggle } from "../components/theme-toggle";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
@@ -36,7 +35,6 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
     SidebarProvider,
-    SidebarTrigger,
     useSidebar,
 } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
@@ -56,6 +54,10 @@ import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
 import { CommandPalette, openCommandPalette } from "./command-palette";
+import { useNavLabels } from "./nav-labels";
+import type { NavGroup, NavGroupKey, StudioTab } from "./nav-types";
+import { StudioHeader } from "./studio-header";
+import { useConsoleShortcut } from "./use-console-shortcut";
 
 // Route-level lazy panels. Each becomes its own on-demand `chunk-*.js` under
 // `dist/standalone/` (esbuild `splitting` in `scripts/build-standalone.mjs`),
@@ -145,53 +147,6 @@ const StorageRulesPanel = lazyNamed(() => import("../features/storage/storage-ru
 const TracesPanel = lazyNamed(() => import("../features/traces/traces-panel"), "TracesPanel");
 const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
-
-/** Identifier for each built-in studio tab. */
-type StudioTab =
-    | "agents"
-    | "analytics"
-    | "api"
-    | "audit"
-    | "authAudit"
-    | "authConfig"
-    | "authSessions"
-    | "containers"
-    | "dashboards"
-    | "data"
-    | "deploymentHealth"
-    | "drains"
-    | "export"
-    | "fanout"
-    | "files"
-    | "flags"
-    | "functions"
-    | "health"
-    | "home"
-    | "insights"
-    | "issues"
-    | "kv"
-    | "logs"
-    | "mail"
-    | "metrics"
-    | "migrations"
-    | "notifications"
-    | "organizations"
-    | "payments"
-    | "permissions"
-    | "pitr"
-    | "queues"
-    | "realtime"
-    | "rls"
-    | "schedule"
-    | "schema"
-    | "security"
-    | "settings"
-    | "sql"
-    | "storageRules"
-    | "traces"
-    | "users"
-    | "vectors"
-    | "workflows";
 
 interface StudioProps {
     /**
@@ -310,15 +265,6 @@ interface StudioChrome {
 const StudioChromeContext = createContext<StudioChrome | null>(null);
 
 /**
- * Stable identifier for each sidebar domain; the display label is localised.
- * Domains group the pages by concern — Overview · Database · Functions · Auth ·
- * Storage · Observability (live logs + metrics) · Advisors · Operations (jobs,
- * mail, drains, payments) · Settings — so the data/SQL surfaces sit together and
- * monitoring is separated from the things you run.
- */
-type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "observability" | "operations" | "overview" | "settings" | "storage";
-
-/**
  * 16px line glyphs (drawn at a 24-unit grid) keyed by tab. Inline so the
  * studio ships no icon-font/asset dependency; they inherit `currentColor`
  * from the active/hover nav state in the scoped stylesheet.
@@ -383,9 +329,6 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     vectors: <path d="M4 7l8-4 8 4-8 4-8-4Zm0 5 8 4 8-4M4 17l8 4 8-4" />,
     workflows: <path d="M5 5h5v5H5V5Zm9 9h5v5h-5v-5ZM7.5 10v2a2 2 0 0 0 2 2H14m2.5-4V8a2 2 0 0 0-2-2H10" />,
 };
-
-/** One icon-rail domain and the sub-pages its secondary nav lists. */
-type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> };
 
 /**
  * Icon-rail domains, top to bottom, each owning the sub-pages its secondary nav
@@ -836,41 +779,13 @@ const StudioLayoutShell = (): ReactElement => {
     const operationConsole = useOperationConsole();
     const toggleConsole = operationConsole?.toggle;
 
-    useEffect(() => {
-        if (toggleConsole === undefined) {
-            return undefined;
-        }
-
-        const onKeyDown = (event: KeyboardEvent): void => {
-            // Ctrl+` only — NOT ⌘`, which macOS owns as "cycle this app's
-            // windows" — with no other modifier, ignoring auto-repeat, and never
-            // while the operator is typing (the SQL editor is a full-page
-            // textarea, and ` is a legal character in it).
-            if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat || event.key !== "`") {
-                return;
-            }
-
-            const { target } = event;
-
-            if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName))) {
-                return;
-            }
-
-            event.preventDefault();
-            toggleConsole();
-        };
-
-        globalThis.addEventListener("keydown", onKeyDown);
-
-        return () => {
-            globalThis.removeEventListener("keydown", onKeyDown);
-        };
-    }, [toggleConsole]);
+    useConsoleShortcut(toggleConsole);
 
     // Which optional package-backed pages this deployment enables. Defaults to
     // everything-shown until the RPC settles, so the nav never flickers a page in
     // then out — it only ever drops a page once the worker reports it disabled.
     const features = useStudioFeatures();
+    const { groupLabel, tabDescription, tabLabel } = useNavLabels();
 
     // The nav, command palette, and active-domain lookup all run off the filtered
     // groups so a disabled feature's tab disappears from every entry point. A
@@ -887,117 +802,6 @@ const StudioLayoutShell = (): ReactElement => {
             fireAndForget(navigate({ replace: true, to: "/home" }));
         }
     }, [current, features, navigate]);
-
-    // Memoised on `t` (stable per locale) so the maps re-localise when the active
-    // locale changes but aren't rebuilt on every unrelated render.
-    const tabLabel = useMemo(() => {
-        return {
-            agents: t("Agents"),
-            analytics: t("Analytics"),
-            api: t("API"),
-            audit: t("Audit"),
-            authAudit: t("Auth audit"),
-            authConfig: t("Configuration"),
-            authSessions: t("Sessions"),
-            containers: t("Containers"),
-            dashboards: t("Dashboards"),
-            data: t("Data"),
-            deploymentHealth: t("Deployment health"),
-            drains: t("Log drains"),
-            export: t("Export / Import"),
-            fanout: t("Fan-out"),
-            files: t("Files"),
-            flags: t("Flags"),
-            functions: t("Functions"),
-            health: t("Health"),
-            home: t("Home"),
-            insights: t("Performance"),
-            issues: t("Issues"),
-            kv: t("KV"),
-            logs: t("Logs"),
-            metrics: t("Metrics"),
-            migrations: t("Migrations"),
-            notifications: t("Notifications"),
-            organizations: t("Organizations"),
-            pitr: t("Time Travel"),
-            mail: t("Mail"),
-            payments: t("Payments"),
-            permissions: t("Permissions"),
-            queues: t("Queues"),
-            realtime: t("Realtime"),
-            rls: t("RLS Policies"),
-            schedule: t("Scheduled"),
-            schema: t("Schema"),
-            security: t("Security"),
-            settings: t("Settings"),
-            sql: t("SQL editor"),
-            traces: t("Traces"),
-            storageRules: t("Access Rules"),
-            users: t("Users"),
-            vectors: t("Vectors"),
-            workflows: t("Workflows"),
-        };
-    }, [t]);
-
-    const groupLabel = {
-        advisors: t("Advisors"),
-        auth: t("Auth"),
-        database: t("Database"),
-        functions: t("Functions"),
-        observability: t("Observability"),
-        operations: t("Operations"),
-        overview: t("Overview"),
-        settings: t("Settings"),
-        storage: t("Storage"),
-    };
-
-    // One-line section descriptions for the page header.
-    const tabDescription = {
-        agents: t("Inspect agent threads, message timelines, tool calls, and token usage."),
-        analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
-        api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
-        audit: t("A durable log of admin state-changing operations."),
-        authAudit: t("Authentication and security events — sign-ins, MFA, and session changes."),
-        authConfig: t("Enabled plugins and session config (read-only)."),
-        authSessions: t("Browse and revoke active sessions across all users."),
-        containers: t("Live Cloudflare Containers — current lifecycle state per instance from the log stream."),
-        dashboards: t("Chart widgets backed by saved read-only SQL queries."),
-        data: t("Browse and edit rows across your shard and global tables."),
-        deploymentHealth: t("Live liveness, readiness, and per-binding health from the deployment's /_lunora/health endpoint."),
-        drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
-        export: t("Export a shard to NDJSON, or import rows from it."),
-        fanout: t("Realtime fan-out cost and per-topic subscriber counts for this shard."),
-        files: t("Browse objects in your R2 storage buckets."),
-        flags: t("Inspect feature flags and their live evaluation under a targeting context."),
-        functions: t("Run registered queries, mutations, and actions."),
-        health: t("At-a-glance connection, error, and shard signals."),
-        home: t("Connection, health, and advisor summary for your deployment."),
-        insights: t("Surface slow functions, error spikes, and cache problems."),
-        issues: t("Grouped error triage — Worker throws and container crashes folded by fingerprint."),
-        logs: t("A live stream of recent function logs."),
-        metrics: t("Per-shard health and aggregate metrics."),
-        migrations: t("Review migration status and run them."),
-        notifications: t("Registered push devices — endpoint, kind, last-send status, and delivery errors."),
-        organizations: t("Browse and manage organizations, members, and invitations."),
-        pitr: t("Restore a shard to a point in the last 30 days."),
-        mail: t("Email your app sent, captured in dev."),
-        payments: t("Synced customers, subscriptions, and webhook events."),
-        permissions: t("Inspect access policies per table, and probe a function as any identity."),
-        queues: t("Inspect declared Cloudflare Queues — their producer bindings, consumer mode, and dead-letter queue."),
-        realtime: t("Active WebSocket subscriptions on this shard."),
-        rls: t("Inspect row-level-security policies and roles, per table."),
-        schedule: t("Inspect and cancel scheduled jobs."),
-        schema: t("Inspect each table and its columns."),
-        security: t("Review admin gates, credentials, and log redaction."),
-        settings: t("Read-only deployment config — vars, secrets, and bindings."),
-        sql: t("Run read-only SQL against a shard."),
-        kv: t("Browse and edit key-value pairs in your Workers KV namespaces."),
-        storageRules: t("Inspect storage access rules — per bucket, operation, and key prefix."),
-        traces: t("Recent ctx.trace waterfalls for this shard — the drill-down from a log line."),
-        users: t("Manage auth users — roles, bans, sessions, and identity."),
-        vectors: t("Browse Vectorize indexes and run similarity searches."),
-        workflows: t("Inspect declared Cloudflare Workflows and their bindings."),
-    };
 
     const selectTab = (event: React.MouseEvent<HTMLButtonElement>): void => {
         fireAndForget(navigate({ to: `/${event.currentTarget.dataset.tab ?? ""}` }));
@@ -1046,41 +850,7 @@ const StudioLayoutShell = (): ReactElement => {
             <SidebarInset className="overflow-hidden md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm">
                 {/* Top bar — sidebar toggle + breadcrumb, centred ⌘K search, and the
                     connection / theme cluster. Mirrors the reference dashboard header. */}
-                <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4" data-testid="dash-app-header">
-                    <SidebarTrigger className="-ms-1" />
-                    <nav aria-label={t("Breadcrumb")} className="flex items-center gap-1.5 text-[13px]">
-                        <span className="text-muted-foreground">{groupLabel[activeGroup.key]}</span>
-                        <svg
-                            aria-hidden="true"
-                            className="size-3.5 text-muted-foreground/60"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth={1.7}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="m9 6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <span className="font-medium text-foreground">{tabLabel[current]}</span>
-                    </nav>
-
-                    <button
-                        className="mx-auto hidden h-8 w-72 items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted md:flex"
-                        data-testid="dash-app-search"
-                        onClick={openCommandPalette}
-                        type="button"
-                    >
-                        <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-                            <circle cx="11" cy="11" r="7" />
-                            <path d="m21 21-4.3-4.3" strokeLinecap="round" />
-                        </svg>
-                        {t("Search…")}
-                        <kbd className="ms-auto rounded border border-border bg-background px-1 font-sans text-[10px] text-muted-foreground">⌘K</kbd>
-                    </button>
-
-                    <div className="ms-auto flex items-center gap-1.5 md:ms-0">
-                        <ThemeToggle />
-                    </div>
-                </header>
+                <StudioHeader domain={groupLabel[activeGroup.key]} onOpenCommandPalette={openCommandPalette} page={tabLabel[current]} />
 
                 {chrome?.rulesInstalled === false && <RulesBanner />}
 
@@ -1395,4 +1165,6 @@ export const Studio = ({
     );
 };
 
-export type { StudioChrome, StudioProps, StudioTab };
+export type { StudioChrome, StudioProps };
+
+export { type StudioTab } from "./nav-types";

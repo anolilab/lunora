@@ -315,6 +315,9 @@ export const SchemaDiagram = ({ columnsError, nodeClasses, tables, testIdPrefix 
         return tables.filter((table) => tierFilter[table.tier] && table.name.toLowerCase().includes(needle));
     }, [tables, tierFilter, query]);
 
+    // Memoized because the re-seed effects below depend on these IDENTITIES: a new
+    // array every render would call `setNodes`/`setEdges` every render, which is a
+    // render loop, not a slow render. Not a compiler-replaceable perf hint.
     const seededNodes = useMemo(
         () => buildNodes(visibleTables, columnsError ?? false, nodeClasses ?? EMPTY_NODE_CLASSES),
         [visibleTables, columnsError, nodeClasses],

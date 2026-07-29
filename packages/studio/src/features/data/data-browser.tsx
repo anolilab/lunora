@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
@@ -308,6 +308,11 @@ export const DataBrowser = ({
     const columnsByTable = schemaQuery.data?.columnsByTable ?? EMPTY_COLUMNS_BY_TABLE;
     const [backRelationsOn, setBackRelationsOn] = usePersistedValue<Record<string, string[]>>(BACK_RELATIONS_KEY, {});
 
+    // MEMOIZED DELIBERATELY, unlike the derivations below. This feeds
+    // `activeBackRelations` → the grid's `columnDefs` → `useReactTable`, and
+    // react-table resets its internal state (column sizing, row selection) the
+    // moment `columns` changes identity. React Compiler would hold it stable, but
+    // a compiler bail-out here is a visible bug, not a slow render.
     const resolveBackRelations = useCallback(
         (table: string) => {
             const enabled = new Set(backRelationsOn[table]);
@@ -392,68 +397,57 @@ export const DataBrowser = ({
     // query never runs off un-reviewed model output.
     const assistant = useSqlAssistant(shardKey);
 
-    const askAiFilter = useCallback(
-        (prompt: string): void => {
-            const apply = async (): Promise<void> => {
-                const clauses = await assistant.suggestFilter(prompt, selectedTable ?? "");
+    const askAiFilter = (prompt: string): void => {
+        const apply = async (): Promise<void> => {
+            const clauses = await assistant.suggestFilter(prompt, selectedTable ?? "");
 
-                if (clauses !== undefined) {
-                    onFiltersChange(
-                        clauses.map((clause) => {
-                            // The wire value is `unknown`; a filter row is a string
-                            // input, so only scalars round-trip meaningfully.
-                            const raw: unknown = clause.value;
-                            const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
+            if (clauses !== undefined) {
+                onFiltersChange(
+                    clauses.map((clause) => {
+                        // The wire value is `unknown`; a filter row is a string
+                        // input, so only scalars round-trip meaningfully.
+                        const raw: unknown = clause.value;
+                        const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
 
-                            return { column: clause.column, operator: clause.operator, value };
-                        }),
-                    );
-                }
-            };
+                        return { column: clause.column, operator: clause.operator, value };
+                    }),
+                );
+            }
+        };
 
-            fireAndForget(apply());
-        },
-        [assistant, onFiltersChange, selectedTable],
-    );
+        fireAndForget(apply());
+    };
 
     // Available reverse edges for the open table, and the counts for the loaded
     // page. Only the switched-on edges are resolved; the rest cost nothing.
-    const availableBackRelations = useMemo(
-        () => (selectedTable === null ? [] : backRelationsFor(selectedTable, columnsByTable)),
-        [columnsByTable, selectedTable],
-    );
-    const enabledBackRelations = useMemo(() => new Set(backRelationsOn[selectedTable ?? ""]), [backRelationsOn, selectedTable]);
-    const pageIds = useMemo(() => {
-        // One pass, not map-then-filter: a page is up to a few hundred rows and
-        // this re-derives on every page change.
-        const ids: string[] = [];
+    // Plain derivations — React Compiler memoizes them, and `useBackRelations`
+    // keys its fetch on a serialised signature rather than these identities, so
+    // nothing downstream cares whether they are stable.
+    const availableBackRelations = selectedTable === null ? [] : backRelationsFor(selectedTable, columnsByTable);
+    const enabledBackRelations = new Set(backRelationsOn[selectedTable ?? ""]);
+    // One pass, not map-then-filter: a page is up to a few hundred rows.
+    const pageIds: string[] = [];
 
-        for (const row of page?.rows ?? []) {
-            const id = row._id ?? row.id;
+    for (const row of page?.rows ?? []) {
+        const id = row._id ?? row.id;
 
-            if (typeof id === "string" && id !== "") {
-                ids.push(id);
-            }
+        if (typeof id === "string" && id !== "") {
+            pageIds.push(id);
         }
-
-        return ids;
-    }, [page]);
+    }
     // The DEBOUNCED shard, matching the page these ids came from — the live one
     // would refetch per keystroke and could count children on a shard other than
     // the one whose rows are on screen.
     const backRelationCounts = useBackRelations(enabledBackRelations, availableBackRelations, pageIds, queryShardKey);
 
-    const onToggleBackRelation = useCallback(
-        (key: string): void => {
-            setBackRelationsOn((current) => {
-                const forTable = selectedTable ?? "";
-                const existing: string[] = current[forTable] ?? [];
+    const onToggleBackRelation = (key: string): void => {
+        setBackRelationsOn((current) => {
+            const forTable = selectedTable ?? "";
+            const existing: string[] = current[forTable] ?? [];
 
-                return { ...current, [forTable]: existing.includes(key) ? existing.filter((entry) => entry !== key) : [...existing, key] };
-            });
-        },
-        [selectedTable, setBackRelationsOn],
-    );
+            return { ...current, [forTable]: existing.includes(key) ? existing.filter((entry) => entry !== key) : [...existing, key] };
+        });
+    };
 
     // Pinned columns, per table, persisted on this browser. Per table because a
     // pin is a statement about THAT table's shape ("keep the email visible"),
@@ -467,30 +461,20 @@ export const DataBrowser = ({
     // this browser yet. The precedence was the other way round, which made every
     // pin/unpin a no-op for the rest of the session whenever `?pins=` was
     // present — the toggle wrote to storage that was never read again.
-    const pinnedColumns = useMemo(() => {
-        const stored = pinsByTable[pinKey];
+    const stored = pinsByTable[pinKey];
+    const pinnedColumns = stored === undefined ? new Set((initialPins ?? "").split(",").filter((name) => name !== "")) : new Set(stored);
 
-        if (stored !== undefined) {
-            return new Set(stored);
-        }
+    const onTogglePin = (columnId: string): void => {
+        setPinsByTable((current) => {
+            // Seed from whatever is displayed (storage, else the URL) so the
+            // first toggle after arriving on a `?pins=` link edits that set
+            // rather than starting from empty.
+            const existing: string[] = current[pinKey] ?? [...pinnedColumns];
+            const next = existing.includes(columnId) ? existing.filter((id) => id !== columnId) : [...existing, columnId];
 
-        return new Set((initialPins ?? "").split(",").filter((name) => name !== ""));
-    }, [initialPins, pinKey, pinsByTable]);
-
-    const onTogglePin = useCallback(
-        (columnId: string): void => {
-            setPinsByTable((current) => {
-                // Seed from whatever is displayed (storage, else the URL) so the
-                // first toggle after arriving on a `?pins=` link edits that set
-                // rather than starting from empty.
-                const existing: string[] = current[pinKey] ?? [...pinnedColumns];
-                const next = existing.includes(columnId) ? existing.filter((id) => id !== columnId) : [...existing, columnId];
-
-                return { ...current, [pinKey]: next };
-            });
-        },
-        [pinKey, pinnedColumns, setPinsByTable],
-    );
+            return { ...current, [pinKey]: next };
+        });
+    };
 
     const client = useLunora();
 
