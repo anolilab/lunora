@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveAdminToken } from "../../src/util/admin-token";
+import { resolveAdminBearer } from "../../src/util/admin-token";
 
 /** A project root whose `.dev.vars` holds `token`, or none at all when omitted. */
 const projectWith = (token?: string): string => {
@@ -21,7 +21,7 @@ const projectWith = (token?: string): string => {
     return root;
 };
 
-describe("resolveAdminToken", () => {
+describe("resolveAdminBearer", () => {
     const original = process.env["LUNORA_ADMIN_TOKEN"];
 
     beforeEach(() => {
@@ -41,7 +41,7 @@ describe("resolveAdminToken", () => {
 
         process.env["LUNORA_ADMIN_TOKEN"] = "from-env";
 
-        expect(resolveAdminToken({ cwd: projectWith("from-file"), token: "from-flag" })).toStrictEqual({ source: "flag", token: "from-flag" });
+        expect(resolveAdminBearer({ cwd: projectWith("from-file"), token: "from-flag" })).toStrictEqual({ source: "flag", token: "from-flag" });
     });
 
     it("prefers the environment over .dev.vars", () => {
@@ -49,7 +49,7 @@ describe("resolveAdminToken", () => {
 
         process.env["LUNORA_ADMIN_TOKEN"] = "from-env";
 
-        expect(resolveAdminToken({ cwd: projectWith("from-file") })).toStrictEqual({ source: "env", token: "from-env" });
+        expect(resolveAdminBearer({ cwd: projectWith("from-file") })).toStrictEqual({ source: "env", token: "from-env" });
     });
 
     it("falls back to .dev.vars so a local run needs no flags at all", () => {
@@ -58,7 +58,7 @@ describe("resolveAdminToken", () => {
         // A local dev worker is http by definition; that is exactly the case under test.
         const local = "http://localhost:5174";
 
-        expect(resolveAdminToken({ cwd: projectWith("from-file"), url: local })).toStrictEqual({ source: "dev-vars", token: "from-file" });
+        expect(resolveAdminBearer({ cwd: projectWith("from-file"), url: local })).toStrictEqual({ source: "dev-vars", token: "from-file" });
     });
 
     // eslint-disable-next-line sonarjs/no-clear-text-protocols -- the http case is the point: a plaintext remote target must not receive the dev secret
@@ -67,24 +67,24 @@ describe("resolveAdminToken", () => {
 
         // A dev secret must not leave the machine because a command happened to
         // be pointed at a deployed worker — this fails closed instead.
-        expect(resolveAdminToken({ cwd: projectWith("from-file"), url })).toStrictEqual({});
+        expect(resolveAdminBearer({ cwd: projectWith("from-file"), url })).toStrictEqual({});
     });
 
     it("treats an unparseable url as remote", () => {
         expect.assertions(1);
 
-        expect(resolveAdminToken({ cwd: projectWith("from-file"), url: "not a url" })).toStrictEqual({});
+        expect(resolveAdminBearer({ cwd: projectWith("from-file"), url: "not a url" })).toStrictEqual({});
     });
 
     it("reports nothing when no source has a token", () => {
         expect.assertions(1);
 
-        expect(resolveAdminToken({ cwd: projectWith() })).toStrictEqual({});
+        expect(resolveAdminBearer({ cwd: projectWith() })).toStrictEqual({});
     });
 
     it("ignores an empty .dev.vars value rather than sending a blank bearer", () => {
         expect.assertions(1);
 
-        expect(resolveAdminToken({ cwd: projectWith("") })).toStrictEqual({});
+        expect(resolveAdminBearer({ cwd: projectWith("") })).toStrictEqual({});
     });
 });

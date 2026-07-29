@@ -95,6 +95,12 @@ export default defineSchema({
         title: v.string(),
         updatedAt: v.number(),
     })
+        // Rows come from `lunora seed`, which bulk-inserts through the admin import
+        // endpoint — not from a mutation. Without this the insert-path advisor
+        // reports `table_without_insert` on every codegen run, which is noise
+        // rather than a finding: the advisory's own text says a table "seeded
+        // elsewhere" can be ignored, and this is the declaration that says so.
+        .externallyManaged()
         .index("by_created", ["createdAt"])
         .index("by_status", ["status"]),
 

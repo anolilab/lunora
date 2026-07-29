@@ -82,29 +82,24 @@ const ResponseBody = ({ active, running, showError }: ResponseBodyProps): ReactE
     );
 };
 
-/**
- * The right-rail response panel: documented response **examples** as status tabs
- * (one per `2xx` / `4xx` … the operation declares, each seeded from its schema)
- * with the live "try it" result folded in as a highlighted `Live` tab the moment
- * a request fires. Mirrors the target reference's right-hand response card — the
- * example sits beside the request sample before you ever send, then the real
- * round-trip (status pill + duration) takes over on send, while the documented
- * examples stay one click away for comparison.
- *
- * Reads the shared {@link useOperationRun} state, so it tracks the request
- * console without prop drilling; the provider is keyed on the operation, so
- * switching operations remounts this with freshly-seeded tabs.
- */
 /** The documented responses, plus the live result as its own tab once the operation has been run. */
-const buildTabs = (
-    operation: ApiOperation,
-    ran: boolean,
-    error: null | string,
-    response: unknown,
-    failed: boolean,
-    durationMs: null | number,
-    t: TFunction,
-): ResponseTab[] => {
+const buildTabs = ({
+    durationMs,
+    error,
+    failed,
+    operation,
+    ran,
+    response,
+    t,
+}: {
+    durationMs: null | number;
+    error: null | string;
+    failed: boolean;
+    operation: ApiOperation;
+    ran: boolean;
+    response: unknown;
+    t: TFunction;
+}): ResponseTab[] => {
     const documented = operation.responses.map((entry): ResponseTab => {
         return { body: exampleBody(entry), durationMs: null, id: entry.status, label: entry.status, live: false, status: entry.status };
     });
@@ -126,6 +121,19 @@ const buildTabs = (
     return [live, ...documented];
 };
 
+/**
+ * The right-rail response panel: documented response **examples** as status tabs
+ * (one per `2xx` / `4xx` … the operation declares, each seeded from its schema)
+ * with the live "try it" result folded in as a highlighted `Live` tab the moment
+ * a request fires. Mirrors the target reference's right-hand response card — the
+ * example sits beside the request sample before you ever send, then the real
+ * round-trip (status pill + duration) takes over on send, while the documented
+ * examples stay one click away for comparison.
+ *
+ * Reads the shared {@link useOperationRun} state, so it tracks the request
+ * console without prop drilling; the provider is keyed on the operation, so
+ * switching operations remounts this with freshly-seeded tabs.
+ */
 const ResponsePanel = (): ReactElement => {
     const t = useT();
     const { durationMs, error, operation, response, status } = useOperationRun();
@@ -135,7 +143,7 @@ const ResponsePanel = (): ReactElement => {
     const ran = status === "success" || failed;
 
     // Documented example tabs, in declared order, plus the live tab once a run lands.
-    const tabs = buildTabs(operation, ran, error, response, failed, durationMs, t);
+    const tabs = buildTabs({ durationMs, error, failed, operation, ran, response, t });
 
     // Default selection: the live tab once a run has landed, otherwise a 2xx example (else the first tab).
     const defaultId = ran ? LIVE_TAB : (tabs.find((tab) => tab.status.startsWith("2"))?.id ?? tabs[0]?.id ?? "");

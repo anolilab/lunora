@@ -269,6 +269,29 @@ describe("lunora run --as", () => {
         expect(calls[0]?.body["functionPath"]).toBe("__lunora_admin__:listTables");
     });
 
+    it("refuses to put the admin bearer on the wire in cleartext to a remote host", async () => {
+        expect.assertions(2);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+        const messages: string[] = [];
+        const logger = { ...silentLogger(), error: (message: string) => messages.push(message) };
+
+        // The bearer is full-access admin; a MITM on a plaintext hop would own the
+        // deployment. Every other bearer-carrying command refuses this, and so
+        // must `run --as`.
+        const result = await runRpcCommand({
+            as: "user_123",
+            fetchImpl: capturing(calls),
+            functionPath: "messages:list",
+            logger,
+            token: "admin-secret",
+            url: "http://staging.example.com",
+        });
+
+        expect(result.code).toBe(1);
+        expect(calls).toHaveLength(0);
+    });
+
     it("points a shard denial at --as instead of leaving the operator to guess", async () => {
         expect.assertions(1);
 

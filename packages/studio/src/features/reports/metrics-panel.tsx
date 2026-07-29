@@ -98,22 +98,6 @@ const StatCard = ({
     </Card>
 );
 
-/**
- * Health snapshot for a single shard: request / error counts (since the DO last
- * woke), its live SQLite size, and reactive-cache hit/miss stats when a cache is
- * configured. Reads via the `__lunora_admin__:getMetrics` RPC over the
- * {@link useLunora} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
- *
- * Counters are per-DO-instance and reset on hibernation/restart — this is a
- * "since this instance woke" readout, not a durable time series.
- *
- * The panel is always live: a `getMetrics` WebSocket subscription opens once the
- * first one-shot seed commits a shard and re-pushes on every server write-flush,
- * accumulating a client-side, in-memory series of requests-per-sample (the delta
- * of `requests` between consecutive samples), rendered as an inline-SVG
- * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
- * remount.
- */
 /** A duration for display: `—` when there is none, microseconds under a millisecond. */
 const formatMs = (ms: number): string => {
     if (ms <= 0) {
@@ -131,7 +115,23 @@ const formatMs = (ms: number): string => {
     return `${(ms / 1000).toFixed(2)}s`;
 };
 
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+/**
+ * Health snapshot for a single shard: request / error counts (since the DO last
+ * woke), its live SQLite size, and reactive-cache hit/miss stats when a cache is
+ * configured. Reads via the `__lunora_admin__:getMetrics` RPC over the
+ * {@link useLunora} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
+ *
+ * Counters are per-DO-instance and reset on hibernation/restart — this is a
+ * "since this instance woke" readout, not a durable time series.
+ *
+ * The panel is always live: a `getMetrics` WebSocket subscription opens once the
+ * first one-shot seed commits a shard and re-pushes on every server write-flush,
+ * accumulating a client-side, in-memory series of requests-per-sample (the delta
+ * of `requests` between consecutive samples), rendered as an inline-SVG
+ * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
+ * remount.
+ */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~493 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

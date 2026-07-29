@@ -78,19 +78,6 @@ const recipientText = (value: string | string[] | undefined): string => {
     return Array.isArray(value) ? value.join(", ") : value;
 };
 
-/**
- * Dev mail catcher — a unified inbox of every email the app sent. `@lunora/mail`'s
- * capture transport (wired in dev) intercepts each send and persists it to the
- * root-shard mailbox instead of delivering, so verification / forgot-password and
- * any app mail show up here with nothing leaving the machine. Reads the
- * `__lunora_admin__:getCapturedMail` RPC over the {@link useLunora} client;
- * gated by the server's `LUNORA_ADMIN_TOKEN`.
- *
- * The inbox is a single root-shard table with no write-flush to subscribe to, so
- * it polls on a fixed interval (paused while the tab is hidden) — new captured
- * mail appears without a manual refresh. The HTML body is rendered in a fully
- * sandboxed iframe (no script execution) so captured markup can't run in the studio.
- */
 /** Captured mail whose subject or recipients contain `filter` (case-insensitive); everything when it is blank. */
 const matchingMail = (entries: ReadonlyArray<CapturedMail>, filter: string): ReadonlyArray<CapturedMail> => {
     const needle = filter.trim().toLowerCase();
@@ -111,7 +98,20 @@ const selectedMail = (visible: ReadonlyArray<CapturedMail>, selectedId: null | s
     return visible.find((entry) => entry.id === selectedId) ?? visible[0];
 };
 
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+/**
+ * Dev mail catcher — a unified inbox of every email the app sent. `@lunora/mail`'s
+ * capture transport (wired in dev) intercepts each send and persists it to the
+ * root-shard mailbox instead of delivering, so verification / forgot-password and
+ * any app mail show up here with nothing leaving the machine. Reads the
+ * `__lunora_admin__:getCapturedMail` RPC over the {@link useLunora} client;
+ * gated by the server's `LUNORA_ADMIN_TOKEN`.
+ *
+ * The inbox is a single root-shard table with no write-flush to subscribe to, so
+ * it polls on a fixed interval (paused while the tab is hidden) — new captured
+ * mail appears without a manual refresh. The HTML body is rendered in a fully
+ * sandboxed iframe (no script execution) so captured markup can't run in the studio.
+ */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~424 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

@@ -175,7 +175,7 @@ const schemaTabClass = (active: boolean): string =>
  * works.
  */
 // react-doctor-disable-next-line react-doctor/prefer-useReducer -- the six values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~670 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: SchemaViewerProps): ReactElement => {
     const client = useLunora();
     const t = useT();

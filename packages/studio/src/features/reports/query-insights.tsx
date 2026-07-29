@@ -89,18 +89,6 @@ interface QueryInsightsProps {
     readonly queryStats: ReadonlyArray<EnrichedQueryStat & { p50DurationMs?: number; p95DurationMs?: number }>;
 }
 
-/**
- * Slow-query leaderboard for the Reports → Metrics panel.
- *
- * Renders a sortable table of per-statement SQL aggregates surfaced by the
- * `__lunora_admin__:getMetrics` RPC when the worker includes the
- * `queryStats` feed (workers predating the query-metrics feature return
- * `undefined` here — the parent panel guards on presence before mounting
- * this component). Each row carries a performance badge keyed on average
- * execution time, and the full normalised SQL can be expanded inline.
- *
- * Sort options: total time (default), avg time, execution count, rows read.
- */
 /** Statements ordered by the selected column, worst first. Copies before sorting — the prop array is not ours to reorder. */
 const sortStats = (queryStats: QueryInsightsProps["queryStats"], sortField: SortField): QueryInsightsProps["queryStats"] => {
     const copy = [...queryStats];
@@ -128,6 +116,18 @@ const sortStats = (queryStats: QueryInsightsProps["queryStats"], sortField: Sort
     return copy;
 };
 
+/**
+ * Slow-query leaderboard for the Reports → Metrics panel.
+ *
+ * Renders a sortable table of per-statement SQL aggregates surfaced by the
+ * `__lunora_admin__:getMetrics` RPC when the worker includes the
+ * `queryStats` feed (workers predating the query-metrics feature return
+ * `undefined` here — the parent panel guards on presence before mounting
+ * this component). Each row carries a performance badge keyed on average
+ * execution time, and the full normalised SQL can be expanded inline.
+ *
+ * Sort options: total time (default), avg time, execution count, rows read.
+ */
 export const QueryInsights = ({ queryStats }: QueryInsightsProps): ReactElement => {
     const t = useT();
     const [sortField, setSortField] = useState<SortField>("totalTime");

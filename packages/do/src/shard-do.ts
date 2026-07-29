@@ -6418,7 +6418,11 @@ abstract class ShardDO {
      * overwritten here for the duration of the dispatch and restored after, so
      * the forge can't leak into a later request. The target path is validated to
      * be a non-admin function, so it can't be used to re-enter the admin plane.
-     * The studio only surfaces this tool behind a loopback-dev gate.
+     *
+     * Callers: the studio surfaces it behind a loopback-dev gate (`runAsIdentity`),
+     * and `lunora run --as` dispatches through it from the CLI. That gate was
+     * always UI-only — the server-side authority is, and remains, the admin
+     * bearer check above.
      */
     private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseRunAsArgs(args);

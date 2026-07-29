@@ -275,13 +275,16 @@ const ColumnsMenu = ({
                         {allVisible ? t("Hide all") : t("Show all")}
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
-                    {/* One pass, not `.filter().map()`: reverse-relation columns are
-                        toggled below in their own group — listing them here too would
-                        offer two switches for one column — and a wide table walks this
-                        list on every open. */}
+                    {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over one table's leaf columns, walked when the menu opens; the flatMap-of-arrays form reads worse for no measurable gain at this size */}
                     {table
                         .getAllLeafColumns()
-                        .flatMap((column) => (column.id.startsWith("__back__:") ? [] : [<ColumnToggle column={column} key={column.id} />]))}
+                        // Reverse-relation columns are toggled below in their own
+                        // group — listing them here too would offer two switches for
+                        // one column.
+                        .filter((column) => !column.id.startsWith("__back__:"))
+                        .map((column) => (
+                            <ColumnToggle column={column} key={column.id} />
+                        ))}
                 </DropdownMenuGroup>
                 {backRelations.length > 0 && onToggleBackRelation !== undefined && (
                     <DropdownMenuGroup>
@@ -463,6 +466,5 @@ const GridActionsBar = ({
     );
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
 export type { GridRow };

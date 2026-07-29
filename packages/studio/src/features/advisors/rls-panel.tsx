@@ -22,31 +22,21 @@ const operationLabel = (t: TFunction, operation: RlsOperation): string =>
 interface TableCoverage {
     /** The set of operations a policy guards on this table. */
     operations: Set<RlsOperation>;
-    /** Procedures whose `.use(rls(...))` chain declared a policy on this table, deduped. */
-    procedures: string[];
+    /** Procedures whose `.use(rls(...))` chain declared a policy on this table. A Set, like `operations` — dedup is the point. */
+    procedures: Set<string>;
     table: string;
 }
 
 /** Fold the flat policy list into one row per table, in alphabetical table order. */
 const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
     const byTable = new Map<string, TableCoverage>();
-    // Procedure names are deduped through a Set, not `procedures.includes`: the
-    // check sits inside the fold, so the array scan made it quadratic in the
-    // number of policies on one table.
-    const seenProcedures = new Map<string, Set<string>>();
 
     for (const policy of policies) {
-        const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: [], table: policy.table };
+        const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: new Set<string>(), table: policy.table };
 
         coverage.operations.add(policy.on);
 
-        const seen = seenProcedures.get(policy.table) ?? new Set<string>();
-
-        if (!seen.has(policy.procedure)) {
-            seen.add(policy.procedure);
-            seenProcedures.set(policy.table, seen);
-            coverage.procedures.push(policy.procedure);
-        }
+        coverage.procedures.add(policy.procedure);
 
         byTable.set(policy.table, coverage);
     }
@@ -122,7 +112,7 @@ const RlsPanel = (): ReactElement => {
                                                     )}
                                                 </TableCell>
                                             ))}
-                                            <TableCell className="font-mono text-xs text-muted-foreground">{coverage.procedures.join(", ")}</TableCell>
+                                            <TableCell className="font-mono text-xs text-muted-foreground">{[...coverage.procedures].join(", ")}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>

@@ -68,6 +68,17 @@ interface SeedOptions {
     indexOffset?: Readonly<Record<string, number>>;
 
     /**
+     * Wall-clock reference for time-valued columns (`createdAt`, `expiresAt`, …),
+     * as epoch-ms. Defaults to now.
+     *
+     * Pin it to make a plan byte-for-byte reproducible: seeding is deterministic
+     * in `seed` alone for every other column, and this is the one input that
+     * would otherwise drift between runs. A pinned `(seed, now)` pair is what
+     * makes a seeded screenshot, test fixture, or bug report replayable.
+     */
+    now?: number;
+
+    /**
      * Restrict seeding to these tables. Transitive `v.id(...)` parents are added
      * automatically (unless already covered by `existingIds`) so child foreign
      * keys resolve to real rows. The result is still ordered by FK dependency.
@@ -133,6 +144,7 @@ const generateField = (
     localIndex: number,
     idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
+    now: number,
 ): unknown => {
     if (field.fkTable !== undefined) {
         const pool = fkPool(field, table, localIndex, idsByTable, existingIds);
@@ -152,7 +164,7 @@ const generateField = (
         return undefined;
     }
 
-    return generateValue(field.validator, field.name, input);
+    return generateValue(field.validator, field.name, input, now);
 };
 
 /**
@@ -161,7 +173,7 @@ const generateField = (
  * parents come before it.
  */
 const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<TablePlan> => {
-    const { counts = {}, defaultCount = 10, existingIds = {}, indexOffset = {}, only, overrides = {}, seed = 0 } = options;
+    const { counts = {}, defaultCount = 10, existingIds = {}, indexOffset = {}, now = Date.now(), only, overrides = {}, seed = 0 } = options;
 
     setHashKey(seed);
 
@@ -248,7 +260,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
             ids.push(row._id as string);
 
             for (const field of spec.fields) {
-                apply(field.name, () => generateField(field, table, cellInput(seed, table, index, field.name), localIndex, idsByTable, existingIds));
+                apply(field.name, () => generateField(field, table, cellInput(seed, table, index, field.name), localIndex, idsByTable, existingIds, now));
             }
 
             rows.push(row);

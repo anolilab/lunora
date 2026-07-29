@@ -37,15 +37,6 @@ const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? 
 /** Soonest-due first so the next thing to fire is at the top. */
 const sortByDue = (records: ScheduleRecord[]): ScheduleRecord[] => records.toSorted((a, b) => a.scheduledFor - b.scheduledFor);
 
-/**
- * View — and cancel — the functions queued via `runAfter` / `runAt` on the
- * scheduler. Cron *triggers* are static wrangler config and don't appear here;
- * this lists the dynamic, in-flight schedule only.
- *
- * Works out of the box under `&lt;LunoraProvider>` via the client's scheduler
- * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
- * {@link ScheduledJobsProps.cancelJob} to override the transport.
- */
 /** How to cancel a job, or `undefined` when the panel is read-only: the host's canceller wins; otherwise the client can cancel what it also lists. A custom loader without a canceller stays read-only. */
 const jobCanceller = (
     client: ReturnType<typeof useLunora>,
@@ -59,6 +50,15 @@ const jobCanceller = (
     return loadJobs === undefined ? (id: string) => client.cancelScheduledJob(id) : undefined;
 };
 
+/**
+ * View — and cancel — the functions queued via `runAfter` / `runAt` on the
+ * scheduler. Cron *triggers* are static wrangler config and don't appear here;
+ * this lists the dynamic, in-flight schedule only.
+ *
+ * Works out of the box under `&lt;LunoraProvider>` via the client's scheduler
+ * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
+ * {@link ScheduledJobsProps.cancelJob} to override the transport.
+ */
 export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement => {
     const client = useLunora();
     const t = useT();

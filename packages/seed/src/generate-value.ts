@@ -58,8 +58,13 @@ const STRING_HEURISTICS: ReadonlyArray<{ generate: (input: unknown) => string; k
  * quantity by validator kind alone — and seeding it as `641` produces rows no
  * date filter, sort, or range search can do anything with. The name is the only
  * signal available, and it is the same signal the string heuristics already use.
+ *
+ * Bare `time` is deliberately NOT in this set: `responseTime`, `loadTime`, and
+ * `elapsedTime` are durations, and seeding a duration as ~1.7e12 is worse than
+ * leaving it a plain number. A false negative here is boring data; a false
+ * positive is nonsense data. `timestamp` stays because it is unambiguous.
  */
-const TIMESTAMP_WORDS: ReadonlySet<string> = new Set(["at", "date", "deadline", "expires", "expiry", "since", "time", "timestamp", "until"]);
+const TIMESTAMP_WORDS: ReadonlySet<string> = new Set(["at", "date", "deadline", "expires", "expiry", "since", "timestamp", "until"]);
 
 /** camelCase boundary — `lastSeenAt` → `last Seen At`. Module scope so it is compiled once. */
 const CAMEL_BOUNDARY = /([a-z\d])([A-Z])/gu;
@@ -96,9 +101,11 @@ const isTimestampField = (fieldName: string): boolean => {
 /**
  * A deterministic epoch-ms within {@link TIMESTAMP_WINDOW_MS} before `now`.
  *
- * `now` is injected rather than read here so a plan stays reproducible: the same
- * seed plus the same `now` yields the same rows, which is what makes a seeded
- * screenshot or a bug report replayable.
+ * `now` is injected rather than read here — and is REQUIRED, with no default —
+ * so a plan stays reproducible: the same seed plus the same `now` yields the
+ * same rows, which is what makes a seeded screenshot or a bug report
+ * replayable. A default here would let a caller silently forget to pass one
+ * and quietly lose the determinism the package promises.
  */
 const generateTimestamp = (input: unknown, now: number): number => now - copycat.int(input, { max: TIMESTAMP_WINDOW_MS, min: 0 });
 
@@ -128,7 +135,7 @@ const generateString = (fieldName: string, input: unknown, constraints: Constrai
     return truncated;
 };
 
-const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number = Date.now()): unknown => {
+const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number): unknown => {
     const inner = unwrapOptional(validator);
     const constraints = constraintsOf(inner);
 
@@ -226,7 +233,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
         case "object": {
             const shape = metaOf(inner).shape ?? {};
 
-            return Object.fromEntries(Object.entries(shape).map(([key, child]) => [key, generateValue(child, key, [input, key])]));
+            return Object.fromEntries(Object.entries(shape).map(([key, child]) => [key, generateValue(child, key, [input, key], now)]));
         }
 
         case "record": {
@@ -236,8 +243,8 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
                 // through `keyValidator`, so honour any key constraints (minLength,
                 // format, …) rather than emitting a plain lorem word that the
                 // writer's validation would reject. Keys must be strings.
-                const key = keyValidator === undefined ? copycat.word(["k", itemInput]) : String(generateValue(keyValidator, fieldName, ["k", itemInput]));
-                const value = valueValidator === undefined ? copycat.word(["v", itemInput]) : generateValue(valueValidator, fieldName, ["v", itemInput]);
+                const key = keyValidator === undefined ? copycat.word(["k", itemInput]) : String(generateValue(keyValidator, fieldName, ["k", itemInput], now));
+                const value = valueValidator === undefined ? copycat.word(["v", itemInput]) : generateValue(valueValidator, fieldName, ["v", itemInput], now);
 
                 return [key, value] as const;
             });
@@ -257,7 +264,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             const members = metaOf(inner).members ?? [];
             const chosen = copycat.oneOf(input, members);
 
-            return chosen === undefined ? copycat.word(input) : generateValue(chosen, fieldName, [input, "u"]);
+            return chosen === undefined ? copycat.word(input) : generateValue(chosen, fieldName, [input, "u"], now);
         }
 
         default: {

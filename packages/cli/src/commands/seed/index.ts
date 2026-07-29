@@ -7,6 +7,7 @@ const seedCommand: Command = {
         ["lunora seed --table posts --count 50", "Seed 50 posts; FK-parent tables are seeded automatically"],
         ["lunora seed --reset", "Wipe local .wrangler/state, then seed from scratch"],
         ["lunora seed --seed 7 --dry-run", "Print the NDJSON for seed 7 without inserting"],
+        ["lunora seed --seed 7 --now 1785000000000", "Byte-identical rows across runs (pins the clock too)"],
     ],
     group: "Data",
     loader: () =>
@@ -18,6 +19,12 @@ const seedCommand: Command = {
         { description: "Rows per table (default 10)", name: "count", type: Number },
         { description: "Seed only this table; its FK-parent tables are seeded automatically", name: "table", type: String },
         { description: "Deterministic seed — same value yields identical rows (default 0)", name: "seed", type: Number },
+        {
+            description:
+                "Epoch-ms reference for time columns (createdAt, expiresAt, …). Pin it with --seed for byte-identical rows across runs; defaults to now",
+            name: "now",
+            type: Number,
+        },
         { description: "Print the generated NDJSON instead of inserting", name: "dry-run", type: Boolean },
         { description: "Wipe local .wrangler/state before seeding (local dev only)", name: "reset", type: Boolean },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
@@ -38,6 +45,7 @@ export type SeedOptions = CreateOptions<{
     "batch-size": number | undefined;
     count: number | undefined;
     "dry-run": boolean | undefined;
+    now: number | undefined;
     prod: boolean | undefined;
     reset: boolean | undefined;
     seed: number | undefined;

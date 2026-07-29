@@ -190,7 +190,6 @@ const ChartStyle = ({ id, config }: { config: ChartConfig; id: string }): React.
 };
 
 // Helper to extract item config from a payload.
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key: string): ChartConfig[string] | undefined {
     if (typeof payload !== "object" || payload === null) {
         return undefined;
@@ -225,7 +224,6 @@ function getColorsCount(config: ChartConfig[string]): number {
 
 // Generate random loading data for skeleton/loading state
 // min/max represent percentage of the range (0-100), defaults to 20-80 for realistic look
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export const getLoadingData = (points: number = 10, min: number = 0, max: number = 70): { loading: number }[] => {
     const range = max - min;
     return Array.from({ length: points }, () => {
@@ -235,5 +233,4 @@ export const getLoadingData = (points: number = 10, min: number = 0, max: number
     });
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { axisValueToPercentFormatter, ChartContainer, ChartStyle, getColorsCount, LoadingIndicator };

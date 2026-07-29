@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
+import { useMirroredRef } from "../../../hooks/use-mirrored-ref";
 import type { BulkDeleteResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
@@ -197,23 +198,22 @@ interface DataBrowserModel {
     writeError: null | string;
 }
 
-/**
- * All non-render state and handlers for the data browser: the admin RPC reads
- * (`listTables` / `readTablePage`), the live subscriptions, the schema-aware
- * writes, page-local sorting/search, and the derived pagination range. Composes
- * {@link useDataBrowserTable} for the headless table model. Extracted verbatim
- * from the component so behavior, fetch sequencing, and effect dependencies are
- * unchanged — the component is now just markup wiring.
- */
 /** The `readTablePage` arguments for the displayed view. */
-const toPageArgs = (
-    table: string,
-    filters: ReadonlyArray<EditableFilter>,
-    search: string,
-    sorting: SortingState,
-    pageSize: number,
-    offset: number,
-): Record<string, unknown> => {
+const toPageArgs = ({
+    filters,
+    offset,
+    pageSize,
+    search,
+    sorting,
+    table,
+}: {
+    filters: ReadonlyArray<EditableFilter>;
+    offset: number;
+    pageSize: number;
+    search: string;
+    sorting: SortingState;
+    table: string;
+}): Record<string, unknown> => {
     return {
         filters: toFilterClauses(filters),
         limit: pageSize,
@@ -229,7 +229,7 @@ const toPageArgs = (
 };
 
 /** The predicate-only arguments for the row-count read, so paging never re-keys the COUNT. */
-const toCountArgs = (table: string, filters: ReadonlyArray<EditableFilter>, search: string): Record<string, unknown> => {
+const toCountArgs = ({ filters, search, table }: { filters: ReadonlyArray<EditableFilter>; search: string; table: string }): Record<string, unknown> => {
     return {
         filters: toFilterClauses(filters),
         limit: 1,
@@ -349,16 +349,7 @@ const useDataBrowser = ({
     // the current value without threading it through; the page query reads the
     // state directly via `pageArgs`.
     const [filters, setFilters] = useState<EditableFilter[]>(() => toEditableFilters(initialFilters ?? []));
-    const filtersRef = useRef<EditableFilter[]>(filters);
-
-    // Mirrored in an EFFECT, not during render: React may render without
-    // committing (a concurrent re-render, an offscreen pass), and a render-phase
-    // write would publish a value from a render that never became the UI. No dep
-    // array so it tracks every commit, and declared here — ahead of every effect
-    // that reads the ref — because effects run in declaration order.
-    useEffect(() => {
-        filtersRef.current = filters;
-    });
+    const filtersRef = useMirroredRef<EditableFilter[]>(filters);
 
     // Facets (Datasette-style per-column value/count summaries): the columns the
     // operator has toggled into the facet sidebar, each with its loaded summary.
@@ -389,7 +380,7 @@ const useDataBrowser = ({
     const tables = tablesQuery.data ?? null;
     const tablesError = tablesQuery.error;
 
-    const pageArgs = toPageArgs(selectedTable ?? "", filters, search, sorting, pageSize, offset);
+    const pageArgs = toPageArgs({ filters, offset, pageSize, search, sorting, table: selectedTable ?? "" });
 
     // The row count, split off the page read and keyed on the PREDICATE alone
     // (table / filters / search) — no `offset`, `pageSize`, or `orderBy`, since a
@@ -400,7 +391,7 @@ const useDataBrowser = ({
     // it on the same key (it shares the page read's table dependency), so the
     // displayed total stays correct. `limit: 1` keeps the (ignored) row fetch
     // minimal — only `.total` is read.
-    const countArgs = toCountArgs(selectedTable ?? "", filters, search);
+    const countArgs = toCountArgs({ filters, search, table: selectedTable ?? "" });
 
     // `keepPreviousData` is off: the placeholder isn't identity-aware, so holding
     // the last page across a `selectedTable` / `debouncedShard` change would render
@@ -505,17 +496,9 @@ const useDataBrowser = ({
     // facet refetches and, worse, a self-perpetuating `onViewChange` → `navigate`
     // loop that re-asserts `/data` and traps the user on the tab. Keying on the
     // values means each fires only when the displayed view actually changes.
-    const facetFetcherRef = useRef(facetFetcher);
-    const refetchFacetsRef = useRef(refetchFacets);
-    const onViewChangeRef = useRef(onViewChange);
-
-    // Mirrored in an effect for the same reason as `filtersRef` above, and
-    // declared ahead of the two effects that read these so it commits first.
-    useEffect(() => {
-        facetFetcherRef.current = facetFetcher;
-        refetchFacetsRef.current = refetchFacets;
-        onViewChangeRef.current = onViewChange;
-    });
+    const facetFetcherRef = useMirroredRef(facetFetcher);
+    const refetchFacetsRef = useMirroredRef(refetchFacets);
+    const onViewChangeRef = useMirroredRef(onViewChange);
 
     // Refetch every toggled-on facet when the active view (filters / search / shard
     // / table) changes, so the summaries always reflect the previewed rows. The
@@ -531,6 +514,8 @@ const useDataBrowser = ({
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
         refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search));
         // Fire on the active view; the facet callbacks are read via refs (see above).
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the refs are `useMirroredRef` handles — stable by construction, and reading them is the whole point: the effect keys on the VIEW values so it fires when the view changes, not when a callback identity churns
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: `useMirroredRef` handles are stable, and listing them would say this effect depends on identities it deliberately does not
     }, [debouncedShard, selectedTable, filters, search]);
 
     // Tracks the table the local view has been (re-)seeded for. Declared before the
@@ -561,25 +546,18 @@ const useDataBrowser = ({
             shard: debouncedShard,
         });
         // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the ref is a `useMirroredRef` handle — stable by construction; depending on `onViewChange` itself is what caused the navigate loop this pattern exists to avoid
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: the ref handle is stable, and depending on `onViewChange` is exactly the loop this avoids
     }, [selectedTable, tableParam, filters, sorting, search, debouncedShard]);
 
     // The URL's view params, mirrored to refs so the re-seed effect can read the
     // CURRENT values while depending on `tableParam` alone (depending on the params
     // themselves would re-seed — wiping a half-typed filter — every time the user's
     // own edit mirrors back to the URL).
-    const initialFiltersRef = useRef(initialFilters);
-    const initialOrderByRef = useRef(initialOrderBy);
-    const initialSearchRef = useRef(initialSearch);
-    const initialShardKeyRef = useRef(initialShardKey);
-
-    // Mirrored in an effect (see `filtersRef`), declared ahead of the re-seed
-    // effect below that reads them.
-    useEffect(() => {
-        initialFiltersRef.current = initialFilters;
-        initialOrderByRef.current = initialOrderBy;
-        initialSearchRef.current = initialSearch;
-        initialShardKeyRef.current = initialShardKey;
-    });
+    const initialFiltersRef = useMirroredRef(initialFilters);
+    const initialOrderByRef = useMirroredRef(initialOrderBy);
+    const initialSearchRef = useMirroredRef(initialSearch);
+    const initialShardKeyRef = useMirroredRef(initialShardKey);
 
     // Re-seed the per-table local view state whenever the open table changes — an
     // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
@@ -981,6 +959,14 @@ const useDataBrowser = ({
     };
 };
 
+/**
+ * All non-render state and handlers for the data browser: the admin RPC reads
+ * (`listTables` / `readTablePage`), the live subscriptions, the schema-aware
+ * writes, page-local sorting/search, and the derived pagination range. Composes
+ * {@link useDataBrowserTable} for the headless table model. Extracted verbatim
+ * from the component so behavior, fetch sequencing, and effect dependencies are
+ * unchanged — the component is now just markup wiring.
+ */
 export type { DataBrowserModel };
 export type { FacetState } from "./use-facets";
 export { useDataBrowser };

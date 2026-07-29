@@ -213,15 +213,18 @@ const EvilBrush = ({
 
     useEffect(() => {
         if (!isControlled) {
-            // react-doctor-disable-next-line react-doctor/no-impure-state-updater -- the ref write is the value being returned, so a repeated updater run writes the same bytes; hoisting it out would need the previous range this updater exists to read
-            setInternalRange((previous) => {
-                const adjusted = {
-                    startIndex: Math.min(previous.startIndex, Math.max(0, totalPoints - 1)),
-                    endIndex: Math.min(previous.endIndex, Math.max(0, totalPoints - 1)),
-                };
-                lastCommittedRef.current = adjusted;
-                return adjusted;
-            });
+            // Computed OUTSIDE the updater, which is now pure. `lastCommittedRef`
+            // tracks `internalRange` exactly — every `setInternalRange` in this
+            // file writes both — so it supplies the previous range without a
+            // ref write inside an updater React may run more than once.
+            const maxIndex = Math.max(0, totalPoints - 1);
+            const adjusted = {
+                startIndex: Math.min(lastCommittedRef.current.startIndex, maxIndex),
+                endIndex: Math.min(lastCommittedRef.current.endIndex, maxIndex),
+            };
+
+            lastCommittedRef.current = adjusted;
+            setInternalRange(adjusted);
         }
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `totalPoints` IS `data.length`, computed above and listed in the deps
     }, [totalPoints, isControlled]);
@@ -466,7 +469,7 @@ const MiniChart = ({
     strokeVariant?: "solid" | "dashed" | "animated-dashed";
     variant: EvilBrushVariant;
 }): React.ReactElement => {
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the chart's series config
     const gradients = Object.entries(chartConfig)
         // react-doctor-disable-next-line react-doctor/js-set-map-lookups -- `keys` is the chart's series list — a handful of entries, walked once at render, so a Set costs more than it saves
         .filter(([key]) => keys.includes(key))

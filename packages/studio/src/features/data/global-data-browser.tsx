@@ -7,6 +7,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { useMirroredRef } from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
 import DataFacets from "./data-facets";
@@ -84,7 +85,7 @@ const chipValue = (value: unknown): string => {
  * table sidebar + a bordered grid with a paginated footer — and gated by the
  * server's `LUNORA_ADMIN_TOKEN`.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~458 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const GlobalDataBrowser = ({
     initialTable,
     onSelectTable,
@@ -107,15 +108,9 @@ export const GlobalDataBrowser = ({
     // only from facet clicks (and their removable chips). Mirrored into a ref so the
     // page/facet fetches and the poll tick read the latest set without re-binding.
     const [filters, setFilters] = useState<GlobalFilterClause[]>([]);
-    const filtersRef = useRef(filters);
-
-    // Mirrored in an EFFECT, not during render: React may render without
-    // committing, and a render-phase write would publish a value from a render
-    // that never became the UI. The handlers below still assign directly — a
-    // write inside an event handler is already outside render.
-    useEffect(() => {
-        filtersRef.current = filters;
-    });
+    // The handlers below still assign directly — a write inside an event handler
+    // is already outside render, so it needs no mirror.
+    const filtersRef = useMirroredRef(filters);
 
     // Datasette-style per-column value/count summaries the operator has toggled on.
     // Opt-in per column (faceting a wide column is costly); each reflects the active

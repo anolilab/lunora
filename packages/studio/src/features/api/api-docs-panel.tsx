@@ -273,17 +273,6 @@ interface FunctionGroup {
     readonly items: ReadonlyArray<{ fn: string; kind: FunctionKind; path: string }>;
 }
 
-/**
- * Per-resource "how to call this from your app" browser, generated from the
- * registered functions and tables the studio already has — no new endpoints.
- * The left rail lists functions grouped by file plus a Tables section; the right
- * pane shows copy-paste snippets (React / Client / CLI for functions; the typed
- * data-model usage for tables).
- *
- * Args are a placeholder: the real argument shape lives in the codegen'd `api`
- * types this browser never loads, the same way Supabase's usage snippets show
- * placeholders.
- */
 /** Group function descriptors by their file segment, files sorted, functions sorted within each file — a stable, scannable rail. */
 const groupByFile = (functionList: ReadonlyArray<FunctionDescriptor>): ReadonlyArray<FunctionGroup> => {
     const byFile = new Map<string, { fn: string; kind: FunctionKind; path: string }[]>();
@@ -303,6 +292,17 @@ const groupByFile = (functionList: ReadonlyArray<FunctionDescriptor>): ReadonlyA
         .toSorted((a, b) => a.file.localeCompare(b.file));
 };
 
+/**
+ * Per-resource "how to call this from your app" browser, generated from the
+ * registered functions and tables the studio already has — no new endpoints.
+ * The left rail lists functions grouped by file plus a Tables section; the right
+ * pane shows copy-paste snippets (React / Client / CLI for functions; the typed
+ * data-model usage for tables).
+ *
+ * Args are a placeholder: the real argument shape lives in the codegen'd `api`
+ * types this browser never loads, the same way Supabase's usage snippets show
+ * placeholders.
+ */
 const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactElement => {
     const t = useT();
     const client = useLunora();
@@ -420,6 +420,5 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
 };
 
 export type { ApiDocsPanelProps };
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, REACT_HAS_ACTION_HOOK, splitPath };
 export default ApiDocsPanel;

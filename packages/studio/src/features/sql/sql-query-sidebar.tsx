@@ -118,12 +118,6 @@ interface SqlQuerySidebarProps {
     readonly search: string;
 }
 
-/**
- * The SQL editor's left rail: a search box + new-query button, the browser-persisted
- * PRIVATE saved queries, the canned REFERENCE templates, and the run HISTORY. Pure
- * presentation — the panel owns the query/history state and all the handlers; this
- * just lays them out and filters the Private list by the search box.
- */
 /** Saved queries whose name contains `search` (case-insensitive); all of them when it is blank. */
 const matchingQueries = (queries: ReadonlyArray<SavedQuery>, search: string): SavedQuery[] => {
     const needle = search.trim().toLowerCase();
@@ -131,6 +125,12 @@ const matchingQueries = (queries: ReadonlyArray<SavedQuery>, search: string): Sa
     return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
 };
 
+/**
+ * The SQL editor's left rail: a search box + new-query button, the browser-persisted
+ * PRIVATE saved queries, the canned REFERENCE templates, and the run HISTORY. Pure
+ * presentation — the panel owns the query/history state and all the handlers; this
+ * just lays them out and filters the Private list by the search box.
+ */
 const SqlQuerySidebar = ({
     activeId,
     history,

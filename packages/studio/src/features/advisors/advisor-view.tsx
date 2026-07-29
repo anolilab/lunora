@@ -104,13 +104,6 @@ const levelCount = (t: TFunction, level: AdvisorLevel, count: number): string =>
 const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
     ({ error: t("No errors detected"), info: t("No suggestions"), warning: t("No warnings detected") })[level];
 
-/**
- * Shared Advisor content — a 1-to-1 of Supabase Studio's Advisor layout: a row of
- * severity tabs (Errors / Warnings / Info) with per-level counts, a toolbar, and a
- * three-column table (Issue type / Entity/item / Description) of the active tab's
- * findings, with a centered per-tab empty state. The Security and Performance
- * advisors both render through this so they stay visually identical.
- */
 /** Count the advisories at each level, so the level tabs can show their totals. */
 const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> => {
     const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
@@ -122,6 +115,13 @@ const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> =
     return tally;
 };
 
+/**
+ * Shared Advisor content — a 1-to-1 of Supabase Studio's Advisor layout: a row of
+ * severity tabs (Errors / Warnings / Info) with per-level counts, a toolbar, and a
+ * three-column table (Issue type / Entity/item / Description) of the active tab's
+ * findings, with a centered per-tab empty state. The Security and Performance
+ * advisors both render through this so they stay visually identical.
+ */
 export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
     const t = useT();
     const [active, setActive] = useState<AdvisorLevel>("error");
@@ -202,6 +202,5 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
     );
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { advisoryRow };
 export type { AdvisorLevel, AdvisorRow, AdvisoryLike };

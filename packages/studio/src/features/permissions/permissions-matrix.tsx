@@ -30,7 +30,8 @@ interface TableRowState {
     /** `read|insert|update|delete` → covering procedure (or no policy). */
     cells: Record<RlsOperation, CellState>;
     /** Columns this table masks (from `maskPolicies`). */
-    maskedColumns: string[];
+    /** Columns this table masks. A Set, so the fold dedups without a parallel map. */
+    maskedColumns: Set<string>;
     table: string;
     /** True when an `rls_uncovered_table` advisory names this table — reachable without a policy. */
     uncovered: boolean;
@@ -70,7 +71,7 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
 
         const row: TableRowState = {
             cells: { delete: {}, insert: {}, read: {}, update: {} },
-            maskedColumns: [],
+            maskedColumns: new Set<string>(),
             table,
             uncovered: uncovered.has(table),
         };
@@ -84,20 +85,10 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
         ensure(policy.table).cells[policy.on] = { procedure: policy.procedure };
     }
 
-    // Deduped through a Set, not `maskedColumns.includes`: the check is inside the
-    // loop, so the array scan made it quadratic in the number of masked columns
-    // on one table.
-    const seenMasked = new Map<string, Set<string>>();
-
+    // Deduped through the row's own Set rather than a parallel map keyed by the
+    // same table — one structure, and dedup comes free.
     for (const column of maskColumns) {
-        const row = ensure(column.table);
-        const seen = seenMasked.get(column.table) ?? new Set<string>();
-
-        if (!seen.has(column.column)) {
-            seen.add(column.column);
-            seenMasked.set(column.table, seen);
-            row.maskedColumns.push(column.column);
-        }
+        ensure(column.table).maskedColumns.add(column.column);
     }
 
     for (const table of uncovered) {
@@ -234,13 +225,13 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
                                     );
                                 })}
                                 <TableCell>
-                                    {row.maskedColumns.length === 0 ? (
+                                    {row.maskedColumns.size === 0 ? (
                                         <span aria-hidden="true" className="text-muted-foreground">
                                             —
                                         </span>
                                     ) : (
                                         <span className="flex flex-wrap gap-1">
-                                            {row.maskedColumns.map((column) => (
+                                            {[...row.maskedColumns].map((column) => (
                                                 <Badge key={column} variant="outline">
                                                     {column}
                                                 </Badge>

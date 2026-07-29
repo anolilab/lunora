@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
-import { describeAdminTokenSource, resolveAdminToken } from "../../util/admin-token";
-import { resolveDefaultAdminUrl } from "../../util/admin-url";
+import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
+import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -40,7 +40,7 @@ interface RunCommandResult {
     requestUrl: string;
 }
 
-const parseArgsJson = (raw: string | undefined): unknown => {
+const parseArgsJson = (raw: string | undefined, flag = "--args"): unknown => {
     if (raw === undefined || raw.length === 0) {
         return {};
     }
@@ -50,7 +50,7 @@ const parseArgsJson = (raw: string | undefined): unknown => {
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new LunoraError("INTERNAL", `failed to parse --args as JSON: ${message}`, { cause: error });
+        throw new LunoraError("INTERNAL", `failed to parse ${flag} as JSON: ${message}`, { cause: error });
     }
 };
 
@@ -63,52 +63,91 @@ const RUN_AS_PATH = "__lunora_admin__:runAs";
 const ADMIN_PREFIX = "__lunora_admin__:";
 
 /**
- * Headers for the dispatch. The admin bearer rides along only for the calls that
- * need it — a forged-identity `runAs` and the reserved admin paths — so an
- * ordinary function call keeps sending nothing it does not have to.
- *
- * Returns `undefined` (after logging) when a bearer is required and none of the
- * sources has one, so the caller can exit non-zero.
- */
-const buildRequestHeaders = (options: RunCommandOptions, context: { baseUrl: string; cwd: string; runAs: boolean }): Record<string, string> | undefined => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-
-    if (!context.runAs && !options.functionPath.startsWith(ADMIN_PREFIX)) {
-        return headers;
-    }
-
-    const { source, token } = resolveAdminToken({ cwd: context.cwd, token: options.token, url: context.baseUrl });
-
-    if (token === undefined) {
-        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
-
-        return undefined;
-    }
-
-    options.logger.debug?.(`admin bearer from ${describeAdminTokenSource(source)}`);
-
-    return { ...headers, authorization: `Bearer ${token}` };
-};
-
-/**
  * A shard denial on a plain call is almost always "this app gates on identity
  * and the CLI brought none" — say so, rather than leaving the operator to work
  * out from a bare 403 that `runAs` exists.
  */
-const hintOnShardDenial = (logger: Logger, outcome: { body: string; runAs: boolean; status: number }): void => {
-    if (outcome.runAs || outcome.status !== 403 || !outcome.body.includes("FORBIDDEN_SHARD")) {
+const hintOnShardDenial = (logger: Logger, outcome: { body: unknown; runAs: boolean; status: number }): void => {
+    // Read the code off the PARSED body, not the raw text: a substring match would
+    // also fire on any response that merely quotes the code (an error message, a
+    // log echo) and would stop firing the day the wire format is re-cased.
+    const code = (outcome.body as { error?: { code?: unknown } } | undefined)?.error?.code;
+
+    if (outcome.runAs || outcome.status !== 403 || code !== "FORBIDDEN_SHARD") {
         return;
     }
 
     logger.info("this app authorizes per shard, so an anonymous call is denied — retry with --as <userId> to run as an authenticated user");
 };
 
+/**
+ * The `/rpc` envelope: either the call itself, or that call nested inside the
+ * admin-gated `runAs` op.
+ *
+ * `--as` cannot be a plain RPC. A plain RPC arrives with no session, so any app
+ * that configures `authorizeShard` — the recommended posture — default-denies it.
+ * `runAs` forges the named identity for one dispatch, which is what the Studio's
+ * "run as identity" tool does; the runtime exempts single-shard admin envelopes
+ * from the tenant gate so the call reaches the DO's own bearer check.
+ */
+const buildEnvelope = ({
+    args,
+    claims,
+    options,
+    runAs,
+}: {
+    args: unknown;
+    claims: Record<string, unknown> | undefined;
+    options: RunCommandOptions;
+    runAs: boolean;
+}): Record<string, unknown> => {
+    const envelope: Record<string, unknown> = runAs
+        ? { args: { args, functionPath: options.functionPath, identity: claims, userId: options.as }, functionPath: RUN_AS_PATH }
+        : { args, functionPath: options.functionPath };
+
+    if (options.shard !== undefined) {
+        envelope.shardKey = options.shard;
+    }
+
+    return envelope;
+};
+
+/**
+ * Where this call goes — which depends on whether it carries a credential.
+ *
+ * WITHOUT a bearer: the documented `run` behaviour. `--url`, else the
+ * `lunora link` target, else the running dev worker, else wrangler's port.
+ *
+ * WITH a bearer the link is deliberately NOT consulted. `resolveWorkerUrl` has no
+ * `--prod` gate, so a linked production worker would otherwise become the silent
+ * target of a forged-identity mutation — no flag, no confirmation.
+ * `resolveAdminBaseUrl` then applies the gate every other bearer-carrying command
+ * already uses: it refuses to put a full-access admin bearer on the wire in
+ * cleartext to a non-loopback host.
+ *
+ * Returns `undefined` (after logging) when the target is unusable.
+ */
+const resolveRunTarget = ({ cwd, logger, needsBearer, url }: { cwd: string; logger: Logger; needsBearer: boolean; url?: string }): string | undefined => {
+    if (needsBearer) {
+        return resolveAdminBaseUrl(url, logger, cwd);
+    }
+
+    return (resolveWorkerUrl({ cwd, url }) ?? resolveDefaultAdminUrl(cwd)).replace(TRAILING_SLASH, "");
+};
+
 const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    // Precedence: explicit `--url` > `.lunora/project.json` link > the running dev
-    // server's recorded URL > wrangler's default port.
-    const resolvedUrl = resolveWorkerUrl({ cwd, url: options.url });
-    const baseUrl = (resolvedUrl ?? resolveDefaultAdminUrl(cwd)).replace(TRAILING_SLASH, "");
+    const runAs = options.as !== undefined && options.as !== "";
+    // A forged identity and the reserved admin paths both travel with the
+    // full-access admin bearer, which changes how the target may be chosen.
+    const needsBearer = runAs || options.functionPath.startsWith(ADMIN_PREFIX);
+
+    const baseUrl = resolveRunTarget({ cwd, logger: options.logger, needsBearer, url: options.url });
+
+    if (baseUrl === undefined) {
+        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+    }
+
     const requestUrl = `${baseUrl}/_lunora/rpc`;
 
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
@@ -122,7 +161,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     try {
         parsedArgs = parseArgsJson(options.args);
-        parsedClaims = options.claims === undefined ? undefined : (parseArgsJson(options.claims) as Record<string, unknown>);
+        parsedClaims = options.claims === undefined ? undefined : (parseArgsJson(options.claims, "--claims") as Record<string, unknown>);
     } catch (error: unknown) {
         options.logger.error(error instanceof Error ? error.message : String(error));
 
@@ -136,23 +175,24 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     // the Studio's "run as identity" tool does, and the runtime already exempts
     // single-shard admin envelopes from the tenant gate so the call reaches the
     // DO's own bearer check.
-    const runAs = options.as !== undefined && options.as !== "";
-    const headers = buildRequestHeaders(options, { baseUrl, cwd, runAs });
+    const { source, token } = needsBearer ? resolveAdminBearer({ cwd, token: options.token, url: baseUrl }) : {};
 
-    if (headers === undefined) {
+    if (needsBearer && token === undefined) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
         return { body: undefined, code: 1, requestUrl };
     }
 
-    const payload: Record<string, unknown> = runAs
-        ? {
-              args: { args: parsedArgs, functionPath: options.functionPath, identity: parsedClaims, userId: options.as },
-              functionPath: RUN_AS_PATH,
-          }
-        : { args: parsedArgs, functionPath: options.functionPath };
-
-    if (options.shard !== undefined) {
-        payload.shardKey = options.shard;
+    if (token !== undefined) {
+        options.logger.debug?.(`admin bearer from ${describeAdminTokenSource(source)}`);
     }
+
+    const headers: Record<string, string> = {
+        "content-type": "application/json",
+        ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+    };
+
+    const payload = buildEnvelope({ args: parsedArgs, claims: parsedClaims, options, runAs });
 
     options.logger.info(`POST ${requestUrl} -> ${options.functionPath}${runAs ? ` (as ${options.as ?? ""})` : ""}`);
 
@@ -174,7 +214,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     options.logger.info(JSON.stringify(body, undefined, 2));
 
-    hintOnShardDenial(options.logger, { body: text, runAs, status: response.status });
+    hintOnShardDenial(options.logger, { body, runAs, status: response.status });
 
     return {
         body,

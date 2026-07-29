@@ -20,7 +20,7 @@ const filterGroups = (groups: ApiTagGroup[], query: string): ApiTagGroup[] => {
         return groups;
     }
 
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the API tag groups while filtering; the list is the spec's tag count and the walk is per keystroke on a small collection
     return groups
         .map((group): ApiTagGroup => {
             return {

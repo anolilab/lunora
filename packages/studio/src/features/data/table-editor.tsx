@@ -1,10 +1,11 @@
 import { useLunora } from "@lunora/react";
 import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
+import { useMirroredRef } from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { DataViewSearch } from "../../lib/data-view-params";
 import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";
@@ -57,6 +58,16 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
     );
 };
 
+/** Copy the current deep link. A no-op where the clipboard API is unavailable (insecure context). */
+const onCopyLink = (): void => {
+    try {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
+        fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
+    } catch {
+        /* clipboard unavailable (insecure context) — nothing to copy to */
+    }
+};
+
 /**
  * The Table editor: browses your application's tables across both storage tiers
  * from one section. A schema switch in the sidebar header (Supabase's
@@ -70,16 +81,6 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
  * URL and browser back/forward moves between tables and tiers. The browsers push on
  * selection and re-open whatever the URL names.
  */
-/** Copy the current deep link. A no-op where the clipboard API is unavailable (insecure context). */
-const onCopyLink = (): void => {
-    try {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
-        fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
-    } catch {
-        /* clipboard unavailable (insecure context) — nothing to copy to */
-    }
-};
-
 export const TableEditor = ({ editable = false, initialShardKey }: TableEditorProps): ReactElement => {
     const client = useLunora();
     const navigate = useNavigate();
@@ -100,14 +101,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     // `navigate`). Without this, mirroring the loaded view back to the URL on a
     // deep-link load (`/data?table=…`) fires a `navigate({ to: "/data" })` that
     // clobbers an in-flight tab switch — you couldn't leave the data tab.
-    const searchRef = useRef(search);
-
-    // Mirrored in an EFFECT, not during render: React may render without
-    // committing, and a render-phase write would publish a value from a render
-    // that never became the UI.
-    useEffect(() => {
-        searchRef.current = search;
-    });
+    const searchRef = useMirroredRef(search);
 
     // True while the data route is the active one. The URL-mirroring callbacks below
     // all `navigate({ to: "/data" })`; some fire from deferred effects/microtasks that

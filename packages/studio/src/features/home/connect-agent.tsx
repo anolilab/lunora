@@ -138,5 +138,4 @@ const ConnectAgentCard = (): ReactElement => {
     );
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { buildAgentPrompt, buildMcpConfig, ConnectAgentCard };

@@ -105,14 +105,6 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
     );
 };
 
-/**
- * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
- * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
- * editor pane, and a Results / Explain pane with a Run control + shard selector.
- * Read-only — the `__lunora_admin__:runSql` RPC rejects everything but
- * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
- * tables (use the Data grid's inline edit for mutations).
- */
 /** One result-pane tab's classes, selected or not. */
 const tabClass = (selected: boolean): string =>
     `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
@@ -120,7 +112,7 @@ const tabClass = (selected: boolean): string =>
 /** The tab the editor opens with on a fresh browser: the first template. */
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~840 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -836,4 +828,12 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     );
 };
 
+/**
+ * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
+ * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
+ * editor pane, and a Results / Explain pane with a Run control + shard selector.
+ * Read-only — the `__lunora_admin__:runSql` RPC rejects everything but
+ * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
+ * tables (use the Data grid's inline edit for mutations).
+ */
 export type { SqlEditorPanelProps };

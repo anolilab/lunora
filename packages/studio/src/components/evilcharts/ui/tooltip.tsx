@@ -90,7 +90,7 @@ const ChartTooltipContent = ({
         >
             {nestLabel ? null : tooltipLabel}
             <div className="grid gap-1.5">
-                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes */}
+                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the tooltip payload — one entry per series under the cursor */}
                 {payload
                     .filter((item) => item.type !== "none")
                     .map((item, index) => {

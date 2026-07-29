@@ -23,8 +23,11 @@ const WRANGLER_DEV_URL = "http://localhost:8787";
  * guessing — a live record beats a hardcoded port every time.
  *
  * The record is only consulted when it is LIVE: `readLiveDevServerState` drops
- * it when the recorded pid is gone, so a `kill -9`'d server cannot redirect a
- * later command at a port something else now owns.
+ * it when the recorded pid is gone. That check is liveness-only on macOS —
+ * only Linux additionally compares the process start time — so a recycled pid
+ * can still make a dead record look current there. Local-only, and the worst
+ * case is a confusing connection error rather than a leaked secret, since the
+ * `.dev.vars` fallback is gated on the resolved target being loopback.
  */
 const resolveDefaultAdminUrl = (cwd: string | undefined): string => {
     if (cwd === undefined) {
@@ -65,5 +68,4 @@ const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger, cwd?: s
     return candidate.replace(TRAILING_SLASH, "");
 };
 
-export { resolveDefaultAdminUrl, WRANGLER_DEV_URL };
-export default resolveAdminBaseUrl;
+export { resolveAdminBaseUrl, resolveDefaultAdminUrl };

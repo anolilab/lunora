@@ -526,17 +526,17 @@ const EditableCell = ({
     );
 };
 
+/** Accept the drop — without `preventDefault` the browser refuses the target. */
+const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
+    event.preventDefault();
+};
+
 /**
  * One grid column header: the sort toggle, a drag handle for reordering (native
  * HTML5 drag → `table.setColumnOrder`), and a right-edge resize grip wired to
  * TanStack's resize handler. `draggedRef` carries the column id being dragged
  * between the source's `dragstart` and the target's `drop`.
  */
-/** Accept the drop — without `preventDefault` the browser refuses the target. */
-const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
-    event.preventDefault();
-};
-
 const GridHeaderCell = ({
     draggedRef,
     header,
@@ -1152,6 +1152,5 @@ const useDataBrowserTable = (
     return { attachScroll, scrollLeft: horizontal.left, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth: horizontal.width, virtualRows };
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { DataBrowserTableView, rowId, useDataBrowserTable };
 export type { DataBrowserTableModel, GridEdit, GridReferences, TableRow };

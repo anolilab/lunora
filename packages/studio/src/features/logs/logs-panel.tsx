@@ -303,7 +303,7 @@ const summarizeLogs = (entries: ReadonlyArray<LogEntry>): LogSummary => {
         pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
     }
 
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over LOG_LEVELS, a five-element constant
     const byLevel: SummaryBucket[] = LOG_LEVELS.filter((level) => levelCounts.has(level)).map((level) => {
         return { count: levelCounts.get(level) ?? 0, key: level };
     });
@@ -381,7 +381,7 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
  * For the raw, un-attributed request firehose (which Lunora deliberately does
  * NOT re-stream), a deep-link to Cloudflare Workers Observability is provided.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~801 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
     const t = useT();
 
@@ -796,6 +796,5 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     );
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { filterLogs, summarizeLogs };
 export type { LogFilterCriteria, LogsPanelProps, LogSummary, SummaryBucket, TimeRange };

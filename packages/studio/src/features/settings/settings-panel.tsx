@@ -23,18 +23,6 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
     var: "secondary",
 };
 
-/**
- * Read-only **Settings** view of the deployment's config: the Worker vars,
- * secrets, and bindings exposed via `env`, plus best-effort deploy metadata.
- * Reads the `__lunora_admin__:getSettings` RPC via {@link useAdminQuery} (gated
- * by the server's `LUNORA_ADMIN_TOKEN`).
- *
- * Strictly view-only: secret values are masked server-side and never returned
- * raw, and there is no editing here. The infrastructure plane lives in
- * Cloudflare/wrangler — a deep-link to the Cloudflare dashboard is provided so
- * you can edit there. Deployment config is static at runtime (it only changes on
- * redeploy), so this loads once on mount — there is no live channel or poll.
- */
 /** The deployment facts that are actually present, as label/value rows. Absent fields are omitted rather than rendered blank. */
 const toDeployRows = (deploy: DeployInfo | undefined, t: TFunction): { label: string; value: string }[] => {
     if (deploy === undefined) {
@@ -62,6 +50,18 @@ const toDeployRows = (deploy: DeployInfo | undefined, t: TFunction): { label: st
     return rows;
 };
 
+/**
+ * Read-only **Settings** view of the deployment's config: the Worker vars,
+ * secrets, and bindings exposed via `env`, plus best-effort deploy metadata.
+ * Reads the `__lunora_admin__:getSettings` RPC via {@link useAdminQuery} (gated
+ * by the server's `LUNORA_ADMIN_TOKEN`).
+ *
+ * Strictly view-only: secret values are masked server-side and never returned
+ * raw, and there is no editing here. The infrastructure plane lives in
+ * Cloudflare/wrangler — a deep-link to the Cloudflare dashboard is provided so
+ * you can edit there. Deployment config is static at runtime (it only changes on
+ * redeploy), so this loads once on mount — there is no live channel or poll.
+ */
 export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactElement => {
     const t = useT();
 

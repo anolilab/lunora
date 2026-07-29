@@ -136,13 +136,6 @@ const triggerDownload = (url: string, filename: string): void => {
     anchor.remove();
 };
 
-/**
- * The file browser's controller: owns all listing/pagination, prefix +
- * folder-navigation, sort, view + thumbnail-size, share-link expiry, selection +
- * bulk delete, copy, delete and upload state, and composes {@link useKeySelection}.
- * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
- * stay presentational.
- */
 /** Selection identity for a bucket object: its full key. */
 const keyOf = (object: StorageObject): string => object.key;
 
@@ -696,5 +689,12 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     };
 };
 
+/**
+ * The file browser's controller: owns all listing/pagination, prefix +
+ * folder-navigation, sort, view + thumbnail-size, share-link expiry, selection +
+ * bulk delete, copy, delete and upload state, and composes {@link useKeySelection}.
+ * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
+ * stay presentational.
+ */
 export { THUMBNAIL_URL_TTL, useFileBrowser };
 export type { FileBrowserModel, FileView };

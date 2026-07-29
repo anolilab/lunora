@@ -75,8 +75,13 @@ const readDevVariablesToken = (cwd: string): string | undefined => {
 /**
  * Resolve the admin bearer, reporting which source supplied it. Returns an empty
  * object when no source has one — the caller decides how to fail.
+ *
+ * Named `resolveAdminBearer`, not `resolveAdminToken`: `@lunora/config`'s
+ * studio-host already exports a `resolveAdminToken(cwd)` that this package
+ * imports elsewhere, with a different signature and no loopback gate. Two
+ * same-named resolvers in one package is a mis-import waiting to happen.
  */
-const resolveAdminToken = ({ cwd, token, url }: ResolveAdminTokenInputs): ResolvedAdminToken => {
+const resolveAdminBearer = ({ cwd, token, url }: ResolveAdminTokenInputs): ResolvedAdminToken => {
     if (token !== undefined && token !== "") {
         return { source: "flag", token };
     }
@@ -106,4 +111,4 @@ const describeAdminTokenSource = (source: AdminTokenSource | undefined): string 
 };
 
 export type { AdminTokenSource, ResolveAdminTokenInputs, ResolvedAdminToken };
-export { ADMIN_TOKEN_KEY, describeAdminTokenSource, resolveAdminToken };
+export { ADMIN_TOKEN_KEY, describeAdminTokenSource, resolveAdminBearer };

@@ -262,6 +262,16 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
     };
 };
 
+/** Attempts and failures as parallel series for the auth sparkline. */
+const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[]; failures: number[] } => {
+    const buckets = auth?.history ?? [];
+
+    return {
+        attempts: buckets.map((bucket) => bucket.attempts),
+        failures: buckets.map((bucket) => bucket.failures),
+    };
+};
+
 /**
  * App-level health & SLO overview. On top of the original single-shard snapshot
  * (recent errors, request/error counts, shards seen) it composes the
@@ -278,18 +288,8 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
  * live: a root-shard `getMetrics` subscription drives a full cross-shard re-pull
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
-/** Attempts and failures as parallel series for the auth sparkline. */
-const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[]; failures: number[] } => {
-    const buckets = auth?.history ?? [];
-
-    return {
-        attempts: buckets.map((bucket) => bucket.attempts),
-        failures: buckets.map((bucket) => bucket.failures),
-    };
-};
-
 // react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
-// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~641 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

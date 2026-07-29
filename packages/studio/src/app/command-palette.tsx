@@ -79,15 +79,6 @@ const CommandRow = ({ active, index, item, onActivate, onSelect }: CommandRowPro
     );
 };
 
-/**
- * Command palette (⌘K / Ctrl-K) — Supabase-style global search. Rendered inside
- * the studio shell so its selection can drive the router's `useNavigate`. Opens
- * on the keyboard shortcut or the {@link OPEN_EVENT} the top-bar Search button
- * dispatches, filters the navigable destinations by a case-insensitive substring
- * over their label and domain, and navigates to the chosen one. Built on the
- * studio's Base UI dialog primitive — no `cmdk`/extra dependency — with a small
- * arrow-key + Enter affordance over the filtered list.
- */
 /** Items whose label or group contains `query` (case-insensitive); every item when the query is blank. */
 const matchingItems = (items: ReadonlyArray<CommandItem>, query: string): ReadonlyArray<CommandItem> => {
     const needle = query.trim().toLowerCase();
@@ -99,6 +90,15 @@ const matchingItems = (items: ReadonlyArray<CommandItem>, query: string): Readon
     return items.filter((item) => item.label.toLowerCase().includes(needle) || item.group.toLowerCase().includes(needle));
 };
 
+/**
+ * Command palette (⌘K / Ctrl-K) — Supabase-style global search. Rendered inside
+ * the studio shell so its selection can drive the router's `useNavigate`. Opens
+ * on the keyboard shortcut or the {@link OPEN_EVENT} the top-bar Search button
+ * dispatches, filters the navigable destinations by a case-insensitive substring
+ * over their label and domain, and navigates to the chosen one. Built on the
+ * studio's Base UI dialog primitive — no `cmdk`/extra dependency — with a small
+ * arrow-key + Enter affordance over the filtered list.
+ */
 const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
@@ -237,6 +237,5 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
     );
 };
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { CommandPalette, openCommandPalette };
 export type { CommandItem, CommandPaletteProps };

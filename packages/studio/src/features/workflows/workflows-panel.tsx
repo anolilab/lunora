@@ -44,6 +44,15 @@ const formatPayload = (instance: ObservedInstance): string => {
     }
 };
 
+/** The effective selection: the operator's pick while it still exists, else the first declared workflow. Derived rather than synced in an effect, so a codegen that drops the selected workflow re-defaults on the next render. */
+const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selectedExport: string): string => {
+    if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
+        return selectedExport;
+    }
+
+    return workflows[0]?.exportName ?? "";
+};
+
 /**
  * The Workflows inspector — lists the deployment's declared Cloudflare Workflows
  * (`defineWorkflow`) and lets you start and observe instances of them.
@@ -59,15 +68,6 @@ const formatPayload = (instance: ObservedInstance): string => {
  * to the observed-instances table, whose "Refresh" re-reads the instance-status
  * admin RPC (`binding.get(id).status()`).
  */
-/** The effective selection: the operator's pick while it still exists, else the first declared workflow. Derived rather than synced in an effect, so a codegen that drops the selected workflow re-defaults on the next render. */
-const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selectedExport: string): string => {
-    if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
-        return selectedExport;
-    }
-
-    return workflows[0]?.exportName ?? "";
-};
-
 const WorkflowsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();

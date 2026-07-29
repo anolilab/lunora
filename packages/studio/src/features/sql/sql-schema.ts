@@ -1,5 +1,5 @@
 import { useLunora } from "@lunora/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -19,11 +19,6 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
  * absent. Re-loads when `shardKey` changes; a fast shard switch discards a stale
  * in-flight list via the cancel token.
  */
-/** Pair the table list with its column map — the shape the editor's completion source reads. */
-const toSchema = (tables: string[], columns: Record<string, string[]>): { columns: Record<string, string[]>; tables: string[] } => {
-    return { columns, tables };
-};
-
 const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
     const client = useLunora();
 
@@ -87,10 +82,22 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
         fireAndForget(fetchColumns());
     };
 
-    // Referentially stable while the data is unchanged, so consumers (the
-    // autocomplete's `refresh` callback and the panel's probe-refresh effect)
-    // can depend on it without re-firing after every render.
-    const schema = toSchema(tables, columns);
+    // LOAD-BEARING memo, kept deliberately. `schema` is a dependency of the
+    // autocomplete's `refresh` callback and, through it, of the panel's
+    // probe-refresh effect. A fresh object per render churns both identities, the
+    // effect fires on every render, and Escape stops dismissing the popover — it
+    // reopens on the very next render with the same suggestions at the same
+    // caret.
+    //
+    // React Compiler WOULD hold this stable in the packem build, but the vitest
+    // `component` project runs the JSX through esbuild with no compiler
+    // transform, and that suite is what gates CI — the same reasoning already
+    // recorded on `refresh`'s own `useCallback` in `sql-autocomplete-ui.tsx`.
+    // Deleting this one while keeping that one defeats it.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: see above; the CI suite runs without the compiler transform
+    const schema = useMemo(() => {
+        return { columns, tables };
+    }, [columns, tables]);
 
     return { probe, schema };
 };

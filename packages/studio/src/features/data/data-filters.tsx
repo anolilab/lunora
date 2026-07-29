@@ -49,7 +49,7 @@ const coerceFilterValue = (value: string): number | string => {
  * always stays a string.
  */
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the operator's own filter rows — a handful, edited by hand
     filters
         .filter((filter) => filter.column !== "")
         .map((filter) => {
@@ -200,5 +200,4 @@ const DataFilters = ({
 };
 
 export type { EditableFilter };
-// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { DataFilters, toFilterClauses };

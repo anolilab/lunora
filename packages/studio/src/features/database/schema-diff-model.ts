@@ -97,7 +97,7 @@ const buildSchemaDiffModel = (before: SchemaSnapshot | undefined, after: SchemaS
     // `scope` is stamped by the diff engine itself (`shared/schema-snapshot.ts`),
     // so a new change variant cannot silently render an affected table as
     // untouched — which is what a set of type names maintained over here would do.
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over one migration's change list to build a lookup Set; the diff is already materialised in memory and the Set is built once per diff, not per row
     const changedTables = new Set(changes.filter((change) => change.scope === "table" && change.table !== undefined).map((change) => change.table));
 
     const tables: DiffTable[] = [];

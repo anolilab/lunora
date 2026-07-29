@@ -48,7 +48,6 @@ const IDLE: RunState = { kind: "idle" };
  * demand.
  */
 
-/** How to run a trigger, or `undefined` when the panel is read-only: the host's runner wins; otherwise the client can run what it also lists. A custom loader without a runner stays read-only. */
 const cronRunner = (
     client: ReturnType<typeof useLunora>,
     loadCronJobs: CronTriggersPanelProps["loadCronJobs"],
@@ -61,6 +60,7 @@ const cronRunner = (
     return loadCronJobs === undefined ? (name: string) => client.runCronJob(name) : undefined;
 };
 
+/** How to run a trigger, or `undefined` when the panel is read-only: the host's runner wins; otherwise the client can run what it also lists. A custom loader without a runner stays read-only. */
 export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPanelProps = {}): ReactElement => {
     const client = useLunora();
     const t = useT();
