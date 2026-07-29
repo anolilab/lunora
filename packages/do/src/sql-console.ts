@@ -89,7 +89,8 @@ interface SqlDiagnostic {
 const SQLITE_NEAR = /near "([^"]*)": syntax error/iu;
 
 /**
- * A `SCAN <table>` step in a SQLite query plan — a full table scan, no index used.
+ * A `SCAN` step naming a table in a SQLite query plan — a full table scan, with
+ * no index used.
  *
  * `CONSTANT ROW` and `SUBQUERY n` are excluded: SQLite emits `SCAN CONSTANT ROW`
  * for a constant select and `SCAN SUBQUERY 1` for a materialized subquery, so
@@ -178,16 +179,25 @@ const lintReadonlySql = (sql: SqlExec, query: string): SqlLintResult => {
     // reports, deliberately worded the same way so one concept doesn't get two
     // names in one UI.
     const diagnostics: SqlDiagnostic[] = [];
+    // One warning per TABLE, not per plan step: a self-join or a UNION scans the
+    // same table twice and would otherwise print the identical sentence twice,
+    // which reads as two problems rather than one.
+    const scanned = new Set<string>();
 
     for (const detail of plan) {
         const scan = PLAN_SCAN.exec(detail);
 
         if (scan) {
-            diagnostics.push({
-                message: `full table scan on \`${scan[1] ?? ""}\` — this query reads every row`,
-                severity: "warning",
-                source: "plan",
-            });
+            const table = scan[1] ?? "";
+
+            if (!scanned.has(table)) {
+                scanned.add(table);
+                diagnostics.push({
+                    message: `full table scan on \`${table}\` — this query reads every row`,
+                    severity: "warning",
+                    source: "plan",
+                });
+            }
         }
     }
 

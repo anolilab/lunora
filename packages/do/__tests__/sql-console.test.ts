@@ -202,6 +202,31 @@ describe("lintReadonlySql", () => {
         expect(result.diagnostics[0]?.message).toMatch(/messages/u);
     });
 
+    it("warns once per table when the plan scans it more than once", () => {
+        expect.assertions(2);
+
+        const result = lintReadonlySql(
+            stubExec([{ detail: "SCAN messages" }, { detail: "SCAN messages AS m2" }, { detail: "SCAN threads" }]),
+            "SELECT * FROM messages, messages m2, threads",
+        );
+
+        // A self-join scans one table twice; two identical sentences would read
+        // as two problems.
+        expect(result.diagnostics).toHaveLength(2);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toStrictEqual([
+            "full table scan on `messages` — this query reads every row",
+            "full table scan on `threads` — this query reads every row",
+        ]);
+    });
+
+    it("stays quiet on plan steps that read no table", () => {
+        expect.assertions(1);
+
+        // `SCAN CONSTANT ROW` / `SCAN SUBQUERY n` are SQLite's wording for a
+        // constant select and a materialized subquery — neither is a table.
+        expect(lintReadonlySql(stubExec([{ detail: "SCAN CONSTANT ROW" }, { detail: "SCAN SUBQUERY 1" }]), "SELECT 1").diagnostics).toStrictEqual([]);
+    });
+
     it("maps a SQLite syntax error onto the offending token", () => {
         expect.assertions(3);
 
