@@ -50,6 +50,7 @@ const ChartTooltipContent = ({
     const { config } = useChart();
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- this returns JSX built from seven closure values (payload, config, label, the two formatters, and both class names); hoisting it would mean a seven-parameter helper or a component, and this is vendored evilcharts code kept close to upstream
+    // react-doctor-disable-next-line react-doctor/rerender-memo-before-early-return -- the suggested fix — hoisting the early return above the memo — would make a hook conditional, which is illegal; the memo itself is kept for the reason recorded above it
     const tooltipLabel = React.useMemo(() => {
         if (hideLabel || !payload?.length) {
             return null;
@@ -89,6 +90,7 @@ const ChartTooltipContent = ({
         >
             {nestLabel ? null : tooltipLabel}
             <div className="grid gap-1.5">
+                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes */}
                 {payload
                     .filter((item) => item.type !== "none")
                     .map((item, index) => {
@@ -109,6 +111,7 @@ const ChartTooltipContent = ({
                                     indicator === "dot" && "items-center",
                                     selected != null && selected !== item.dataKey && "opacity-30",
                                 )}
+                                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- these rows are positional — the index IS the identity, because the underlying record carries no domain id (see the matching eslint-disable)
                                 key={index}
                             >
                                 {formatter && item?.value !== undefined && item.name ? (

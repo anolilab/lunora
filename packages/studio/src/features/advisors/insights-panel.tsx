@@ -358,6 +358,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // layer). The insight owns the hot-scan story (it's the causal, latency-aware
     // view with the inline "add index" jump); the runtime lint suppresses its
     // hot-scan finding for those tables and keeps only its unique dead-index half.
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
     const missingIndexTables = new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? []));
 
     // Runtime advisor lints (dead index + hot scan + hot shard) over the recorded

@@ -153,5 +153,6 @@ const FileSelect = ({ objectKey, onToggle, selected, t }: FileSelectProps): Reac
     <Checkbox aria-label={t("Select row")} checked={selected} data-testid={`storage-select-${objectKey}`} onCheckedChange={onToggle} />
 );
 
+// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { FileActions, fileItemBindings, FileReferences, FileSelect };
 export type { FileItemHandlers };

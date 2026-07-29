@@ -420,5 +420,6 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
 };
 
 export type { ApiDocsPanelProps };
+// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, REACT_HAS_ACTION_HOOK, splitPath };
 export default ApiDocsPanel;

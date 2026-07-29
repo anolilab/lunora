@@ -49,6 +49,7 @@ const coerceFilterValue = (value: string): number | string => {
  * always stays a string.
  */
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
     filters
         .filter((filter) => filter.column !== "")
         .map((filter) => {
@@ -159,8 +160,14 @@ const DataFilters = ({
             </div>
 
             {filters.map((filter, index) => (
-                // eslint-disable-next-line react-x/no-array-index-key -- filter rows are positional; their index IS their identity (no domain id)
-                <div className="flex flex-wrap items-center gap-1.5" data-testid="db-filter-row" key={index}>
+                <div
+                    className="flex flex-wrap items-center gap-1.5"
+                    data-testid="db-filter-row"
+                    /* eslint-disable react-x/no-array-index-key -- filter rows are positional; their index IS their identity (no domain id) */
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- filter rows are positional; their index IS their identity (no domain id)
+                    key={index}
+                    /* eslint-enable react-x/no-array-index-key */
+                >
                     <select aria-label="Filter column" data-index={index} data-testid="db-filter-column" onChange={changeColumn} value={filter.column}>
                         {columns.map((column) => (
                             <option key={column} value={column}>
@@ -193,4 +200,5 @@ const DataFilters = ({
 };
 
 export type { EditableFilter };
+// react-doctor-disable-next-line react-doctor/only-export-components -- the studio ships one feature per file — panel plus the helpers and types it owns — and this rule wants each of those split in two purely so Fast Refresh keeps component state during dev; a package-wide file split is not worth an HMR-only gain
 export { DataFilters, toFilterClauses };

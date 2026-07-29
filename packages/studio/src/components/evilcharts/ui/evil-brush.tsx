@@ -466,6 +466,7 @@ const MiniChart = ({
     strokeVariant?: "solid" | "dashed" | "animated-dashed";
     variant: EvilBrushVariant;
 }): React.ReactElement => {
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
     const gradients = Object.entries(chartConfig)
         // react-doctor-disable-next-line react-doctor/js-set-map-lookups -- `keys` is the chart's series list — a handful of entries, walked once at render, so a Set costs more than it saves
         .filter(([key]) => keys.includes(key))

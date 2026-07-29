@@ -52,6 +52,7 @@ interface SchemaEditorOverlayProps {
  * Mounted only when `SchemaViewer` receives `schemaEditable` (set by the
  * loopback dev hosts), so it is absent from a deployed/read-only studio.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverlayProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();

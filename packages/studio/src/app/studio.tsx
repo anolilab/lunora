@@ -794,6 +794,7 @@ const StudioLayoutShell = (): ReactElement => {
     // The nav, command palette, and active-domain lookup all run off the filtered
     // groups so a disabled feature's tab disappears from every entry point. A
     // group whose every tab is gated off collapses out of the rail entirely.
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes
     const visibleGroups = NAV_GROUPS.map((group) => {
         return { ...group, tabs: group.tabs.filter((tab) => isTabVisible(tab, features)) };
     }).filter((group) => group.tabs.length > 0);

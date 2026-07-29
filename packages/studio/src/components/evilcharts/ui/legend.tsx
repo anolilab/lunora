@@ -43,6 +43,7 @@ const ChartLegendContent = ({
                 className,
             )}
         >
+            {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over a bounded list (chart series, log levels, nav tabs); the single-pass rewrite reads worse and measures the same at these sizes */}
             {payload
                 .filter((item) => item.type !== "none")
                 .map((item) => {

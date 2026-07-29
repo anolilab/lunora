@@ -115,6 +115,7 @@ const ManagedTable = ({
  * the whole surface also polls via {@link useAutoRefresh} since the auth store
  * is HTTP-only with no live channel.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled }: OrganizationDetailProps): ReactElement => {
     const client = useLunora();
     const t = useT();

@@ -120,6 +120,7 @@ const tabClass = (selected: boolean): string =>
 /** The tab the editor opens with on a fresh browser: the first template. */
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

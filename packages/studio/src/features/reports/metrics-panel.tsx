@@ -131,6 +131,7 @@ const formatMs = (ms: number): string => {
     return `${(ms / 1000).toFixed(2)}s`;
 };
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

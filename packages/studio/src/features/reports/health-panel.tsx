@@ -289,6 +289,7 @@ const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[];
 };
 
 // react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

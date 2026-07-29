@@ -58,8 +58,10 @@ const TransposedTable = ({
                         {rows.map((_, index) => (
                             <th
                                 className="border-b border-border px-3 py-1.5 text-start font-mono text-[11px] tracking-wide uppercase tabular-nums text-muted-foreground"
-                                // eslint-disable-next-line react-x/no-array-index-key -- raw row has no stable id; position is the only key
+                                /* eslint-disable react-x/no-array-index-key -- raw row has no stable id; position is the only key */
+                                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- these rows are positional — the index IS the identity, because the underlying record carries no domain id (see the matching eslint-disable)
                                 key={index}
+                                /* eslint-enable react-x/no-array-index-key */
                             >
                                 {t("Row {n}", { n: index + 1 })}
                             </th>
@@ -73,8 +75,13 @@ const TransposedTable = ({
                                 {column}
                             </th>
                             {rows.map((row, index) => (
-                                // eslint-disable-next-line react-x/no-array-index-key -- raw row has no stable id; position is the only key
-                                <td className="max-w-md truncate border-b border-border px-3 py-1.5 font-mono" key={index}>
+                                <td
+                                    className="max-w-md truncate border-b border-border px-3 py-1.5 font-mono"
+                                    /* eslint-disable react-x/no-array-index-key -- raw row has no stable id; position is the only key */
+                                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- raw row has no stable id; position is the only key
+                                    key={index}
+                                    /* eslint-enable react-x/no-array-index-key */
+                                >
                                     <CellValue value={row[column]} />
                                 </td>
                             ))}

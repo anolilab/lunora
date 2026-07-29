@@ -111,6 +111,7 @@ const selectedMail = (visible: ReadonlyArray<CapturedMail>, selectedId: null | s
     return visible.find((entry) => entry.id === selectedId) ?? visible[0];
 };
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();

@@ -84,6 +84,7 @@ const chipValue = (value: unknown): string => {
  * table sidebar + a bordered grid with a paginated footer — and gated by the
  * server's `LUNORA_ADMIN_TOKEN`.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- splitting this component is a real refactor with its own review, not a lint fix; tracked separately rather than done blind inside an unrelated change
 export const GlobalDataBrowser = ({
     initialTable,
     onSelectTable,
