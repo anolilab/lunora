@@ -337,61 +337,7 @@ commits are the record.**
 
 ### Recommended execution order
 
-All seven are independent (no cross-plan deps) and small. Recommended order by
-leverage: **079, 080** first (the two P2 correctness/durability wins with clean
-verification), then the P3 quick wins **081 → 082 → 083 → 084 → 085** in any order.
-Each is scoped to one package and re-runs that package's `lint:types` + `test` as
-its gate.
-
-### Findings considered and rejected (Wave 8)
-
-Vetted against live code and dropped — recorded so they aren't re-audited:
-
-- **ratelimit "fails open on store error"** — FALSE POSITIVE. The subagent audited
-  `rate-limiter.ts` in isolation; the `rateLimit` middleware (`middleware.ts:62-82`)
-  wraps `limit()` in try/catch and **fails closed (503) by default**, with an
-  explicit documented `failOpen` opt-in.
-- **dispatch `response.text()` double-read** (`create-dispatch-runner.ts:74-78`) —
-  FALSE POSITIVE. The two `.text()` calls are on mutually exclusive paths (`throw`
-  inside `if (!response.ok)` exits before the success-path read).
-- **D1 `getBookmark` null→undefined coercion** (`d1-client.ts:124`) — by design; the
-  wrapper's documented contract returns `undefined` for "no bookmark yet".
-- **client WebSocket listeners "never removed"** (`lunora-client.ts:3159+`) — not a
-  leak; the four listeners belong to the local `socket`, which is dereferenced
-  (`conn.socket` reassigned) and GC'd with its listeners when superseded. Guarded
-  standard pattern (`if (conn.socket !== socket) return`).
-- **optimistic-layer transform swallow** (`optimistic-layers.ts:42-47`) — by design;
-  a throwing layer is skipped and the error surfaces on mutation settle (documented).
-- **react cache polling ignores tab visibility** (`react/src/cache.ts:84`) — only the
-  WS-unavailable fallback timer; narrow, low impact. Not selected.
-- **browser DNS-rebinding SSRF** — documented out-of-scope in `create-browser.ts:195-197`;
-  the SSRF guard (protocol / private-IP / credential-strip) is sound.
-- **studio admin token in `sessionStorage`** — subagent's threat model is wrong:
-  `sessionStorage` is cleared on tab close and does NOT survive a browser restart
-  (that is `localStorage`). Documented deliberate tradeoff; studio is a local UI.
-- **browser `clampViewport` partial object**, **payment webhook-replay / money BigInt
-  precision / auth `withoutHeaders` collision / signed-URL safe-integer**, **runtime
-  topK-`k` unbounded / admin-RPC rate-limit / fan-out partial-result policy**, **cli
-  secret-name quoting / `Promise.all`→`allSettled` / dev-stream error handler**,
-  **analytics `track()` name validation** — all type-guarded, app-boundary,
-  threat-model-dependent, or negligible-impact nits; not worth plans.
-- **SessionDO GC alarm re-arm** (`session-do.ts:273`) — reconsidered on close read
-  and REJECTED: the `if (remaining > 0 …)` guard is correct, because `remaining === 0`
-  means all expired records were just deleted in the same sweep (no residue to
-  reclaim), and any later `create()` re-arms via `armGcAlarm()`. Self-heals.
-
-### Not audited this pass
-
-- **Direction / roadmap** (features, what to build next) — out of scope for this
-  correctness/security/perf/tests/tech-debt sweep. Run `/improve next` for a
-  grounded direction pass.
-- **Docs** category — only spot-checked.
-- **Plausible test-coverage / tech-debt leads surfaced but not selected** (would
-  need gap-confirmation before planning): workflow fan-out failure-mode tests
-  (`packages/workflow`), MCP tool-surface authz/error tests (`packages/mcp`),
-  codegen namespace-collision test for case-insensitive filesystems
-  (`packages/codegen`), advisor static-lint edge-case predicate dedup
-  (`packages/advisor`).
+Spent — the whole wave shipped in one branch (PR #229).
 
 ## Wave 9 — auth hot-path hardening + typed identity layer (baseline `c490bad`, 2026-07-01)
 
@@ -1079,14 +1025,14 @@ queries, FK traversal, facets, staged edits, cascade preview, row generation,
 shard explorer, mask policies. Their `stream` view is Prisma-Postgres-specific
 (our analog is the logs/subscriptions panels).
 
-| Plan | Title                                                                                                   | Category | Pkg               | Pri | Effort | Risk | Status                        |
-| ---- | ------------------------------------------------------------------------------------------------------- | -------- | ----------------- | --- | ------ | ---- | ----------------------------- |
-| 200  | Studio migration & schema-version visualizer — ledger + diff canvas; the headline gap                   | feat     | do/codegen/studio | P2  | L      | MED  | TODO                          |
-| 201  | Studio SQL editor diagnostics — inline lint before Run, no CodeMirror adoption                          | dx       | studio/do         | P2  | M      | LOW  | TODO                          |
-| 202  | Studio AI layer — one host-supplied `llm` hook (NL→SQL + error correction, NL→filter, chart config)     | feat     | studio            | P3  | L      | MED  | TODO (product decision first) |
-| 203  | Time-ranged statement-level query insights — bucket the metrics we already collect; add p95 + live tail | feat/obs | do/studio         | P2  | M      | LOW  | TODO                          |
-| 204  | Studio operation console — a tape of what Studio itself issued                                          | dx/obs   | studio            | P3  | S–M    | LOW  | TODO                          |
-| 205  | Studio data-grid parity + URL state — pinning, match highlight, typed search, column virtualization     | dx/perf  | studio/do         | P2  | M–L    | LOW  | TODO                          |
+| Plan | Title                                                                                                   | Category | Pkg               | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------- | -------- | ----------------- | --- | ------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | Studio migration & schema-version visualizer — ledger + diff canvas; the headline gap                   | feat     | do/codegen/studio | P2  | L      | MED  | DONE & REMOVED — `__lunora_schema_history` ledger + timeline + diff on the React Flow canvas; the diff engine moved to top-level `shared/` so the drift gate and the Studio classify a change identically.                                                                                                                                      |
+| 201  | Studio SQL editor diagnostics — inline lint before Run, no CodeMirror adoption                          | dx       | studio/do         | P2  | M      | LOW  | DONE & REMOVED — inline lint before Run (rejected verbs, unknown tables/columns, syntax, full-scan plans) via an overlay + problems row. CodeMirror NOT adopted, as the plan required.                                                                                                                                                          |
+| 202  | Studio AI layer — one host-supplied `llm` hook (NL→SQL + error correction, NL→filter, chart config)     | feat     | studio            | P3  | L      | MED  | DONE & REMOVED — product decision landed: the model runs server-side on the app's OWN Workers AI binding, the browser never sees a key, and chart inference sends column names/types/row-count only (asserted by a test). Generated SQL passes the same read-only gate as hand-typed SQL and lands unexecuted.                                  |
+| 203  | Time-ranged statement-level query insights — bucket the metrics we already collect; add p95 + live tail | feat/obs | do/studio         | P2  | M      | LOW  | DONE & REMOVED — 1m/5m/15m/1h ranges over time-bucketed statement metrics, p50/p95 beside the mean. Follow-on (AI recommendations over the series) deliberately not started.                                                                                                                                                                    |
+| 204  | Studio operation console — a tape of what Studio itself issued                                          | dx/obs   | studio            | P3  | S–M    | LOW  | DONE & REMOVED — operation tape recorded through a Proxy over the admin client, so coverage is true by construction rather than by remembering to call a helper.                                                                                                                                                                                |
+| 205  | Studio data-grid parity + URL state — pinning, match highlight, typed search, column virtualization     | dx/perf  | studio/do         | P2  | M–L    | LOW  | DONE & REMOVED — pinning, match highlighting, typed date search, column windowing, reverse-relation counts, URL state. **Infinite scroll: decided against** — pagination gives a stable position, an exact count, and export semantics that mean "these rows"; the perf motive was the vertical axis, which row virtualization already answers. |
 
 ### Notes
 
@@ -1116,29 +1062,25 @@ shard explorer, mask policies. Their `stream` view is Prisma-Postgres-specific
   every embedded Studio and would obsolete two working, tested components — the
   plan renders diagnostics via an overlay + a problems row instead, and makes
   "adopt CodeMirror" a STOP-and-report, not an improvisation.
-- **202 is the only plan gated on a product decision** (whose model, whose key,
-  what data leaves the machine). Its Phase 0 exists to answer that on paper;
-  Phase 1 must not start first. Studio ships no provider — the `llm` hook is
-  host-supplied and every AI affordance is hidden without it, mirroring how
-  `schemaEditable` already gates the schema-authoring overlay.
+- **202's product decision, as landed**: the model runs server-side on the
+  app's own Workers AI binding, so no key or provider ships in the browser and
+  no row values leave the machine (chart inference sends column names, types,
+  and the row count — asserted by a test). Every affordance is hidden when the
+  deployment has no `AI` binding, mirroring how `schemaEditable` gates the
+  schema-authoring overlay.
 - **204 has a single clean choke point** — every Studio admin call flows through
   `studio/src/lib/internal.ts` + `hooks/use-admin-query.ts`. It records operation
   _shapes_ (function, shard, argument summary, duration, outcome), never row
   payloads, and complements the server-side audit log rather than duplicating it.
-- **205 protects what we already do better** (cascade preview, staged edits,
-  facets, masking, SQL export) as explicit non-goals, and leaves infinite scroll
-  as an open decision to record rather than a gap to close — pagination suits an
-  admin tool, and cargo-culting the other tradeoff would be a regression.
+- **205 protected what we already do better** (cascade preview, staged edits,
+  facets, masking, SQL export) as explicit non-goals. **Infinite scroll was
+  decided against**: pagination gives a stable position, an exact count, and
+  export semantics that mean "these rows". The perf motive behind the other
+  tradeoff was the vertical axis, which row virtualization already answers.
 
 ### Recommended execution order
 
-**200** first (largest value, most of the machinery exists). **203** and **205**
-are independent and can run in parallel with it — 203 is mostly server-side
-(`packages/do`), 205 mostly client-side, so they do not collide. **201** after
-205 (both touch Studio UI plumbing; 201 Phase 1 also extracts
-`shared/sql-readonly.ts`, which 202 Phase 1 depends on). **204** any time — it is
-self-contained. **202** last, and only after its Phase 0 decision lands; its
-query-insight recommendations follow-on additionally needs 203's data.
+Spent — the whole wave shipped in one branch (PR #229).
 
 ## Notes for executors (carried from prior waves)
 
