@@ -2,8 +2,9 @@
 
 import type { ReactElement } from "react";
 
+import { createAccountsController } from "../core/accounts";
 import { isFlowEnabled } from "../core/flow-gate";
-import { createTwoFactorSetupController } from "../core/two-factor-setup";
+import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
@@ -16,6 +17,9 @@ const onSubmit =
     };
 
 const TwoFactorSetupCard = (): ReactElement | null => {
+    // Enrolment needs the account's password, which an OAuth-only user does not
+    // have. A `credential` row in the linked accounts is what says they do.
+    const [accounts] = useController(createAccountsController);
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController(createTwoFactorSetupController);
@@ -23,6 +27,27 @@ const TwoFactorSetupCard = (): ReactElement | null => {
 
     if (!isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard")) {
         return null;
+    }
+
+    /*
+     * An OAuth-only account has no password, and enrolment requires one. The
+     * card stays visible and explains that, rather than vanishing: a security
+     * setting that is simply absent reads as "this app doesn't support 2FA",
+     * which sends people looking for a setting that is right there.
+     *
+     * Only a *successful* read that found no credential row counts. While it is
+     * loading, or if it failed, the card behaves as before — same rule as the
+     * flow gate: don't hide something you cannot reason about.
+     */
+    const knowsAccounts = !accounts.loading && accounts.error === undefined && accounts.status === "success";
+    const missingPassword = knowsAccounts && !accounts.items.some((account) => account.providerId === "credential");
+
+    if (missingPassword) {
+        return (
+            <AuthCard title={t.twoFactorSetup}>
+                <p className="lunora-auth-note">{t.twoFactorNeedsPassword}</p>
+            </AuthCard>
+        );
     }
 
     if (state.step === "enabled") {
@@ -50,6 +75,18 @@ const TwoFactorSetupCard = (): ReactElement | null => {
             <AuthCard description={t.twoFactorScan} title={t.twoFactorSetup}>
                 <FormBanner error={state.error} />
                 {state.totpUri === undefined ? null : <code className="lunora-auth-code">{state.totpUri}</code>}
+                {/*
+                 * The key on its own, because the URI is not a substitute for
+                 * it: most authenticators reject a pasted `otpauth://…` string,
+                 * and anyone on a desktop app or without a working camera has
+                 * no other way in.
+                 */}
+                {totpSecret(state.totpUri) === undefined ? null : (
+                    <>
+                        <p className="lunora-auth-note">{t.twoFactorSecret}</p>
+                        <code className="lunora-auth-code">{totpSecret(state.totpUri)}</code>
+                    </>
+                )}
                 {state.backupCodes.length === 0 ? null : (
                     <>
                         <p className="lunora-auth-card__description">{t.backupCodes}</p>

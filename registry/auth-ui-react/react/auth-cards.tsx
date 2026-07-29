@@ -2,16 +2,18 @@
 
 import type { ReactElement } from "react";
 
+import { signInAnonymously } from "../core/anonymous";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import { createTwoFactorVerifyController } from "../core/two-factor-verify";
-import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
+import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, LastUsedBadge, PasswordStrength, SocialButtons, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 
@@ -23,6 +25,23 @@ const onSubmit =
         void action();
     };
 
+/** Guest sign-in, when the `anonymous` plugin is on. */
+const AnonymousButton = (): ReactElement => {
+    const context = useAuthUI();
+
+    return (
+        <button
+            className="lunora-auth-button lunora-auth-button--secondary"
+            onClick={() => {
+                void signInAnonymously(context);
+            }}
+            type="button"
+        >
+            {context.localization.anonymousSignIn}
+        </button>
+    );
+};
+
 interface SignInCardProps {
     forgotPasswordHref?: string;
     signUpHref?: string;
@@ -33,47 +52,65 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
     const { localization: t, social } = context;
     const [state, actions] = useController(createSignInController);
     const pending = state.status === "submitting";
+    // Read once per render rather than in an effect: it is a cookie, it is
+    // available before the first paint, and it only picks a badge.
+    const lastUsed = readLastLoginMethod();
 
     return (
         <AuthCard footer={<AuthLink href={signUpHref}>{t.noAccount}</AuthLink>} title={t.signIn}>
             <SocialButtons
+                lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
                 onSelect={(provider) => {
                     void signInWithSocial(context, provider);
                 }}
                 providers={social}
             />
-            {social.length > 0 ? <AuthDivider /> : null}
-            <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
-                <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
-                <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
-                <SubmitButton pending={pending}>{t.signIn}</SubmitButton>
-            </form>
+            {context.plugins.anonymous ? <AnonymousButton /> : null}
+            {social.length > 0 && context.credentials ? <AuthDivider /> : null}
+            {/*
+             * An OAuth-only deployment has no password form to show. Discovery
+             * reports that as `emailAndPassword: false`; without discovery it
+             * defaults to true, which is the pre-existing behaviour.
+             */}
+            {context.credentials ? (
+                <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                    <FormBanner error={state.formError} />
+                    <Field
+                        autoComplete="email"
+                        field={state.fields.email}
+                        label={t.emailLabel}
+                        name="email"
+                        onBlur={() => {
+                            actions.blur("email");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("email", value);
+                        }}
+                        type="email"
+                    />
+                    <Field
+                        autoComplete="current-password"
+                        field={state.fields.password}
+                        label={t.passwordLabel}
+                        name="password"
+                        onBlur={() => {
+                            actions.blur("password");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("password", value);
+                        }}
+                        type="password"
+                    />
+                    <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
+                    <SubmitButton pending={pending}>
+                        {t.signIn}
+                        {/* better-auth records a password sign-in as "email", so
+                            without this the badge is invisible for the most
+                            common route there is. */}
+                        {lastUsed === LAST_METHOD_EMAIL ? <LastUsedBadge /> : null}
+                    </SubmitButton>
+                </form>
+            ) : null}
         </AuthCard>
     );
 };
@@ -83,11 +120,25 @@ interface SignUpCardProps {
 }
 
 const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactElement => {
-    const { localization: t } = useAuthUI();
+    const context = useAuthUI();
+    const { localization: t, social } = context;
     const [state, actions] = useController(createSignUpController);
 
     return (
         <AuthCard footer={<AuthLink href={signInHref}>{t.haveAccount}</AuthLink>} title={t.signUp}>
+            {/*
+             * Social buttons belong on sign-up too — OAuth is a sign-up path, not
+             * just a sign-in one, and omitting them here sends new users through a
+             * password form they never needed. This was the gap against
+             * better-auth-ui's <AuthView>.
+             */}
+            <SocialButtons
+                onSelect={(provider) => {
+                    void signInWithSocial(context, provider);
+                }}
+                providers={social}
+            />
+            {social.length > 0 ? <AuthDivider /> : null}
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
                 <Field
@@ -128,6 +179,7 @@ const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactEle
                     }}
                     type="password"
                 />
+                <PasswordStrength value={state.fields.password.value} />
                 <SubmitButton pending={state.status === "submitting"}>{t.signUp}</SubmitButton>
             </form>
         </AuthCard>
@@ -216,6 +268,7 @@ interface MagicLinkCardProps {
 }
 
 const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): ReactElement | null => {
+    const lastUsed = readLastLoginMethod();
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController(createMagicLinkController);
@@ -241,7 +294,10 @@ const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): Re
                     }}
                     type="email"
                 />
-                <SubmitButton pending={state.status === "submitting"}>{t.magicLink}</SubmitButton>
+                <SubmitButton pending={state.status === "submitting"}>
+                    {t.magicLink}
+                    {lastUsed === LAST_METHOD_MAGIC_LINK ? <LastUsedBadge /> : null}
+                </SubmitButton>
             </form>
         </AuthCard>
     );
@@ -340,4 +396,4 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
 };
 
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps };
-export { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard };
+export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard };

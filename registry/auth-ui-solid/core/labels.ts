@@ -44,4 +44,40 @@ const passkeyLabel = (passkey: AuthPasskey, localization: Localization): string 
     return name === undefined || name === "" ? localization.passkeyUnnamed : name;
 };
 
-export { passkeyLabel, ROLE_OPTIONS, sessionLabel, slugify };
+/**
+ * Display names for OAuth providers, where naive capitalization gets it wrong.
+ *
+ * Everything else falls through to capitalizing the id, which is right for
+ * `google`, `github`, `discord` and most of the long tail. This table is only
+ * the exceptions — brands with internal capitals or spaces that "Gitlab" and
+ * "Microsoft entra id" would get visibly wrong.
+ */
+const PROVIDER_LABELS: Readonly<Record<string, string>> = {
+    github: "GitHub",
+    gitlab: "GitLab",
+    huggingface: "Hugging Face",
+    linkedin: "LinkedIn",
+    microsoft: "Microsoft",
+    "microsoft-entra-id": "Microsoft Entra ID",
+    paypal: "PayPal",
+    tiktok: "TikTok",
+    vk: "VK",
+    youtube: "YouTube",
+};
+
+/** A provider id as a person would write it: `github` → `GitHub`, `zoom` → `Zoom`. */
+const providerLabel = (provider: string): string => {
+    const known = PROVIDER_LABELS[provider];
+
+    if (known !== undefined) {
+        return known;
+    }
+
+    // Hyphenated ids ("generic-oauth") read as words, not as one run-on token.
+    return provider
+        .split("-")
+        .map((part) => (part === "" ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`))
+        .join(" ");
+};
+
+export { passkeyLabel, PROVIDER_LABELS, providerLabel, ROLE_OPTIONS, sessionLabel, slugify };

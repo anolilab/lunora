@@ -44,6 +44,7 @@ const EXPECTED_EXPORTS = [
     "scim",
     "siwe",
     "twoFactor",
+    "uiConfig",
     "username",
 ] as const;
 

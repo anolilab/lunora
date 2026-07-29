@@ -12,13 +12,13 @@ import { getContext, setContext } from "svelte";
 import type { ControllerContext } from "../core/config";
 
 /**
- * A framework `Link` component (SvelteKit's `<a>` wrapper, a custom router link,
+ * A framework `Link` component (SvelteKit's `&lt;a>` wrapper, a custom router link,
  * …) accepting the same props the base cards pass: `href`, an optional `class`,
- * and its `children` snippet. Falls back to a plain `<a>` when omitted.
+ * and its `children` snippet. Falls back to a plain `&lt;a>` when omitted.
  */
 type AuthUILinkComponent = Component<{ children?: Snippet; class?: string; href: string }>;
 
-/** The value published on the Svelte context tree by `<AuthUIProvider>`. */
+/** The value published on the Svelte context tree by `&lt;AuthUIProvider>`. */
 interface AuthUISvelteContext {
     core: ControllerContext;
     Link?: AuthUILinkComponent;
@@ -28,7 +28,7 @@ const AUTH_UI_CONTEXT_KEY = Symbol("lunora.auth-ui");
 
 /**
  * Publish the resolved auth-UI context on the Svelte component tree. Called once
- * by `<AuthUIProvider>` during its initialisation (the `setContext` constraint),
+ * by `&lt;AuthUIProvider>` during its initialisation (the `setContext` constraint),
  * exactly like React's provider mounts once.
  */
 const setAuthUIContext = (value: AuthUISvelteContext): AuthUISvelteContext => {
@@ -38,7 +38,7 @@ const setAuthUIContext = (value: AuthUISvelteContext): AuthUISvelteContext => {
 };
 
 /**
- * Read the resolved core controller context from the nearest `<AuthUIProvider>`.
+ * Read the resolved core controller context from the nearest `&lt;AuthUIProvider>`.
  * Throws — loud and early — when no provider is mounted, mirroring React's
  * `useAuthUI` guard. Must be called during component initialisation.
  */
@@ -53,9 +53,7 @@ const useAuthUI = (): ControllerContext => {
 };
 
 /** Read the optional framework `Link` from the nearest provider. */
-const useAuthUILink = (): AuthUILinkComponent | undefined => {
-    return getContext<AuthUISvelteContext | undefined>(AUTH_UI_CONTEXT_KEY)?.Link;
-};
+const useAuthUILink = (): AuthUILinkComponent | undefined => getContext<AuthUISvelteContext | undefined>(AUTH_UI_CONTEXT_KEY)?.Link;
 
 export type { AuthUILinkComponent, AuthUISvelteContext };
 export { setAuthUIContext, useAuthUI, useAuthUILink };

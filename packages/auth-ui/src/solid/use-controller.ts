@@ -15,7 +15,7 @@ import { useAuthUI } from "./provider";
  * Unlike the React `useController` there is no dependency array: a Solid
  * component body runs once, so any options the factory closes over are captured
  * at creation. Cards that need to react to changing props should be re-keyed by
- * the caller (`<Show keyed>` / a `key` on the route) instead.
+ * the caller (`&lt;Show keyed>` / a `key` on the route) instead.
  * @param create Builds the controller from the resolved context.
  */
 const createController = <TState extends object, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>): [TState, TActions] => {

@@ -4,27 +4,27 @@
  * and the sign-out button. Each binds a core controller to the shared primitives.
  */
 import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import type { ChangeEmailField } from "../core/change-email";
-import type { ChangePasswordField } from "../core/change-password";
-import type { DeleteAccountField } from "../core/delete-account";
-import type { ProfileField } from "../core/profile";
-import type { SessionsActions } from "../core/sessions";
-import type { AuthSession, FormActions, FormState } from "../core/types";
-import type { ResourceState } from "../core/create-resource-controller";
 import { createChangeEmailController } from "../core/change-email";
+import type { ChangePasswordField } from "../core/change-password";
 import { createChangePasswordController } from "../core/change-password";
+import type { ResourceState } from "../core/create-resource-controller";
+import type { DeleteAccountField } from "../core/delete-account";
 import { createDeleteAccountController } from "../core/delete-account";
 import { isFlowEnabled } from "../core/flow-gate";
 import { passkeyLabel, sessionLabel } from "../core/labels";
 import { createPasskeysController } from "../core/passkeys";
+import type { ProfileField } from "../core/profile";
 import { createProfileController } from "../core/profile";
 import { signOut } from "../core/session-actions";
+import type { SessionsActions } from "../core/sessions";
 import { createSessionsController } from "../core/sessions";
+import type { AuthSession, FormActions, FormState } from "../core/types";
 import { controllerSignal } from "./controller-signal";
-import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent, serializeThemeVariables } from "./primitives";
-import { injectAuthUI } from "./provider";
+import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, serializeThemeVariables, SubmitButtonComponent } from "./primitives";
+import { injectAuthUIContext } from "./provider";
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -52,16 +52,16 @@ class ProfileCardComponent implements OnInit {
     readonly defaultImage = input<string>();
     readonly defaultName = input<string>();
 
-    private readonly context = injectAuthUI();
-    private readonly destroyRef = inject(DestroyRef);
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    private readonly injector = inject(Injector);
+    protected readonly t = this.context().localization;
     protected state!: Signal<FormState<ProfileField>>;
     protected actions!: FormActions<ProfileField>;
 
     ngOnInit(): void {
         const bridge = controllerSignal((context) => createProfileController(context, { initialImage: this.defaultImage(), initialName: this.defaultName() }), {
             context: this.context,
-            destroyRef: this.destroyRef,
+            injector: this.injector,
         });
 
         this.state = bridge.state;
@@ -93,8 +93,8 @@ class ProfileCardComponent implements OnInit {
     `,
 })
 class ChangeEmailCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createChangeEmailController, { context: this.context });
     protected readonly state: Signal<FormState<ChangeEmailField>> = this.bridge.state;
     protected readonly actions: FormActions<ChangeEmailField> = this.bridge.actions;
@@ -142,8 +142,8 @@ class ChangeEmailCardComponent {
     `,
 })
 class ChangePasswordCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createChangePasswordController, { context: this.context });
     protected readonly state: Signal<FormState<ChangePasswordField>> = this.bridge.state;
     protected readonly actions: FormActions<ChangePasswordField> = this.bridge.actions;
@@ -173,8 +173,8 @@ class ChangePasswordCardComponent {
     `,
 })
 class DeleteAccountCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createDeleteAccountController, { context: this.context });
     protected readonly state: Signal<FormState<DeleteAccountField>> = this.bridge.state;
     protected readonly actions: FormActions<DeleteAccountField> = this.bridge.actions;
@@ -213,8 +213,8 @@ class DeleteAccountCardComponent {
     `,
 })
 class SessionsCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSessionsController, { context: this.context });
     protected readonly state: Signal<ResourceState<AuthSession>> = this.bridge.state;
     protected readonly actions: SessionsActions = this.bridge.actions;
@@ -234,7 +234,7 @@ class SessionsCardComponent {
     selector: "lunora-passkeys-card",
     standalone: true,
     template: `
-        @if (enabled) {
+        @if (enabled()) {
             <lunora-auth-card [title]="t.passkeys">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
@@ -264,12 +264,12 @@ class SessionsCardComponent {
     `,
 })
 class PasskeysCardComponent {
-    private readonly context = injectAuthUI();
-    protected readonly enabled = isFlowEnabled(this.context, "passkey", "PasskeysCard");
-    protected readonly t = this.context.localization;
+    private readonly context = injectAuthUIContext();
+    protected readonly enabled = computed(() => isFlowEnabled(this.context(), "passkey", "PasskeysCard"));
+    protected readonly t = this.context().localization;
     protected readonly name = signal("");
 
-    private readonly bridge = controllerSignal((context) => createPasskeysController(context, { autoLoad: this.enabled }), { context: this.context });
+    private readonly bridge = controllerSignal((context) => createPasskeysController(context, { autoLoad: this.enabled() }), { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
 
@@ -279,6 +279,8 @@ class PasskeysCardComponent {
     protected add(): void {
         void this.actions.add(this.name()).then(() => {
             this.name.set("");
+
+            return true;
         });
     }
 
@@ -300,12 +302,12 @@ class PasskeysCardComponent {
 class SignOutButtonComponent {
     readonly label = input<string>();
 
-    private readonly context = injectAuthUI();
-    protected readonly t = this.context.localization;
-    protected readonly themeStyle = serializeThemeVariables(this.context.themeVariables);
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
+    protected readonly themeStyle = serializeThemeVariables(this.context().themeVariables);
 
     protected signOut(): void {
-        void signOut(this.context);
+        void signOut(this.context());
     }
 }
 

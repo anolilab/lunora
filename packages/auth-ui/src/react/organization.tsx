@@ -33,8 +33,19 @@ const OrganizationsCard = (): ReactElement | null => {
         return null;
     }
 
+    /*
+     * The server enforces both of these and answers with an error; the point of
+     * checking here is that a user should not fill in a form to be told no.
+     * `limit` and `allowUserToCreate` come from `uiConfig()` — better-auth has
+     * no endpoint that reports them, so without discovery a UI can only find
+     * out by being refused.
+     */
+    const atLimit = context.organization.limit !== undefined && state.items.length >= context.organization.limit;
+    const cannotCreate = atLimit || !context.organization.allowUserToCreate;
+    const createBlockedReason = atLimit ? t.organizationLimitReached : t.organizationCreateDisallowed;
+
     const create = (): void => {
-        if (name.trim() === "") {
+        if (name.trim() === "" || cannotCreate) {
             return;
         }
 
@@ -99,17 +110,23 @@ const OrganizationsCard = (): ReactElement | null => {
         <AuthCard title={t.organizations}>
             <FormBanner error={state.error} />
             {list}
+            {cannotCreate ? <p className="lunora-auth-note">{createBlockedReason}</p> : null}
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(create)}>
                 <Field field={{ touched: false, value: name }} label={t.organizationName} name="organizationName" onBlur={() => undefined} onChange={setName} />
-                <Field
-                    field={{ touched: false, value: slug }}
-                    label={t.organizationSlug}
-                    name="organizationSlug"
-                    onBlur={() => undefined}
-                    onChange={setSlug}
-                    placeholder={slugify(name)}
-                />
-                <SubmitButton pending={state.busy}>{t.createOrganization}</SubmitButton>
+                {/* Optional UI: apps that don't put the slug in a URL treat it
+                    as an implementation detail, and `create` derives one from
+                    the name when the field is absent or blank. */}
+                {context.organization.showSlug ? (
+                    <Field
+                        field={{ touched: false, value: slug }}
+                        label={t.organizationSlug}
+                        name="organizationSlug"
+                        onBlur={() => undefined}
+                        onChange={setSlug}
+                        placeholder={slugify(name)}
+                    />
+                ) : null}
+                <SubmitButton pending={state.busy || cannotCreate}>{t.createOrganization}</SubmitButton>
             </form>
         </AuthCard>
     );

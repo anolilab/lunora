@@ -36,6 +36,7 @@
  */
 import type { LunoraAuth } from "@lunora/auth";
 import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
 /**
@@ -151,6 +152,12 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
                 await sendAuthEmail(env, { subject: "Verify your email address", text: `Verify your email address:\n${url}`, to: user.email });
             },
         },
+        // Publishes which plugins and social providers you enabled at
+        // `GET /api/auth/ui-config`, so `lunora add auth-ui`'s screens configure
+        // themselves — add a social provider here and its button appears, with
+        // no second list to keep in sync client-side. Only facts a sign-in page
+        // reveals by existing are exposed; drop the plugin to turn it off.
+        plugins: [uiConfig()],
         secret: env.BETTER_AUTH_SECRET,
     });
 
