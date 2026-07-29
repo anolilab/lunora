@@ -52,6 +52,7 @@ const STUDIO_FEATURE_KEYS = [
     "flags",
     "kv",
     "mail",
+    "notifications",
     "payments",
     "queues",
     "scheduler",
@@ -545,6 +546,7 @@ describe("shardDO admin introspection", () => {
                 flags: false,
                 kv: false,
                 mail: false,
+                notifications: false,
                 payments: false,
                 queues: false,
                 scheduler: false,
@@ -564,6 +566,7 @@ describe("shardDO admin introspection", () => {
                 flags: boolean;
                 kv: boolean;
                 mail: boolean;
+                notifications: boolean;
                 payments: boolean;
                 queues: boolean;
                 scheduler: boolean;
@@ -578,6 +581,7 @@ describe("shardDO admin introspection", () => {
                     flags: true,
                     kv: false,
                     mail: false,
+                    notifications: false,
                     payments: true,
                     queues: true,
                     scheduler: true,
@@ -599,6 +603,7 @@ describe("shardDO admin introspection", () => {
                 flags: true,
                 kv: false,
                 mail: false,
+                notifications: false,
                 payments: true,
                 queues: true,
                 scheduler: true,
@@ -654,6 +659,7 @@ describe("shardDO admin introspection", () => {
             "flags",
             "kv",
             "mail",
+            "notifications",
             "payments",
             "queues",
             "scheduler",

@@ -51,6 +51,7 @@ const createClient = (features?: Partial<StudioFeaturesResult>): MockClientHooks
                     flags: true,
                     kv: true,
                     mail: true,
+                    notifications: true,
                     payments: true,
                     queues: true,
                     scheduler: true,
@@ -99,6 +100,7 @@ const STUDIO_FEATURE_KEYS = [
     "flags",
     "kv",
     "mail",
+    "notifications",
     "payments",
     "queues",
     "scheduler",
@@ -345,6 +347,36 @@ describe("studio", () => {
         expect(screen.getByTestId("dash-tab-logs")).toBeDefined();
     });
 
+    it("hides the notifications page when @lunora/notify isn't wired", async () => {
+        expect.hasAssertions();
+
+        // The panel only reads `@lunora/notify` push devices, so without the package
+        // it has nothing to show — it must disappear like every other optional page.
+        render(renderStudio(createClient({ notifications: false })));
+
+        await screen.findByTestId("dash-tab-home");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("dash-tab-notifications")).toBeNull();
+        });
+    });
+
+    it("hides the auth audit page along with the rest of the auth domain when @lunora/auth isn't wired", async () => {
+        expect.hasAssertions();
+
+        // `getAuthAuditLog` answers AUTH_AUDIT_NOT_CONFIGURED without the package's
+        // reader, so the audit trail gates on `auth` like its four sibling pages.
+        render(renderStudio(createClient({ auth: false })));
+
+        await screen.findByTestId("dash-tab-home");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("dash-tab-authAudit")).toBeNull();
+        });
+
+        expect(screen.queryByTestId("dash-tab-users")).toBeNull();
+    });
+
     it("labels the panel region by the active sub-page", async () => {
         expect.hasAssertions();
 
@@ -368,6 +400,7 @@ describe("studio", () => {
             "flags",
             "kv",
             "mail",
+            "notifications",
             "payments",
             "queues",
             "scheduler",

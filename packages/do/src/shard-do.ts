@@ -3290,6 +3290,7 @@ abstract class ShardDO {
             flags: false,
             kv: false,
             mail: false,
+            notifications: false,
             payments: false,
             queues: false,
             scheduler: false,

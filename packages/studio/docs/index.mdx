@@ -243,16 +243,18 @@ omitted from the `<Studio>` shell.
 ## Optional-package nav gating
 
 The studio also hides the pages for optional `@lunora/*` packages your app
-doesn't use — Payments, Mail, Files + Access Rules, Vectors, Scheduler, and
-Workflows — so you never land on a page that errors with "unknown table". This is
+doesn't use — Payments, Mail, Notifications, Files + Access Rules, Vectors,
+Scheduler, and Workflows — so you never land on a page that errors with "unknown
+table" or renders an empty shell. This is
 automatic: codegen statically detects which features a deployment wires up and
 emits the result into the generated `ShardDO`, which the studio reads once over
 the `__lunora_admin__:studioFeatures` RPC.
 
 A feature's page shows when **any** of these is true:
 
-- a `lunora/` source imports its package (e.g. `@lunora/mail`) or reads its
-  context helper (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`,
+- a `lunora/` source imports its package (e.g. `@lunora/mail`, or the
+  `lunora/notify.ts` config's `@lunora/notify`) or reads its context helper
+  (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`, `ctx.notify`,
   `ctx.workflows`);
 - a schema signal implies it — a `v.storage()` column or storage access rule
   (Files), a declared cron (Scheduler), a vector index (Vectors), or a declared
