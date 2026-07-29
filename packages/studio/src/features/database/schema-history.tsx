@@ -316,7 +316,7 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
     const changes = model?.changes ?? [];
 
     return (
-        <div className="flex min-h-0 flex-1 gap-6" data-testid="lunora-schema-history">
+        <div className="flex min-h-0 flex-1 gap-4" data-testid="lunora-schema-history">
             {/* Tertiary: the rail is scenery. A single hairline separates it from
                 the content rather than boxing it into a card. */}
             <nav className="flex w-56 shrink-0 flex-col overflow-hidden border-e border-border" data-testid="sh-timeline-rail">
@@ -335,7 +335,7 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
                 </ul>
             </nav>
 
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pe-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pe-1 pt-4">
                 {/* The one thing you look at first. */}
                 <DiffVerdict
                     breaking={model?.breakingCount ?? 0}

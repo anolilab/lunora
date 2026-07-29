@@ -131,7 +131,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     };
 
     return (
-        <div className="flex flex-col gap-3" data-testid="lunora-migrations">
+        <div className="flex flex-col gap-3 pt-4" data-testid="lunora-migrations">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="mg" />
