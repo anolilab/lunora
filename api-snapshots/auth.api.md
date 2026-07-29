@@ -1251,7 +1251,11 @@ interface UiConfigOptions {
 
 ```ts
 interface UiConfigOrganization {
+    allowUserToCreate: boolean;
     enabled: boolean;
+    invitationLimit?: number;
+    limit?: number;
+    membershipLimit?: number;
     roles: boolean;
     teams: boolean;
 }
@@ -1262,10 +1266,10 @@ interface UiConfigOrganization {
 ```ts
 interface UiConfigPayload {
     emailAndPassword: boolean;
-    organization: UiConfigOrganization;
-    plugins: string[];
+    organization?: UiConfigOrganization;
+    plugins?: string[];
     signUp: boolean;
-    socialProviders: string[];
+    socialProviders?: string[];
 }
 ```
 
