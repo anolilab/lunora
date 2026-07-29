@@ -255,6 +255,9 @@ export const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactE
     };
 
     const allSelected = keys !== null && keys.length > 0 && bulk.length === keys.length;
+    // A Set, not `bulk.includes` per row: the checkbox below asks once per rendered
+    // key, so the array scan made selection quadratic in the page size.
+    const bulkSelected = new Set(bulk);
 
     return (
         <>
@@ -339,7 +342,7 @@ export const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactE
                                             >
                                                 <Checkbox
                                                     aria-label={t("Select {name}", { name: entry.name })}
-                                                    checked={bulk.includes(entry.name)}
+                                                    checked={bulkSelected.has(entry.name)}
                                                     data-testid={`kv-select-${entry.name}`}
                                                     onCheckedChange={() => {
                                                         onToggleBulk(entry.name);

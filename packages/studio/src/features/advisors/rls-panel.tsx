@@ -22,8 +22,8 @@ const operationLabel = (t: TFunction, operation: RlsOperation): string =>
 interface TableCoverage {
     /** The set of operations a policy guards on this table. */
     operations: Set<RlsOperation>;
-    /** Procedures whose `.use(rls(...))` chain declared a policy on this table, deduped. */
-    procedures: string[];
+    /** Procedures whose `.use(rls(...))` chain declared a policy on this table. A Set, like `operations` — dedup is the point. */
+    procedures: Set<string>;
     table: string;
 }
 
@@ -32,13 +32,11 @@ const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
     const byTable = new Map<string, TableCoverage>();
 
     for (const policy of policies) {
-        const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: [], table: policy.table };
+        const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: new Set<string>(), table: policy.table };
 
         coverage.operations.add(policy.on);
 
-        if (!coverage.procedures.includes(policy.procedure)) {
-            coverage.procedures.push(policy.procedure);
-        }
+        coverage.procedures.add(policy.procedure);
 
         byTable.set(policy.table, coverage);
     }
@@ -114,7 +112,7 @@ const RlsPanel = (): ReactElement => {
                                                     )}
                                                 </TableCell>
                                             ))}
-                                            <TableCell className="font-mono text-xs text-muted-foreground">{coverage.procedures.join(", ")}</TableCell>
+                                            <TableCell className="font-mono text-xs text-muted-foreground">{[...coverage.procedures].join(", ")}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>

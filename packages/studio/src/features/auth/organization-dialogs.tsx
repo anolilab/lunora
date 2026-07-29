@@ -334,7 +334,8 @@ const MemberRoleDialog = ({ member, onClose, onDone }: { member: Row; onClose: (
     const t = useT();
     const { busy, error, run } = useAsyncSubmit();
 
-    const [role, setRole] = useState<string>(formatCell(member["role"]));
+    // Lazy initialiser: the eager form re-ran `formatCell` on every render and threw the result away.
+    const [role, setRole] = useState<string>(() => formatCell(member["role"]));
 
     const onSubmit = (): void => {
         run(async () => {

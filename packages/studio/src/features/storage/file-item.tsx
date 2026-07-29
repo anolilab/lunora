@@ -1,6 +1,5 @@
 import type { StorageObject } from "@lunora/client";
 import type { ReactElement } from "react";
-import { useCallback } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { Badge } from "../../components/ui/badge";
@@ -17,7 +16,7 @@ interface FileItemHandlers {
     readonly onToggleSelect: (key: string) => void;
 }
 
-/** The per-object bindings derived by {@link useFileItem}. */
+/** The per-object bindings derived by {@link fileItemBindings}. */
 interface FileItem {
     /** Copy the object's URL (bound to the full key). */
     readonly copy: () => void;
@@ -32,30 +31,32 @@ interface FileItem {
 }
 
 /**
- * One home for the per-item callbacks shared by the list row and the gallery
- * tile: each binds copy/delete/toggle to the object's full `key` via a stable
- * `useCallback` (react-perf, no fresh closure per render) and slices the display
- * `name` off the current folder `prefix`. The layout differs between views; only
- * this wiring is shared.
+ * One home for the per-item bindings shared by the list row and the gallery
+ * tile: each binds copy/delete/toggle to the object's full `key`, and slices the
+ * display `name` off the current folder `prefix`. The layout differs between
+ * views; only this wiring is shared.
+ *
+ * A plain function, not a hook — it calls none, and React Compiler memoizes the
+ * closures it returns.
  */
-const useFileItem = (object: StorageObject, prefix: string, handlers: FileItemHandlers): FileItem => {
+const fileItemBindings = (object: StorageObject, prefix: string, handlers: FileItemHandlers): FileItem => {
     const { onCopy, onDelete, onDownload, onToggleSelect } = handlers;
 
-    const copy = useCallback((): void => {
+    const copy = (): void => {
         onCopy(object.key);
-    }, [onCopy, object.key]);
+    };
 
-    const download = useCallback((): void => {
+    const download = (): void => {
         onDownload(object.key);
-    }, [onDownload, object.key]);
+    };
 
-    const remove = useCallback((): void => {
+    const remove = (): void => {
         onDelete(object.key);
-    }, [onDelete, object.key]);
+    };
 
-    const toggle = useCallback((): void => {
+    const toggle = (): void => {
         onToggleSelect(object.key);
-    }, [onToggleSelect, object.key]);
+    };
 
     return { copy, download, name: object.key.slice(prefix.length), remove, toggle };
 };
@@ -152,5 +153,5 @@ const FileSelect = ({ objectKey, onToggle, selected, t }: FileSelectProps): Reac
     <Checkbox aria-label={t("Select row")} checked={selected} data-testid={`storage-select-${objectKey}`} onCheckedChange={onToggle} />
 );
 
-export { FileActions, FileReferences, FileSelect, useFileItem };
+export { FileActions, fileItemBindings, FileReferences, FileSelect };
 export type { FileItemHandlers };

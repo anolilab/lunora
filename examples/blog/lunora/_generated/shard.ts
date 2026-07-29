@@ -528,6 +528,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "flags": false,
     "kv": false,
     "mail": false,
+    "notifications": false,
     "payments": false,
     "queues": false,
     "scheduler": true,
@@ -535,6 +536,9 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "vectors": true,
     "workflows": false
 };
+
+/** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "e15b280e5b1ef0e4", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"drafts\": {\n      \"fields\": {\n        \"authorId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_updated\": {\n          \"fields\": [\n            \"updatedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"posts\": {\n      \"fields\": {\n        \"authorId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"imageKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"publishedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_published\": {\n          \"fields\": [\n            \"publishedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"users\": {\n      \"fields\": {\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"passwordHash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_email\": {\n          \"fields\": [\n            \"email\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -1018,7 +1022,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false });
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
             this.migrated = true;
         }
 

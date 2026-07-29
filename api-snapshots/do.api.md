@@ -14,7 +14,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 const ADMIN_FUNCTIONS: {
     readonly applyCdc: "__lunora_admin__:applyCdc";
+    readonly aiAvailable: "__lunora_admin__:aiAvailable";
+    readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
+    readonly backRelationCounts: "__lunora_admin__:backRelationCounts";
     readonly cdcSync: "__lunora_admin__:cdcSync";
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
@@ -40,6 +45,7 @@ const ADMIN_FUNCTIONS: {
     readonly getLogs: "__lunora_admin__:getLogs";
     readonly getMetrics: "__lunora_admin__:getMetrics";
     readonly getPitrBookmark: "__lunora_admin__:getPitrBookmark";
+    readonly getQueryInsights: "__lunora_admin__:getQueryInsights";
     readonly getQueueMessages: "__lunora_admin__:getQueueMessages";
     readonly getRequestLog: "__lunora_admin__:getRequestLog";
     readonly getSecurityAudit: "__lunora_admin__:getSecurityAudit";
@@ -50,6 +56,7 @@ const ADMIN_FUNCTIONS: {
     readonly importShard: "__lunora_admin__:importShard";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listQueues: "__lunora_admin__:listQueues";
+    readonly lintSql: "__lunora_admin__:lintSql";
     readonly listTables: "__lunora_admin__:listTables";
     readonly listWorkflows: "__lunora_admin__:listWorkflows";
     readonly maskPolicies: "__lunora_admin__:maskPolicies";
@@ -65,6 +72,8 @@ const ADMIN_FUNCTIONS: {
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
+    readonly schemaHistory: "__lunora_admin__:schemaHistory";
+    readonly schemaVersion: "__lunora_admin__:schemaVersion";
     readonly runAs: "__lunora_admin__:runAs";
     readonly runMigration: "__lunora_admin__:runMigration";
     readonly runSql: "__lunora_admin__:runSql";
@@ -2246,6 +2255,7 @@ interface StudioFeaturesResult {
     flags: boolean;
     kv: boolean;
     mail: boolean;
+    notifications: boolean;
     payments: boolean;
     queues: boolean;
     scheduler: boolean;
@@ -3246,6 +3256,10 @@ const runRowValidators: (definition: TableDefinitionLike, document: Record<strin
 ```ts
 const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
     cdc?: boolean;
+    schemaSnapshot?: {
+        hash: string;
+        json: string;
+    };
 }) => void;
 ```
 

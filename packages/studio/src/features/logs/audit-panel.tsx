@@ -114,6 +114,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     // cells) so the semantics, styling, and tests stay intact. See `observeViewportRect`.
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
         count: filtered.length,
         estimateSize: () => ROW_HEIGHT,

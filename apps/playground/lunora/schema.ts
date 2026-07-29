@@ -54,6 +54,56 @@ export default defineSchema({
         // (`createdAt < cutoff`) instead of loading every row and filtering in memory.
         .index("by_created", ["createdAt"]),
 
+    /**
+     * A deliberately WIDE, high-volume table for exercising the Studio data
+     * browser: column pinning, horizontal column windowing, search-match
+     * highlighting, typed date-range search, and reverse-relation counts.
+     *
+     * 24 columns is past the point where the grid mounts every cell of every
+     * visible row, so the windowing is observable rather than theoretical; the
+     * `ownerId` / `channelId` refs give the data browser two forward links and
+     * give `users` / `channels` two more reverse edges to count.
+     *
+     * Fill it with `lunora seed --table demoRecords --count 250`: the seeder
+     * derives the rows from this definition, seeds the FK parents first, and
+     * gives the `*At` columns real timestamps spread over the last six months,
+     * which is what makes the grid's `2026-07`-style date search meaningful.
+     */
+    demoRecords: defineTable({
+        amount: v.number(),
+        category: v.string(),
+        channelId: v.id("channels"),
+        city: v.string(),
+        code: v.string(),
+        country: v.string(),
+        createdAt: v.number(),
+        currency: v.string(),
+        department: v.string(),
+        description: v.string(),
+        email: v.string(),
+        externalRef: v.string(),
+        latitude: v.number(),
+        longitude: v.number(),
+        notes: v.optional(v.string()),
+        ownerId: v.id("users"),
+        priority: v.number(),
+        quantity: v.number(),
+        region: v.string(),
+        sku: v.string(),
+        status: v.string(),
+        tags: v.string(),
+        title: v.string(),
+        updatedAt: v.number(),
+    })
+        // Rows come from `lunora seed`, which bulk-inserts through the admin import
+        // endpoint — not from a mutation. Without this the insert-path advisor
+        // reports `table_without_insert` on every codegen run, which is noise
+        // rather than a finding: the advisory's own text says a table "seeded
+        // elsewhere" can be ignored, and this is the declaration that says so.
+        .externallyManaged()
+        .index("by_created", ["createdAt"])
+        .index("by_status", ["status"]),
+
     // Per-user private notes — the playground's Row-Level Security surface.
     // Lives in the default root DO; `notes.list` deliberately reads the WHOLE
     // table and relies on the `rls()` read policy (see lunora/notes.ts) to

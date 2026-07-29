@@ -1,13 +1,13 @@
 import type { ReactElement } from "react";
-import { useMemo } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { SettingEntry, SettingsResult } from "../../lib/admin";
+import type { DeployInfo, SettingEntry, SettingsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_WORKERS_URL } from "../../lib/cf-links";
 
@@ -21,6 +21,33 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
     binding: "outline",
     secret: "destructive",
     var: "secondary",
+};
+
+/** The deployment facts that are actually present, as label/value rows. Absent fields are omitted rather than rendered blank. */
+const toDeployRows = (deploy: DeployInfo | undefined, t: TFunction): { label: string; value: string }[] => {
+    if (deploy === undefined) {
+        return [];
+    }
+
+    const rows: { label: string; value: string }[] = [];
+
+    if (deploy.workerUrl !== undefined) {
+        rows.push({ label: t("URL"), value: deploy.workerUrl });
+    }
+
+    if (deploy.environment !== undefined) {
+        rows.push({ label: t("Environment"), value: deploy.environment });
+    }
+
+    if (deploy.deploymentId !== undefined) {
+        rows.push({ label: t("Deployment"), value: deploy.deploymentId });
+    }
+
+    if (deploy.versionTag !== undefined) {
+        rows.push({ label: t("Version"), value: deploy.versionTag });
+    }
+
+    return rows;
 };
 
 /**
@@ -47,33 +74,7 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
         isLoading: loading,
     } = useAdminQuery<SettingsResult>(ADMIN_FUNCTIONS.getSettings, {}, { shardKey: initialShardKey ?? "" });
 
-    const deployRows = useMemo<{ label: string; value: string }[]>(() => {
-        const deploy = result?.deploy;
-
-        if (deploy === undefined) {
-            return [];
-        }
-
-        const rows: { label: string; value: string }[] = [];
-
-        if (deploy.workerUrl !== undefined) {
-            rows.push({ label: t("URL"), value: deploy.workerUrl });
-        }
-
-        if (deploy.environment !== undefined) {
-            rows.push({ label: t("Environment"), value: deploy.environment });
-        }
-
-        if (deploy.deploymentId !== undefined) {
-            rows.push({ label: t("Deployment"), value: deploy.deploymentId });
-        }
-
-        if (deploy.versionTag !== undefined) {
-            rows.push({ label: t("Version"), value: deploy.versionTag });
-        }
-
-        return rows;
-    }, [result, t]);
+    const deployRows = toDeployRows(result?.deploy, t);
 
     const settings = result?.settings ?? [];
 

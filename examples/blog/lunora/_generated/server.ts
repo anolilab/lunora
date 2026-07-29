@@ -25,6 +25,8 @@ import type {
 } from "lunorash/server";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
+import type { VectorSearch, VectorSearchReader } from "lunorash/server";
+import type { VectorIndexName } from "./dataModel.js";
 
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -100,22 +102,25 @@ type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? 
  */
 type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;
 
-export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage" | "vectors"> {
     readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly vectors: VectorSearchReader<VectorIndexName>;
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage" | "vectors"> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly vectors: VectorSearch<VectorIndexName>;
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage" | "vectors"> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
+    readonly vectors: VectorSearch<VectorIndexName>;
 }
 
 /**

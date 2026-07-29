@@ -80,6 +80,7 @@ interface SeedOptions {
     defaultCount?: number;
     existingIds?: Readonly<Record<string, ReadonlyArray<string>>>;
     indexOffset?: Readonly<Record<string, number>>;
+    now?: number;
     only?: ReadonlyArray<string>;
     overrides?: SeedOverrides;
     seed?: number;

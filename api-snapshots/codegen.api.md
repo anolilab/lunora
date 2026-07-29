@@ -167,10 +167,18 @@ interface CronJobIR {
 
 ```ts
 interface DriftChange {
+    scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
-    type: "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedJurisdiction" | "changedFieldKind" | "changedIndex" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "removedField" | "removedIndex" | "removedRelation" | "removedTable";
+    table?: string;
+    type: "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "removedField" | "removedIndex" | "removedRelation" | "removedTable";
 }
+```
+
+### `DriftScope` (type)
+
+```ts
+type DriftScope = "schema" | "table";
 ```
 
 ### `EmitAppOptions` (interface)
@@ -1064,7 +1072,7 @@ const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalyti
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)

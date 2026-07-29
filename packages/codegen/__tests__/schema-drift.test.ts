@@ -1,15 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import type { SchemaIR, TableIR } from "../src/ir";
-import {
-    buildSchemaSnapshot,
-    diffSchemaSnapshots,
-    evaluateSchemaDrift,
-    parseSchemaSnapshot,
-    SCHEMA_SNAPSHOT_VERSION,
-    SchemaSnapshotParseError,
-    serializeSchemaSnapshot,
-} from "../src/schema-drift";
+import { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "../src/schema-drift";
 
 /** Build a minimal `TableIR` with the given field shape; extras (indexes/relations/shardMode) optional. */
 const table = (name: string, shape: TableIR["shape"], extra: Partial<TableIR> = {}): TableIR => {
@@ -133,7 +126,9 @@ describe("schema-drift", () => {
                 buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField, role: stringField })]), []),
             );
 
-            expect(safe.changes).toStrictEqual([{ severity: "safe", summary: "added optional field users.bio", type: "addedOptionalField" }]);
+            expect(safe.changes).toStrictEqual([
+                { scope: "table", severity: "safe", summary: "added optional field users.bio", table: "users", type: "addedOptionalField" },
+            ]);
             expect(breaking.changes.some((c) => c.type === "addedRequiredField" && c.severity === "breaking")).toBe(true);
         });
 
@@ -164,7 +159,9 @@ describe("schema-drift", () => {
                 buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField }), table("posts", { title: stringField })]), []),
             );
 
-            expect(widened.changes).toStrictEqual([{ severity: "safe", summary: "field users.name became optional", type: "fieldRequiredToOptional" }]);
+            expect(widened.changes).toStrictEqual([
+                { scope: "table", severity: "safe", summary: "field users.name became optional", table: "users", type: "fieldRequiredToOptional" },
+            ]);
             expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
         });
 

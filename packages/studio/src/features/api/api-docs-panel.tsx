@@ -1,7 +1,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "API", "Fn", and "Docs" are the domain terms for this API-docs panel; the file name and default-export name are fixed by the studio's tab wiring. */
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -273,6 +273,25 @@ interface FunctionGroup {
     readonly items: ReadonlyArray<{ fn: string; kind: FunctionKind; path: string }>;
 }
 
+/** Group function descriptors by their file segment, files sorted, functions sorted within each file — a stable, scannable rail. */
+const groupByFile = (functionList: ReadonlyArray<FunctionDescriptor>): ReadonlyArray<FunctionGroup> => {
+    const byFile = new Map<string, { fn: string; kind: FunctionKind; path: string }[]>();
+
+    for (const descriptor of functionList) {
+        const { file, fn } = splitPath(descriptor.path);
+        const bucket = byFile.get(file) ?? [];
+
+        bucket.push({ fn, kind: descriptor.kind, path: descriptor.path });
+        byFile.set(file, bucket);
+    }
+
+    return [...byFile.entries()]
+        .map(([file, items]) => {
+            return { file, items: items.toSorted((a, b) => a.fn.localeCompare(b.fn)) };
+        })
+        .toSorted((a, b) => a.file.localeCompare(b.file));
+};
+
 /**
  * Per-resource "how to call this from your app" browser, generated from the
  * registered functions and tables the studio already has — no new endpoints.
@@ -316,27 +335,11 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
         };
     }, [client, initialShardKey]);
 
-    const functionList = useMemo(() => functions ?? [], [functions]);
+    const functionList = functions ?? [];
 
     // Group function descriptors by their file segment, files sorted, functions
     // sorted within each file — a stable, scannable rail.
-    const grouped = useMemo<ReadonlyArray<FunctionGroup>>(() => {
-        const byFile = new Map<string, { fn: string; kind: FunctionKind; path: string }[]>();
-
-        for (const descriptor of functionList) {
-            const { file, fn } = splitPath(descriptor.path);
-            const bucket = byFile.get(file) ?? [];
-
-            bucket.push({ fn, kind: descriptor.kind, path: descriptor.path });
-            byFile.set(file, bucket);
-        }
-
-        return [...byFile.entries()]
-            .map(([file, items]) => {
-                return { file, items: items.toSorted((a, b) => a.fn.localeCompare(b.fn)) };
-            })
-            .toSorted((a, b) => a.file.localeCompare(b.file));
-    }, [functionList]);
+    const grouped = groupByFile(functionList);
 
     const tableNames = (tables ?? []).map((table) => table.name).toSorted((a, b) => a.localeCompare(b));
 

@@ -22,6 +22,7 @@ const ALL_OFF: FeatureUsage = {
     images: false,
     kv: false,
     mail: false,
+    notify: false,
     payments: false,
     pipelines: false,
     r2sql: false,
@@ -115,6 +116,22 @@ describe("discover-feature-usage", () => {
 
         expect(viaImport.x402).toBe(true);
         expect(viaContext.x402).toBe(true);
+    });
+
+    it("detects notify via the `@lunora/notify` import (the `lunora/notify.ts` config) or a `ctx.notify` read", () => {
+        expect.assertions(2);
+
+        // The realistic signal is the app's `lunora/notify.ts` config — it imports
+        // `defineNotify`, and the file is part of the scanned source set.
+        writeSource("notify.ts", `import { defineNotify } from "@lunora/notify";\nexport default defineNotify({});`);
+        const viaImport = discoverFeatureUsage(newProject(), workdir);
+
+        rmSync(join(workdir, "notify.ts"));
+        writeSource("ping.ts", `export const p = async (ctx) => ctx.notify.send({});`);
+        const viaContext = discoverFeatureUsage(newProject(), workdir);
+
+        expect(viaImport.notify).toBe(true);
+        expect(viaContext.notify).toBe(true);
     });
 
     it("detects the new Cloudflare-capability features via import or the `ctx.*` helper", () => {
@@ -278,6 +295,7 @@ describe("discover-feature-usage", () => {
                 flags: false,
                 kv: false,
                 mail: false,
+                notifications: false,
                 payments: false,
                 queues: false,
                 scheduler: false,
@@ -323,6 +341,16 @@ describe("discover-feature-usage", () => {
             const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/mail"]) });
 
             expect(result).toMatchObject({ mail: true });
+        });
+
+        it("shows the notifications page from notify usage or a declared @lunora/notify dependency", () => {
+            expect.assertions(3);
+
+            // Hidden by default — the Notifications panel only reads `@lunora/notify`
+            // devices, so an app without the package has nothing to show there.
+            expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS).notifications).toBe(false);
+            expect(buildStudioFeatures({ ...ALL_OFF, notify: true }, NO_SIGNALS).notifications).toBe(true);
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/notify"]) }).notifications).toBe(true);
         });
 
         it("hides the payments page for a bare @lunora/payment dependency, showing it only once the store tables are declared", () => {

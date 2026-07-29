@@ -85,6 +85,8 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
 interface DataMovementAdminRouteDeps {
     /** Apply `.global()` (D1) CDC changes; absent when no global plane is configured. */
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
+    /** Enforce the admin bearer for an endpoint that needs no optional dependency. */
+    assertAdmin: (request: Request) => void;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
     exportCursorStore?: ExportCursorStore;
     /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
@@ -128,6 +130,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         exportSinks,
         knownTables,
         queryCoordinator,
+        assertAdmin,
         requireAdminOption,
         resolveForwardContext,
         shardDO,
@@ -341,9 +344,12 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        // Import fans out through `streamingImport`, but still requires the coordinator
-        // to be configured; `requireAdminOption` enforces the admin gate + presence.
-        requireAdminOption(request, queryCoordinator, { code: "BAD_REQUEST", message: "Import endpoint requires a `queryCoordinator` on the worker" });
+        // Admin gate only. Import fans out through `streamingImport`, which never
+        // touches the coordinator — this used to demand one anyway, which made
+        // `lunora seed` (and every other bulk import) fail with "requires a
+        // `queryCoordinator`" on every app the builder produces, since the
+        // builder has no way to configure one.
+        assertAdmin(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 

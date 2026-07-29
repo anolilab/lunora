@@ -1,9 +1,10 @@
 import { useLunora } from "@lunora/react";
 import type { QueryKey } from "@tanstack/react-query";
 import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/internal";
+import { operationLog } from "../lib/operation-log";
 
 /**
  * The TanStack Query key for a reserved admin RPC read. Stable + structural:
@@ -206,6 +207,9 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 
     // The base read shares the generic client-query machinery (cache, dedup, error
     // normalisation, refetch); admin layers a live WS subscription on top.
+    // No recording wrapper here: the client itself is wrapped once where the
+    // studio mounts it (`lib/recording-client.ts`), so every dispatch — this one
+    // and the ~50 imperative call sites alike — lands on the tape by construction.
     const base = useClientQuery<T>(queryKey, () => client.query(adminRef(path), args, callOptions(shardKey)) as Promise<T>, {
         enabled,
         keepPreviousData,
@@ -224,22 +228,34 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
             return undefined;
         }
 
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- opens the live subscription channel — synchronising with an external system is the effect's purpose
         setLiveError(undefined);
 
-        return client.subscribe(
+        // One tape entry per CHANNEL: opened here, counted on each push, closed
+        // in the teardown below (see `operation-log.ts`).
+        const seq = operationLog.startSubscription(path, args, shardKey);
+
+        const unsubscribe = client.subscribe(
             adminRef(path),
             args,
             (value) => {
+                operationLog.recordPush(seq);
                 setLiveError(undefined);
                 queryClient.setQueryData(queryKey, value);
             },
             {
                 ...callOptions(shardKey),
                 onError: (error) => {
+                    operationLog.failSubscription(seq, error.message);
                     setLiveError(error.message);
                 },
             },
         );
+
+        return () => {
+            operationLog.endSubscription(seq);
+            unsubscribe();
+        };
         // `args`/`queryKey` are tracked via `keySignature`; `client`/`queryClient` are provider-stable.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [keySignature, enabled, live]);
@@ -260,14 +276,11 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 const useInvalidateAdmin = (): ((path: string, args?: Record<string, unknown>, shardKey?: string) => void) => {
     const queryClient = useQueryClient();
 
-    return useCallback(
-        (path: string, args?: Record<string, unknown>, shardKey?: string): void => {
-            const queryKey = args === undefined ? ["lunora-admin", path] : adminQueryKey(path, args, shardKey ?? "");
+    return (path: string, args?: Record<string, unknown>, shardKey?: string): void => {
+        const queryKey = args === undefined ? ["lunora-admin", path] : adminQueryKey(path, args, shardKey ?? "");
 
-            fireAndForget(queryClient.invalidateQueries({ queryKey }));
-        },
-        [queryClient],
-    );
+        fireAndForget(queryClient.invalidateQueries({ queryKey }));
+    };
 };
 
 export { adminQueryKey, useAdminQuery, useClientQuery, useInvalidateAdmin };

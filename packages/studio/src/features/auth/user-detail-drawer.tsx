@@ -87,9 +87,9 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
                     options?.onResult?.(result);
                 } catch (error_) {
                     setActionError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -135,6 +135,7 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
     };
 
     const onSetPassword = (): void => {
+        // react-doctor-disable-next-line react-doctor/no-impure-state-updater -- `runAction` is this drawer's async-action helper, not a state updater — the callback is an async thunk, and React never re-runs it
         runAction(async () => {
             await client.setAuthUserPassword({ newPassword, userId: user.id });
             setNewPassword("");

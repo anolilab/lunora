@@ -1,7 +1,10 @@
 import { flattenHint } from "@lunora/errors";
 import type { ReactElement } from "react";
 
+import { useT } from "../i18n/i18n-context";
 import { errorDocumentationUrl, errorHint, errorMessage } from "../lib/internal";
+import { operationSeqOf } from "../lib/recording-client";
+import { useOperationConsole } from "./operation-console-provider";
 import { Alert } from "./ui/alert";
 
 interface ErrorAlertProps {
@@ -20,8 +23,22 @@ interface ErrorAlertProps {
  * overlay show.
  */
 export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement => {
+    const t = useT();
+    // `undefined` when no console is mounted above this tree (a host embedding a
+    // single panel, or a standalone render in a test). The affordance is then not
+    // rendered at all — a button that silently does nothing is worse than none.
+    const operationConsole = useOperationConsole();
     const hint = errorHint(error);
     const documentationUrl = errorDocumentationUrl(error);
+    // `recordedCall` tags a rejection with its operation-tape entry, so this
+    // callout can point at the exact call that produced it rather than making the
+    // operator hunt. Untagged errors (thrown outside an admin RPC) fall back to
+    // the errors-only view.
+    const seq = operationSeqOf(error);
+
+    const showInConsole = (): void => {
+        operationConsole?.openConsole({ errorsOnly: true, seq });
+    };
 
     return (
         <Alert className={className} testId={testId} variant="destructive">
@@ -37,6 +54,16 @@ export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): React
                 >
                     View error docs
                 </a>
+            )}
+            {operationConsole === undefined ? null : (
+                <button
+                    className="mt-1 block text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="error-show-in-console"
+                    onClick={showInConsole}
+                    type="button"
+                >
+                    {t("Show in console")}
+                </button>
             )}
         </Alert>
     );

@@ -58,8 +58,32 @@ export const notifications = defineQueue<Notification>({
             }
         }
     },
+    // Exhausted messages go to `notifications-dlq` rather than being dropped.
+    // Without this, a message that burns its 3 attempts is gone with no record —
+    // and the Studio's DLQ badge (which this example exists to demonstrate) could
+    // never appear. The advisor flags a queue without one for exactly that reason.
+    deadLetterQueue: "notifications-dlq",
     // Dead-letter a message after 3 delivery attempts (the Cloudflare default).
-    // Add `deadLetterQueue: "notifications-dlq"` to also route exhausted messages
-    // to another queue for inspection.
     maxRetries: 3,
+});
+
+/**
+ * The dead-letter queue for {@link notifications}.
+ *
+ * Declaring a DLQ is only half the job: an unconsumed queue still expires its
+ * messages at the retention window, so the record you dead-lettered a message to
+ * preserve quietly evaporates. This consumer acks and logs each one, which is
+ * what makes the Studio's Queues panel able to show it — and what makes the
+ * one-click redrive there have something to redrive.
+ */
+export const notificationsDlq = defineQueue<Notification>({
+    handler: (context, batch) => {
+        for (const message of batch.messages) {
+            context.log.warn("notification dead-lettered", { id: message.id, kind: message.body.kind, to: message.body.to });
+            // Acked, not retried: this message already exhausted its attempts on
+            // the parent queue. Retrying here would just burn this queue's budget
+            // too and then drop it for real.
+            message.ack();
+        }
+    },
 });

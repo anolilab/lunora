@@ -65,6 +65,7 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
         setInserted(undefined);
         setInserting(true);
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
         try {
             // Vary the seed per click so repeated generations don't collide on
             // the deterministic `_id` the planner derives from (seed, index).

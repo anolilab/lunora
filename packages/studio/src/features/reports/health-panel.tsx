@@ -1,7 +1,7 @@
 import type { SchedulerStatus } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import ConnectionBadge from "../../components/connection-badge";
 import { LiveError } from "../../components/live-status";
@@ -262,6 +262,16 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
     };
 };
 
+/** Attempts and failures as parallel series for the auth sparkline. */
+const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[]; failures: number[] } => {
+    const buckets = auth?.history ?? [];
+
+    return {
+        attempts: buckets.map((bucket) => bucket.attempts),
+        failures: buckets.map((bucket) => bucket.failures),
+    };
+};
+
 /**
  * App-level health & SLO overview. On top of the original single-shard snapshot
  * (recent errors, request/error counts, shards seen) it composes the
@@ -278,6 +288,8 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
  * live: a root-shard `getMetrics` subscription drives a full cross-shard re-pull
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
+// react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~641 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -309,6 +321,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
     const rootShard = initialShardKey ?? "";
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect and the fan-out timer depend on this, so a fresh one re-fires them every render
     const refresh = useCallback(async (): Promise<void> => {
         if (inFlightRef.current) {
             return;
@@ -338,6 +351,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         setScheduler(result.scheduler);
 
         inFlightRef.current = false;
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `rootShard` is derived from the prop and listed in the deps
     }, [client, recentShards, rootShard]);
 
     useEffect(() => {
@@ -363,11 +377,18 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
         // Within the cooldown: coalesce the rest of the burst into one trailing run
         // at the interval edge (only if one isn't already scheduled).
-        trailingTimerRef.current ??= setTimeout(() => {
-            trailingTimerRef.current = null;
-            lastFanOutRef.current = Date.now();
-            fireAndForget(refresh());
-        }, MIN_FANOUT_INTERVAL_MS - elapsed);
+        // An explicit `if`, not `??=`: React Compiler cannot lower `??=`, and one
+        // unsupported operator bails the WHOLE component out of auto-memoization.
+        // The ref is `null | Timeout`, so the two forms are equivalent, and the
+        // compiler bail-out costs more than the extra line reads.
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- `??=` is unsupported by React Compiler's HIR lowering; see above
+        if (trailingTimerRef.current === null) {
+            trailingTimerRef.current = setTimeout(() => {
+                trailingTimerRef.current = null;
+                lastFanOutRef.current = Date.now();
+                fireAndForget(refresh());
+            }, MIN_FANOUT_INTERVAL_MS - elapsed);
+        }
     };
 
     useEffect(
@@ -405,14 +426,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const topErrors = recentErrors.slice(0, RECENT_ERROR_LIMIT);
 
     const trend = requestErrorSeries(totals?.history);
-    const authTrend = useMemo(() => {
-        const buckets = auth?.history ?? [];
-
-        return {
-            attempts: buckets.map((bucket) => bucket.attempts),
-            failures: buckets.map((bucket) => bucket.failures),
-        };
-    }, [auth?.history]);
+    const authTrend = authSeries(auth);
 
     // Functions that have run, worst error-rate first, then by call volume.
     const worstFunctions = functions

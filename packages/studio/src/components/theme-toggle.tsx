@@ -1,3 +1,4 @@
+// react-doctor-disable-next-line react-doctor/use-lazy-motion -- `m` + LazyMotion needs a provider above every consumer; this package exports individual panels that hosts mount without the studio shell, so a missing provider would throw at runtime in someone else's app
 import { motion } from "motion/react";
 import type { ReactElement } from "react";
 

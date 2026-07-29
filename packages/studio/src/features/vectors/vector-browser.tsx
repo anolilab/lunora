@@ -122,9 +122,9 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
         } catch (error_) {
             setMatches(null);
             setQueryError(errorMessage(error_));
-        } finally {
-            setSearching(false);
         }
+
+        setSearching(false);
     };
 
     const onSearch = (): void => {

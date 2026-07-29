@@ -1,5 +1,4 @@
 import type { ReactElement } from "react";
-import { useMemo } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
@@ -61,7 +60,7 @@ const ContainersPanel = (): ReactElement => {
     const { data, error, liveError } = useAdminQuery<{ entries?: unknown }>(ADMIN_FUNCTIONS.getLogs, {}, { live: true, shardKey: "" });
 
     const loaded = data !== undefined;
-    const rows = useMemo(() => foldContainerInstances(entriesOf(data)), [data]);
+    const rows = foldContainerInstances(entriesOf(data));
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-containers-panel">
@@ -121,6 +120,7 @@ const ContainersPanel = (): ReactElement => {
                                             {row.detail ?? "—"}
                                         </TableCell>
                                         <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">{row.exitCode ?? "—"}</TableCell>
+                                        {/* react-doctor-disable-next-line react-doctor/no-locale-format-in-render -- the studio is a client-only SPA with no SSR pass, so there is no server locale to mismatch against */}
                                         <TableCell className="text-xs tabular-nums text-muted-foreground">{new Date(row.timestamp).toLocaleString()}</TableCell>
                                     </TableRow>
                                 ))}

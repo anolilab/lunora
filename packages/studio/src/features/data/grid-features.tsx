@@ -241,7 +241,21 @@ const ColumnToggle = ({ column }: { readonly column: Column<GridRow> }): ReactEl
  * the TanStack `columnVisibility` state, so toggling a column hides its header and
  * cells everywhere the grid reads `getVisibleCells()`.
  */
-const ColumnsMenu = ({ table }: { readonly table: Table<GridRow> }): ReactElement => {
+/** Hoisted empty list so the default prop is a stable reference across renders. */
+const NO_BACK_RELATIONS: ReadonlyArray<{ column: string; table: string }> = [];
+
+const ColumnsMenu = ({
+    backRelations = NO_BACK_RELATIONS,
+    enabledBackRelations,
+    onToggleBackRelation,
+    table,
+}: {
+    /** Reverse edges available for the open table — offered as opt-in extra columns. */
+    readonly backRelations?: ReadonlyArray<{ column: string; table: string }>;
+    readonly enabledBackRelations?: ReadonlySet<string>;
+    readonly onToggleBackRelation?: (key: string) => void;
+    readonly table: Table<GridRow>;
+}): ReactElement => {
     const t = useT();
     const allVisible = table.getIsAllColumnsVisible();
     const onToggleAll = (): void => {
@@ -261,10 +275,40 @@ const ColumnsMenu = ({ table }: { readonly table: Table<GridRow> }): ReactElemen
                         {allVisible ? t("Hide all") : t("Show all")}
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
-                    {table.getAllLeafColumns().map((column) => (
-                        <ColumnToggle column={column} key={column.id} />
-                    ))}
+                    {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over one table's leaf columns, walked when the menu opens; the flatMap-of-arrays form reads worse for no measurable gain at this size */}
+                    {table
+                        .getAllLeafColumns()
+                        // Reverse-relation columns are toggled below in their own
+                        // group — listing them here too would offer two switches for
+                        // one column.
+                        .filter((column) => !column.id.startsWith("__back__:"))
+                        .map((column) => (
+                            <ColumnToggle column={column} key={column.id} />
+                        ))}
                 </DropdownMenuGroup>
+                {backRelations.length > 0 && onToggleBackRelation !== undefined && (
+                    <DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>{t("Related")}</DropdownMenuLabel>
+                        {backRelations.map((relation) => {
+                            const key = `${relation.table}.${relation.column}`;
+
+                            return (
+                                <DropdownMenuCheckboxItem
+                                    checked={enabledBackRelations?.has(key) === true}
+                                    closeOnClick={false}
+                                    data-testid={`grid-back-relation-${key}`}
+                                    key={key}
+                                    onCheckedChange={() => {
+                                        onToggleBackRelation(key);
+                                    }}
+                                >
+                                    {`← ${relation.table}.${relation.column}`}
+                                </DropdownMenuCheckboxItem>
+                            );
+                        })}
+                    </DropdownMenuGroup>
+                )}
             </DropdownMenuContent>
         </DropdownMenu>
     );
@@ -366,6 +410,9 @@ const CellDetailDialog = ({ column, onClose, value }: { readonly column: string;
  * one-liner.
  */
 const GridActionsBar = ({
+    backRelations,
+    enabledBackRelations,
+    onToggleBackRelation,
     columns,
     editable,
     name,
@@ -375,10 +422,14 @@ const GridActionsBar = ({
     table,
     transposed,
 }: {
+    /** Reverse edges available for the open table — offered as opt-in extra columns. */
+    readonly backRelations?: ReadonlyArray<{ column: string; table: string }>;
     readonly columns: ReadonlyArray<string>;
     readonly editable: boolean;
+    readonly enabledBackRelations?: ReadonlySet<string>;
     readonly name: string;
     readonly onBulkDelete: (ids: ReadonlyArray<string>) => void;
+    readonly onToggleBackRelation?: (key: string) => void;
     readonly onToggleTranspose: () => void;
     readonly rows: ReadonlyArray<GridRow>;
     readonly table: Table<GridRow>;
@@ -399,7 +450,7 @@ const GridActionsBar = ({
     return (
         <div className="flex flex-wrap items-center gap-1.5" data-testid="grid-actions">
             <ExportMenu columns={columns} name={name} rows={rows} />
-            <ColumnsMenu table={table} />
+            <ColumnsMenu backRelations={backRelations} enabledBackRelations={enabledBackRelations} onToggleBackRelation={onToggleBackRelation} table={table} />
             <button
                 aria-pressed={transposed}
                 className={CONTROL_BTN}

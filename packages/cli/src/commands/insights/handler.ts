@@ -1,4 +1,4 @@
-import resolveAdminBaseUrl from "../../util/admin-url";
+import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -169,6 +169,8 @@ const formatInsightsReport = (report: InsightsReport): string => {
 };
 
 interface InsightsCommandOptions {
+    /** Project root, so the running dev server's recorded URL can be found when `--url` is absent. */
+    cwd?: string;
     fetchImpl?: FetchLike;
     json?: boolean;
     limit?: number;
@@ -216,7 +218,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
         return { code: 1 };
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
         return { code: 1 };
@@ -284,6 +286,7 @@ const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(
     const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
 
     return runInsightsCommand({
+        cwd,
         fetchImpl: undefined,
         json: options.json,
         limit,

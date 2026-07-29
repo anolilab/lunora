@@ -6,7 +6,7 @@ import type { TFunction } from "../../i18n/i18n-context";
 import type { StorageReference } from "../../lib/admin";
 import { fireAndForget, formatBytes } from "../../lib/internal";
 import type { FileItemHandlers } from "./file-item";
-import { FileActions, FileReferences, FileSelect, useFileItem } from "./file-item";
+import { FileActions, fileItemBindings, FileReferences, FileSelect } from "./file-item";
 
 /** File extensions that render as an image thumbnail when the content-type is absent. */
 const IMAGE_EXTENSION_RE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/iu;
@@ -109,12 +109,12 @@ interface GalleryTileProps {
 /**
  * One gallery tile: a thumbnail (with a selection checkbox overlay), the name
  * relative to the current folder, its size, and copy/delete actions. Per-item
- * bindings + the action/select controls are the shared {@link useFileItem} /
+ * bindings + the action/select controls are the shared {@link fileItemBindings} /
  * {@link FileActions} / {@link FileSelect}, mirroring the list view's file row
  * (only the tile layout differs).
  */
 const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, references, resolveUrl, selected, showReferences, t }: GalleryTileProps): ReactElement => {
-    const { copy, download, name, remove, toggle } = useFileItem(object, prefix, handlers);
+    const { copy, download, name, remove, toggle } = fileItemBindings(object, prefix, handlers);
 
     return (
         <div className="flex flex-col gap-1.5" data-testid="fb-tile">

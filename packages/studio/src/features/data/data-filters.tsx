@@ -1,4 +1,5 @@
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
+import { useState } from "react";
 
 import type { FilterClause, FilterOperator } from "../../lib/admin";
 
@@ -48,6 +49,7 @@ const coerceFilterValue = (value: string): number | string => {
  * always stays a string.
  */
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the operator's own filter rows — a handful, edited by hand
     filters
         .filter((filter) => filter.column !== "")
         .map((filter) => {
@@ -68,16 +70,21 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
 const DataFilters = ({
     columns,
     filters,
+    onAskAi,
     onFiltersChange,
     onSearchChange,
     search,
 }: {
     columns: ReadonlyArray<string>;
     filters: ReadonlyArray<EditableFilter>;
+    /** Ask the model for structured clauses. Omitted when no AI binding is available. */
+    onAskAi?: (prompt: string) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
     onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
     search: string;
 }): ReactElement => {
+    const [aiPrompt, setAiPrompt] = useState("");
+
     const addFilter = (): void => {
         onFiltersChange([...filters, { column: columns[0] ?? "", operator: "eq", value: "" }]);
     };
@@ -116,11 +123,51 @@ const DataFilters = ({
                 <button data-testid="db-add-filter" onClick={addFilter} type="button">
                     Add filter
                 </button>
+                {/* Natural-language filtering. Hidden when the app has no AI
+                    binding — an affordance that can never work is worse than
+                    none. The model returns STRUCTURED clauses, so they land in
+                    these same rows for the operator to see and edit before the
+                    query runs. */}
+                {onAskAi !== undefined && (
+                    <>
+                        <input
+                            aria-label="Describe a filter"
+                            data-testid="db-ai-prompt"
+                            onChange={(event) => {
+                                setAiPrompt(event.target.value);
+                            }}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter" && aiPrompt.trim() !== "") {
+                                    event.preventDefault();
+                                    onAskAi(aiPrompt.trim());
+                                }
+                            }}
+                            placeholder="describe a filter…"
+                            value={aiPrompt}
+                        />
+                        <button
+                            data-testid="db-ai-filter"
+                            disabled={aiPrompt.trim() === ""}
+                            onClick={() => {
+                                onAskAi(aiPrompt.trim());
+                            }}
+                            type="button"
+                        >
+                            Suggest
+                        </button>
+                    </>
+                )}
             </div>
 
             {filters.map((filter, index) => (
-                // eslint-disable-next-line react-x/no-array-index-key -- filter rows are positional; their index IS their identity (no domain id)
-                <div className="flex flex-wrap items-center gap-1.5" data-testid="db-filter-row" key={index}>
+                <div
+                    className="flex flex-wrap items-center gap-1.5"
+                    data-testid="db-filter-row"
+                    /* eslint-disable react-x/no-array-index-key -- filter rows are positional; their index IS their identity (no domain id) */
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- filter rows are positional; their index IS their identity (no domain id)
+                    key={index}
+                    /* eslint-enable react-x/no-array-index-key */
+                >
                     <select aria-label="Filter column" data-index={index} data-testid="db-filter-column" onChange={changeColumn} value={filter.column}>
                         {columns.map((column) => (
                             <option key={column} value={column}>

@@ -123,10 +123,9 @@ const fetchRelatedRows = async (
 ): Promise<{ capNote: string | undefined; rowCount: number; rowIds: string[] }> => {
     try {
         const page = await readPage(table, rowId);
-        const rowIds = page.rows
-            .map((r) => extractRowId(r))
-            .filter(Boolean)
-            .slice(0, MAX_ROWS_PER_TABLE);
+        // One pass: `.map().filter(Boolean)` walked the page twice and, worse, did
+        // not narrow away the empty ids — `flatMap` does both.
+        const rowIds = page.rows.flatMap((r) => extractRowId(r) || []).slice(0, MAX_ROWS_PER_TABLE);
         // This read runs the COUNT (no `skipCount`), so `total` is present; the
         // `?? 0` only satisfies the now-optional `TablePage.total` type.
         const total = page.total ?? 0;
@@ -172,8 +171,10 @@ const resolveCascadeNode = async (
         // For each matching row id, collect child impacts (bounded to first 10 sampled ids).
         for (const childRelation of childRelations) {
             for (const id of rowIds.slice(0, 10)) {
-                // eslint-disable-next-line no-await-in-loop -- sequential tree walk
+                /* eslint-disable no-await-in-loop -- sequential tree walk */
+                // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: the preview walks the relation graph in order, and a parallel burst would hammer one shard for a UI hint
                 const child = await resolveCascadeNode(childRelation.table, id, childRelation, cascadeMap, visited, depth + 1, readPage);
+                /* eslint-enable no-await-in-loop */
 
                 if (child.rowCount > 0 || depth === 0) {
                     children.push(child);

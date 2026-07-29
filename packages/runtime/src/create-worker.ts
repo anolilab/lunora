@@ -2698,6 +2698,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // behind the coordinator option, so no bare `assertAdmin` is needed).
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
+        assertAdmin: assertAdminAuthorized,
         exportCursorStore: options.exportCursorStore,
         exportSinks: options.exportSinks,
         knownTables: () => collectKnownTables(options.resolveTableSharding),

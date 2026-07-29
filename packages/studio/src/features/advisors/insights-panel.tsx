@@ -2,7 +2,7 @@ import type { AdvisorShardTraffic } from "@lunora/advisor";
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
@@ -304,6 +304,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // cache key. Previously the panel only reloaded on mount + visibility change, so
     // typing a different shard key never re-fetched the enumeration either.
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- drives an imperative enumeration over the debounced shard — an async load, not derived state
         fireAndForget(enumerateShard(debouncedShard));
     }, [debouncedShard, enumerateShard]);
 
@@ -312,13 +313,22 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // tabbing back from your editor after a schema save (by which point the dev
     // worker has reloaded with the new `LUNORA_ADVISORIES`) re-pulls everything,
     // so advisories land fresh without a manual Refresh.
+    //
+    // The refresh itself is an EFFECT EVENT: it reads five values that change on
+    // nearly every render, and listing them as deps tore down and re-registered
+    // the `visibilitychange` listener each time. An effect event always sees the
+    // latest values without being a dep, so the listener is bound once.
+    const refreshOnVisible = useEffectEvent((): void => {
+        metricsQuery.refetch();
+        functionsQuery.refetch();
+        advisoriesQuery.refetch();
+        fireAndForget(enumerateShard(debouncedShard));
+    });
+
     useEffect(() => {
         const onVisible = (): void => {
             if (document.visibilityState === "visible") {
-                metricsQuery.refetch();
-                functionsQuery.refetch();
-                advisoriesQuery.refetch();
-                fireAndForget(enumerateShard(debouncedShard));
+                refreshOnVisible();
             }
         };
 
@@ -327,7 +337,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         return () => {
             document.removeEventListener("visibilitychange", onVisible);
         };
-    }, [advisoriesQuery, debouncedShard, enumerateShard, functionsQuery, metricsQuery]);
+    }, []);
 
     // Deep-link the "add the index" jump: open the Schema tab with the scanned
     // table pre-selected (`/schema?table=<name>`) so the operator lands on its
@@ -348,6 +358,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // layer). The insight owns the hot-scan story (it's the causal, latency-aware
     // view with the inline "add index" jump); the runtime lint suppresses its
     // hot-scan finding for those tables and keeps only its unique dead-index half.
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the advisor insights for one shard — a findings list, built once per fetch
     const missingIndexTables = new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? []));
 
     // Runtime advisor lints (dead index + hot scan + hot shard) over the recorded
@@ -405,6 +416,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         });
 
         return [...staticRows, ...runtimeRows, ...insightRows];
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `advisories` IS `advisoriesQuery.data?.advisories`, destructured above and listed in the deps
     }, [advisories, insights, jumpToSchemaIndex, runtimeRows, t]);
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;

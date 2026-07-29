@@ -1,14 +1,15 @@
 import { Copy01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "../../../components/ui/button";
+import type { TFunction } from "../../../i18n/i18n-context";
 import { useT } from "../../../i18n/i18n-context";
 import { copyToClipboard } from "../../../lib/internal";
 import { cn } from "../../../lib/utils";
 import JsonHighlight from "./json-highlight";
-import type { ApiResponse } from "./openapi-model";
+import type { ApiOperation, ApiResponse } from "./openapi-model";
 import { useOperationRun } from "./run-context";
 import { exampleForSchema } from "./schema-view";
 import { statusDotClass, statusToneClass } from "./status-tone";
@@ -81,6 +82,45 @@ const ResponseBody = ({ active, running, showError }: ResponseBodyProps): ReactE
     );
 };
 
+/** The documented responses, plus the live result as its own tab once the operation has been run. */
+const buildTabs = ({
+    durationMs,
+    error,
+    failed,
+    operation,
+    ran,
+    response,
+    t,
+}: {
+    durationMs: null | number;
+    error: null | string;
+    failed: boolean;
+    operation: ApiOperation;
+    ran: boolean;
+    response: unknown;
+    t: TFunction;
+}): ResponseTab[] => {
+    const documented = operation.responses.map((entry): ResponseTab => {
+        return { body: exampleBody(entry), durationMs: null, id: entry.status, label: entry.status, live: false, status: entry.status };
+    });
+
+    if (!ran) {
+        return documented;
+    }
+
+    // The live result reads as 2xx on success / "error" on failure so it picks up the same tone helpers.
+    const live: ResponseTab = {
+        body: liveBody(error, response, failed),
+        durationMs,
+        id: LIVE_TAB,
+        label: t("Live"),
+        live: true,
+        status: failed ? "error" : "200",
+    };
+
+    return [live, ...documented];
+};
+
 /**
  * The right-rail response panel: documented response **examples** as status tabs
  * (one per `2xx` / `4xx` … the operation declares, each seeded from its schema)
@@ -103,27 +143,7 @@ const ResponsePanel = (): ReactElement => {
     const ran = status === "success" || failed;
 
     // Documented example tabs, in declared order, plus the live tab once a run lands.
-    const tabs = useMemo<ResponseTab[]>(() => {
-        const documented = operation.responses.map((entry): ResponseTab => {
-            return { body: exampleBody(entry), durationMs: null, id: entry.status, label: entry.status, live: false, status: entry.status };
-        });
-
-        if (!ran) {
-            return documented;
-        }
-
-        // The live result reads as 2xx on success / "error" on failure so it picks up the same tone helpers.
-        const live: ResponseTab = {
-            body: liveBody(error, response, failed),
-            durationMs,
-            id: LIVE_TAB,
-            label: t("Live"),
-            live: true,
-            status: failed ? "error" : "200",
-        };
-
-        return [live, ...documented];
-    }, [operation, ran, failed, error, response, durationMs, t]);
+    const tabs = buildTabs({ durationMs, error, failed, operation, ran, response, t });
 
     // Default selection: the live tab once a run has landed, otherwise a 2xx example (else the first tab).
     const defaultId = ran ? LIVE_TAB : (tabs.find((tab) => tab.status.startsWith("2"))?.id ?? tabs[0]?.id ?? "");

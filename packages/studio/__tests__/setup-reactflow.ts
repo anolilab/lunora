@@ -23,9 +23,29 @@ configure({ asyncUtilTimeout: process.env["CI"] === "true" ? 5000 : 1000 });
 
 /* eslint-disable class-methods-use-this -- no-op DOM stub: ResizeObserver methods intentionally do nothing */
 class ResizeObserverStub {
+    /**
+     * Kept and invoked on `observe`. A real `ResizeObserver` delivers an initial
+     * measurement as soon as it observes, and the data grid relies on exactly
+     * that callback to size its column window — a stub that dropped the callback
+     * silently disabled the measurement under test while passing.
+     */
+    private readonly callback: (entries: unknown[], observer: unknown) => void;
+
+    public constructor(callback: (entries: unknown[], observer: unknown) => void) {
+        this.callback = callback;
+    }
+
     public disconnect(): void {}
 
-    public observe(): void {}
+    public observe(target: Element): void {
+        // A real observer delivers `(entries, observer)` — react-virtual reads
+        // `entries[0].borderBoxSize`, so an argument-less call throws. The sizes
+        // are zero because jsdom does no layout; consumers already treat a zero
+        // viewport as "unmeasured" and fall back safely.
+        const size = { blockSize: 0, inlineSize: 0 };
+
+        this.callback([{ borderBoxSize: [size], contentBoxSize: [size], contentRect: { height: 0, width: 0 }, target }], this);
+    }
 
     public unobserve(): void {}
 }
@@ -72,6 +92,12 @@ if (!("getBBox" in globalThis.SVGElement.prototype)) {
 // animations; without this it throws asynchronously after the rendering test.
 if (typeof globalThis.Element.prototype.getAnimations !== "function") {
     (globalThis.Element.prototype as any).getAnimations = (): Animation[] => [];
+}
+
+// jsdom implements no scrolling at all, so `scrollIntoView` is absent — the
+// operation console calls it to reveal the entry an error surface pointed at.
+if (typeof globalThis.Element.prototype.scrollIntoView !== "function") {
+    (globalThis.Element.prototype as any).scrollIntoView = (): void => {};
 }
 
 if (typeof globalThis.matchMedia !== "function") {

@@ -161,6 +161,7 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
     // Resolve the query runner: an explicit override wins (tests); otherwise build
     // a SQL client from the token config. `null` when neither is available — the
     // panel then renders the config-needed empty state and never fetches.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: feeds `load`, which an effect depends on; a fresh one re-fires the query every render
     const run = useMemo<((sql: string) => Promise<AnalyticsSqlResult>) | null>(() => {
         if (runQuery !== undefined) {
             return runQuery;
@@ -175,6 +176,7 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
         return (sql: string) => client.query(sql);
     }, [config, runQuery]);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect depends on this, so a fresh one re-runs the load every render
     const load = useCallback(
         async (token: { cancelled: boolean }): Promise<void> => {
             if (run === null) {
@@ -191,8 +193,10 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
                 });
 
                 try {
-                    // eslint-disable-next-line no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit.
+                    /* eslint-disable no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit. */
+                    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: each read is a separate worker round-trip and firing them together would burst the very analytics endpoint being measured
                     const result = await run(panel.sql(dataset));
+                    /* eslint-enable no-await-in-loop */
 
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
                     if (!token.cancelled) {

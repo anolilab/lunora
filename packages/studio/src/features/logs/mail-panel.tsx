@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
@@ -78,6 +78,26 @@ const recipientText = (value: string | string[] | undefined): string => {
     return Array.isArray(value) ? value.join(", ") : value;
 };
 
+/** Captured mail whose subject or recipients contain `filter` (case-insensitive); everything when it is blank. */
+const matchingMail = (entries: ReadonlyArray<CapturedMail>, filter: string): ReadonlyArray<CapturedMail> => {
+    const needle = filter.trim().toLowerCase();
+
+    if (needle === "") {
+        return entries;
+    }
+
+    return entries.filter((entry) => `${entry.subject} ${recipientText(entry.to)}`.toLowerCase().includes(needle));
+};
+
+/** The selected message, defaulting to the newest visible one so a refresh or a filter change never leaves the detail pane pointing at nothing. */
+const selectedMail = (visible: ReadonlyArray<CapturedMail>, selectedId: null | string): CapturedMail | undefined => {
+    if (visible.length === 0) {
+        return undefined;
+    }
+
+    return visible.find((entry) => entry.id === selectedId) ?? visible[0];
+};
+
 /**
  * Dev mail catcher — a unified inbox of every email the app sent. `@lunora/mail`'s
  * capture transport (wired in dev) intercepts each send and persists it to the
@@ -91,6 +111,7 @@ const recipientText = (value: string | string[] | undefined): string => {
  * mail appears without a manual refresh. The HTML body is rendered in a fully
  * sandboxed iframe (no script execution) so captured markup can't run in the studio.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~424 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -111,7 +132,7 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const [tab, setTab] = useState<PreviewTab>("html");
     const [filter, setFilter] = useState<string>("");
 
-    const entries = useMemo<CapturedMail[]>(() => data?.entries ?? [], [data]);
+    const entries: CapturedMail[] = data?.entries ?? [];
     const error = readError ?? actionError;
     // Prefer the read's raw error (carries hint/docsUrl); an action error is a plain message string.
     const errorSource = readError === null ? actionError : readErrorSource;
@@ -186,24 +207,10 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
 
     // Client-side substring filter over subject + recipient, AND-combined with the
     // server-loaded window. An empty query passes everything through unchanged.
-    const visible = useMemo<CapturedMail[]>(() => {
-        const needle = filter.trim().toLowerCase();
-
-        if (needle === "") {
-            return entries;
-        }
-
-        return entries.filter((entry) => `${entry.subject} ${recipientText(entry.to)}`.toLowerCase().includes(needle));
-    }, [entries, filter]);
+    const visible = matchingMail(entries, filter);
 
     // Keep a valid selection across refreshes/filters: default to the newest visible message.
-    const selected = useMemo<CapturedMail | undefined>(() => {
-        if (visible.length === 0) {
-            return undefined;
-        }
-
-        return visible.find((entry) => entry.id === selectedId) ?? visible[0];
-    }, [visible, selectedId]);
+    const selected = selectedMail(visible, selectedId);
 
     // First actionable link in the selected message, for the copy / open buttons.
     const link = selectedLink(selected);
