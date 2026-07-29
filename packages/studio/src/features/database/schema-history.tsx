@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import type { StorageTier } from "../../components/storage-tier";
@@ -139,6 +139,9 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
         fireAndForget(navigate({ search: { version }, to: "/migrations" }));
     };
 
+    // Which reading of the diff is on screen. Defaults to the canvas.
+    const [pane, setPane] = useState<"changes" | "diagram">("diagram");
+
     const historyQuery = useAdminQuery<SchemaVersionsResult>(ADMIN_FUNCTIONS.schemaHistory, {}, { shardKey });
     const versions = historyQuery.data?.versions ?? [];
 
@@ -220,11 +223,20 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
 
     const changes = model?.changes ?? [];
 
+    // Tabbed, not stacked. The canvas and the change list are two different
+    // readings of the SAME diff, and stacking them made each fight the other for
+    // vertical space — the list ended up a scrolling strip and then fell below
+    // the fold entirely. Only one is ever the thing you are looking at.
+    const paneClass = (active: boolean): string =>
+        cn(
+            "border-b-2 px-3 py-2 font-mono text-[11px] tracking-widest uppercase outline-none transition-colors",
+            active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+        );
+
     return (
         <div className="flex min-h-0 flex-1 gap-6" data-testid="lunora-schema-history">
-            {/* Tertiary: the rail is scenery. Sharp-edged, borderless on three
-                sides — a single hairline separates it from the content rather
-                than boxing it into a card. */}
+            {/* Tertiary: the rail is scenery. A single hairline separates it from
+                the content rather than boxing it into a card. */}
             <nav className="flex w-56 shrink-0 flex-col overflow-hidden border-e border-border" data-testid="sh-timeline-rail">
                 <RailLabel>{t("Schema versions")}</RailLabel>
                 <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="sh-timeline">
@@ -241,52 +253,71 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
                 </ul>
             </nav>
 
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 pe-1">
-                {/* The one thing you look at first. Given vast space above the
-                    evidence so the squint test resolves to it. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pe-1">
+                {/* The one thing you look at first. */}
                 <DiffVerdict
                     breaking={model?.breakingCount ?? 0}
                     count={previousHash === undefined ? diagramTables.length : changes.length}
                     first={previousHash === undefined}
                 />
 
-                {/* The canvas carries no border — it already reads as a distinct
-                    surface, and boxing it doubled the chrome. */}
-                {/* flex-[2] against the list's flex-1 — the canvas gets the
-                    larger share but no longer a hardcoded height that pushed the
-                    verdict below the fold. */}
-                <div className="flex min-h-0 flex-[2] flex-col">
-                    <SchemaDiagram fill nodeClasses={nodeClasses} tables={diagramTables} testIdPrefix="sh" />
+                <div className="flex shrink-0 items-center gap-1 border-b border-border" data-testid="sh-panes" role="tablist">
+                    <button
+                        aria-selected={pane === "diagram"}
+                        className={paneClass(pane === "diagram")}
+                        data-testid="sh-pane-diagram"
+                        onClick={() => {
+                            setPane("diagram");
+                        }}
+                        role="tab"
+                        type="button"
+                    >
+                        {t("Diagram")}
+                    </button>
+                    <button
+                        aria-selected={pane === "changes"}
+                        className={paneClass(pane === "changes")}
+                        data-testid="sh-pane-changes"
+                        onClick={() => {
+                            setPane("changes");
+                        }}
+                        role="tab"
+                        type="button"
+                    >
+                        {t("Changes")}
+                        <span className="ms-2 tabular-nums text-muted-foreground">{changes.length}</span>
+                    </button>
                 </div>
 
-                {/* Was a 160px strip with its own scrollbar — the third nested
-                    scroll region on the page, holding the actual verdict. It now
-                    takes a real share of the column and scrolls only when it
-                    genuinely overflows. */}
-                <ul className="min-h-0 flex-1 overflow-y-auto border-t border-border" data-testid="sh-changes">
-                    {changes.map((change) => (
-                        <li
-                            className="flex items-baseline gap-3 border-s-2 py-2 ps-3 text-[13px] transition-colors hover:bg-accent/30"
-                            key={`${change.type}-${change.summary}`}
-                        >
-                            {/* No badge. Every row of a safe migration said
-                                "safe", so the chip carried no information while
-                                dominating the row. Severity is a rule on the
-                                left and colour on the value — an event, not a
-                                default. */}
-                            <span
-                                aria-hidden="true"
-                                className={cn("-ms-3 h-3.5 w-0.5 shrink-0 self-center", change.severity === "breaking" ? "bg-destructive" : "bg-border")}
-                            />
-                            {change.severity === "breaking" && (
-                                <span className="font-mono text-[10px] tracking-widest text-destructive uppercase">{t("breaking")}</span>
-                            )}
-                            <span className={cn("min-w-0", change.severity === "breaking" ? "text-foreground" : "text-muted-foreground")}>
-                                {change.summary}
-                            </span>
-                        </li>
-                    ))}
-                </ul>
+                {pane === "diagram" ? (
+                    <div className="flex min-h-0 flex-1 flex-col">
+                        <SchemaDiagram fill nodeClasses={nodeClasses} tables={diagramTables} testIdPrefix="sh" />
+                    </div>
+                ) : (
+                    <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="sh-changes">
+                        {changes.map((change) => (
+                            <li
+                                className="flex items-baseline gap-3 border-s-2 py-2 ps-3 text-[13px] transition-colors hover:bg-accent/30"
+                                key={`${change.type}-${change.summary}`}
+                            >
+                                {/* No badge. Every row of a safe migration said
+                                    "safe", so the chip carried no information
+                                    while dominating the row. Severity is a rule
+                                    on the left edge and colour on the value. */}
+                                <span
+                                    aria-hidden="true"
+                                    className={cn("-ms-3 h-3.5 w-0.5 shrink-0 self-center", change.severity === "breaking" ? "bg-destructive" : "bg-border")}
+                                />
+                                {change.severity === "breaking" && (
+                                    <span className="font-mono text-[10px] tracking-widest text-destructive uppercase">{t("breaking")}</span>
+                                )}
+                                <span className={cn("min-w-0", change.severity === "breaking" ? "text-foreground" : "text-muted-foreground")}>
+                                    {change.summary}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                )}
             </div>
         </div>
     );

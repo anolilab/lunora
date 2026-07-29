@@ -529,6 +529,8 @@ const MESSAGE_IDS = [
     "First recorded version — every table is new.",
     "{count} change(s)",
     "change",
+    "Diagram",
+    "Changes",
     "changes",
     "tables",
     "first recorded version",
