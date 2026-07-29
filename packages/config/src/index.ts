@@ -165,6 +165,8 @@ export { discoverWorkflowInfo } from "./workflow-info";
 export type { ReadWranglerResult } from "./wrangler-path";
 export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 export { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
+export type { AlchemyTranslation, WranglerConfigShape } from "./wrangler-to-alchemy";
+export { wranglerToAlchemy } from "./wrangler-to-alchemy";
 export type {
     TailConsumer,
     WranglerConfig,
