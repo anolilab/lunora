@@ -99,7 +99,6 @@ const DiffVerdict = ({ breaking, count, first }: { readonly breaking: number; re
             <div className="flex items-baseline gap-3" data-testid="sh-summary">
                 <span className="text-3xl leading-none font-light tracking-tight tabular-nums">{count}</span>
                 <span className="font-mono text-[11px] tracking-widest text-muted-foreground uppercase">{t("tables")}</span>
-                <span className="font-mono text-[11px] tracking-widest text-muted-foreground/60 uppercase">· {t("first recorded version")}</span>
             </div>
         );
     }

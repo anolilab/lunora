@@ -251,8 +251,8 @@ describe("schemaDiagram (viewer integration)", () => {
 
         render(renderViewer(createClient()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // The unified diagram renders the `messages` node, with its `author` FK column probed via describeTables.
         const column = await screen.findByTestId("sd-col-messages-author");
@@ -265,8 +265,8 @@ describe("schemaDiagram (viewer integration)", () => {
 
         render(renderViewer(createClientWithColumnError()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // describeTables rejects for the shard → shardColumnsError[shard] is true → hint renders.
         const hint = await screen.findByTestId("sd-node-messages-error");

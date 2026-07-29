@@ -538,7 +538,6 @@ const MESSAGE_IDS = [
     "{count} columns",
     "changes",
     "tables",
-    "first recorded version",
     "{count} breaking",
     "breaking",
     "safe",

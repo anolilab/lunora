@@ -178,7 +178,9 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
     const client = useLunora();
     const t = useT();
 
-    const [view, setView] = useState<SchemaView>("list");
+    // Graph first: the diagram answers "what shape is this database", which is the
+    // question you open this page with. The table list is the drill-down.
+    const [view, setView] = useState<SchemaView>("graph");
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [tableFilter, setTableFilter] = useState<string>("");
     const [tables, setTables] = useState<TableInfo[] | null>(null);

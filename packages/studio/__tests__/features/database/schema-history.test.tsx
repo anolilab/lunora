@@ -112,11 +112,11 @@ describe("schemaHistoryPanel", () => {
 
         render(renderPanel(createClient({ versions: [VERSIONS[1] as (typeof VERSIONS)[number]] })));
 
+        // With no predecessor the verdict counts TABLES, not changes — that is
+        // what "treat it as all-new" means here. The label that used to spell it
+        // out was dropped as noise, so assert the count instead of the prose.
         await waitFor(() => {
-            // Case-insensitive: the verdict renders this label in a mono caption
-            // that is uppercased by CSS, so asserting the exact casing of the
-            // source string would break on a purely visual change.
-            expect(screen.getByTestId("sh-summary").textContent?.toLowerCase()).toContain("first recorded version");
+            expect(screen.getByTestId("sh-summary").textContent?.toLowerCase()).toContain("tables");
         });
     });
 

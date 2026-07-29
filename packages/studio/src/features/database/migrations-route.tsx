@@ -63,7 +63,7 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
     );
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col" data-testid="lunora-migrations-route">
+        <div className="flex min-h-0 flex-1 flex-col pt-4" data-testid="lunora-migrations-route">
             <div className="flex shrink-0 items-center gap-1 border-b border-border px-3" data-testid="mg-panes" role="tablist">
                 {tab("diagram", t("Diagram"), "mg-pane-diagram")}
                 {tab("changes", t("Changes"), "mg-pane-changes")}
@@ -72,7 +72,7 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
 
             {/* Only the selected pane is mounted, so the React Flow canvas is not
                 measuring and re-fitting behind a form nobody is looking at. */}
-            <div className="flex min-h-0 flex-1 flex-col pt-4">
+            <div className="flex min-h-0 flex-1 flex-col">
                 {pane === "data" ? (
                     // The inset is THIS pane's, not the container's: the schema
                     // panes own their edges — the version rail runs to the left
