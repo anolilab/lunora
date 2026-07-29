@@ -4,7 +4,6 @@ import { useMemo } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import type { StorageTier } from "../../components/storage-tier";
-import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
@@ -33,7 +32,13 @@ const STATUS_RING: Readonly<Record<TableStatus, string>> = {
 /** Map a snapshot's shard mode onto the diagram's storage tier. */
 const tierOf = (shardMode: string): StorageTier => (shardMode === "global" ? "global" : "shard");
 
-/** One row in the version timeline. */
+/**
+ * One row in the version timeline.
+ *
+ * Tertiary layer: mono, small, low-contrast. The rail is scenery you scan, not
+ * the thing you read — the selected version is marked by an aurora rule and a
+ * contrast step, never by a heavier weight or a larger size.
+ */
 const VersionRow = ({
     appliedAt,
     hash,
@@ -50,8 +55,10 @@ const VersionRow = ({
     <li>
         <button
             className={cn(
-                "flex w-full flex-col items-start gap-0.5 border-s-2 px-3 py-2 text-start outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
-                selected ? "border-s-primary bg-accent" : "border-s-transparent",
+                "flex w-full flex-col items-start gap-1 border-s-2 px-4 py-3 text-start outline-none transition-colors",
+                selected
+                    ? "border-s-primary bg-accent/60 text-foreground"
+                    : "border-s-transparent text-muted-foreground hover:bg-accent/30 hover:text-foreground",
             )}
             data-testid={`sh-version-${hash}`}
             onClick={() => {
@@ -59,13 +66,51 @@ const VersionRow = ({
             }}
             type="button"
         >
-            <span className="flex w-full items-center gap-2">
-                <span className="text-xs font-medium">v{seq}</span>
-                <span className="ms-auto font-mono text-[10px] text-muted-foreground">{hash.slice(0, 8)}</span>
+            <span className="flex w-full items-baseline gap-2">
+                <span className="font-mono text-[13px] tabular-nums">v{seq}</span>
+                <span className="ms-auto font-mono text-[10px] tracking-wider text-muted-foreground/70 uppercase">{hash.slice(0, 7)}</span>
             </span>
-            <span className="text-[11px] text-muted-foreground">{formatTimestamp(appliedAt)}</span>
+            <span className="font-mono text-[10px] tracking-wide text-muted-foreground/70">{formatTimestamp(appliedAt)}</span>
         </button>
     </li>
+);
+
+/**
+ * The diff verdict — the PRIMARY layer, and the one thing this page exists to
+ * answer: how much moved, and can it be deployed.
+ *
+ * A number at display size, because the count is the answer. Everything else on
+ * the page is the evidence behind it. `breaking` is the only place colour
+ * appears, and it lands on the value rather than on a label, so a safe migration
+ * reads as pure monochrome and a dangerous one is impossible to miss.
+ */
+const DiffVerdict = ({ breaking, count, first }: { readonly breaking: number; readonly count: number; readonly first: boolean }): ReactElement => {
+    const t = useT();
+
+    if (first) {
+        return (
+            <div className="flex items-baseline gap-3" data-testid="sh-summary">
+                <span className="text-3xl leading-none font-light tracking-tight tabular-nums">{count}</span>
+                <span className="font-mono text-[11px] tracking-widest text-muted-foreground uppercase">{t("tables")}</span>
+                <span className="font-mono text-[11px] tracking-widest text-muted-foreground/60 uppercase">· {t("first recorded version")}</span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex items-baseline gap-3" data-testid="sh-summary">
+            <span className={cn("text-3xl leading-none font-light tracking-tight tabular-nums", breaking > 0 && "text-destructive")}>{count}</span>
+            <span className="font-mono text-[11px] tracking-widest text-muted-foreground uppercase">{count === 1 ? t("change") : t("changes")}</span>
+            {breaking > 0 && (
+                <span className="font-mono text-[11px] tracking-widest text-destructive uppercase">· {t("{count} breaking", { count: breaking })}</span>
+            )}
+        </div>
+    );
+};
+
+/** Small mono section label — the tertiary layer's only chrome. */
+const RailLabel = ({ children }: { readonly children: string }): ReactElement => (
+    <div className="px-4 pt-4 pb-2 font-mono text-[10px] tracking-widest text-muted-foreground/70 uppercase">{children}</div>
 );
 
 /**
@@ -173,48 +218,69 @@ export const SchemaHistoryPanel = ({ shardKey = "" }: SchemaHistoryPanelProps): 
         );
     }
 
+    const changes = model?.changes ?? [];
+
     return (
-        <div className="flex min-h-0 flex-1 gap-3" data-testid="lunora-schema-history">
-            <ul className="w-48 shrink-0 overflow-y-auto rounded-xl border border-border bg-card py-1" data-testid="sh-timeline">
-                {versions.map((version) => (
-                    <VersionRow
-                        appliedAt={version.appliedAt}
-                        hash={version.hash}
-                        key={version.hash}
-                        onSelect={setPicked}
-                        selected={version.hash === selected}
-                        seq={version.seq}
-                    />
-                ))}
-            </ul>
+        <div className="flex min-h-0 flex-1 gap-6" data-testid="lunora-schema-history">
+            {/* Tertiary: the rail is scenery. Sharp-edged, borderless on three
+                sides — a single hairline separates it from the content rather
+                than boxing it into a card. */}
+            <nav className="flex w-56 shrink-0 flex-col overflow-hidden border-e border-border" data-testid="sh-timeline-rail">
+                <RailLabel>{t("Schema versions")}</RailLabel>
+                <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="sh-timeline">
+                    {versions.map((version) => (
+                        <VersionRow
+                            appliedAt={version.appliedAt}
+                            hash={version.hash}
+                            key={version.hash}
+                            onSelect={setPicked}
+                            selected={version.hash === selected}
+                            seq={version.seq}
+                        />
+                    ))}
+                </ul>
+            </nav>
 
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="sh-summary">
-                    {previousHash === undefined ? (
-                        <span>{t("First recorded version — every table is new.")}</span>
-                    ) : (
-                        <span>
-                            {t("{count} change(s)", { count: model?.changes.length ?? 0 })}
-                            {(model?.breakingCount ?? 0) > 0 && (
-                                <Badge className="ms-2" variant="destructive">
-                                    {t("{count} breaking", { count: model?.breakingCount ?? 0 })}
-                                </Badge>
-                            )}
-                        </span>
-                    )}
-                </div>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 pe-1">
+                {/* The one thing you look at first. Given vast space above the
+                    evidence so the squint test resolves to it. */}
+                <DiffVerdict
+                    breaking={model?.breakingCount ?? 0}
+                    count={previousHash === undefined ? diagramTables.length : changes.length}
+                    first={previousHash === undefined}
+                />
 
-                <div className="min-h-0 flex-1">
+                {/* The canvas carries no border — it already reads as a distinct
+                    surface, and boxing it doubled the chrome. */}
+                <div className="min-h-0 flex-[3]">
                     <SchemaDiagram nodeClasses={nodeClasses} tables={diagramTables} testIdPrefix="sh" />
                 </div>
 
-                <ul className="max-h-40 shrink-0 overflow-y-auto rounded-xl border border-border bg-card" data-testid="sh-changes">
-                    {(model?.changes ?? []).map((change) => (
-                        <li className="flex items-start gap-2 px-3 py-1.5 text-xs" key={`${change.type}-${change.summary}`}>
-                            <Badge className="mt-px shrink-0" variant={change.severity === "breaking" ? "destructive" : "secondary"}>
-                                {change.severity === "breaking" ? t("breaking") : t("safe")}
-                            </Badge>
-                            <span className="min-w-0 text-muted-foreground">{change.summary}</span>
+                {/* Was a 160px strip with its own scrollbar — the third nested
+                    scroll region on the page, holding the actual verdict. It now
+                    takes a real share of the column and scrolls only when it
+                    genuinely overflows. */}
+                <ul className="min-h-0 flex-1 overflow-y-auto border-t border-border" data-testid="sh-changes">
+                    {changes.map((change) => (
+                        <li
+                            className="flex items-baseline gap-3 border-s-2 py-2 ps-3 text-[13px] transition-colors hover:bg-accent/30"
+                            key={`${change.type}-${change.summary}`}
+                        >
+                            {/* No badge. Every row of a safe migration said
+                                "safe", so the chip carried no information while
+                                dominating the row. Severity is a rule on the
+                                left and colour on the value — an event, not a
+                                default. */}
+                            <span
+                                aria-hidden="true"
+                                className={cn("-ms-3 h-3.5 w-0.5 shrink-0 self-center", change.severity === "breaking" ? "bg-destructive" : "bg-border")}
+                            />
+                            {change.severity === "breaking" && (
+                                <span className="font-mono text-[10px] tracking-widest text-destructive uppercase">{t("breaking")}</span>
+                            )}
+                            <span className={cn("min-w-0", change.severity === "breaking" ? "text-foreground" : "text-muted-foreground")}>
+                                {change.summary}
+                            </span>
                         </li>
                     ))}
                 </ul>

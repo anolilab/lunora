@@ -105,7 +105,10 @@ describe("schemaHistoryPanel", () => {
         render(renderPanel(createClient({ versions: [VERSIONS[1] as (typeof VERSIONS)[number]] })));
 
         await waitFor(() => {
-            expect(screen.getByTestId("sh-summary").textContent).toContain("First recorded version");
+            // Case-insensitive: the verdict renders this label in a mono caption
+            // that is uppercased by CSS, so asserting the exact casing of the
+            // source string would break on a purely visual change.
+            expect(screen.getByTestId("sh-summary").textContent?.toLowerCase()).toContain("first recorded version");
         });
     });
 
