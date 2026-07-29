@@ -146,7 +146,7 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
     it("builds tail argv with the worker positional before flags", () => {
         expect.assertions(1);
 
-        expect(toolchain?.tail?.({ environment: "prod", format: "json", search: "boom", status: "error", worker: "api" })?.args).toStrictEqual([
+        expect(toolchain?.tail({ environment: "prod", format: "json", search: "boom", status: "error", worker: "api" }).args).toStrictEqual([
             "tail",
             "api",
             "--env",
@@ -164,10 +164,10 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
     it("builds secret argv without ever placing a value on the command line", () => {
         expect.assertions(2);
 
-        const put = toolchain?.secretPut?.({ environment: "prod", key: "STRIPE_KEY" });
+        const put = toolchain?.secretPut({ environment: "prod", key: "STRIPE_KEY" });
 
         expect(put?.args).toStrictEqual(["secret", "put", "STRIPE_KEY", "--env", "prod"]);
-        expect(toolchain?.secretList?.({})?.args).toStrictEqual(["secret", "list", "--format", "json"]);
+        expect(toolchain?.secretList({}).args).toStrictEqual(["secret", "list", "--format", "json"]);
     });
 
     it("builds dev argv with the generated config and caller flags", () => {

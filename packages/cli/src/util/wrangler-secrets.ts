@@ -92,7 +92,7 @@ const parseSecretNames = (stdout: string): ReadonlyArray<string> | undefined => 
 const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListRemoteSecretsResult> => {
     // The toolchain is the target's, not always wrangler's — resolving from the
     // project keeps a non-default target from shelling out to the wrong CLI.
-    const listCommand = resolveDeployDriver(resolveProjectTarget(inputs.cwd)).toolchain?.secretList?.({ environment: inputs.env, temporary: inputs.temporary });
+    const listCommand = resolveDeployDriver(resolveProjectTarget(inputs.cwd)).toolchain?.secretList({ environment: inputs.env, temporary: inputs.temporary });
 
     if (listCommand === undefined) {
         return { error: "deploy target has no command-line toolchain", names: [], ok: false };

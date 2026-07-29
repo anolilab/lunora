@@ -209,11 +209,6 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
 /** The Cloudflare deploy driver. */
 const CLOUDFLARE_DRIVER: DeployDriver = {
     id: "cloudflare",
-    // Pure: builds argv and reconciles JSON, never spawns — so it is safe to
-
-    // import from a Worker even though the CLI is what usually runs it.
-
-    runtime: "any",
 
     infer: async (context: DriverContext) => {
         const inferred = await inferLunoraBindings({ projectRoot: context.projectRoot });
