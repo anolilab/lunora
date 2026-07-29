@@ -460,11 +460,14 @@ interface RunCliOptions {
 ```ts
 interface RunCommandOptions {
     args?: string;
+    as?: string;
+    claims?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
     functionPath: string;
     logger: Logger;
     shard?: string;
+    token?: string;
     url?: string;
 }
 ```
