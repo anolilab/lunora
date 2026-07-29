@@ -24,7 +24,7 @@ import type { SqlExecutor } from "../../src/sql-store";
  * `DatabaseSync` is synchronous, so both methods resolve immediately; the async signature
  * exists to satisfy the executor seam D1 (genuinely async) also implements.
  */
-export const executorFor = (database: DatabaseSync): SqlExecutor => {
+const executorFor = (database: DatabaseSync): SqlExecutor => {
     return {
         all: (sql, parameters) => Promise.resolve(database.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
         run: (sql, parameters) => {
@@ -58,7 +58,7 @@ const affinity = (type: ReadonlyArray<string> | string): string => {
  * surfaces as an opaque SQL error much later. Folding the resolve in means no caller can
  * pass raw options and get a subtly incomplete schema.
  */
-export const materialiseAuthSchema = (database: DatabaseSync, options: LunoraAuthOptions): void => {
+const materialiseAuthSchema = (database: DatabaseSync, options: LunoraAuthOptions): void => {
     for (const table of Object.values(getAuthTables(resolveAuthOptions(options)))) {
         const columns = [
             `"id" TEXT PRIMARY KEY`,
@@ -68,3 +68,5 @@ export const materialiseAuthSchema = (database: DatabaseSync, options: LunoraAut
         database.exec(`CREATE TABLE "${table.modelName}" (${columns.join(", ")})`);
     }
 };
+
+export { executorFor, materialiseAuthSchema };

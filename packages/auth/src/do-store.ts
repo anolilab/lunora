@@ -19,21 +19,25 @@
  *
  * `@experimental`; D1 remains the recommended default. Experimental here is about the
  * signature, not the primitive: the transaction path is covered by a workerd suite over
- * the real `state.storage.transaction`, but the export sits outside the api-snapshot gate
- * and the 1.0 SemVer promise, so it can churn.
+ * the real `state.storage.transaction`, but `api-snapshots/auth.api.md` records the export
+ * as untracked, so its shape can churn without failing the gate that backs this package's
+ * stability guarantee.
  *
  * What makes it a deliberate choice rather than a drop-in swap:
  *
- * - **Topology.** `user` / `session` and the SCIM tables live inside **one** object, so
- *   writes serialise through it, its storage limits apply, and backup/export follows the
- *   DO path rather than D1's.
- * - **No `ensureMigrated`** — better-auth's migrator is kysely-only, so the object
- *   materialises its own schema (see `authDoSchemaStatements`).
- * - **No sharding** — there is one auth object.
- * - **`authAdmin` degrades.** The studio's auth admin pages read the auth tables from the
- *   worker, which DO storage does not permit, so they report "not configured" rather than
- *   returning data. The audit feed still works (the worker reads it back over an internal
- *   route).
+ * **Topology.** `user` / `session` and the SCIM tables live inside **one** object, so writes
+ * serialise through it, its storage limits apply, and backup/export follows the DO path
+ * rather than D1's.
+ *
+ * **No `ensureMigrated`.** better-auth's migrator is kysely-only, so the object materialises
+ * its own schema (see `authDoSchemaStatements`).
+ *
+ * **No sharding.** There is one auth object.
+ *
+ * **`authAdmin` degrades.** The studio's auth admin pages read the auth tables from the
+ * worker, which DO storage does not permit, so they report "not configured" rather than
+ * returning data. The audit feed still works — the worker reads it back over an internal
+ * route.
  *
  * Measure it before moving an existing deployment. Full picture: `docs/index.mdx`.
  *

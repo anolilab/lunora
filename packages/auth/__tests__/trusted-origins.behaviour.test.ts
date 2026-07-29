@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
@@ -36,9 +36,25 @@ import { executorFor, materialiseAuthSchema } from "./helpers/sqlite-auth-db";
  *
  * better-auth resolves `skipOriginCheck` in `context/create-context.mjs` as: the caller's
  * `advanced.disableOriginCheck` when set, else **true** under `isTest()`. Vitest sets
- * `NODE_ENV=test`, so without the explicit `false` this whole suite passes while measuring
- * nothing — the middleware returns early and every origin, trusted or not, is accepted.
- * Setting it restores the production code path, which is the only one worth asserting on.
+ * `NODE_ENV=test`, so without the explicit `false` the middleware returns early and every
+ * origin is accepted — the two positive cases below then pass while proving nothing, and
+ * the two negative ones fail outright. Setting it restores the production code path, the
+ * only one worth asserting on.
+ *
+ * Which is also the property that keeps this suite honest: it asserts in **both**
+ * directions, so it cannot quietly decay into a vacuous pass. An accept-everything
+ * regression breaks the negative cases; a reject-everything regression breaks the
+ * positive ones.
+ *
+ * ## Why the environment is stubbed
+ *
+ * `getBaseURL` consults `BETTER_AUTH_URL` and its framework-prefixed variants *before*
+ * falling back to the request, and `getTrustedOrigins` appends
+ * `BETTER_AUTH_TRUSTED_ORIGINS` to the list. Any of those set in the ambient shell silently
+ * changes the verdict: pointing `BETTER_AUTH_TRUSTED_ORIGINS` at the foreign origin below
+ * turns "CSRF protection is intact" red with no hint that the environment is the cause, and
+ * `BETTER_AUTH_URL` is exactly what a developer working on a better-auth app would have
+ * exported. Clearing them is what makes the run hermetic.
  */
 
 const SECRET = "lunora-trusted-origins-secret-lunora-trusted-xx";
@@ -51,6 +67,21 @@ const OWN_ORIGIN = "https://app.example.com";
 const FOREIGN_ORIGIN = "https://evil.example";
 
 let database: DatabaseSync;
+
+/**
+ * Every env key that can pre-empt or widen the request-derived origin — the
+ * `BETTER_AUTH_URL` family read by `getBaseURL`, plus `BETTER_AUTH_TRUSTED_ORIGINS`
+ * appended by `getTrustedOrigins`. `BASE_URL` is deliberately absent: Vitest owns that
+ * key, and stubbing it breaks the runner rather than the dependency.
+ */
+const AMBIENT_ORIGIN_KEYS = [
+    "BETTER_AUTH_URL",
+    "NEXT_PUBLIC_BETTER_AUTH_URL",
+    "PUBLIC_BETTER_AUTH_URL",
+    "NUXT_PUBLIC_BETTER_AUTH_URL",
+    "NUXT_PUBLIC_AUTH_URL",
+    "BETTER_AUTH_TRUSTED_ORIGINS",
+] as const;
 
 /**
  * The deployment under test: no `baseURL`, no `trustedOrigins`, schema materialised to
@@ -95,6 +126,10 @@ describe("trusted origins with neither baseURL nor trustedOrigins configured", (
     let auth: LunoraAuth;
 
     beforeEach(async () => {
+        for (const key of AMBIENT_ORIGIN_KEYS) {
+            vi.stubEnv(key, undefined);
+        }
+
         database = new DatabaseSync(":memory:");
         auth = deployAuth();
 
@@ -103,6 +138,7 @@ describe("trusted origins with neither baseURL nor trustedOrigins configured", (
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         database.close();
     });
 

@@ -10,6 +10,9 @@ import { useT } from "../../i18n/i18n-context";
 import { fireAndForget } from "../../lib/internal";
 import type { AdditiveEdit, SchemaEditResult, SchemaEditTable } from "../../lib/schema-edit";
 import { applyEdit } from "../../lib/schema-edit";
+import type { Mode } from "./schema-editor-mode-bar";
+import { SchemaEditorModeBar } from "./schema-editor-mode-bar";
+import { SchemaEditorResult } from "./schema-editor-result";
 
 /** Validator palette for an added optional column. Each maps to a `v.*` call. */
 const COLUMN_TYPES: ReadonlyArray<{ label: string; validator: string }> = [
@@ -23,9 +26,6 @@ const COLUMN_TYPES: ReadonlyArray<{ label: string; validator: string }> = [
 
 /** Default validator for a new column (the first palette entry). */
 const DEFAULT_VALIDATOR = "v.string()";
-
-/** Which form is open, if any. `destructive` is the migration-handoff notice. */
-type Mode = "addColumn" | "addIndex" | "addTable" | "destructive" | null;
 
 /** Split a comma-separated field list into trimmed, non-empty field names. */
 const splitFields = (raw: string): string[] =>
@@ -52,7 +52,6 @@ interface SchemaEditorOverlayProps {
  * Mounted only when `SchemaViewer` receives `schemaEditable` (set by the
  * loopback dev hosts), so it is absent from a deployed/read-only studio.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~381 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverlayProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
@@ -175,41 +174,14 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                 <CardDescription>{t("Adds a table, column, or index to lunora/schema.ts and reruns codegen.")}</CardDescription>
             </CardHeader>
             <CardContent>
-                <div className="flex flex-wrap gap-2">
-                    <Button data-testid="sc-editor-add-table" onClick={openTable} size="xs" type="button" variant={mode === "addTable" ? "default" : "outline"}>
-                        {t("Add table")}
-                    </Button>
-                    <Button
-                        data-testid="sc-editor-add-column"
-                        disabled={tableNames.length === 0}
-                        onClick={openColumn}
-                        size="xs"
-                        type="button"
-                        variant={mode === "addColumn" ? "default" : "outline"}
-                    >
-                        {t("Add column")}
-                    </Button>
-                    <Button
-                        data-testid="sc-editor-add-index"
-                        disabled={tableNames.length === 0}
-                        onClick={openIndex}
-                        size="xs"
-                        type="button"
-                        variant={mode === "addIndex" ? "default" : "outline"}
-                    >
-                        {t("Add index")}
-                    </Button>
-                    <Button
-                        data-testid="sc-editor-destructive"
-                        disabled={tableNames.length === 0}
-                        onClick={openDestructive}
-                        size="xs"
-                        type="button"
-                        variant={mode === "destructive" ? "default" : "ghost"}
-                    >
-                        {t("Rename / drop / change type…")}
-                    </Button>
-                </div>
+                <SchemaEditorModeBar
+                    hasTables={tableNames.length > 0}
+                    mode={mode}
+                    onAddColumn={openColumn}
+                    onAddIndex={openIndex}
+                    onAddTable={openTable}
+                    onDestructive={openDestructive}
+                />
 
                 {mode === "addTable" && (
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="sc-editor-table-form">
@@ -334,44 +306,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                     </div>
                 )}
 
-                {result?.kind === "error" && (
-                    <p className="mt-3 text-sm text-destructive" data-testid="sc-editor-error" role="alert">
-                        {result.message}
-                    </p>
-                )}
-
-                {result?.kind === "needs-migration" && (
-                    <div className="mt-3 flex flex-col gap-2" data-testid="sc-editor-needs-migration">
-                        <p className="text-sm text-warning" role="alert">
-                            {t("This edit changes stored data and must go through a migration. Review the migration before applying.")}
-                        </p>
-                        <Button
-                            className="self-start"
-                            data-testid="sc-editor-open-migrations"
-                            onClick={onOpenMigrations}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("Open Migrations")}
-                        </Button>
-                    </div>
-                )}
-
-                {result?.kind === "ok" && result.diagnostics.length > 0 && (
-                    <div className="mt-3 flex flex-col gap-1" data-testid="sc-editor-diagnostics">
-                        <p className="text-sm text-destructive" role="alert">
-                            {t("Codegen reported diagnostics:")}
-                        </p>
-                        <ul className="flex flex-col gap-0.5">
-                            {result.diagnostics.map((diagnostic) => (
-                                <li className="font-mono text-[11px] text-destructive" key={diagnostic}>
-                                    {diagnostic}
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                )}
+                <SchemaEditorResult onOpenMigrations={onOpenMigrations} result={result} />
             </CardContent>
         </Card>
     );
