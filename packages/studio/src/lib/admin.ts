@@ -32,7 +32,9 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    aiChartConfig: "__lunora_admin__:aiChartConfig",
     aiGenerateSql: "__lunora_admin__:aiGenerateSql",
+    aiTableFilter: "__lunora_admin__:aiTableFilter",
     assignIssue: "__lunora_admin__:assignIssue",
     backRelationCounts: "__lunora_admin__:backRelationCounts",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
@@ -1316,6 +1318,19 @@ export interface SqlConsoleResult {
  * is guaranteed by the type rather than by convention.
  */
 export type GenerateSqlResult = { degraded: false; sql: string } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** Payload of an `aiTableFilter` call — structured clauses, never SQL. */
+export type GenerateFilterResult = { clauses: FilterClause[]; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** A chart the editor can render, inferred from a result set's SHAPE only. */
+export interface AssistantChartConfig {
+    kind: "area" | "bar" | "line";
+    x: string;
+    y: string[];
+}
+
+/** Payload of an `aiChartConfig` call. */
+export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
 
 /** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
 export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";

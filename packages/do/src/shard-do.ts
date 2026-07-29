@@ -137,7 +137,7 @@ import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
 import { runSocketPool } from "./socket-pool";
 import { foldTraces, SpanBuffer } from "./span-buffer";
-import { generateSql } from "./sql-assistant";
+import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
@@ -6243,8 +6243,12 @@ abstract class ShardDO {
             return this.handleExplainIssue(args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.aiGenerateSql) {
-            return this.handleGenerateSql(args);
+        // The three AI-assistant writes share one shape (parse → call → audit →
+        // respond), so they dispatch from a map rather than three more arms.
+        const aiHandler = this.aiAdminHandlers()[functionPath];
+
+        if (aiHandler !== undefined) {
+            return aiHandler(args);
         }
 
         const triaged = await this.handleIssueTriageOp(functionPath, args);
@@ -6709,6 +6713,57 @@ abstract class ShardDO {
             // The statement itself is recorded: it is what the operator is about
             // to be handed, and an audit trail that omits it explains nothing.
             this.recordAudit("aiGenerateSql", { detail: { sql: result.sql } });
+        }
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /** The AI-assistant admin writes, keyed by function path. */
+    private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
+        return {
+            [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
+            [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
+            [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
+        };
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiTableFilter` — a natural-language filter for the
+     * data browser, grounded in the browsed table's real columns.
+     *
+     * Returns STRUCTURED clauses, never SQL, so the browser's existing filter
+     * validation and parameter binding apply unchanged.
+     */
+    private async handleAiTableFilter(args: Record<string, unknown>): Promise<Response> {
+        this.ensureMigrated();
+
+        const table = typeof args["table"] === "string" ? args["table"] : "";
+        const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
+        }
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiChartConfig` — infer a chart for a result set.
+     *
+     * The caller sends the result's SHAPE (column names, inferred types, row
+     * count), never its values: per plan 202's Phase 0, inference running on the
+     * user's own account is not the same as the operator expecting a model to
+     * read their rows, and the shape is enough to choose an axis.
+     */
+    private async handleAiChartConfig(args: Record<string, unknown>): Promise<Response> {
+        const columns = Array.isArray(args["columns"]) ? (args["columns"] as string[]).filter((name) => typeof name === "string") : [];
+        const types = typeof args["types"] === "object" && args["types"] !== null ? (args["types"] as Record<string, string>) : undefined;
+        const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
+        const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });
         }
 
         return jsonResponse({ result }, 200);

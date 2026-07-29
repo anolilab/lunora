@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { SchemaFact } from "../src/sql-assistant";
-import { extractStatement, generateSql, MAX_ATTEMPTS } from "../src/sql-assistant";
+import { extractStatement, generateChart, generateFilter, generateSql, MAX_ATTEMPTS } from "../src/sql-assistant";
 
 const SCHEMA: SchemaFact[] = [{ columns: ["id", "body", "authorId"], table: "messages" }];
 
@@ -137,5 +137,98 @@ describe("generateSql", () => {
 
         expect(result.degraded).toBe(true);
         expect(ai.run).not.toHaveBeenCalled();
+    });
+});
+
+describe("generateFilter", () => {
+    const COLUMNS = ["id", "status", "createdAt"];
+
+    it("returns structured clauses, not SQL, so existing validation applies unchanged", async () => {
+        expect.assertions(2);
+
+        const ai = binding('[{"column":"status","operator":"eq","value":"open"}]');
+        const result = await generateFilter(ai, { prompt: "open ones" }, COLUMNS);
+
+        expect(result.degraded).toBe(false);
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
+    });
+
+    it("drops a hallucinated column rather than passing it to the query builder", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"nope","operator":"eq","value":1}]');
+
+        // Every clause invalid ⇒ nothing usable ⇒ degrade, not a bad filter.
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("drops an operator the filter builder does not accept", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"DROP TABLE","value":1}]');
+
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("keeps the valid clauses when only some are bad", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"nope","operator":"eq","value":1},{"column":"status","operator":"eq","value":"open"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded ? undefined : result.clauses).toHaveLength(1);
+    });
+});
+
+describe("generateChart", () => {
+    const RESULT = { columns: ["day", "hits"], rowCount: 30, types: { day: "string", hits: "number" } };
+
+    it("infers a chart validated against the real columns", async () => {
+        expect.assertions(2);
+
+        const ai = binding('{"kind":"line","x":"day","y":["hits"]}');
+        const result = await generateChart(ai, {}, RESULT);
+
+        expect(result.degraded).toBe(false);
+        expect(result.degraded ? undefined : result.chart).toStrictEqual({ kind: "line", x: "day", y: ["hits"] });
+    });
+
+    it("degrades on a hallucinated axis instead of rendering an empty chart", async () => {
+        expect.assertions(1);
+
+        const ai = binding('{"kind":"line","x":"nope","y":["hits"]}');
+
+        const result = await generateChart(ai, {}, RESULT);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("nEVER sends row values — only column names, types, and the count", async () => {
+        expect.assertions(3);
+
+        const ai = binding('{"kind":"bar","x":"day","y":["hits"]}');
+
+        await generateChart(ai, { prompt: "chart it" }, RESULT);
+
+        const user = (ai.run.mock.calls[0]?.[1] as { messages: { content: string }[] }).messages[1]?.content ?? "";
+
+        // Plan 202's Phase 0 line: the shape is enough to pick an axis, and
+        // "same account" is not the same as "the operator expected a model to
+        // read their rows".
+        expect(user).toContain("day: string");
+        expect(user).toContain("Row count: 30");
+        expect(user).not.toContain("secret-value");
+    });
+
+    it("rejects a chart kind the editor cannot render", async () => {
+        expect.assertions(1);
+
+        const result = await generateChart(binding('{"kind":"pie","x":"day","y":["hits"]}'), {}, RESULT);
+
+        expect(result.degraded).toBe(true);
     });
 });

@@ -3,7 +3,7 @@
 - **Category**: feat (competitive parity — Prisma Studio AI affordances)
 - **Priority**: P3
 - **Effort**: L · **Risk**: MED
-- **Status**: DONE (Phases 0–2 shipped; Phases 3–4 deferred — see below)
+- **Status**: DONE (all phases shipped)
 - **Baseline**: `865a9a4c` (2026-07-28)
 - **Goal**: AI assistance in Studio — natural-language → SQL (with
   database-error correction), natural-language → table filter, and chart-config
@@ -106,27 +106,33 @@ before it runs.
       Bounded to 2 attempts, each shown before running. This is what makes
       Phase 1 pay off — the first draft is often one column name away.
 
-## Phase 3 — NL → table filter — DEFERRED
+## Phase 3 — NL → table filter
 
-- [ ] A prompt affordance on the data browser filter bar producing a STRUCTURED
+- [x] A prompt affordance on the data browser filter bar producing a STRUCTURED
       `FilterClause[]` against the table's `ColumnMeta`.
 
-## Phase 4 — Chart config from a result set — DEFERRED
+## Phase 4 — Chart config from a result set
 
-- [ ] Infer chart type + axis mapping for the editor's existing `chart` tab,
+- [x] Infer chart type + axis mapping for the editor's existing `chart` tab,
       honouring the Phase 0 egress line (columns + types + row COUNT by default;
       values only on explicit opt-in).
 
-Both deferred deliberately. Phases 1–2 deliver the feature that carries the
-plan — a draft you can read and run, and a repair when it is one column name
-off — and they establish the whole contract: the engine, the gate, the fence, the
-degrade arms, and the capability gating. Phases 3–4 are additional TASKS riding
-that contract, not additional architecture, and each is independently useful.
+Both ride the contract Phases 1–2 established (engine, gate, fence, timeout,
+retry, degrade arms) via a `task` discriminator on one RPC family, rather than
+three copies of that scaffolding — three copies is three places for one of them
+to go missing.
 
-Phase 4 in particular has an unresolved product question the Phase 0 decision
-deliberately left open: chart inference is the only task that would want row
-VALUES, and the opt-in UI for that is a design choice, not a mechanical one.
-Shipping it as a tail of this plan would have decided that quietly.
+**The row-values question resolved itself.** Phase 4 was the one task that might
+have wanted them, and it turns out not to: column names, inferred types, and the
+row count are enough to choose an axis. So NO row values are sent at all, no
+opt-in UI is needed, and the Phase 0 egress line holds without a new control. A
+test asserts the prompt carries the shape and not the data.
+
+Both tasks return STRUCTURED output that is validated against reality before it
+is used — filter clauses against the table's real columns and the 7 operators the
+builder accepts, chart axes against the result's real columns and the 3 kinds the
+editor can render. A hallucinated name is dropped here rather than reaching the
+query builder or rendering an empty chart.
 
 ## Implementation notes
 
