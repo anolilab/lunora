@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShardInput } from "../../components/shard-input";
 import { StorageTierBadge, TIER_META } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
@@ -148,6 +147,13 @@ const IndexList = ({
         </ul>
     </div>
 );
+
+/** Underline tab, matching the Migrations page so the two read as one system. */
+const schemaTabClass = (active: boolean): string =>
+    cn(
+        "border-b-2 px-3 py-2 font-mono text-[11px] tracking-widest uppercase outline-none transition-colors",
+        active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+    );
 
 /**
  * Schema overview that shows both storage tiers so the distinction is never a
@@ -476,27 +482,30 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
             <div className="flex flex-wrap items-center gap-3">
                 <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
 
-                <div aria-label={t("Schema view")} className="flex gap-1.5" data-testid="sc-view-toggle" role="group">
-                    <Button
-                        aria-pressed={view === "list"}
-                        data-testid="sc-view-list"
-                        onClick={showList}
-                        size="xs"
-                        type="button"
-                        variant={view === "list" ? "default" : "outline"}
-                    >
-                        {t("Table list")}
-                    </Button>
-                    <Button
-                        aria-pressed={view === "graph"}
+                {/* Tabs, not a pair of toggle buttons: these are two views of one
+                    thing, and the Migrations page next door already reads this
+                    way. Matches its underline idiom so the two pages agree. */}
+                <div aria-label={t("Schema view")} className="flex items-center gap-1" data-testid="sc-view-toggle" role="tablist">
+                    <button
+                        aria-selected={view === "graph"}
+                        className={schemaTabClass(view === "graph")}
                         data-testid="sc-view-graph"
                         onClick={showGraph}
-                        size="xs"
+                        role="tab"
                         type="button"
-                        variant={view === "graph" ? "default" : "outline"}
                     >
                         {t("Graph")}
-                    </Button>
+                    </button>
+                    <button
+                        aria-selected={view === "list"}
+                        className={schemaTabClass(view === "list")}
+                        data-testid="sc-view-list"
+                        onClick={showList}
+                        role="tab"
+                        type="button"
+                    >
+                        {t("Table list")}
+                    </button>
                 </div>
             </div>
 

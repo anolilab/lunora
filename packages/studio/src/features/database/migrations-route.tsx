@@ -56,7 +56,7 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
     );
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col" data-testid="lunora-migrations">
+        <div className="flex min-h-0 flex-1 flex-col" data-testid="lunora-migrations-route">
             <div className="flex shrink-0 items-center gap-1 border-b border-border px-3" data-testid="mg-panes" role="tablist">
                 {tab("diagram", t("Diagram"), "mg-pane-diagram")}
                 {tab("changes", t("Changes"), "mg-pane-changes")}

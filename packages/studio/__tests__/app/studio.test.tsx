@@ -290,7 +290,7 @@ describe("studio", () => {
 
         fireEvent.click(await renderAndFind("dash-tab-migrations"));
 
-        await screen.findByTestId("lunora-migrations");
+        await screen.findByTestId("lunora-migrations-route");
 
         expect(screen.queryByTestId("lunora-home")).toBeNull();
     });
