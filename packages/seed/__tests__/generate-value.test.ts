@@ -125,3 +125,48 @@ describe("generateValue — bytes wire representation", () => {
         expect(new Uint8Array(buffer)).toHaveLength(value.length);
     });
 });
+
+describe("generateValue — time-named number columns", () => {
+    /** A fixed epoch so the assertions are about the heuristic, not about the clock. */
+    const NOW = 1_785_000_000_000;
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+    it.each(["createdAt", "updatedAt", "publishedAt", "expiresAt", "lastSeenTime", "startDate", "deletedSince", "validUntil"])(
+        "seeds %s as an epoch-ms timestamp inside the recent window",
+        (field) => {
+            expect.assertions(2);
+
+            const value = generateValue(v.number(), field, `${field}-input`, NOW) as number;
+
+            expect(value).toBeLessThanOrEqual(NOW);
+            expect(value).toBeGreaterThanOrEqual(NOW - SIX_MONTHS_MS);
+        },
+    );
+
+    it.each(["rating", "latitude", "longitude", "category", "quantity", "format", "timeout", "candidateId", "updateCount", "seat"])(
+        "leaves %s as a plain number",
+        (field) => {
+            expect.assertions(1);
+
+            // Matching is on the last WORD: `format` ends in "at", `candidateId`
+            // contains "date", `timeout` contains "time" — a latitude of 1.78e12
+            // is not a latitude.
+            expect(generateValue(v.number(), field, `${field}-input`, NOW)).toBeLessThanOrEqual(1000);
+        },
+    );
+
+    it("lets declared bounds win over the name", () => {
+        expect.assertions(1);
+
+        // A schema that says 0..5 means a rating, whatever the column is called.
+        const validator = withConstraints(v.number(), { maximum: 5, minimum: 0 });
+
+        expect(generateValue(validator, "createdAt", "bounded-input", NOW)).toBeLessThanOrEqual(5);
+    });
+
+    it("is deterministic for the same seed input and clock", () => {
+        expect.assertions(1);
+
+        expect(generateValue(v.number(), "createdAt", "same-input", NOW)).toBe(generateValue(v.number(), "createdAt", "same-input", NOW));
+    });
+});

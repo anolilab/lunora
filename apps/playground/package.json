@@ -16,8 +16,7 @@
         "test": "vitest run",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
-        "fallow:health": "fallow health --score",
-        "seed": "node scripts/seed.mjs"
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",

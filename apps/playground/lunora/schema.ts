@@ -64,7 +64,10 @@ export default defineSchema({
      * `ownerId` / `channelId` refs give the data browser two forward links and
      * give `users` / `channels` two more reverse edges to count.
      *
-     * Seeded by `demo:seedDemo` — see `lunora/demo.ts`.
+     * Fill it with `lunora seed --table demoRecords --count 250`: the seeder
+     * derives the rows from this definition, seeds the FK parents first, and
+     * gives the `*At` columns real timestamps spread over the last six months,
+     * which is what makes the grid's `2026-07`-style date search meaningful.
      */
     demoRecords: defineTable({
         amount: v.number(),

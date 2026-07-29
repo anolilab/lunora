@@ -261,7 +261,7 @@ const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefi
         return undefined;
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
         return undefined;

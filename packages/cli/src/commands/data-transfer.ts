@@ -15,6 +15,7 @@ import { stat, unlink } from "node:fs/promises";
 
 import { LunoraError } from "@lunora/errors";
 
+import { resolveAdminToken } from "../util/admin-token";
 import resolveAdminBaseUrl from "../util/admin-url";
 import type { Logger } from "../util/logger";
 import type { FetchLike } from "./run/handler";
@@ -173,15 +174,15 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         return { bytes: 0, code: 1, rows: 0 };
     }
 
-    const token = options.token ?? process.env["LUNORA_ADMIN_TOKEN"];
+    const { token } = resolveAdminToken({ cwd: options.cwd ?? process.cwd(), token: options.token, url: options.url });
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
         return { bytes: 0, code: 1, rows: 0 };
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
         return { bytes: 0, code: 1, rows: 0 };
@@ -306,10 +307,10 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return undefined;
     }
 
-    const token = options.token ?? process.env["LUNORA_ADMIN_TOKEN"];
+    const { token } = resolveAdminToken({ cwd: options.cwd ?? process.cwd(), token: options.token, url: options.url });
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
         return undefined;
     }
@@ -330,7 +331,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return undefined;
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
         return undefined;

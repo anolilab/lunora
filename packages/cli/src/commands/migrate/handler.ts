@@ -508,7 +508,7 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
         return undefined;
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
         return undefined;

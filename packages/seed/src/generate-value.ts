@@ -50,6 +50,58 @@ const STRING_HEURISTICS: ReadonlyArray<{ generate: (input: unknown) => string; k
     { generate: (input) => copycat.password(input), keywords: ["password", "secret", "token"] },
 ];
 
+/**
+ * Column-name suffixes/keywords that mean "this number is a moment in time".
+ *
+ * Lunora stores dates as epoch-ms NUMBERS (see the `date`/`timestamp` arm
+ * below), so a `createdAt: v.number()` column is indistinguishable from a
+ * quantity by validator kind alone — and seeding it as `641` produces rows no
+ * date filter, sort, or range search can do anything with. The name is the only
+ * signal available, and it is the same signal the string heuristics already use.
+ */
+const TIMESTAMP_WORDS: ReadonlySet<string> = new Set(["at", "date", "deadline", "expires", "expiry", "since", "time", "timestamp", "until"]);
+
+/** camelCase boundary — `lastSeenAt` → `last Seen At`. Module scope so it is compiled once. */
+const CAMEL_BOUNDARY = /([a-z\d])([A-Z])/gu;
+
+/** `_`, `-`, and whitespace separators. */
+const WORD_SEPARATORS = /[\s_-]+/u;
+
+/** Split a column name into lower-cased words across camelCase and `_`/`-`/space boundaries: `lastSeenAt` becomes `last`, `seen`, `at`. */
+const wordsOf = (fieldName: string): string[] =>
+    fieldName
+        .replaceAll(CAMEL_BOUNDARY, "$1 $2")
+        .split(WORD_SEPARATORS)
+        .filter((word) => word !== "")
+        .map((word) => word.toLowerCase());
+
+/** How far back a generated timestamp may fall. Six months is wide enough that a `YYYY-MM` search selects a real subset rather than everything or nothing. */
+const TIMESTAMP_WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether `fieldName` names a moment in time.
+ *
+ * Matches on the LAST WORD, not on a substring: `format` ends in "at",
+ * `candidateId` contains "date", and `timeout` contains "time" — none of them is
+ * a timestamp, and a latitude of 1.78e12 is not a latitude.
+ * Naming a column `somethingAt` / `somethingDate` is the convention this leans on.
+ */
+const isTimestampField = (fieldName: string): boolean => {
+    const words = wordsOf(fieldName);
+    const last = words.at(-1);
+
+    return last !== undefined && TIMESTAMP_WORDS.has(last);
+};
+
+/**
+ * A deterministic epoch-ms within {@link TIMESTAMP_WINDOW_MS} before `now`.
+ *
+ * `now` is injected rather than read here so a plan stays reproducible: the same
+ * seed plus the same `now` yields the same rows, which is what makes a seeded
+ * screenshot or a bug report replayable.
+ */
+const generateTimestamp = (input: unknown, now: number): number => now - copycat.int(input, { max: TIMESTAMP_WINDOW_MS, min: 0 });
+
 /** Heuristic string generation by column name (mirrors the studio data generator). */
 const generateString = (fieldName: string, input: unknown, constraints: Constraints): string => {
     const lower = fieldName.toLowerCase();
@@ -76,7 +128,7 @@ const generateString = (fieldName: string, input: unknown, constraints: Constrai
     return truncated;
 };
 
-const generateValue = (validator: Validator, fieldName: string, input: unknown): unknown => {
+const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number = Date.now()): unknown => {
     const inner = unwrapOptional(validator);
     const constraints = constraintsOf(inner);
 
@@ -96,7 +148,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
                 return [];
             }
 
-            return copycat.times(input, [1, 3], (itemInput) => generateValue(element, fieldName, itemInput));
+            return copycat.times(input, [1, 3], (itemInput) => generateValue(element, fieldName, itemInput, now));
         }
 
         case "bigint": {
@@ -144,6 +196,13 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
 
         case "number": {
             const { maximum, minimum } = constraints;
+
+            // A time-named column with no explicit bounds is epoch-ms, not a
+            // quantity. Declared bounds win — a schema that says `minimum: 0,
+            // maximum: 5` means a rating, whatever the column is called.
+            if (maximum === undefined && minimum === undefined && isTimestampField(fieldName)) {
+                return generateTimestamp(input, now);
+            }
 
             if (maximum !== undefined && minimum !== undefined && minimum > maximum) {
                 throw new LunoraError(
