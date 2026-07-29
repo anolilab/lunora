@@ -398,6 +398,7 @@ export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables,
     // Memoized because the re-seed effects below depend on these IDENTITIES: a new
     // array every render would call `setNodes`/`setEdges` every render, which is a
     // render loop, not a slow render. Not a compiler-replaceable perf hint.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: the re-seed effects below key on it
     const seededNodes = useMemo(
         () => buildNodes(visibleTables, columnsError ?? false, nodeClasses ?? EMPTY_NODE_CLASSES),
         [visibleTables, columnsError, nodeClasses],

@@ -39,6 +39,7 @@ const OperationRow = ({ entry, focused }: { readonly entry: OperationEntry; read
     // makes React detach and re-attach the ref every render, re-scrolling the
     // viewport under the operator's hands. Kept explicit rather than trusting the
     // compiler, because a bail-out here is a visible bug.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- ref-callback identity is behaviour: a fresh one re-scrolls the viewport every render
     const scrollWhenFocused = useCallback(
         (node: HTMLLIElement | null): void => {
             if (node !== null && focused) {

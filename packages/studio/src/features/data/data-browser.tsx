@@ -313,12 +313,14 @@ export const DataBrowser = ({
     // react-table resets its internal state (column sizing, row selection) the
     // moment `columns` changes identity. React Compiler would hold it stable, but
     // a compiler bail-out here is a visible bug, not a slow render.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: react-table resets on a new `columns` identity
     const resolveBackRelations = useCallback(
         (table: string) => {
             const enabled = new Set(backRelationsOn[table]);
 
             return backRelationsFor(table, columnsByTable).filter((relation) => enabled.has(backRelationKey(relation)));
         },
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `columnsByTable` IS `schemaQuery.data?.columnsByTable`, destructured above; the deps are complete
         [backRelationsOn, columnsByTable],
     );
 

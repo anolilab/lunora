@@ -265,6 +265,7 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
     // and the effect sets state on every render, which is an infinite loop rather
     // than a slow one. React Compiler would keep them stable; a bail-out must not
     // be able to hang the page.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: SchemaDiagram's re-seed effect keys on it
     const model = useMemo(() => {
         const after = snapshotFromJson(afterQuery.data?.version?.snapshotJson);
 
@@ -278,6 +279,7 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
     // The canvas consumes the schema viewer's `DiagramTable`, so the diff maps
     // onto it and passes the per-table status as a separate ring map — reusing
     // one laid-out, exportable canvas instead of forking a second one.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: SchemaDiagram's re-seed effect keys on it
     const diagramTables = useMemo<DiagramTable[]>(
         () =>
             (model?.tables ?? []).map((table: DiffTable) => {
@@ -285,6 +287,7 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
             }),
         [model],
     );
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: SchemaDiagram's re-seed effect keys on it
     const nodeClasses = useMemo<Record<string, string>>(() => {
         const classes: Record<string, string> = {};
 

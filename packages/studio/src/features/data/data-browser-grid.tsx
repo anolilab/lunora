@@ -1012,6 +1012,7 @@ const useDataBrowserTable = (
         }
 
         return defs;
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `columns`/`references` ARE `page.columns`/`page.refs`, destructured above; the deps are complete
     }, [backRelations, columns, references]);
 
     // `data` MUST keep a stable reference across renders: react-table resets its
@@ -1118,6 +1119,7 @@ const useDataBrowserTable = (
             );
         };
 
+        // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- this callback ref RETURNS its cleanup (below), which React invokes when the node detaches
         node.addEventListener("scroll", sync, { passive: true });
 
         const observer = new ResizeObserver(sync);
