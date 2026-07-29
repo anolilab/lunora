@@ -503,6 +503,7 @@ const MESSAGE_IDS = [
     "SQL query",
     "SQL problems",
     "Operation console",
+    "Suggest chart",
     "Describe the query you want",
     "Draft SQL",
     "Thinking…",

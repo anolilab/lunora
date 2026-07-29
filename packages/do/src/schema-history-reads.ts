@@ -1,8 +1,9 @@
 /**
- * Admin read resolvers for the schema-version ledger and the SQL linter.
+ * Admin read resolvers registered as a lookup table.
  *
- * A lookup table rather than more arms on `ShardDO.readAdminOp`'s
- * if-chain: these are pure functions of `(sql, args)` — none of them touches
+ * Holds the SQL linter, the schema-version ledger, per-row reverse-relation
+ * counts, and the time-ranged query insights. A lookup table rather than more
+ * arms on `ShardDO.readAdminOp`'s if-chain: these are pure functions of `(sql, args)` — none of them touches
  * `this` — so expressing them as class methods would mean three more
  * `class-methods-use-this` suppressions in a file that already carries dozens,
  * and three more branches in a dispatch chain that is already long. Registering
@@ -105,8 +106,15 @@ const resolveSchemaHistoryRead = (
         return undefined;
     }
 
-    return SCHEMA_HISTORY_READS[functionPath.slice(prefix.length)]?.(sql, args, wildcard);
+    const name = functionPath.slice(prefix.length);
+
+    // `Object.hasOwn`, not a bare index: a literal's keys resolve through
+    // `Object.prototype`, so `__lunora_admin__:toString` would return
+    // `Object.prototype.toString` — truthy, called, and handed back as an
+    // outcome. Harmless over the one-shot POST, but the subscription bridge then
+    // reads `.tables` off it and throws inside the socket handler.
+    return Object.hasOwn(SCHEMA_HISTORY_READS, name) ? SCHEMA_HISTORY_READS[name]?.(sql, args, wildcard) : undefined;
 };
 
-export { INSIGHT_RANGES, resolveSchemaHistoryRead, SCHEMA_HISTORY_READS };
-export type { AdminReadOutcome, AdminReadResolver };
+export { resolveSchemaHistoryRead };
+export type { AdminReadOutcome };

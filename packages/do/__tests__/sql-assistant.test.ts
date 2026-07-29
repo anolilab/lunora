@@ -212,7 +212,10 @@ describe("generateChart", () => {
 
         const ai = binding('{"kind":"bar","x":"day","y":["hits"]}');
 
-        await generateChart(ai, { prompt: "chart it" }, RESULT);
+        // The fixture deliberately carries a real-looking value so the absence
+        // assertion below is meaningful — the previous version asserted a string
+        // nothing could have produced.
+        await generateChart(ai, { prompt: "chart it", rows: [{ day: "2026-07-01", hits: 42, secret: "alice@example.com" }] }, RESULT);
 
         const user = (ai.run.mock.calls[0]?.[1] as { messages: { content: string }[] }).messages[1]?.content ?? "";
 
@@ -221,7 +224,7 @@ describe("generateChart", () => {
         // read their rows".
         expect(user).toContain("day: string");
         expect(user).toContain("Row count: 30");
-        expect(user).not.toContain("secret-value");
+        expect(user).not.toContain("alice@example.com");
     });
 
     it("rejects a chart kind the editor cannot render", async () => {

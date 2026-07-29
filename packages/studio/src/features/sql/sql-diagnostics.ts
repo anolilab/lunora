@@ -51,7 +51,24 @@ const FROM_SOURCE = /\b(?:from|join)\s+([a-z_][\w$]*)/giu;
 const QUALIFIED_COLUMN = /\b([a-z_][\w$]*)\.([a-z_][\w$]*)/giu;
 
 /** SQL keywords that can legally follow `FROM`/`JOIN` and are not table names. */
-const NOT_A_TABLE = new Set(["lateral", "select"]);
+const NOT_A_TABLE = new Set([
+    "cross",
+    "full",
+    "group",
+    "having",
+    "inner",
+    "join",
+    "lateral",
+    "left",
+    "limit",
+    "offset",
+    "order",
+    "right",
+    "select",
+    "union",
+    "where",
+    "window",
+]);
 
 /** Flag `FROM`/`JOIN` sources that are neither a known table, a CTE, nor an internal table. */
 const unknownTableDiagnostics = (masked: string, known: Set<string>, ctes: Set<string>): SqlDiagnostic[] => {

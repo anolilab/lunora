@@ -209,3 +209,26 @@ describe("toSpans", () => {
         expect(toSpans([span(3, 99)], 10)).toStrictEqual([{ end: 10, severity: "error", start: 3 }]);
     });
 });
+
+describe("quoted identifiers", () => {
+    it("does not mistake a double-quoted table for a string literal", () => {
+        expect.assertions(1);
+
+        // Only single quotes delimit a SQL string; double quotes delimit an
+        // identifier. Masking `"users"` as data left the scanner seeing
+        // `FROM` + the next keyword and flagging `unknown table \`WHERE\``.
+        expect(lintDraft('SELECT * FROM "messages" WHERE id = 1', schema)).toStrictEqual([]);
+    });
+
+    it("never reports a clause keyword as an unknown table", () => {
+        expect.assertions(1);
+
+        expect(lintDraft("SELECT * FROM messages GROUP BY id", schema)).toStrictEqual([]);
+    });
+
+    it("still masks single-quoted literals", () => {
+        expect.assertions(1);
+
+        expect(lintDraft("SELECT * FROM messages WHERE body = 'from nowhere'", schema)).toStrictEqual([]);
+    });
+});

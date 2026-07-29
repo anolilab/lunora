@@ -1,7 +1,13 @@
 /**
- * The `__lunora_admin__:aiGenerateSql` admin RPC's engine — the Studio SQL
- * editor's opt-in "describe the query you want" action, and its "fix this"
- * follow-up after a failed run.
+ * Engine for the three AI-assistant admin RPCs — `aiGenerateSql` (the SQL
+ * editor's "describe the query you want" and its "fix this" follow-up),
+ * `aiTableFilter`, and `aiChartConfig`.
+ *
+ * Three RPCs, but ONE inference primitive (`runPrompt`) and ONE retry policy
+ * (`attempt`). The caps, the untrusted fence, the deadline, and the two degrade
+ * arms therefore exist exactly once — a second copy of the deadline is a second
+ * place for it to go missing, and the deadline is what stops a hung model
+ * pinning the DO's single-threaded admin dispatch.
  *
  * Modelled on `issue-explainer.ts`, which established this shape: a pure
  * parse → ground → call → shape unit over an INJECTED Workers AI binding, with
@@ -42,6 +48,9 @@ const STATEMENT_CAP = 2000;
 
 /** Cap the error text on a repair request. */
 const ERROR_CAP = 500;
+
+/** Cap any single caller-supplied identifier (a column or type name) inside a grounding block. */
+const COLUMN_NAME_CAP = 64;
 
 /** Cap a caller-supplied model-id override; no real Workers AI model id approaches this. */
 const MODEL_CAP = 120;
@@ -84,16 +93,6 @@ export interface SchemaFact {
     table: string;
 }
 
-/**
- * Which assistant task is being asked for.
- *
- * One RPC with a task discriminator rather than three: the caps, the untrusted
- * fence, the timeout, the retry, and the degrade arms are identical for all
- * three, and three copies of that scaffolding is three places for one of them to
- * go missing.
- */
-export type AssistantTask = "chart" | "filter" | "sql";
-
 /** Parsed `aiGenerateSql` payload. */
 export interface GenerateSqlArgs {
     /** The error the failing statement produced. Only meaningful with `failedSql`. */
@@ -104,8 +103,6 @@ export interface GenerateSqlArgs {
     model?: string;
     /** What the operator asked for, in their own words. Required. */
     prompt: string;
-    /** Which task to run. Defaults to `sql`. */
-    task?: AssistantTask;
 }
 
 /** Why the assistant produced nothing. A closed union so a typo'd sentinel is a compile error. */
@@ -325,21 +322,28 @@ const userPrompt = (args: GenerateSqlArgs, schema: ReadonlyArray<SchemaFact>): s
     return parts.join("\n");
 };
 
-/** Run one inference, returning the raw text or `undefined`. Races a deadline. */
-const runInference = async (binding: AiRunBinding, model: string, args: GenerateSqlArgs, schema: ReadonlyArray<SchemaFact>): Promise<string | undefined> => {
+/**
+ * Run one inference against a deadline, returning the raw text or `undefined`.
+ *
+ * THE one place `binding.run` is called and the one place the timeout lives.
+ * Every task routes through here — a second copy of this race is a second place
+ * for the deadline to go missing, and the deadline is what keeps a hung model
+ * from pinning the DO's single-threaded admin dispatch.
+ */
+const runPrompt = async (binding: AiRunBinding, model: string, system: string, user: string): Promise<string | undefined> => {
     let deadline: ReturnType<typeof setTimeout> | undefined;
 
     const result = await Promise.race([
         binding.run(model, {
             max_tokens: 300,
             messages: [
-                { content: systemPrompt(), role: "system" },
-                { content: userPrompt(args, schema), role: "user" },
+                { content: system, role: "system" },
+                { content: user, role: "user" },
             ],
         }),
         new Promise<never>((_resolve, reject) => {
             deadline = setTimeout(() => {
-                reject(new Error("aiGenerateSql: inference timed out"));
+                reject(new Error("sql-assistant: inference timed out"));
             }, SQL_ASSISTANT_TIMEOUT_MS);
         }),
     ]).finally(() => {
@@ -353,44 +357,27 @@ const runInference = async (binding: AiRunBinding, model: string, args: Generate
     return undefined;
 };
 
-/** True when `binding` structurally looks like a Workers AI binding. */
-const isAiBinding = (binding: unknown): binding is AiRunBinding =>
-    typeof binding === "object" && binding !== null && typeof (binding as { run?: unknown }).run === "function";
-
 /**
- * Generate (or repair) a read-only statement for the Studio SQL editor.
+ * THE one retry loop: run, validate, retry once, then degrade.
  *
- * Never throws for an AI-side failure: every such path returns the `degraded`
- * arm, so the editor can say why nothing appeared and the operator carries on
- * typing. A response that fails the read-only gate is retried once and then
- * DISCARDED — returning unvalidated SQL, even labelled, would put a model's
- * output inside a security boundary it has no business in.
+ * Generic over what a task considers valid, so the attempt policy, the
+ * empty-response handling, and the two degrade arms exist exactly once. A model
+ * that answered but never cleared validation is a different failure from one
+ * that said nothing, and the editor words them differently — that distinction
+ * lives here rather than in each task.
  */
-const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, schema: ReadonlyArray<SchemaFact>): Promise<GenerateSqlResult> => {
-    const args: GenerateSqlArgs = {
-        failedError: capped(rawArgs.failedError, ERROR_CAP),
-        failedSql: capped(rawArgs.failedSql, STATEMENT_CAP),
-        model: capped(rawArgs.model, MODEL_CAP),
-        prompt: capped(rawArgs.prompt, PROMPT_CAP),
-    };
-
-    if (args.prompt === "") {
-        return degraded("empty-response");
-    }
-
-    if (!isAiBinding(binding)) {
-        return degraded("no-ai-binding");
-    }
-
-    const model = args.model === undefined || args.model === "" ? DEFAULT_SQL_ASSISTANT_MODEL : args.model;
+const attempt = async <T>(
+    run: () => Promise<string | undefined>,
+    validate: (raw: string) => T | undefined,
+): Promise<GenerateSqlDegraded | { degraded: false; value: T }> => {
     let sawResponse = false;
 
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    for (let index = 0; index < MAX_ATTEMPTS; index += 1) {
         let raw: string | undefined;
 
         try {
-            // eslint-disable-next-line no-await-in-loop -- the retry is inherently sequential: the second attempt only happens because the first failed validation
-            raw = await runInference(binding, model, args, schema);
+            // eslint-disable-next-line no-await-in-loop -- inherently sequential: attempt two only happens because attempt one failed validation
+            raw = await run();
         } catch {
             return degraded("ai-error");
         }
@@ -401,15 +388,13 @@ const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, s
 
         sawResponse = true;
 
-        const statement = extractStatement(raw);
+        const value = validate(raw);
 
-        if (statement !== "" && classifyStatement(statement) === undefined) {
-            return { degraded: false, sql: statement };
+        if (value !== undefined) {
+            return { degraded: false, value };
         }
     }
 
-    // A model that answered but never cleared the gate is a different failure
-    // from one that said nothing — the editor words them differently.
     return degraded(sawResponse ? "unsafe-response" : "empty-response");
 };
 
@@ -428,42 +413,57 @@ const structuredSystemPrompt = (task: "chart" | "filter"): string => {
     );
 };
 
-/** Run one structured-task inference and return the raw text. */
-const runStructured = async (binding: AiRunBinding, model: string, task: "chart" | "filter", prompt: string, facts: string): Promise<string | undefined> => {
-    let deadline: ReturnType<typeof setTimeout> | undefined;
+/** Assemble the structured-task user message: grounding facts, then the fenced request. */
+const structuredUserPrompt = (facts: string, prompt: string): string =>
+    [facts, "", UNTRUSTED_FENCE, `Request: ${capped(prompt, PROMPT_CAP)}`, UNTRUSTED_FENCE].join("\n");
 
-    const result = await Promise.race([
-        binding.run(model, {
-            max_tokens: 300,
-            messages: [
-                { content: structuredSystemPrompt(task), role: "system" },
-                { content: [facts, "", UNTRUSTED_FENCE, `Request: ${capped(prompt, PROMPT_CAP)}`, UNTRUSTED_FENCE].join("\n"), role: "user" },
-            ],
-        }),
-        new Promise<never>((_resolve, reject) => {
-            deadline = setTimeout(() => {
-                reject(new Error(`ai${task}: inference timed out`));
-            }, SQL_ASSISTANT_TIMEOUT_MS);
-        }),
-    ]).finally(() => {
-        clearTimeout(deadline);
-    });
+/** True when `binding` structurally looks like a Workers AI binding. */
+const isAiBinding = (binding: unknown): binding is AiRunBinding =>
+    typeof binding === "object" && binding !== null && typeof (binding as { run?: unknown }).run === "function";
 
-    if (typeof result === "object" && result !== null && typeof (result as { response?: unknown }).response === "string") {
-        return (result as { response: string }).response;
+/** Resolve the model id, applying the cap and the pinned default. */
+const modelFor = (rawArgs: Record<string, unknown>): string => capped(rawArgs.model, MODEL_CAP) || DEFAULT_SQL_ASSISTANT_MODEL;
+
+/**
+ * Generate (or repair) a read-only statement for the Studio SQL editor.
+ *
+ * A response that fails the read-only gate is retried once and then DISCARDED —
+ * returning unvalidated SQL, even labelled, would put model output inside a
+ * security boundary it has no business in.
+ */
+const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, schema: ReadonlyArray<SchemaFact>): Promise<GenerateSqlResult> => {
+    const args: GenerateSqlArgs = {
+        failedError: capped(rawArgs.failedError, ERROR_CAP),
+        failedSql: capped(rawArgs.failedSql, STATEMENT_CAP),
+        prompt: capped(rawArgs.prompt, PROMPT_CAP),
+    };
+
+    if (args.prompt === "") {
+        return degraded("empty-response");
     }
 
-    return undefined;
+    if (!isAiBinding(binding)) {
+        return degraded("no-ai-binding");
+    }
+
+    const outcome = await attempt(
+        async () => runPrompt(binding, modelFor(rawArgs), systemPrompt(), userPrompt(args, schema)),
+        (raw) => {
+            const statement = extractStatement(raw);
+
+            return statement !== "" && classifyStatement(statement) === undefined ? statement : undefined;
+        },
+    );
+
+    return outcome.degraded ? outcome : { degraded: false, sql: outcome.value };
 };
 
 /**
- * Translate a natural-language request into STRUCTURED filter clauses for the
- * data browser.
+ * Translate a natural-language request into STRUCTURED filter clauses.
  *
- * Structured, not SQL: the clauses go through the browser's existing filter
+ * Structured, not SQL: the clauses go through the data browser's existing filter
  * validation and parameter binding untouched, so a hallucinated column or
- * operator is dropped here rather than reaching the query builder. That is the
- * whole reason this task returns JSON instead of a `WHERE` fragment.
+ * operator is dropped here rather than reaching the query builder.
  */
 const generateFilter = async (binding: unknown, rawArgs: Record<string, unknown>, columns: ReadonlyArray<string>): Promise<GenerateFilterResult> => {
     const prompt = capped(rawArgs.prompt, PROMPT_CAP);
@@ -476,45 +476,23 @@ const generateFilter = async (binding: unknown, rawArgs: Record<string, unknown>
         return degraded("no-ai-binding");
     }
 
-    const model = capped(rawArgs.model, MODEL_CAP) || DEFAULT_SQL_ASSISTANT_MODEL;
-    const facts = `Columns available on this table: ${columns.join(", ")}`;
-    let sawResponse = false;
+    const named = columns.slice(0, MAX_GROUNDED_COLUMNS);
+    const facts = `Columns available on this table: ${named.join(", ")}`;
+    const outcome = await attempt(
+        async () => runPrompt(binding, modelFor(rawArgs), structuredSystemPrompt("filter"), structuredUserPrompt(facts, prompt)),
+        (raw) => validateClauses(extractJson(raw), columns),
+    );
 
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-        let raw: string | undefined;
-
-        try {
-            // eslint-disable-next-line no-await-in-loop -- the retry is inherently sequential: attempt two only happens because attempt one failed validation
-            raw = await runStructured(binding, model, "filter", prompt, facts);
-        } catch {
-            return degraded("ai-error");
-        }
-
-        if (raw === undefined || raw.trim() === "") {
-            continue;
-        }
-
-        sawResponse = true;
-
-        const clauses = validateClauses(extractJson(raw), columns);
-
-        if (clauses !== undefined) {
-            return { clauses, degraded: false };
-        }
-    }
-
-    return degraded(sawResponse ? "unsafe-response" : "empty-response");
+    return outcome.degraded ? outcome : { clauses: outcome.value, degraded: false };
 };
 
 /**
  * Infer a chart configuration for a result set.
  *
- * **Only the SHAPE of the result is sent** — column names, their inferred types,
- * and the row count. Row VALUES are never included: per plan 202's Phase 0, the
- * model running on the user's own account is not the same as the operator
- * expecting a model to read their rows, and the shape is enough to pick an axis.
- * A hallucinated column degrades to "could not infer a chart" rather than a
- * chart that renders empty.
+ * **Only the SHAPE of the result is sent** — column names, inferred types, and
+ * the row count. Row VALUES are never included: per plan 202's Phase 0, a model
+ * running on the user's own account is not the same as the operator expecting a
+ * model to read their rows, and the shape is enough to choose an axis.
  */
 const generateChart = async (
     binding: unknown,
@@ -525,40 +503,23 @@ const generateChart = async (
         return degraded("no-ai-binding");
     }
 
-    if (result.columns.length === 0) {
+    // Capped like every other grounding block. The caller supplies these column
+    // names, so an uncapped join is an unbounded prompt.
+    const named = result.columns.slice(0, MAX_GROUNDED_COLUMNS);
+
+    if (named.length === 0) {
         return degraded("empty-response");
     }
 
-    const model = capped(rawArgs.model, MODEL_CAP) || DEFAULT_SQL_ASSISTANT_MODEL;
-    const described = result.columns.map((column) => `${column}: ${result.types?.[column] ?? "unknown"}`).join(", ");
+    const described = named.map((column) => `${capped(column, COLUMN_NAME_CAP)}: ${capped(result.types?.[column] ?? "unknown", COLUMN_NAME_CAP)}`).join(", ");
     const facts = `Result columns and types: ${described}\nRow count: ${String(result.rowCount)}`;
     const prompt = capped(rawArgs.prompt, PROMPT_CAP) || "choose the most informative chart for this result";
-    let sawResponse = false;
+    const outcome = await attempt(
+        async () => runPrompt(binding, modelFor(rawArgs), structuredSystemPrompt("chart"), structuredUserPrompt(facts, prompt)),
+        (raw) => validateChart(extractJson(raw), named),
+    );
 
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-        let raw: string | undefined;
-
-        try {
-            // eslint-disable-next-line no-await-in-loop -- sequential retry, as above
-            raw = await runStructured(binding, model, "chart", prompt, facts);
-        } catch {
-            return degraded("ai-error");
-        }
-
-        if (raw === undefined || raw.trim() === "") {
-            continue;
-        }
-
-        sawResponse = true;
-
-        const chart = validateChart(extractJson(raw), result.columns);
-
-        if (chart !== undefined) {
-            return { chart, degraded: false };
-        }
-    }
-
-    return degraded(sawResponse ? "unsafe-response" : "empty-response");
+    return outcome.degraded ? outcome : { chart: outcome.value, degraded: false };
 };
 
-export { extractStatement, generateChart, generateFilter, generateSql, MAX_ATTEMPTS, SQL_ASSISTANT_TIMEOUT_MS };
+export { extractStatement, generateChart, generateFilter, generateSql, MAX_ATTEMPTS };

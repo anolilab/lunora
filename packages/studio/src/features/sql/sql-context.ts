@@ -48,9 +48,6 @@ const NOT_AN_ALIAS = new Set([
 /** Every character except a newline — newlines survive masking so line geometry is unchanged. */
 const NON_NEWLINE = /[^\n]/gu;
 
-/** Unicode whitespace, tested one code point at a time (no backtracking). */
-const WHITESPACE = /\s/u;
-
 /**
  * The end index of the non-code run starting at `from`, or `-1` when `from` is
  * ordinary code. One decision per construct, so the scanner stays readable.
@@ -58,10 +55,15 @@ const WHITESPACE = /\s/u;
 const nonCodeRunEnd = (sql: string, from: number): number => {
     const char = sql[from];
 
-    if (char === "'" || char === '"') {
+    // Only SINGLE quotes delimit a string literal in SQL. Double quotes delimit
+    // an IDENTIFIER — masking `FROM "users"` as if it were data left the scanner
+    // seeing `FROM` followed by the next keyword, so the linter reported
+    // `unknown table \`WHERE\`` on a valid statement and the autocomplete bound
+    // no alias for it.
+    if (char === "'") {
         let end = from + 1;
 
-        while (end < sql.length && sql[end] !== char) {
+        while (end < sql.length && sql[end] !== "'") {
             end += 1;
         }
 
@@ -82,38 +84,6 @@ const nonCodeRunEnd = (sql: string, from: number): number => {
     }
 
     return -1;
-};
-
-/**
- * Index of the first character that is neither whitespace nor a comment.
- *
- * A single linear scan rather than one alternation regex: an alternation over
- * whitespace, line comments, and block comments backtracks polynomially against
- * admin-supplied SQL on long runs of unterminated block-comment openers. An
- * unterminated block comment stops the scan where it opened.
- */
-const leadingNoiseEnd = (sql: string): number => {
-    let index = 0;
-
-    while (index < sql.length) {
-        const char = sql[index];
-
-        if (char !== undefined && WHITESPACE.test(char)) {
-            index += 1;
-
-            continue;
-        }
-
-        const end = nonCodeRunEnd(sql, index);
-
-        if (end === -1 || end === index) {
-            break;
-        }
-
-        index = end;
-    }
-
-    return index;
 };
 
 /**
@@ -196,5 +166,5 @@ const sqlContextOf = (draft: string, tables: ReadonlyArray<string>): SqlContext 
     return { ctes: cteNames(masked), masked, targets: qualifierTargets(masked, known) };
 };
 
-export { leadingNoiseEnd, maskNonCode, sqlContextOf };
+export { maskNonCode, sqlContextOf };
 export type { SqlContext };

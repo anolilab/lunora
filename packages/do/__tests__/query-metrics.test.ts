@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { SqlExec } from "../src/ctx-db";
 import {
     normalizeSql,
     pruneQueryBuckets,
@@ -257,7 +258,7 @@ describe("time-bucketed query insights", () => {
     it("answers 'what is hot NOW' rather than 'since the shard was created'", () => {
         expect.assertions(2);
 
-        const {sql} = createSqliteExec();
+        const { sql } = createSqliteExec();
 
         // An old statement hammered 100× an hour ago…
         for (let index = 0; index < 100; index += 1) {
@@ -280,7 +281,7 @@ describe("time-bucketed query insights", () => {
     it("interpolates percentiles from the latency histogram", () => {
         expect.assertions(2);
 
-        const {sql} = createSqliteExec();
+        const { sql } = createSqliteExec();
 
         // 90 fast executions and 10 slow: p50 sits in a low bucket, p95 in a high
         // one. Deliberately NOT 95/5 — at exactly 5% the 95th sample is still a
@@ -303,7 +304,7 @@ describe("time-bucketed query insights", () => {
     it("reports the tracked-statement cap so the UI can avoid implying totality", () => {
         expect.assertions(2);
 
-        const {sql} = createSqliteExec();
+        const { sql } = createSqliteExec();
 
         recordQueryMetric(sql, "SELECT 1", 1, 0, 0, at(0));
 
@@ -316,7 +317,7 @@ describe("time-bucketed query insights", () => {
     it("emits one chart point per window, oldest first", () => {
         expect.assertions(2);
 
-        const {sql} = createSqliteExec();
+        const { sql } = createSqliteExec();
 
         recordQueryMetric(sql, "SELECT 1", 10, 0, 0, at(0));
         recordQueryMetric(sql, "SELECT 1", 30, 0, 0, at(1));
@@ -330,7 +331,7 @@ describe("time-bucketed query insights", () => {
     it("prunes windows past the retention horizon", () => {
         expect.assertions(1);
 
-        const {sql} = createSqliteExec();
+        const { sql } = createSqliteExec();
 
         recordQueryMetric(sql, "SELECT 1", 1, 0, 0, at(0));
         pruneQueryBuckets(sql, at(QUERY_BUCKET_RETENTION + 10));
@@ -340,13 +341,25 @@ describe("time-bucketed query insights", () => {
     });
 
     it("never lets a bucket-table failure break the lifetime counters", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const {sql} = createSqliteExec();
+        const real = createSqliteExec().sql;
+        // Fail ONLY the bucket table's statements, so the lifetime path is truly
+        // exercised. Using a healthy handle here passed whether or not the
+        // try/catch existed — a green test for an invariant it never checked.
+        const sql = {
+            exec: (query: string, ...parameters: unknown[]) => {
+                if (query.includes("_queries_buckets")) {
+                    throw new Error("bucket table unavailable");
+                }
 
-        recordQueryMetric(sql, "SELECT 1", 5, 1, 0, at(0));
+                return real.exec(query, ...parameters);
+            },
+        } as unknown as SqlExec;
 
-        // The lifetime leaderboard is the older, more load-bearing of the two.
+        expect(() => {
+            recordQueryMetric(sql, "SELECT 1", 5, 1, 0, at(0));
+        }).not.toThrow();
         expect(readQueryMetrics(sql)[0]?.execCount).toBe(1);
     });
 });

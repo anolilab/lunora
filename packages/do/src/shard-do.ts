@@ -6757,8 +6757,17 @@ abstract class ShardDO {
      * read their rows, and the shape is enough to choose an axis.
      */
     private async handleAiChartConfig(args: Record<string, unknown>): Promise<Response> {
-        const columns = Array.isArray(args["columns"]) ? (args["columns"] as string[]).filter((name) => typeof name === "string") : [];
-        const types = typeof args["types"] === "object" && args["types"] !== null ? (args["types"] as Record<string, string>) : undefined;
+        // Bounded at the boundary: these names are CALLER-supplied (a result set
+        // the studio just rendered), and every other input on this surface is
+        // capped. An uncapped list is an unbounded prompt, twice over with the retry.
+        const columns = Array.isArray(args["columns"])
+            ? (args["columns"] as unknown[]).filter((name): name is string => typeof name === "string").slice(0, 64)
+            : [];
+        const rawTypes = typeof args["types"] === "object" && args["types"] !== null ? (args["types"] as Record<string, unknown>) : undefined;
+        const types =
+            rawTypes === undefined
+                ? undefined
+                : Object.fromEntries(Object.entries(rawTypes).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
         const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
         const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
 

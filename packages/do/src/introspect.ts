@@ -978,7 +978,20 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
         return undefined;
     }
 
+    // `Date.UTC` remaps years 0-99 onto 1900+year, so `0026` would silently
+    // become 1926. Reject them rather than answering with the wrong century.
+    if (year < 100) {
+        return undefined;
+    }
+
     const from = Date.UTC(year, (month ?? 1) - 1, day ?? 1);
+
+    // `Date.UTC` rolls an impossible day forward (2026-02-31 → 2026-03-03),
+    // which would match real March rows for a date the operator cannot have
+    // meant. Reject when the constructed date is not the one asked for.
+    if (day !== undefined && new Date(from).getUTCDate() !== day) {
+        return undefined;
+    }
     let to: number;
 
     if (day !== undefined) {

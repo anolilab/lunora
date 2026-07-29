@@ -30,9 +30,14 @@ const pickColumns = (result: SqlConsoleResult): { label: null | string; value: n
  * Capped at {@link MAX_BARS} rows; shows a hint when the result has no numeric
  * column to plot.
  */
-const SqlResultChart = ({ result }: { readonly result: SqlConsoleResult }): ReactElement => {
+const SqlResultChart = ({ axes, result }: { readonly axes?: { x: string; y: string[] }; readonly result: SqlConsoleResult }): ReactElement => {
     const t = useT();
-    const { label, value } = pickColumns(result);
+    const picked = pickColumns(result);
+    // A model-suggested pair overrides the heuristic, but only for columns the
+    // result actually has — `axes` is already validated server-side, and this is
+    // the second gate so a stale suggestion cannot blank the chart.
+    const label = axes !== undefined && result.columns.includes(axes.x) ? axes.x : picked.label;
+    const value = axes?.y.find((column) => result.columns.includes(column)) ?? picked.value;
 
     const data =
         value === null

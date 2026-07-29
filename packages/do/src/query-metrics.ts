@@ -143,6 +143,13 @@ const ensureQueryMetricsTable = (sql: SqlExec): void => {
     );
 };
 
+/**
+ * The bucket most recently pruned, so the prune runs once per window instead of
+ * once per statement. Module-scoped: a DO instance serves one shard, and a cold
+ * start simply prunes again on the first write.
+ */
+let lastPrunedBucket = 0;
+
 /** Floor a timestamp to its bucket start. */
 const bucketFloor = (at: number): number => Math.floor(at / QUERY_BUCKET_MS) * QUERY_BUCKET_MS;
 
@@ -217,7 +224,7 @@ const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number,
         ensureQueryBucketsTable(sql);
 
         const column = latencyColumn(latencyBucketIndex(durationMs));
-         
+
         const upsert = `INSERT INTO "${QUERY_BUCKETS_TABLE}" (sql_hash, bucket_ms, exec_count, total_duration_ms, rows_read, rows_written, ${column})
              VALUES (?, ?, 1, ?, ?, ?, 1)
              ON CONFLICT(sql_hash, bucket_ms) DO UPDATE SET
@@ -229,9 +236,15 @@ const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number,
 
         runSql(sql, upsert, hashStatement(normalized), bucketFloor(now), durationMs, rowsRead, rowsWritten);
 
-        // Prune on the minute boundary only — once per window rather than once
-        // per statement, so the hot path pays a DELETE ~1/1000th of the time.
-        if (now % QUERY_BUCKET_MS < 50) {
+        // Prune once per WINDOW, detected by the bucket changing rather than by
+        // sampling a 50ms slice of it. In a DO `Date.now()` is pinned to the last
+        // I/O, so every statement in one dispatch shares a timestamp: the slice
+        // was sampled once per dispatch, ~0.08% of the time, and the documented
+        // row bound did not actually hold.
+        const bucket = bucketFloor(now);
+
+        if (bucket !== lastPrunedBucket) {
+            lastPrunedBucket = bucket;
             pruneQueryBuckets(sql, now);
         }
     } catch {
@@ -371,11 +384,13 @@ const readQueryInsights = (sql: SqlExec, rangeMs: number, now: number = Date.now
         since,
     )
         .toArray()
-        .map((row) => {return {
-            avgDurationMs: row.exec_count > 0 ? row.total_duration_ms / row.exec_count : 0,
-            bucketMs: row.bucket_ms,
-            execCount: row.exec_count,
-        }});
+        .map((row) => {
+            return {
+                avgDurationMs: row.exec_count > 0 ? row.total_duration_ms / row.exec_count : 0,
+                bucketMs: row.bucket_ms,
+                execCount: row.exec_count,
+            };
+        });
 
     const trackedStatements = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${QUERY_METRICS_TABLE}"`).one().n;
 

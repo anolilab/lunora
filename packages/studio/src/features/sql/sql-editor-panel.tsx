@@ -7,7 +7,7 @@ import { ShardInput } from "../../components/shard-input";
 import { Alert } from "../../components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
-import type { SqlConsoleResult } from "../../lib/admin";
+import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { newId, usePersistedList, usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
@@ -182,6 +182,29 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
     const assistant = useSqlAssistant(shardKey);
+    // The last statement that FAILED, frozen at failure time — see `run`.
+    const [failedRun, setFailedRun] = useState<{ error: string; sql: string } | undefined>(undefined);
+    // Model-inferred chart for the current result, or undefined for the manual one.
+    const [inferredChart, setInferredChart] = useState<AssistantChartConfig | undefined>(undefined);
+
+    const inferChart = (): void => {
+        if (result === null) {
+            return;
+        }
+
+        const apply = async (): Promise<void> => {
+            // The result's SHAPE only — never its rows (plan 202 Phase 0).
+            const chart = await assistant.inferChart({
+                columns: result.columns,
+                rowCount: result.rowCount,
+                types: Object.fromEntries(result.columns.map((column) => [column, typeof (result.rows[0]?.[column] ?? "")])),
+            });
+
+            setInferredChart(chart);
+        };
+
+        fireAndForget(apply());
+    };
 
     const autocomplete = useSqlAutocomplete(schema, editorRef, setDraft);
     const {
@@ -235,10 +258,16 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
 
+            setFailedRun(undefined);
+            setInferredChart(undefined);
             setActiveOutput({ error: null, pane: mode, result: next });
             recordShard(shardKey);
             recordHistory(sql);
         } catch (error_: unknown) {
+            // Capture the statement that actually failed. "Fix this" previously
+            // read the live draft, so any edit after the failure asked the model
+            // to repair text that never ran, against an error it never produced.
+            setFailedRun({ error: errorMessage(error_), sql });
             setActiveOutput({ error: errorMessage(error_), pane: mode, result: null });
         } finally {
             setRunning(false);
@@ -662,7 +691,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 <div className={workspaceClass}>
                     {/* Line-numbered editor pane, with the assistant bar, diagnostics overlay + problems row. */}
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                        <SqlAssistantBar assistant={assistant} failed={error === null ? undefined : { error, sql: draft }} onGenerated={setDraft} />
+                        <SqlAssistantBar assistant={assistant} failed={failedRun} onGenerated={setDraft} />
                         <div className="flex min-h-0 min-w-0 flex-1">
                             <div
                                 aria-hidden="true"
@@ -713,6 +742,18 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                             <button className={tabClass(tab === "chart")} data-testid="sql-tab-chart" onClick={showChart} type="button">
                                 {t("Chart")}
                             </button>
+                            {/* Chart inference, hidden without an AI binding. */}
+                            {!assistant.unavailable && tab === "chart" && result !== null && (
+                                <button
+                                    className={tabClass(false)}
+                                    data-testid="sql-infer-chart"
+                                    disabled={assistant.pending}
+                                    onClick={inferChart}
+                                    type="button"
+                                >
+                                    {assistant.pending ? t("Thinking…") : t("Suggest chart")}
+                                </button>
+                            )}
                             <button className={tabClass(tab === "explain")} data-testid="sql-tab-explain" onClick={showExplain} type="button">
                                 {t("Explain")}
                             </button>
@@ -779,7 +820,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                             {error === null && result !== null && (
                                 <div data-testid="sql-result">
-                                    {tab === "chart" ? <SqlResultChart result={result} /> : <SqlResultTable result={result} />}
+                                    {tab === "chart" ? <SqlResultChart axes={inferredChart} result={result} /> : <SqlResultTable result={result} />}
                                     <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="sql-count">
                                         {result.truncated
                                             ? t("Showing the first {max} of {count} rows.", { count: result.rowCount, max: result.rows.length })

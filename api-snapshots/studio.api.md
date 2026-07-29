@@ -309,9 +309,10 @@ interface DataBrowserProps {
 ### `DataFilters` (const)
 
 ```ts
-const DataFilters: ({ columns, filters, onFiltersChange, onSearchChange, search }: {
+const DataFilters: ({ columns, filters, onAskAi, onFiltersChange, onSearchChange, search }: {
     columns: ReadonlyArray<string>;
     filters: ReadonlyArray<EditableFilter>;
+    onAskAi?: (prompt: string) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
     onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
     search: string;

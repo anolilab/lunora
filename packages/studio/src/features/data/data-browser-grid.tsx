@@ -786,11 +786,11 @@ const DataBrowserTableView = ({
     onInspect,
     highlight,
     backRelationCounts,
+    attachScroll,
     onTogglePin,
     pinnedColumns,
     refs,
     scrollLeft,
-    scrollRef,
     scrollToIndex,
     table,
     tableRows,
@@ -798,6 +798,8 @@ const DataBrowserTableView = ({
     viewportWidth,
     virtualRows,
 }: {
+    /** Callback ref for the scroll container. */
+    attachScroll: (node: HTMLDivElement | null) => void;
     /** Reverse-relation counts, keyed `table.column` → parent id → count. */
     backRelationCounts: Readonly<Record<string, Readonly<Record<string, number>>>>;
     edit: GridEdit;
@@ -815,7 +817,6 @@ const DataBrowserTableView = ({
     refs: GridReferences;
     /** Horizontal scroll offset + measured viewport width, driving the column window. */
     scrollLeft: number;
-    scrollRef: React.RefObject<HTMLDivElement | null>;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
@@ -997,7 +998,7 @@ const DataBrowserTableView = ({
 
     return (
         <GridContainer layout="fill">
-            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={scrollRef} role="grid" style={SCROLL_STYLE} tabIndex={0}>
+            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={attachScroll} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
@@ -1031,9 +1032,10 @@ const DataBrowserTableView = ({
 
 /** What {@link useDataBrowserTable} hands back to the component. */
 interface DataBrowserTableModel {
+    /** Callback ref for the scroll container — installs the measurement when the node mounts. */
+    attachScroll: (node: HTMLDivElement | null) => void;
     /** Horizontal scroll offset, driving the column window. */
     scrollLeft: number;
-    scrollRef: React.RefObject<HTMLDivElement | null>;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
@@ -1168,16 +1170,25 @@ const useDataBrowserTable = (
         [virtualizer],
     );
 
-    // Horizontal scroll + viewport width, for the column window. Tracked with a
-    // passive listener rather than React state per scroll event: this fires at
-    // frame rate on a wide table, and only the derived window matters.
+    // Horizontal scroll + viewport width, for the column window.
+    //
+    // Attached by a CALLBACK REF, not an effect. The scroll container lives in
+    // `DataBrowserTableView`, which only mounts once a page has rows — so an
+    // effect in this hook (which lives in the always-mounted `DataBrowser`) ran
+    // while `scrollRef.current` was still null, returned early, and with `[]`
+    // deps never ran again. The window then measured a 0px viewport forever and
+    // fell back to rendering every column, silently disabling the whole feature.
+    // A callback ref fires exactly when the node appears and again when it goes.
     const [horizontal, setHorizontal] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
+    const teardownRef = useRef<(() => void) | undefined>(undefined);
 
-    useEffect(() => {
-        const node = scrollRef.current;
+    const attachScroll = useCallback((node: HTMLDivElement | null): void => {
+        teardownRef.current?.();
+        teardownRef.current = undefined;
+        scrollRef.current = node;
 
         if (node === null) {
-            return undefined;
+            return;
         }
 
         const sync = (): void => {
@@ -1186,17 +1197,13 @@ const useDataBrowserTable = (
             );
         };
 
-        // No synchronous `sync()` here: a setState inside an effect body renders
-        // twice and is a lint error in this repo. `ResizeObserver` fires once on
-        // observe, which is the initial measurement — and where it does not (jsdom),
-        // the viewport stays 0 and `columnWindow` falls back to every column.
         node.addEventListener("scroll", sync, { passive: true });
 
         const observer = new ResizeObserver(sync);
 
         observer.observe(node);
 
-        return () => {
+        teardownRef.current = () => {
             node.removeEventListener("scroll", sync);
             observer.disconnect();
         };
@@ -1211,7 +1218,7 @@ const useDataBrowserTable = (
 
     const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
 
-    return { scrollLeft: horizontal.left, scrollRef, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth: horizontal.width, virtualRows };
+    return { attachScroll, scrollLeft: horizontal.left, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth: horizontal.width, virtualRows };
 };
 
 export { columnWindow, DataBrowserTableView, pinnedOffsets, rowId, useDataBrowserTable };

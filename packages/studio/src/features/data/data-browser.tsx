@@ -10,9 +10,10 @@ import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta, FilterClause, TableInfo, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
-import { adminRef, callOptions } from "../../lib/internal";
+import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
 import { maskColumnsForTable, maskRows, mergeSensitiveColumns } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
+import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
 import { backRelationKey, backRelationsFor } from "./back-relations";
 import type { TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
@@ -174,6 +175,7 @@ const DataBrowserViewControls = ({
     maskOn,
     onAddRow,
     onBulkDelete,
+    onAskAiFilter,
     onClearTable,
     onFilterChange,
     onFiltersChange,
@@ -194,6 +196,8 @@ const DataBrowserViewControls = ({
     /** Whether the "Mask sensitive columns" preview is on. */
     maskOn: boolean;
     onAddRow: () => void;
+    /** Ask the model for structured clauses; omitted when no AI binding is available. */
+    onAskAiFilter?: (prompt: string) => void;
     onBulkDelete: () => void;
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -251,7 +255,14 @@ const DataBrowserViewControls = ({
                     </ConfirmButton>
                 )}
             </div>
-            <DataFilters columns={columns} filters={filters} onFiltersChange={onFiltersChange} onSearchChange={onFilterChange} search={filter} />
+            <DataFilters
+                columns={columns}
+                filters={filters}
+                onAskAi={onAskAiFilter}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={onFilterChange}
+                search={filter}
+            />
         </div>
     );
 };
@@ -375,6 +386,35 @@ export const DataBrowser = ({
         tableParam,
     });
 
+    // Natural-language filtering. The model returns STRUCTURED clauses which
+    // land in the visible filter rows for the operator to see and edit — the
+    // query never runs off un-reviewed model output.
+    const assistant = useSqlAssistant(shardKey);
+
+    const askAiFilter = useCallback(
+        (prompt: string): void => {
+            const apply = async (): Promise<void> => {
+                const clauses = await assistant.suggestFilter(prompt, selectedTable ?? "");
+
+                if (clauses !== undefined) {
+                    onFiltersChange(
+                        clauses.map((clause) => {
+                            // The wire value is `unknown`; a filter row is a string
+                            // input, so only scalars round-trip meaningfully.
+                            const raw: unknown = clause.value;
+                            const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
+
+                            return { column: clause.column, operator: clause.operator, value };
+                        }),
+                    );
+                }
+            };
+
+            fireAndForget(apply());
+        },
+        [assistant, onFiltersChange, selectedTable],
+    );
+
     // Available reverse edges for the open table, and the counts for the loaded
     // page. Only the switched-on edges are resolved; the rest cost nothing.
     const availableBackRelations = useMemo(
@@ -418,22 +458,33 @@ export const DataBrowser = ({
     // The URL wins when it names pins — a shared link to a wide table is only
     // useful if it arrives with the same columns frozen. Browser storage is the
     // per-browser default for when the link doesn't carry any.
+    // STORAGE wins, with the URL as the seed for a table nobody has pinned on
+    // this browser yet. The precedence was the other way round, which made every
+    // pin/unpin a no-op for the rest of the session whenever `?pins=` was
+    // present — the toggle wrote to storage that was never read again.
     const pinnedColumns = useMemo(() => {
-        const fromUrl = (initialPins ?? "").split(",").filter((name) => name !== "");
+        const stored = pinsByTable[pinKey];
 
-        return new Set(fromUrl.length > 0 ? fromUrl : (pinsByTable[pinKey] ?? []));
+        if (stored !== undefined) {
+            return new Set(stored);
+        }
+
+        return new Set((initialPins ?? "").split(",").filter((name) => name !== ""));
     }, [initialPins, pinKey, pinsByTable]);
 
     const onTogglePin = useCallback(
         (columnId: string): void => {
             setPinsByTable((current) => {
-                const existing: string[] = current[pinKey] ?? [];
+                // Seed from whatever is displayed (storage, else the URL) so the
+                // first toggle after arriving on a `?pins=` link edits that set
+                // rather than starting from empty.
+                const existing: string[] = current[pinKey] ?? [...pinnedColumns];
                 const next = existing.includes(columnId) ? existing.filter((id) => id !== columnId) : [...existing, columnId];
 
                 return { ...current, [pinKey]: next };
             });
         },
-        [pinKey, setPinsByTable],
+        [pinKey, pinnedColumns, setPinsByTable],
     );
 
     const client = useLunora();
@@ -607,6 +658,7 @@ export const DataBrowser = ({
                                 liveError={liveError}
                                 maskOn={maskOn}
                                 onAddRow={addRow}
+                                onAskAiFilter={assistant.unavailable ? undefined : askAiFilter}
                                 onBulkDelete={bulkDelete}
                                 onClearTable={clearTable}
                                 onFilterChange={onFilterChange}
@@ -695,6 +747,7 @@ export const DataBrowser = ({
 
                         {viewMode === "table" && page.rows.length > 0 && !transposed && (
                             <DataBrowserTableView
+                                attachScroll={table.attachScroll}
                                 backRelationCounts={backRelationCounts}
                                 edit={edit}
                                 editable={editable}
@@ -707,7 +760,6 @@ export const DataBrowser = ({
                                 pinnedColumns={pinnedColumns}
                                 refs={references}
                                 scrollLeft={table.scrollLeft}
-                                scrollRef={table.scrollRef}
                                 scrollToIndex={table.scrollToIndex}
                                 table={table.table}
                                 tableRows={table.tableRows}
