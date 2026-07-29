@@ -143,7 +143,9 @@ type AuthorizedAppsController = Controller<ResourceState<OAuthConsent>, Authoriz
 const createAuthorizedAppsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): AuthorizedAppsController => {
     const resource = createResourceController<OAuthConsent>(
         context,
-        async (context_) => assertOk(await context_.authClient.oauth2.getConsents()).data ?? [],
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.oauth2.getConsents()).data ?? [] };
+        },
         options,
     );
 

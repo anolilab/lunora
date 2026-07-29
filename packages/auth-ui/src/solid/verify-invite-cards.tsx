@@ -1,6 +1,7 @@
 import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
 
+import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
 import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
@@ -13,17 +14,6 @@ const onSubmit =
         event.preventDefault();
         void action();
     };
-
-/** Read one query parameter off the current URL, or undefined off the browser. */
-const queryParameter = (name: string): string | undefined => {
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
-
-    if (search === undefined || search === "") {
-        return undefined;
-    }
-
-    return new URLSearchParams(search).get(name) ?? undefined;
-};
 
 /**
  * The page the verification link lands on. It consumes the token on mount and

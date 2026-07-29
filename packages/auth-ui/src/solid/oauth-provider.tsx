@@ -1,6 +1,7 @@
 import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
 
+import { queryParameter } from "../core/browser-location";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createAuthorizedAppsController, createConsentController, scopeLabels } from "../core/oauth-provider";
 import { AuthCard, FormBanner, Skeleton } from "./primitives";
@@ -23,8 +24,7 @@ interface ConsentCardProps {
 const ConsentCard = (props: ConsentCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
-    const resolved = props.consentId ?? (search === undefined ? undefined : (new URLSearchParams(search).get("consent_id") ?? undefined));
+    const resolved = props.consentId ?? queryParameter("consent_id");
     // Resolved before the controller is built: a gated-off card must not fetch a
     // pending authorization request on mount just to render nothing.
     const enabled = isFlowEnabled(context, "oauthProvider", "ConsentCard");

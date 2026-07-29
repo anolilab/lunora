@@ -6,12 +6,12 @@
     there is no session, returning to this same invitation afterwards.
 -->
 <script lang="ts">
+    import { queryParameter } from "../core/browser-location";
     import { createAcceptInvitationController } from "../core/invitations";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
     import FormBanner from "./FormBanner.svelte";
-    import { queryParameter } from "./query-parameter";
     import Skeleton from "./Skeleton.svelte";
 
     let {

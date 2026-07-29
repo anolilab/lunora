@@ -67,11 +67,46 @@ const store = createStore<{ token?: string }>({});
  * Empty when there is no token — an app without a captcha, or a request made
  * before the user solved it, then simply sends nothing and the server decides.
  */
-const captchaHeaders = (path?: string, endpoints: ReadonlyArray<string> = CAPTCHA_ENDPOINTS): Record<string, string> => {
+
+/**
+ * Whether `path` is one the plugin guards.
+ *
+ * Mirrors better-auth's own matcher rather than approximating it: it compares a
+ * normalized pathname* and supports a trailing `*`. A plain `endsWith` looks
+ * equivalent until someone follows this module's own advice and passes their
+ * `captcha({ endpoints })` list — a wildcard entry like `/sign-in/*` would then
+ * never match, no header would ever be attached, and every sign-in would fail
+ * with `MISSING_RESPONSE`.
+ */
+const ORIGIN = /^[a-z]+:\/\/[^/]+/iu;
+const DOUBLE_SLASH = /\/{2,}/gu;
+const TRAILING_SLASH = /\/$/u;
+
+const isGuarded = (path: string, endpoints: ReadonlyArray<string>, basePath: string): boolean => {
+    // Accept a full URL or a bare path; strip the query and the auth basePath,
+    // collapse doubled slashes, drop a trailing one — as better-auth does.
+    const withoutOrigin = path.replace(ORIGIN, "");
+    const withoutQuery = withoutOrigin.split("?")[0] ?? "";
+    const trimmedBase = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+    const relative = withoutQuery.startsWith(trimmedBase) ? withoutQuery.slice(trimmedBase.length) : withoutQuery;
+    const pathname = relative.replaceAll(DOUBLE_SLASH, "/").replace(TRAILING_SLASH, "") || "/";
+
+    return endpoints.some((endpoint) => (endpoint.endsWith("*") ? pathname.startsWith(endpoint.slice(0, -1)) : endpoint === pathname));
+};
+
+/** Options for {@link captchaHeaders}. */
+interface CaptchaHeaderOptions {
+    /** Your auth mount path, so a full URL can be reduced to what better-auth compares. Defaults to `/api/auth`. */
+    basePath?: string;
+    /** The list you passed to `captcha({ endpoints })`, if you passed one. */
+    endpoints?: ReadonlyArray<string>;
+}
+
+const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Record<string, string> => {
     // A path the plugin does not guard must not consume the token — see the
     // note on CAPTCHA_ENDPOINTS. Called without a path (a caller attaching it
     // deliberately to one request) it still works.
-    if (path !== undefined && !endpoints.some((endpoint) => path.endsWith(endpoint))) {
+    if (path !== undefined && !isGuarded(path, options.endpoints ?? CAPTCHA_ENDPOINTS, options.basePath ?? "/api/auth")) {
         return {};
     }
 
@@ -179,8 +214,14 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
     const provider = PROVIDERS[options.provider];
     let widgetId: unknown;
     let disposed = false;
-    /** Whether the token currently in the store came from this widget. */
-    let owned = false;
+
+    /**
+     * The token *this* widget last produced. Compared by identity on teardown
+     * rather than tracked as a boolean: with two widgets on a page (a sign-in /
+     * sign-up tab pair) a flag set when A solved is still set after B solves, so
+     * unmounting A would wipe B's answer.
+     */
+    let ownToken: string | undefined;
 
     void loadScript(provider.script)
         .then(() => {
@@ -196,13 +237,13 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 
             widgetId = api.render(element, {
                 callback: (token: string) => {
-                    owned = true;
+                    ownToken = token;
                     setCaptchaToken(token);
                 },
                 // A token expires long before a slow user finishes a form; drop
                 // it rather than send one the provider will reject.
                 "expired-callback": () => {
-                    owned = false;
+                    ownToken = undefined;
                     setCaptchaToken(undefined);
                 },
                 sitekey: options.siteKey,
@@ -217,10 +258,9 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
     return () => {
         disposed = true;
 
-        // Only clear a token this widget produced. A sign-in / sign-up tab pair
-        // mounts two widgets, and unmounting one must not wipe the other's
-        // freshly solved answer.
-        if (owned) {
+        // Only if the store still holds *our* token — another widget may have
+        // solved since, and consuming clears it anyway.
+        if (ownToken !== undefined && store.get().token === ownToken) {
             setCaptchaToken(undefined);
         }
 
@@ -230,5 +270,5 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
     };
 };
 
-export type { CaptchaProvider, RenderCaptchaOptions };
+export type { CaptchaHeaderOptions, CaptchaProvider, RenderCaptchaOptions };
 export { CAPTCHA_ENDPOINTS, CAPTCHA_HEADER, captchaHeaders, PROVIDERS, renderCaptcha, setCaptchaToken };

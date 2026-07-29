@@ -22,6 +22,8 @@
  * the fields that are safe to see there, and adding one is a deliberate act.
  */
 
+import { queryParameter } from "./browser-location";
+
 /** Fields that may be seeded from the URL. Deliberately small; never a secret. */
 const PREFILLABLE = new Set(["email", "name", "username"]);
 
@@ -41,15 +43,9 @@ const readFieldPrefill = (field: string): string | undefined => {
         return undefined;
     }
 
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
+    const value = queryParameter(field);
 
-    if (search === undefined || search === "") {
-        return undefined;
-    }
-
-    const value = new URLSearchParams(search).get(field);
-
-    if (value === null) {
+    if (value === undefined) {
         return undefined;
     }
 

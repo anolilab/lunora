@@ -7,13 +7,13 @@
     to approve than to read is the failure mode this screen exists to avoid.
 -->
 <script lang="ts">
+    import { queryParameter } from "../core/browser-location";
     import { isFlowEnabled } from "../core/flow-gate";
     import { createConsentController, scopeLabels } from "../core/oauth-provider";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
     import FormBanner from "./FormBanner.svelte";
-    import { queryParameter } from "./query-parameter";
     import Skeleton from "./Skeleton.svelte";
 
     let {

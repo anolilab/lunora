@@ -13,6 +13,7 @@
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
+    // eslint-disable-next-line no-useless-assignment -- the increment is the point: a module-level counter handing out one DOM id per instance.
     const uid = `lunora-auth-${(counter += 1)}`;
     const context = useAuthUI();
     const t = context.localization;

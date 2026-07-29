@@ -142,7 +142,9 @@ type UserInvitationsController = Controller<ResourceState<AuthInvitationDetail>,
 const createUserInvitationsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): UserInvitationsController => {
     const resource = createResourceController<AuthInvitationDetail>(
         context,
-        async (context_) => assertOk(await context_.authClient.organization.listUserInvitations()).data ?? [],
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.organization.listUserInvitations()).data ?? [] };
+        },
         options,
     );
 

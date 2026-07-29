@@ -84,11 +84,16 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
         { autoLoad: options.autoLoad, initialExtra: { search: "" } },
     );
 
-    /** Navigate only when the mutation actually succeeded. */
-    const afterSessionSwap = async (run: () => Promise<void>): Promise<void> => {
-        await run();
-
-        if (resource.getState().error === undefined) {
+    /**
+     * Navigate only when the mutation actually ran and succeeded.
+     *
+     * `mutateOk`, not a `state.error` read: `error` is cleared at the start of
+     * every attempt and `mutate` no-ops while one is in flight, so a
+     * double-clicked Impersonate would otherwise navigate away having
+     * impersonated nobody.
+     */
+    const afterSessionSwap = async (run: () => Promise<boolean>): Promise<void> => {
+        if (await run()) {
             context.onSessionChange?.();
             context.nav.navigate(context.redirects.afterSignIn);
         }
@@ -99,7 +104,7 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
             ban: (userId: string, reason?: string) =>
                 resource.mutate(async () => assertOk(await context.authClient.admin.banUser({ banReason: reason, userId }))),
             impersonate: (userId: string) =>
-                afterSessionSwap(() => resource.mutate(async () => assertOk(await context.authClient.admin.impersonateUser({ userId })))),
+                afterSessionSwap(async () => resource.mutateOk(async () => assertOk(await context.authClient.admin.impersonateUser({ userId })))),
             refetch: resource.refetch,
             remove: (userId: string) => resource.mutate(async () => assertOk(await context.authClient.admin.removeUser({ userId }))),
             setRole: (userId: string, role: string) => resource.mutate(async () => assertOk(await context.authClient.admin.setRole({ role, userId }))),
@@ -107,7 +112,7 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
                 resource.patch({ search: value });
                 await resource.refetch();
             },
-            stopImpersonating: () => afterSessionSwap(() => resource.mutate(async () => assertOk(await context.authClient.admin.stopImpersonating()))),
+            stopImpersonating: () => afterSessionSwap(async () => resource.mutateOk(async () => assertOk(await context.authClient.admin.stopImpersonating()))),
             unban: (userId: string) => resource.mutate(async () => assertOk(await context.authClient.admin.unbanUser({ userId }))),
         },
         destroy: resource.destroy,

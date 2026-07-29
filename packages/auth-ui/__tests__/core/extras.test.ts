@@ -335,3 +335,95 @@ describe("url prefill", () => {
         expect(readFieldPrefill("newPassword")).toBeUndefined();
     });
 });
+
+describe("captcha endpoint filter", () => {
+    const solved = (): void => {
+        setCaptchaToken("tok");
+    };
+
+    it("attaches on a route the plugin guards", () => {
+        expect.assertions(1);
+
+        solved();
+
+        expect(captchaHeaders("https://app.test/api/auth/sign-in/email")).toStrictEqual({ [CAPTCHA_HEADER]: "tok" });
+    });
+
+    it("does not spend the token on a route the plugin ignores", () => {
+        expect.assertions(2);
+
+        solved();
+
+        // The whole point: `onRequest` fires for every call, and the token is
+        // consumed on read — a background getSession must not spend it.
+        expect(captchaHeaders("https://app.test/api/auth/get-session")).toStrictEqual({});
+        // Still there for the request that needs it.
+        expect(captchaHeaders("https://app.test/api/auth/sign-in/email")).toStrictEqual({ [CAPTCHA_HEADER]: "tok" });
+    });
+
+    it("ignores a query string, as better-auth's own matcher does", () => {
+        expect.assertions(1);
+
+        solved();
+
+        expect(captchaHeaders("https://app.test/api/auth/sign-in/email?redirect=/x")).toStrictEqual({ [CAPTCHA_HEADER]: "tok" });
+    });
+
+    it("supports a trailing-wildcard endpoint, which a plain endsWith cannot", () => {
+        expect.assertions(1);
+
+        solved();
+
+        // Following this module's own advice — passing your `captcha({ endpoints })`
+        // list — must not silently stop attaching the header and break sign-in.
+        expect(captchaHeaders("https://app.test/api/auth/sign-in/email", { endpoints: ["/sign-in/*"] })).toStrictEqual({ [CAPTCHA_HEADER]: "tok" });
+    });
+
+    it("honours a custom basePath", () => {
+        expect.assertions(1);
+
+        solved();
+
+        expect(captchaHeaders("https://app.test/auth/sign-in/email", { basePath: "/auth" })).toStrictEqual({ [CAPTCHA_HEADER]: "tok" });
+    });
+});
+
+describe("theme mode", () => {
+    it("applies a remembered preference, so the page matches the control", async () => {
+        expect.assertions(1);
+
+        const { createThemeModeController } = await import("../../src/core");
+        const applied: string[] = [];
+
+        vi.stubGlobal("localStorage", { getItem: () => "dark", setItem: vi.fn() });
+
+        // Regression: dropping the construction-time write to stop a card
+        // hijacking a host app's theme also stopped a saved choice ever being
+        // honoured — the radio said Dark while the page rendered light.
+        createThemeModeController({
+            apply: (_mode, resolved) => {
+                applied.push(resolved);
+            },
+        });
+
+        expect(applied).toStrictEqual(["dark"]);
+    });
+
+    it("does not write a theme it merely defaulted to", async () => {
+        expect.assertions(1);
+
+        const { createThemeModeController } = await import("../../src/core");
+        const applied: string[] = [];
+
+        vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+
+        // Mounting an appearance card must not rewrite a host app's theme.
+        createThemeModeController({
+            apply: (_mode, resolved) => {
+                applied.push(resolved);
+            },
+        });
+
+        expect(applied).toStrictEqual([]);
+    });
+});

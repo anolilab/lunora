@@ -83,10 +83,11 @@ const PLUGIN_ID_TO_FLOW: Readonly<Record<string, string>> = {
 /**
  * One in-flight request per endpoint, shared by every provider on the page.
  *
- * A *failed* lookup is evicted rather than cached: a single offline moment or a
- * 500 would otherwise pin `unavailable` for the life of the page, leaving every
- * card on the weaker client-only gating until a full reload. A later provider
- * mount retries; a successful answer stays cached, because it cannot change.
+ * A *failed* lookup is evicted rather than cached, so a later mount retries
+ * instead of inheriting one offline moment for the life of the page. Note the
+ * limit: providers already mounted keep the handle they were given and stay
+ * `unavailable` until they remount. A successful answer stays cached, because
+ * it cannot change.
  *
  * Module-level rather than per-provider so mounting `&lt;SignInCard>` and
  * `&lt;UserButton>` under two providers doesn't fetch twice. Keyed by the resolved
@@ -102,27 +103,44 @@ const isConfig = (value: unknown): value is DiscoveredConfig => {
     const candidate = value as Partial<DiscoveredConfig>;
 
     /*
-     * `signUp` is the shape marker, not `plugins`: a deployment may withhold the
-     * plugin list, and requiring it here would make a legitimate answer look
-     * like an unrelated endpoint. It is a boolean the payload always carries.
+     * The two booleans are the shape marker, not `plugins`: a deployment may
+     * withhold the plugin list, and requiring it here would make a legitimate
+     * answer look like an unrelated endpoint.
+     *
+     * The arrays are still checked *when present*, because nothing downstream
+     * re-checks them: a `plugins: 42` would reach `for (const id of plugins)`
+     * and throw inside the provider's render rather than degrading.
      */
-    return typeof candidate.signUp === "boolean" && typeof candidate.emailAndPassword === "boolean";
+    const arrayOrAbsent = (candidateValue: unknown): boolean => candidateValue === undefined || Array.isArray(candidateValue);
+
+    return (
+        typeof candidate.signUp === "boolean" &&
+        typeof candidate.emailAndPassword === "boolean" &&
+        arrayOrAbsent(candidate.plugins) &&
+        arrayOrAbsent(candidate.socialProviders)
+    );
 };
 
-/** The body as it arrives: every field optional, because an older `uiConfig()` may predate one. */
-type DiscoveredPayload = Partial<Omit<DiscoveredConfig, "organization">> & { organization?: Partial<DiscoveredOrganization> };
+/**
+ * The body as `isConfig` has proved it: the two booleans are the shape marker,
+ * so they are present; everything else is optional because the server may have
+ * withheld it (`expose`) or predate it.
+ */
+type DiscoveredPayload = Partial<Omit<DiscoveredConfig, "emailAndPassword" | "organization" | "signUp">> &
+    Pick<DiscoveredConfig, "emailAndPassword" | "signUp"> & { organization?: Partial<DiscoveredOrganization> };
 
 /**
  * Normalize the parsed body.
  *
- * The parameter is deliberately partial: `isConfig` only guarantees the two
- * arrays, so an older `uiConfig()` that predates a field really can omit it.
- * Typing it as the full `DiscoveredConfig` would make every default below look
- * dead to the compiler while still being reachable at runtime.
+ * Only the optional halves need defaulting: `emailAndPassword` and `signUp` are
+ * what `isConfig` checks for, so by the time this runs they are booleans. The
+ * two arrays and `organization` are the genuinely absent-able ones — withheld by
+ * `expose`, or predating a field — and stay `undefined` rather than defaulted,
+ * because the resolver has to tell "not disclosed" from "disclosed as empty".
  */
 const normalize = (raw: DiscoveredPayload): DiscoveredConfig => {
     return {
-        emailAndPassword: raw.emailAndPassword ?? true,
+        emailAndPassword: raw.emailAndPassword,
         // An undisclosed field stays undefined so the resolver can tell it apart
         // from a disclosed-but-empty one and fall back to the client's own answer.
         organization:
@@ -138,7 +156,7 @@ const normalize = (raw: DiscoveredPayload): DiscoveredConfig => {
                       teams: raw.organization.teams ?? false,
                   },
         plugins: raw.plugins,
-        signUp: raw.signUp ?? true,
+        signUp: raw.signUp,
         socialProviders: raw.socialProviders,
     };
 };

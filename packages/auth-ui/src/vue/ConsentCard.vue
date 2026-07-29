@@ -7,12 +7,12 @@
 // to approve than to read is the failure mode this screen exists to avoid.
 import { computed } from "vue";
 
+import { queryParameter } from "../core/browser-location";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createConsentController, scopeLabels } from "../core/oauth-provider";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
-import { queryParameter } from "./query-parameter";
 import Skeleton from "./Skeleton.vue";
 import { useController } from "./use-controller";
 

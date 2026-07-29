@@ -4,11 +4,11 @@
 // It renders the organization's name before asking for a decision — an "Accept"
 // button with nothing above it is not consent — and bounces through sign-in when
 // there is no session, returning to this same invitation afterwards.
+import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController } from "../core/invitations";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
-import { queryParameter } from "./query-parameter";
 import Skeleton from "./Skeleton.vue";
 import { useController } from "./use-controller";
 

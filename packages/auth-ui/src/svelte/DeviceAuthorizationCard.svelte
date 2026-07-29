@@ -6,6 +6,7 @@
     exists to make visible.
 -->
 <script lang="ts">
+    import { queryParameter } from "../core/browser-location";
     import { createDeviceAuthorizationController } from "../core/device-authorization";
     import { isFlowEnabled } from "../core/flow-gate";
     import AuthCard from "./AuthCard.svelte";
@@ -13,7 +14,6 @@
     import { controllerStore } from "./controller-store";
     import Field from "./Field.svelte";
     import FormBanner from "./FormBanner.svelte";
-    import { queryParameter } from "./query-parameter";
 
     let {
         userCode,

@@ -70,6 +70,13 @@ const createFormController = <TField extends string>(context: ControllerContext,
 
     const store = createStore<FormState<TField>>(initialState());
 
+    /*
+     * Which `load` is current. `reset()` can start a second one while the first
+     * is still in flight, and without this the slower response wins — restoring
+     * older server data over the newer read.
+     */
+    let generation = 0;
+
     /**
      * Fields the user has typed into. Not `FieldState.touched` — that means
      * "has been blurred", which drives error display and stays false while
@@ -173,15 +180,35 @@ const createFormController = <TField extends string>(context: ControllerContext,
         }
     };
 
+    /**
+     * Re-run `prefill` and seed the fields in one transition.
+     *
+     * A resolved prefill never overwrites a field the user has already typed
+     * into, and never seeds at all once a submit is in flight or has done. Both
+     * guards exist because `prefill` is a network read racing a human: a slow
+     * `getSession` that lands after someone typed — or after they *saved* —
+     * would otherwise silently restore the old value over their edit, which
+     * reads as "the save didn't work". The race widens with anything else on the
+     * page that also reads the session, so it is not a theoretical one.
+     */
     const load = async (): Promise<void> => {
         if (!options.prefill) {
             return;
         }
 
+        generation += 1;
+
+        const ticket = generation;
+
         store.set({ ...state(), loading: true });
 
         try {
             const seeded = await options.prefill(context);
+
+            if (ticket !== generation) {
+                return;
+            }
+
             const current = state();
 
             if (current.status === "submitting" || current.status === "success") {
@@ -203,7 +230,10 @@ const createFormController = <TField extends string>(context: ControllerContext,
             store.set({ ...current, fields, loading: false });
         } catch (error) {
             context.onError?.(error);
-            store.set({ ...state(), loading: false });
+
+            if (ticket === generation) {
+                store.set({ ...state(), loading: false });
+            }
         }
     };
 
@@ -217,18 +247,6 @@ const createFormController = <TField extends string>(context: ControllerContext,
             void load();
         }
     };
-
-    /**
-     * Re-run `prefill` and seed the fields in one transition.
-     *
-     * A resolved prefill never overwrites a field the user has already typed
-     * into, and never seeds at all once a submit is in flight or has done. Both
-     * guards exist because `prefill` is a network read racing a human: a slow
-     * `getSession` that lands after someone typed — or after they *saved* —
-     * would otherwise silently restore the old value over their edit, which
-     * reads as "the save didn't work". The race widens with anything else on the
-     * page that also reads the session, so it is not a theoretical one.
-     */
 
     if (options.prefill) {
         void load();

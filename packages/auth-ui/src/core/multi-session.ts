@@ -30,7 +30,9 @@ type DeviceSessionsController = Controller<ResourceState<AuthDeviceSession>, Dev
 const createDeviceSessionsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): DeviceSessionsController => {
     const resource = createResourceController<AuthDeviceSession>(
         context,
-        async (context_) => assertOk(await context_.authClient.multiSession.listDeviceSessions()).data ?? [],
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.multiSession.listDeviceSessions()).data ?? [] };
+        },
         options,
     );
 

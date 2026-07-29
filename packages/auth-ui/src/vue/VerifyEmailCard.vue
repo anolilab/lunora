@@ -2,11 +2,11 @@
 // The page the verification link lands on. It consumes the token on mount and
 // redirects, so the only states a user sees are "working" and "that link is no
 // longer good".
+import { queryParameter } from "../core/browser-location";
 import { createVerifyEmailController } from "../core/verify-email";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
-import { queryParameter } from "./query-parameter";
 import { useController } from "./use-controller";
 
 const props = defineProps<{

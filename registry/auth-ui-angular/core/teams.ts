@@ -32,7 +32,9 @@ const createTeamsController = (context: ControllerContext, options: TeamsOptions
 
     const resource = createResourceController<AuthTeam>(
         context,
-        async (context_) => assertOk(await context_.authClient.organization.listTeams(query === undefined ? undefined : { query })).data ?? [],
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.organization.listTeams(query === undefined ? undefined : { query })).data ?? [] };
+        },
         { autoLoad: options.autoLoad },
     );
 

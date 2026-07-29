@@ -6,6 +6,7 @@
 import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, computed, inject, Injector, input } from "@angular/core";
 
+import { queryParameter } from "../core/browser-location";
 import type { ResourceState } from "../core/create-resource-controller";
 import { isFlowEnabled } from "../core/flow-gate";
 import type { AuthorizedAppsActions, ConsentActions, ConsentState } from "../core/oauth-provider";
@@ -84,8 +85,7 @@ class ConsentCardComponent implements OnInit {
     // Angular has set the inputs, so the controller would read the URL's id even
     // when the caller passed one of their own.
     ngOnInit(): void {
-        const search = (globalThis as { location?: { search?: string } }).location?.search;
-        const resolved = this.consentId() ?? (search === undefined ? undefined : (new URLSearchParams(search).get("consent_id") ?? undefined));
+        const resolved = this.consentId() ?? queryParameter("consent_id");
         const bridge = controllerSignal((context) => createConsentController(context, { autoLoad: this.enabled(), consentId: resolved }), {
             context: this.context,
             injector: this.injector,

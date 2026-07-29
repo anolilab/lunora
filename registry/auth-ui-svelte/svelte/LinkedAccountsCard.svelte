@@ -7,7 +7,7 @@
     client change.
 -->
 <script lang="ts">
-    import { createAccountsController, NON_SOCIAL_PROVIDERS } from "../core/accounts";
+    import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
     import { providerLabel } from "../core/labels";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -19,11 +19,7 @@
     const t = context.localization;
     const { actions, state: res } = controllerStore(createAccountsController);
 
-    const linkable = $derived.by(() => {
-        const linked = new Set($res.items.map((account) => account.providerId).filter((id): id is string => id !== undefined));
-
-        return context.social.filter((provider) => !linked.has(provider));
-    });
+    const linkable = $derived(linkableProviders($res.items, context.social));
 </script>
 
 <AuthCard title={t.accountsTitle}>

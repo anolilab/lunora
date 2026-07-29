@@ -33,6 +33,7 @@
         hideWhenSignedOut?: boolean;
     } = $props();
 
+    // eslint-disable-next-line no-useless-assignment -- the increment is the point: a module-level counter handing out one DOM id per instance.
     const menuId = `lunora-auth-menu-${(counter += 1)}`;
     const context = useAuthUI();
     const t = context.localization;

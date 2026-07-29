@@ -85,7 +85,8 @@ const createThemeModeController = (options: ThemeModeOptions = {}): ThemeModeCon
      * occurs. An SSR app that wants the two renders identical passes
      * `persist: false` and drives the mode itself.
      */
-    const initial = (options.persist === false ? undefined : readStored()) ?? "system";
+    const stored = options.persist === false ? undefined : readStored();
+    const initial = stored ?? "system";
     const store = createStore<ThemeModeState>({ mode: initial, resolved: initial === "system" ? systemPrefers() : initial });
 
     const apply = (mode: ThemeMode): void => {
@@ -105,13 +106,20 @@ const createThemeModeController = (options: ThemeModeOptions = {}): ThemeModeCon
     };
 
     /*
-     * Deliberately NOT applied here. Constructing a controller — which happens
+     * Applied only when the user actually chose it through this control and it
+     * was remembered — otherwise a saved "dark" is shown as selected on reload
+     * while the page renders light, which reads as the setting not working.
+     *
+     * A *defaulted* mode is still not applied. Constructing a controller — which happens
      * merely by mounting an appearance card — must not reach out and rewrite a
      * global document attribute: an app with its own theming would be flipped to
      * the OS preference with no user action. The DOM is written on `setMode`,
      * and `state.resolved` reports what the mode means so a view can render the
      * current selection without anything having been changed.
      */
+    if (stored !== undefined) {
+        apply(stored);
+    }
 
     return {
         actions: {

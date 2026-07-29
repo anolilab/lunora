@@ -6,13 +6,13 @@
 // exists to make visible.
 import { computed } from "vue";
 
+import { queryParameter } from "../core/browser-location";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
-import { queryParameter } from "./query-parameter";
 import { useController } from "./use-controller";
 
 const props = defineProps<{

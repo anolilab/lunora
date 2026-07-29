@@ -56,7 +56,7 @@ const onBanToggle = (user: AuthAdminUser): void => {
             type="search"
             :aria-label="t.adminSearch"
             :placeholder="t.adminSearch"
-            :value="state.search"
+            :value="state.extra.search"
             @input="onSearch"
         />
         <Skeleton v-if="state.loading" />

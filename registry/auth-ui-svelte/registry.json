@@ -127,7 +127,6 @@
         { "from": "svelte/VerifyEmailCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/VerifyEmailCard.svelte" },
         { "from": "svelte/context.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/context.ts" },
         { "from": "svelte/controller-store.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/controller-store.ts" },
-        { "from": "svelte/index.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/index.ts" },
-        { "from": "svelte/query-parameter.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/query-parameter.ts" }
+        { "from": "svelte/index.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/index.ts" }
     ]
 }

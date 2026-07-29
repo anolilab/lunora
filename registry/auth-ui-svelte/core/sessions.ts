@@ -17,7 +17,13 @@ interface SessionsActions {
 type SessionsController = Controller<ResourceState<AuthSession>, SessionsActions>;
 
 const createSessionsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): SessionsController => {
-    const resource = createResourceController<AuthSession>(context, async (context_) => assertOk(await context_.authClient.listSessions()).data ?? [], options);
+    const resource = createResourceController<AuthSession>(
+        context,
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.listSessions()).data ?? [] };
+        },
+        options,
+    );
 
     return {
         actions: {

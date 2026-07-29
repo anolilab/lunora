@@ -55,7 +55,13 @@ const linkableProviders = (accounts: ReadonlyArray<AuthAccount>, social: Readonl
 };
 
 const createAccountsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): AccountsController => {
-    const resource = createResourceController<AuthAccount>(context, async (context_) => assertOk(await context_.authClient.listAccounts()).data ?? [], options);
+    const resource = createResourceController<AuthAccount>(
+        context,
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.listAccounts()).data ?? [] };
+        },
+        options,
+    );
 
     return {
         actions: {
@@ -83,4 +89,4 @@ const createAccountsController = (context: ControllerContext, options: { autoLoa
 };
 
 export type { AccountsActions, AccountsController };
-export { createAccountsController, linkableProviders, linkedProviderIds, NON_SOCIAL_PROVIDERS };
+export { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS };

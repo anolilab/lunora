@@ -127,7 +127,6 @@
         { "from": "vue/VerifyEmailCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/VerifyEmailCard.vue" },
         { "from": "vue/index.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/index.ts" },
         { "from": "vue/provider.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/provider.ts" },
-        { "from": "vue/query-parameter.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/query-parameter.ts" },
         { "from": "vue/use-controller.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/use-controller.ts" }
     ]
 }

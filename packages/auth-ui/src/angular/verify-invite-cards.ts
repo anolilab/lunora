@@ -7,6 +7,7 @@
 import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, inject, Injector, input } from "@angular/core";
 
+import { queryParameter } from "../core/browser-location";
 import type { ResourceState } from "../core/create-resource-controller";
 import type { AcceptInvitationActions, AcceptInvitationState, UserInvitationsActions } from "../core/invitations";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
@@ -16,17 +17,6 @@ import { createResendVerificationController, createVerifyEmailController } from 
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SkeletonComponent, SubmitButtonComponent } from "./primitives";
 import { injectAuthUIContext } from "./provider";
-
-/** Read one query parameter off the current URL, or undefined off the browser. */
-const queryParameter = (name: string): string | undefined => {
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
-
-    if (search === undefined || search === "") {
-        return undefined;
-    }
-
-    return new URLSearchParams(search).get(name) ?? undefined;
-};
 
 /**
  * The page the verification link lands on. It consumes the token on mount and

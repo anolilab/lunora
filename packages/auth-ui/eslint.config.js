@@ -131,14 +131,16 @@ export default createConfig(
     {
         files: ["src/svelte/**/*.{ts,svelte}", "__tests__/svelte/**/*.{ts,svelte}"],
         languageOptions: { parserOptions: { project: "./tsconfig.svelte.json", tsconfigRootDir: import.meta.dirname } },
+        // Same as Vue: `svelte` is the consumer's dependency, not ours.
+        rules: { "import/no-extraneous-dependencies": "off" },
+    },
+    {
+        // `.svelte` only: the plain `.ts` beside them is in the same program and
+        // has neither problem, so widening these would drop real coverage.
+        files: ["src/svelte/**/*.svelte"],
         rules: {
-            // Same as Vue: `svelte` is the consumer's dependency, not ours.
-            "import/no-extraneous-dependencies": "off",
             // The svelte parser has no DOM lib, so DOM-only types read as undefined globals.
             "no-undef": "off",
-            // The id counters increment a module-level variable; the "unused"
-            // assignment is the whole point (see the Angular ports' `nextId`).
-            "no-useless-assignment": "off",
         },
     },
     /*

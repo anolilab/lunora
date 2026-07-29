@@ -1,14 +1,15 @@
 import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
 
-import { createAccountsController, NON_SOCIAL_PROVIDERS } from "../core/accounts";
+import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import { isFlowEnabled } from "../core/flow-gate";
 import { providerLabel } from "../core/labels";
 import type { ThemeMode } from "../core/theme-mode";
 import { createThemeModeController, THEME_MODES } from "../core/theme-mode";
 import { createSetUsernameController } from "../core/username";
-import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
+import { createUsernameAvailabilityController } from "../core/username-availability";
+import { AuthCard, Field, FormBanner, Skeleton, SubmitButton, UsernameAvailability } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 import { UserAvatar } from "./user-button";
@@ -33,11 +34,7 @@ const LinkedAccountsCard = (): JSX.Element => {
     const { localization: t } = context;
     const [state, actions] = createController(createAccountsController);
 
-    const linkable = (): ReadonlyArray<string> => {
-        const linked = new Set(state.items.map((account) => account.providerId).filter((id): id is string => id !== undefined));
-
-        return context.social.filter((provider) => !linked.has(provider));
-    };
+    const linkable = (): ReadonlyArray<string> => linkableProviders(state.items, context.social);
 
     return (
         <AuthCard title={t.accountsTitle}>
@@ -176,6 +173,9 @@ const SetUsernameCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = createController(createSetUsernameController);
+    // Checked as the user types, so a taken name surfaces here rather than as a
+    // failed save with the field already blurred.
+    const [availability, availabilityActions] = createController(createUsernameAvailabilityController);
 
     if (!isFlowEnabled(context, "username", "SetUsernameCard")) {
         return null;
@@ -195,8 +195,10 @@ const SetUsernameCard = (): JSX.Element => {
                     }}
                     onChange={(value) => {
                         actions.setField("username", value);
+                        availabilityActions.check(value);
                     }}
                 />
+                <UsernameAvailability status={availability.status} />
                 <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
             </form>
         </AuthCard>

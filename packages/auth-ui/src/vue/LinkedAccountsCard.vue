@@ -8,7 +8,7 @@
 import { computed } from "vue";
 
 import type { AuthAccount } from "../core/types";
-import { createAccountsController, NON_SOCIAL_PROVIDERS } from "../core/accounts";
+import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import { providerLabel } from "../core/labels";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
@@ -22,11 +22,7 @@ const context = useAuthUIContextRef();
 const t = context.value.localization;
 const { actions, state } = useController(createAccountsController);
 
-const linkable = computed(() => {
-    const linked = new Set(state.value.items.map((account) => account.providerId).filter((id): id is string => id !== undefined));
-
-    return context.value.social.filter((provider) => !linked.has(provider));
-});
+const linkable = computed(() => linkableProviders(state.value.items, context.value.social));
 
 const onUnlink = (account: AuthAccount): void => {
     void actions.unlink(account.providerId ?? "", account.accountId);

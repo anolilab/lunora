@@ -18,6 +18,8 @@
  * configured destination.
  */
 
+import { queryParameter } from "./browser-location";
+
 /**
  * Control characters, which can smuggle a value (a newline, a tab) past a naive
  * check further upstream. Hoisted so it compiles once, not per call.
@@ -50,15 +52,17 @@ const isSafeRedirect = (target: string): boolean => {
 
 /** Read `redirectTo` off the current URL, or undefined off the browser. */
 const readRedirectTo = (parameter = "redirectTo"): string | undefined => {
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
+    const value = queryParameter(parameter);
 
-    if (search === undefined || search === "") {
+    if (value === undefined) {
         return undefined;
     }
 
-    const value = new URLSearchParams(search).get(parameter);
+    // Validate and return the *same* string, so a reader does not have to open
+    // `isSafeRedirect` to confirm it trims identically.
+    const trimmed = value.trim();
 
-    return value === null || !isSafeRedirect(value) ? undefined : value.trim();
+    return isSafeRedirect(trimmed) ? trimmed : undefined;
 };
 
 /**
@@ -83,10 +87,18 @@ const withRedirectTo = (path: string): string => {
         return path;
     }
 
-    // Preserve any query string the app already configured on the step's route.
-    const separator = path.includes("?") ? "&" : "?";
+    /*
+     * Parsed rather than appended: an app whose `redirects.twoFactor` already
+     * carries a `redirectTo` would otherwise end up with two, and
+     * `URLSearchParams.get` returns the first — so the configured value would
+     * win over the invitation target this function exists to carry.
+     */
+    const [base, existing = ""] = path.split("?");
+    const parameters = new URLSearchParams(existing);
 
-    return `${path}${separator}redirectTo=${encodeURIComponent(target)}`;
+    parameters.set("redirectTo", target);
+
+    return `${base ?? path}?${parameters.toString()}`;
 };
 
 export { isSafeRedirect, readRedirectTo, resolveAfterSignIn, withRedirectTo };

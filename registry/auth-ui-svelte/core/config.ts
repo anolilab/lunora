@@ -154,12 +154,27 @@ interface AuthUIConfig {
     /** Organization UI options. Server-derived sub-features are separate. */
     organization?: {
         /**
+         * Force the custom-roles cards on. Same reasoning as `teams` below.
+         */
+        roles?: boolean;
+
+        /**
          * Show the slug field when creating or editing an organization.
          * Defaults to true. Turn it off for apps that don't put the slug in a
          * URL — it is an implementation detail there, and the create form
          * derives one from the name anyway.
          */
         showSlug?: boolean;
+
+        /**
+         * Force the teams cards on, regardless of what the server discloses.
+         *
+         * Needed because teams are detected from the server's table map and
+         * have no client-side equivalent to fall back on: a deployment that
+         * withholds the organization block (`uiConfig({ expose })`) would
+         * otherwise lose `&lt;TeamsCard>` from every port with no way to restore it.
+         */
+        teams?: boolean;
     };
     password?: PasswordPolicy;
     plugins?: PluginFlags;
@@ -335,9 +350,9 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
             invitationLimit: discovered?.organization?.invitationLimit,
             limit: discovered?.organization?.limit,
             membershipLimit: discovered?.organization?.membershipLimit,
-            roles: discovered?.organization?.roles ?? false,
+            roles: config.organization?.roles ?? discovered?.organization?.roles ?? false,
             showSlug: config.organization?.showSlug ?? true,
-            teams: discovered?.organization?.teams ?? false,
+            teams: config.organization?.teams ?? discovered?.organization?.teams ?? false,
         },
         password: config.password ?? {},
         plugins: resolvePlugins(config.authClient, config.plugins, discovered),

@@ -35,7 +35,7 @@
             }}
             placeholder={t.adminSearch}
             type="search"
-            value={$res.search}
+            value={$res.extra.search}
         />
         {#if $res.loading}
             <Skeleton />

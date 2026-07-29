@@ -3,6 +3,7 @@ import { createSignal, For, onCleanup, Show } from "solid-js";
 
 import { createAdminUsersController } from "../core/admin-users";
 import { createBackupCodesController } from "../core/backup-codes";
+import { queryParameter } from "../core/browser-location";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS } from "../core/labels";
@@ -112,7 +113,7 @@ const AdminUsersCard = (): JSX.Element => {
                 }}
                 placeholder={t.adminSearch}
                 type="search"
-                value={state.search}
+                value={state.extra.search}
             />
             <Show fallback={<Skeleton />} when={!state.loading}>
                 <ul class="lunora-auth-list">
@@ -185,8 +186,7 @@ interface DeviceAuthorizationCardProps {
 const DeviceAuthorizationCard = (props: DeviceAuthorizationCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const search = (globalThis as { location?: { search?: string } }).location?.search;
-    const resolved = props.userCode ?? (search === undefined ? undefined : (new URLSearchParams(search).get("user_code") ?? undefined));
+    const resolved = props.userCode ?? queryParameter("user_code");
     const enabled = isFlowEnabled(context, "deviceAuthorization", "DeviceAuthorizationCard");
     const [state, actions] = createController((context_) => createDeviceAuthorizationController(context_, { userCode: resolved }));
 

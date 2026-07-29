@@ -4,7 +4,7 @@
  * only place flow logic lives.
  */
 export type { AccountsActions, AccountsController } from "./accounts";
-export { createAccountsController, linkableProviders, linkedProviderIds, NON_SOCIAL_PROVIDERS } from "./accounts";
+export { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "./accounts";
 export type { ActiveMemberActions, ActiveMemberController, ActiveMemberState } from "./active-member";
 export { createActiveMemberController } from "./active-member";
 export type { AdminUsersActions, AdminUsersController, AdminUsersOptions, AdminUsersState } from "./admin-users";

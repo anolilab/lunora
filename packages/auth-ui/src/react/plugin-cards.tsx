@@ -109,7 +109,7 @@ const AdminUsersCard = (): ReactElement | null => {
                 }}
                 placeholder={t.adminSearch}
                 type="search"
-                value={state.search}
+                value={state.extra.search}
             />
             {state.loading ? (
                 <Skeleton />

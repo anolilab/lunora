@@ -7,7 +7,7 @@ import type { Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, computed } from "@angular/core";
 
 import type { AccountsActions } from "../core/accounts";
-import { createAccountsController, NON_SOCIAL_PROVIDERS } from "../core/accounts";
+import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import type { AvatarUploadActions, AvatarUploadState } from "../core/avatar";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import type { ResourceState } from "../core/create-resource-controller";
@@ -18,8 +18,17 @@ import { createThemeModeController, THEME_MODES } from "../core/theme-mode";
 import type { AuthAccount, FormActions, FormState } from "../core/types";
 import type { SetUsernameField } from "../core/username";
 import { createSetUsernameController } from "../core/username";
+import type { UsernameAvailabilityActions, UsernameAvailabilityState } from "../core/username-availability";
+import { createUsernameAvailabilityController } from "../core/username-availability";
 import { controllerSignal } from "./controller-signal";
-import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SkeletonComponent, SubmitButtonComponent } from "./primitives";
+import {
+    AuthCardComponent,
+    AuthFieldComponent,
+    FormBannerComponent,
+    SkeletonComponent,
+    SubmitButtonComponent,
+    UsernameAvailabilityComponent,
+} from "./primitives";
 import { injectAuthUIContext } from "./provider";
 import { UserAvatarComponent } from "./user-button";
 
@@ -87,11 +96,7 @@ class LinkedAccountsCardComponent {
     protected readonly state: Signal<ResourceState<AuthAccount>> = this.bridge.state;
     private readonly actions: AccountsActions = this.bridge.actions;
 
-    protected readonly linkable = computed(() => {
-        const linked = new Set(this.state().items.map((account) => account.providerId));
-
-        return this.context().social.filter((provider) => !linked.has(provider));
-    });
+    protected readonly linkable = computed(() => linkableProviders(this.state().items, this.context().social));
 
     /** Delegates to the shared helper — Angular templates can only call members. */
     protected readonly providerLabel = providerLabel;
@@ -179,7 +184,7 @@ class AvatarCardComponent {
 /** Claim or change the username, when the `username` plugin is on. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
-    imports: [AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent],
+    imports: [AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent, UsernameAvailabilityComponent],
     selector: "lunora-set-username-card",
     standalone: true,
     template: `
@@ -192,9 +197,10 @@ class AvatarCardComponent {
                         [label]="t.usernameLabel"
                         name="username"
                         autoComplete="username"
-                        (changed)="actions.setField('username', $event)"
+                        (changed)="setUsername($event)"
                         (blurred)="actions.blur('username')"
                     />
+                    <lunora-auth-username-availability [status]="availability().status" />
                     <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.saveChanges }}</lunora-auth-submit-button>
                 </form>
             </lunora-auth-card>
@@ -208,6 +214,17 @@ class SetUsernameCardComponent {
     private readonly bridge = controllerSignal(createSetUsernameController, { context: this.context });
     protected readonly state: Signal<FormState<SetUsernameField>> = this.bridge.state;
     protected readonly actions: FormActions<SetUsernameField> = this.bridge.actions;
+
+    // Checked as the user types, so a taken name surfaces here rather than as a
+    // failed save with the field already blurred.
+    private readonly availabilityBridge = controllerSignal(createUsernameAvailabilityController, { context: this.context });
+    protected readonly availability: Signal<UsernameAvailabilityState> = this.availabilityBridge.state;
+    private readonly availabilityActions: UsernameAvailabilityActions = this.availabilityBridge.actions;
+
+    protected setUsername(value: string): void {
+        this.actions.setField("username", value);
+        this.availabilityActions.check(value);
+    }
 }
 
 /**

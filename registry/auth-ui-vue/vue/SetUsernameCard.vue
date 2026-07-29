@@ -4,12 +4,14 @@ import { computed } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
 import { createSetUsernameController } from "../core/username";
+import { createUsernameAvailabilityController } from "../core/username-availability";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
+import UsernameAvailability from "./UsernameAvailability.vue";
 
 const context = useAuthUIContextRef();
 const t = context.value.localization;
@@ -17,6 +19,14 @@ const t = context.value.localization;
 // would stay frozen on the pre-discovery answer. See `provider.ts`.
 const enabled = computed(() => isFlowEnabled(context.value, "username", "SetUsernameCard"));
 const { actions, state } = useController(createSetUsernameController);
+// Checked as the user types, so a taken name surfaces here rather than as a
+// failed save with the field already blurred.
+const { actions: availabilityActions, state: availability } = useController(createUsernameAvailabilityController);
+
+const onUsernameChange = (value: string): void => {
+    actions.setField("username", value);
+    availabilityActions.check(value);
+};
 </script>
 
 <template>
@@ -29,8 +39,9 @@ const { actions, state } = useController(createSetUsernameController);
                 name="username"
                 autoComplete="username"
                 @blur="actions.blur('username')"
-                @change="actions.setField('username', $event)"
+                @change="onUsernameChange($event)"
             />
+            <UsernameAvailability :status="availability.status" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.saveChanges }}</SubmitButton>
         </form>
     </AuthCard>

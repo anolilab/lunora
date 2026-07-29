@@ -10,6 +10,7 @@ import type { AdminUsersActions, AdminUsersState } from "../core/admin-users";
 import { createAdminUsersController } from "../core/admin-users";
 import type { BackupCodesField } from "../core/backup-codes";
 import { createBackupCodesController } from "../core/backup-codes";
+import { queryParameter } from "../core/browser-location";
 import type { ResourceState } from "../core/create-resource-controller";
 import type { DeviceAuthorizationActions, DeviceAuthorizationState } from "../core/device-authorization";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
@@ -116,7 +117,7 @@ class MultiSessionCardComponent {
                     type="search"
                     [attr.aria-label]="t.adminSearch"
                     [attr.placeholder]="t.adminSearch"
-                    [value]="state().search"
+                    [value]="state().extra.search"
                     (input)="search($any($event.target).value)"
                 />
                 @if (state().loading) {
@@ -258,8 +259,7 @@ class DeviceAuthorizationCardComponent implements OnInit {
     // Built in ngOnInit, not a field initializer: `userCode()` is unbound until
     // Angular has set the inputs, so the field would never prefill from a prop.
     ngOnInit(): void {
-        const search = (globalThis as { location?: { search?: string } }).location?.search;
-        const resolved = this.userCode() ?? (search === undefined ? undefined : (new URLSearchParams(search).get("user_code") ?? undefined));
+        const resolved = this.userCode() ?? queryParameter("user_code");
         const bridge = controllerSignal((context) => createDeviceAuthorizationController(context, { userCode: resolved }), {
             context: this.context,
             injector: this.injector,

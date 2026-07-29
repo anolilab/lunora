@@ -27,7 +27,9 @@ type OrganizationsController = Controller<ResourceState<AuthOrganization>, Organ
 const createOrganizationsController = (context: ControllerContext, options: { autoLoad?: boolean } = {}): OrganizationsController => {
     const resource = createResourceController<AuthOrganization>(
         context,
-        async (context_) => assertOk(await context_.authClient.organization.list()).data ?? [],
+        async (context_) => {
+            return { items: assertOk(await context_.authClient.organization.list()).data ?? [] };
+        },
         options,
     );
 
