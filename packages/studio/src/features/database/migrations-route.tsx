@@ -34,13 +34,19 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
 
     const [pane, setPane] = useState<MigrationsPane>("diagram");
 
+    // Mono caps keeps the strip in the tertiary register — it names the views, it
+    // is not the content. The refinements over a plain underline: tracking pulled
+    // back from `widest` (at 11px mono that read as shouting), the active rule in
+    // the aurora accent rather than flat foreground, and a hover wash so the
+    // inactive tabs are visibly hittable rather than dead text.
     const tabClass = (active: boolean): string =>
         cn(
-            "border-b-2 px-3 py-2 font-mono text-[11px] tracking-widest uppercase outline-none transition-colors",
-            active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+            "-mb-px border-b-2 px-3 py-2.5 font-mono text-[11px] tracking-wider uppercase transition-colors outline-none",
+            "hover:bg-accent/40 focus-visible:bg-accent/40",
+            active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
         );
 
-    const tab = (key: MigrationsPane, label: string, testId: string): ReactElement => (
+    const tab = (key: MigrationsPane, label: string, testId: string, count?: number): ReactElement => (
         <button
             aria-selected={pane === key}
             className={tabClass(pane === key)}
@@ -52,6 +58,7 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
             type="button"
         >
             {label}
+            {count !== undefined && <span className="ms-2 tabular-nums text-muted-foreground/70">{count}</span>}
         </button>
     );
 

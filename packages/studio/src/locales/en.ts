@@ -534,6 +534,8 @@ const MESSAGE_IDS = [
     "added",
     "changed",
     "removed",
+    "schema",
+    "{count} columns",
     "changes",
     "tables",
     "first recorded version",

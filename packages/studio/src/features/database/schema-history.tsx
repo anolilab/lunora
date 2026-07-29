@@ -115,10 +115,8 @@ const DiffVerdict = ({ breaking, count, first }: { readonly breaking: number; re
     );
 };
 
-/** The three verbs a change can carry, in the order the list groups them. */
-const CHANGE_ACTIONS = ["added", "changed", "removed"] as const;
-
-type ChangeAction = (typeof CHANGE_ACTIONS)[number];
+/** The three verbs a change can carry. Rendered per row, since the list groups by table. */
+type ChangeAction = "added" | "changed" | "removed";
 
 /**
  * Split a change discriminator into its verb and its subject kind.
@@ -159,6 +157,51 @@ const changeSubject = (change: DriftChange, kind: string): string => {
     const prefix = `${CHANGE_SHAPE[change.type].action} ${kind} `;
 
     return change.summary.startsWith(prefix) ? change.summary.slice(prefix.length) : change.summary;
+};
+
+/** One table's changes, in the order the list renders them. */
+interface TableChangeGroup {
+    readonly changes: ReadonlyArray<DriftChange>;
+    /** The owning table, or `""` for schema-scoped changes (jurisdiction, shard mode). */
+    readonly table: string;
+}
+
+/**
+ * Group changes by the table they belong to.
+ *
+ * By TABLE rather than by verb, because once a diff carries field-level changes
+ * "what happened to `users`?" is the question being asked, and a verb-first list
+ * scatters one table's changes across three headings. The verb moves onto the
+ * row, where it belongs next to the kind.
+ *
+ * `DriftChange.table` is set for every table-scoped change; the schema-scoped
+ * ones (a jurisdiction or shard-mode move) have none and collect under a single
+ * `""` group rendered last, since they describe the database rather than a table.
+ *
+ * Insertion-ordered: the diff model already emits changes in a stable order
+ * (added/changed per table, then removals), so preserving it keeps successive
+ * renders of the same diff identical.
+ */
+const groupChangesByTable = (changes: ReadonlyArray<DriftChange>): TableChangeGroup[] => {
+    const byTable = new Map<string, DriftChange[]>();
+
+    for (const change of changes) {
+        const table = change.table ?? "";
+        const bucket = byTable.get(table);
+
+        if (bucket === undefined) {
+            byTable.set(table, [change]);
+        } else {
+            bucket.push(change);
+        }
+    }
+
+    const groups = [...byTable].map(([table, grouped]) => {
+        return { changes: grouped, table };
+    });
+
+    // Schema-scoped last — it is context for the table groups above it.
+    return [...groups.filter((group) => group.table !== ""), ...groups.filter((group) => group.table === "")];
 };
 
 /** Small mono section label — the tertiary layer's only chrome. */
@@ -307,47 +350,63 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
                     </div>
                 ) : (
                     <div className="min-h-0 flex-1 overflow-y-auto" data-testid="sh-changes">
-                        {CHANGE_ACTIONS.map((action) => {
-                            const inGroup = changes.filter((change) => CHANGE_SHAPE[change.type].action === action);
-
-                            if (inGroup.length === 0) {
-                                return null;
-                            }
+                        {groupChangesByTable(changes).map((group) => {
+                            // Column count comes from the diff model's table, which
+                            // the canvas already loaded — free context on an added
+                            // table, and absent for a schema-scoped group.
+                            const meta = (model?.tables ?? []).find((entry) => entry.name === group.table);
 
                             return (
-                                <section className="mb-6" key={action}>
-                                    {/* The verb, hoisted out of seven identical
-                                        row prefixes into one heading. */}
-                                    <div className="flex items-baseline gap-2 pb-2 font-mono text-[10px] tracking-widest text-muted-foreground/70 uppercase">
-                                        {t(action)}
-                                        <span className="tabular-nums">{inGroup.length}</span>
+                                <section className="mb-6" key={group.table}>
+                                    <div className="flex items-baseline gap-3 border-b border-border/60 pb-1.5">
+                                        <span className="font-mono text-[13px] text-foreground">{group.table === "" ? t("schema") : group.table}</span>
+                                        {meta !== undefined && (
+                                            <span className="font-mono text-[10px] tracking-widest text-muted-foreground/70 tabular-nums uppercase">
+                                                {t("{count} columns", { count: meta.columns.length })}
+                                            </span>
+                                        )}
+                                        {/* Only when it counts something. Every group
+                                            of a first-version diff holds exactly one
+                                            change, and a column of "1"s is noise. */}
+                                        {group.changes.length > 1 && (
+                                            <span className="ms-auto font-mono text-[10px] tracking-widest text-muted-foreground/70 tabular-nums">
+                                                {group.changes.length}
+                                            </span>
+                                        )}
                                     </div>
 
                                     <ul>
-                                        {inGroup.map((change) => {
-                                            const { kind } = CHANGE_SHAPE[change.type];
+                                        {group.changes.map((change) => {
+                                            const { action, kind } = CHANGE_SHAPE[change.type];
                                             const breaking = change.severity === "breaking";
+                                            const subject = changeSubject(change, kind);
 
                                             return (
                                                 <li
                                                     className="flex items-baseline gap-4 border-s-2 py-1.5 ps-3 transition-colors hover:bg-accent/30"
                                                     key={`${change.type}-${change.summary}`}
                                                 >
-                                                    {/* Severity is a rule on the edge, not a badge:
-                                                        every row of a safe migration said "safe", so
-                                                        the chip carried no information. */}
+                                                    {/* Severity is a rule on the edge, not a badge: every
+                                                        row of a safe migration said "safe", so the chip
+                                                        carried no information. */}
                                                     <span
                                                         aria-hidden="true"
                                                         className={cn("-ms-3 h-3 w-0.5 shrink-0 self-center", breaking ? "bg-destructive" : "bg-transparent")}
                                                     />
-                                                    {/* Fixed width so the identifiers below form one
-                                                        scannable column instead of ragged prose. */}
-                                                    <span className="w-32 shrink-0 font-mono text-[10px] tracking-widest text-muted-foreground/70 uppercase">
-                                                        {kind}
+                                                    {/* Verb + kind in one fixed-width column, so the
+                                                        subjects below line up as something scannable. */}
+                                                    <span className="w-44 shrink-0 font-mono text-[10px] tracking-widest text-muted-foreground/70 uppercase">
+                                                        {t(action)} {kind}
                                                     </span>
-                                                    <span className={cn("min-w-0 font-mono text-[13px]", breaking ? "text-destructive" : "text-foreground")}>
-                                                        {changeSubject(change, kind)}
-                                                    </span>
+                                                    {/* An added TABLE's subject is the group heading — no
+                                                        point saying `channels` under `channels`. */}
+                                                    {subject !== group.table && (
+                                                        <span
+                                                            className={cn("min-w-0 font-mono text-[13px]", breaking ? "text-destructive" : "text-foreground")}
+                                                        >
+                                                            {subject}
+                                                        </span>
+                                                    )}
                                                     {breaking && (
                                                         <span className="ms-auto shrink-0 font-mono text-[10px] tracking-widest text-destructive uppercase">
                                                             {t("breaking")}
