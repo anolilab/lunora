@@ -56,7 +56,7 @@ describe("buildNodes", () => {
     it("builds one databaseSchema node per table, carrying its typed columns and tier", () => {
         expect.assertions(5);
 
-        const nodes = buildNodes(DIAGRAM_TABLES, false);
+        const nodes = buildNodes(DIAGRAM_TABLES, false, {});
         const messages = nodes.find((node) => node.id === "messages");
         const users = nodes.find((node) => node.id === "users");
 
@@ -71,7 +71,7 @@ describe("buildNodes", () => {
     it("marks nodes with loadError when columnsError is set", () => {
         expect.assertions(1);
 
-        const nodes = buildNodes(UNPROBED_TABLES, true);
+        const nodes = buildNodes(UNPROBED_TABLES, true, {});
 
         expect(nodes.every((node) => node.data.loadError === true)).toBe(true);
     });
@@ -251,8 +251,8 @@ describe("schemaDiagram (viewer integration)", () => {
 
         render(renderViewer(createClient()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // The unified diagram renders the `messages` node, with its `author` FK column probed via describeTables.
         const column = await screen.findByTestId("sd-col-messages-author");
@@ -265,8 +265,8 @@ describe("schemaDiagram (viewer integration)", () => {
 
         render(renderViewer(createClientWithColumnError()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // describeTables rejects for the shard → shardColumnsError[shard] is true → hint renders.
         const hint = await screen.findByTestId("sd-node-messages-error");
@@ -290,7 +290,7 @@ describe("exportDiagramAsJson (JSON serialiser)", () => {
         const revokeObjectURL = vi.spyOn(globalThis.URL, "revokeObjectURL").mockReturnValue(undefined);
 
         try {
-            const sampleNodes = buildNodes(DIAGRAM_TABLES, false);
+            const sampleNodes = buildNodes(DIAGRAM_TABLES, false, {});
             const sampleEdges = buildEdges(DIAGRAM_TABLES);
 
             exportDiagramAsJson(sampleNodes, sampleEdges, "test-export.json");
@@ -316,7 +316,7 @@ describe("exportDiagramAsJson (JSON serialiser)", () => {
     it("serialises nodes and edges into a downloadable JSON structure", () => {
         expect.assertions(3);
 
-        const sampleNodes = buildNodes(DIAGRAM_TABLES, false);
+        const sampleNodes = buildNodes(DIAGRAM_TABLES, false, {});
         const sampleEdges = buildEdges(DIAGRAM_TABLES);
 
         vi.spyOn(globalThis.URL, "createObjectURL").mockReturnValue("blob:fake");
@@ -357,7 +357,7 @@ describe("viewportForExport", () => {
     it("returns a zoom value within [0.1, 2]", () => {
         expect.assertions(2);
 
-        const nodes = buildNodes(DIAGRAM_TABLES, false);
+        const nodes = buildNodes(DIAGRAM_TABLES, false, {});
         const { zoom } = viewportForExport(nodes, 1920, 1080, 32);
 
         expect(zoom).toBeGreaterThanOrEqual(0.1);

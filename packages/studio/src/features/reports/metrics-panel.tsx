@@ -20,7 +20,7 @@ import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
-import { QueryInsights } from "./query-insights";
+import { QueryInsightsRange } from "./query-insights-range";
 import { Sparkline } from "./sparkline";
 
 interface MetricsPanelProps {
@@ -98,6 +98,23 @@ const StatCard = ({
     </Card>
 );
 
+/** A duration for display: `—` when there is none, microseconds under a millisecond. */
+const formatMs = (ms: number): string => {
+    if (ms <= 0) {
+        return "—";
+    }
+
+    if (ms < 1) {
+        return `${(ms * 1000).toFixed(0)}μs`;
+    }
+
+    if (ms < 1000) {
+        return `${ms.toFixed(1)}ms`;
+    }
+
+    return `${(ms / 1000).toFixed(2)}s`;
+};
+
 /**
  * Health snapshot for a single shard: request / error counts (since the DO last
  * woke), its live SQLite size, and reactive-cache hit/miss stats when a cache is
@@ -114,6 +131,7 @@ const StatCard = ({
  * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
  * remount.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~493 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -185,8 +203,10 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         lastRequestsRef.current = next.requests;
 
         if (shardChanged) {
-            // eslint-disable-next-line react-x/set-state-in-effect -- resetting the per-shard series is part of folding a new snapshot into derived stream state, not an unconditional mount-time reset.
+            /* eslint-disable react-x/set-state-in-effect -- resetting the per-shard series is part of folding a new snapshot into derived stream state, not an unconditional mount-time reset. */
+            // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- the two updates belong to different phases of one async aggregate (start vs result) and cannot be written together
             setHistory([]);
+            /* eslint-enable react-x/set-state-in-effect */
 
             return;
         }
@@ -206,6 +226,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
         const shards = shardsToAggregate(shardKey, loadRecentShards());
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
         try {
             const results = await Promise.all(
                 shards.map(async (shard): Promise<ShardMetricsResult> => {
@@ -240,22 +261,6 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const latencyPercentiles = metrics ? computeLatencyPercentiles(metrics) : { p90: 0, p95: 0 };
 
     // Format a millisecond duration for the P90/P95 stat cards.
-    const formatMs = (ms: number): string => {
-        if (ms <= 0) {
-            return "—";
-        }
-
-        if (ms < 1) {
-            return `${(ms * 1000).toFixed(0)}μs`;
-        }
-
-        if (ms < 1000) {
-            return `${ms.toFixed(1)}ms`;
-        }
-
-        return `${(ms / 1000).toFixed(2)}s`;
-    };
-
     // Enriched query stats — derived when the snapshot contains `queryStats`.
     // `MetricsSnapshot` extends `ShardMetrics` with the optional `queryStats`
     // field surfaced by post-feature workers. Use an `in` guard to narrow safely
@@ -272,6 +277,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         }
 
         return enrichQueryStats(snapQs);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `metrics` is derived from `data` above and listed in the deps
     }, [metrics]);
 
     // The shown tab, falling back to overview when the active shard/snapshot has no
@@ -350,7 +356,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {/* Query Insights tab — rendered only when present and selected. */}
-            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
+            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsightsRange shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && metrics !== null && (
                 <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">

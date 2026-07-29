@@ -1,18 +1,37 @@
 import type { JSX } from "solid-js";
 import { Show } from "solid-js";
 
+import { signInAnonymously } from "../core/anonymous";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
+import { readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import { createTwoFactorVerifyController } from "../core/two-factor-verify";
-import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
+import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, PasswordStrength, SocialButtons, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
+
+/** Guest sign-in, when the `anonymous` plugin is on. */
+const AnonymousButton = (): JSX.Element => {
+    const context = useAuthUI();
+
+    return (
+        <button
+            class="lunora-auth-button lunora-auth-button--secondary"
+            onClick={() => {
+                void signInAnonymously(context);
+            }}
+            type="button"
+        >
+            {context.localization.anonymousSignIn}
+        </button>
+    );
+};
 
 /** Stop the browser's native submit and run the controller action (async or not). */
 const onSubmit =
@@ -31,49 +50,63 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = createController(createSignInController);
+    // Read once when the card is created rather than in an effect: it is a
+    // cookie, it is available before the first paint, and it only picks a badge.
+    const lastUsed = readLastLoginMethod();
 
     return (
         <AuthCard footer={<AuthLink href={props.signUpHref ?? "/sign-up"}>{t.noAccount}</AuthLink>} title={t.signIn}>
             <SocialButtons
+                lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
                 onSelect={(provider) => {
                     void signInWithSocial(context, provider);
                 }}
                 providers={social}
             />
-            <Show when={social.length > 0}>
+            <Show when={context.plugins.anonymous}>
+                <AnonymousButton />
+            </Show>
+            <Show when={social.length > 0 && context.credentials}>
                 <AuthDivider />
             </Show>
-            <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
-                <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
-                <AuthLink href={props.forgotPasswordHref ?? "/forgot-password"}>{t.forgotPasswordLink}</AuthLink>
-                <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
-            </form>
+            {/*
+             * An OAuth-only deployment has no password form to show. Discovery
+             * reports that as `emailAndPassword: false`; without discovery it
+             * defaults to true, which is the pre-existing behaviour.
+             */}
+            <Show when={context.credentials}>
+                <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                    <FormBanner error={state.formError} />
+                    <Field
+                        autoComplete="email"
+                        field={state.fields.email}
+                        label={t.emailLabel}
+                        name="email"
+                        onBlur={() => {
+                            actions.blur("email");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("email", value);
+                        }}
+                        type="email"
+                    />
+                    <Field
+                        autoComplete="current-password"
+                        field={state.fields.password}
+                        label={t.passwordLabel}
+                        name="password"
+                        onBlur={() => {
+                            actions.blur("password");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("password", value);
+                        }}
+                        type="password"
+                    />
+                    <AuthLink href={props.forgotPasswordHref ?? "/forgot-password"}>{t.forgotPasswordLink}</AuthLink>
+                    <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
+                </form>
+            </Show>
         </AuthCard>
     );
 };
@@ -83,11 +116,27 @@ interface SignUpCardProps {
 }
 
 const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
-    const { localization: t } = useAuthUI();
+    const context = useAuthUI();
+    const { localization: t, social } = context;
     const [state, actions] = createController(createSignUpController);
 
     return (
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.haveAccount}</AuthLink>} title={t.signUp}>
+            {/*
+             * Social buttons belong on sign-up too — OAuth is a sign-up path, not
+             * just a sign-in one, and omitting them here sends new users through a
+             * password form they never needed. This was the gap against
+             * better-auth-ui's <AuthView>.
+             */}
+            <SocialButtons
+                onSelect={(provider) => {
+                    void signInWithSocial(context, provider);
+                }}
+                providers={social}
+            />
+            <Show when={social.length > 0}>
+                <AuthDivider />
+            </Show>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
                 <Field
@@ -128,6 +177,7 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
                     }}
                     type="password"
                 />
+                <PasswordStrength value={state.fields.password.value} />
                 <SubmitButton pending={state.status === "submitting"}>{t.signUp}</SubmitButton>
             </form>
         </AuthCard>
@@ -342,4 +392,4 @@ const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
 };
 
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps };
-export { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard };
+export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard };

@@ -337,61 +337,7 @@ commits are the record.**
 
 ### Recommended execution order
 
-All seven are independent (no cross-plan deps) and small. Recommended order by
-leverage: **079, 080** first (the two P2 correctness/durability wins with clean
-verification), then the P3 quick wins **081 → 082 → 083 → 084 → 085** in any order.
-Each is scoped to one package and re-runs that package's `lint:types` + `test` as
-its gate.
-
-### Findings considered and rejected (Wave 8)
-
-Vetted against live code and dropped — recorded so they aren't re-audited:
-
-- **ratelimit "fails open on store error"** — FALSE POSITIVE. The subagent audited
-  `rate-limiter.ts` in isolation; the `rateLimit` middleware (`middleware.ts:62-82`)
-  wraps `limit()` in try/catch and **fails closed (503) by default**, with an
-  explicit documented `failOpen` opt-in.
-- **dispatch `response.text()` double-read** (`create-dispatch-runner.ts:74-78`) —
-  FALSE POSITIVE. The two `.text()` calls are on mutually exclusive paths (`throw`
-  inside `if (!response.ok)` exits before the success-path read).
-- **D1 `getBookmark` null→undefined coercion** (`d1-client.ts:124`) — by design; the
-  wrapper's documented contract returns `undefined` for "no bookmark yet".
-- **client WebSocket listeners "never removed"** (`lunora-client.ts:3159+`) — not a
-  leak; the four listeners belong to the local `socket`, which is dereferenced
-  (`conn.socket` reassigned) and GC'd with its listeners when superseded. Guarded
-  standard pattern (`if (conn.socket !== socket) return`).
-- **optimistic-layer transform swallow** (`optimistic-layers.ts:42-47`) — by design;
-  a throwing layer is skipped and the error surfaces on mutation settle (documented).
-- **react cache polling ignores tab visibility** (`react/src/cache.ts:84`) — only the
-  WS-unavailable fallback timer; narrow, low impact. Not selected.
-- **browser DNS-rebinding SSRF** — documented out-of-scope in `create-browser.ts:195-197`;
-  the SSRF guard (protocol / private-IP / credential-strip) is sound.
-- **studio admin token in `sessionStorage`** — subagent's threat model is wrong:
-  `sessionStorage` is cleared on tab close and does NOT survive a browser restart
-  (that is `localStorage`). Documented deliberate tradeoff; studio is a local UI.
-- **browser `clampViewport` partial object**, **payment webhook-replay / money BigInt
-  precision / auth `withoutHeaders` collision / signed-URL safe-integer**, **runtime
-  topK-`k` unbounded / admin-RPC rate-limit / fan-out partial-result policy**, **cli
-  secret-name quoting / `Promise.all`→`allSettled` / dev-stream error handler**,
-  **analytics `track()` name validation** — all type-guarded, app-boundary,
-  threat-model-dependent, or negligible-impact nits; not worth plans.
-- **SessionDO GC alarm re-arm** (`session-do.ts:273`) — reconsidered on close read
-  and REJECTED: the `if (remaining > 0 …)` guard is correct, because `remaining === 0`
-  means all expired records were just deleted in the same sweep (no residue to
-  reclaim), and any later `create()` re-arms via `armGcAlarm()`. Self-heals.
-
-### Not audited this pass
-
-- **Direction / roadmap** (features, what to build next) — out of scope for this
-  correctness/security/perf/tests/tech-debt sweep. Run `/improve next` for a
-  grounded direction pass.
-- **Docs** category — only spot-checked.
-- **Plausible test-coverage / tech-debt leads surfaced but not selected** (would
-  need gap-confirmation before planning): workflow fan-out failure-mode tests
-  (`packages/workflow`), MCP tool-surface authz/error tests (`packages/mcp`),
-  codegen namespace-collision test for case-insensitive filesystems
-  (`packages/codegen`), advisor static-lint edge-case predicate dedup
-  (`packages/advisor`).
+Spent — the whole wave shipped in one branch (PR #229).
 
 ## Wave 9 — auth hot-path hardening + typed identity layer (baseline `c490bad`, 2026-07-01)
 
@@ -1060,6 +1006,81 @@ deliberately on Cloudflare Workflows — different substrate, not a reuse.
   continuous change tap is missing.
 - **164 has a prerequisite** — formalize the wire protocol as a
   language-independent spec + conformance fixtures before writing the SDK.
+
+## Wave 15 — competitive gap analysis (Prisma Studio, baseline `865a9a4c`, 2026-07-28)
+
+A requested pass over `packages/studio`, compared against
+[prisma/studio](https://github.com/prisma/studio) (`@prisma/studio-core`, OSS),
+grounded against that repo's source tree and its normative `Architecture/*.md`
+docs rather than its README. Prisma Studio is a **database** tool with 7 views
+(`table`, `sql`, `schema`, `migrations`, `queries`, `console`, `stream`);
+`@lunora/studio` is a full backend console with ~27 feature areas, so we are a
+superset almost everywhere. The gaps below are the places where their narrower
+scope bought deeper polish.
+
+**Verified non-gaps (excluded).** Schema visualization (`@xyflow/react` diagram +
+export + editor overlay), row virtualization, CSV/JSON/**SQL** export (they do
+CSV/JSON only), column visibility, EXPLAIN, schema-aware SQL autocomplete, saved
+queries, FK traversal, facets, staged edits, cascade preview, row generation,
+shard explorer, mask policies. Their `stream` view is Prisma-Postgres-specific
+(our analog is the logs/subscriptions panels).
+
+| Plan | Title                                                                                                   | Category | Pkg               | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------- | -------- | ----------------- | --- | ------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | Studio migration & schema-version visualizer — ledger + diff canvas; the headline gap                   | feat     | do/codegen/studio | P2  | L      | MED  | DONE & REMOVED — `__lunora_schema_history` ledger + timeline + diff on the React Flow canvas; the diff engine moved to top-level `shared/` so the drift gate and the Studio classify a change identically.                                                                                                                                      |
+| 201  | Studio SQL editor diagnostics — inline lint before Run, no CodeMirror adoption                          | dx       | studio/do         | P2  | M      | LOW  | DONE & REMOVED — inline lint before Run (rejected verbs, unknown tables/columns, syntax, full-scan plans) via an overlay + problems row. CodeMirror NOT adopted, as the plan required.                                                                                                                                                          |
+| 202  | Studio AI layer — one host-supplied `llm` hook (NL→SQL + error correction, NL→filter, chart config)     | feat     | studio            | P3  | L      | MED  | DONE & REMOVED — product decision landed: the model runs server-side on the app's OWN Workers AI binding, the browser never sees a key, and chart inference sends column names/types/row-count only (asserted by a test). Generated SQL passes the same read-only gate as hand-typed SQL and lands unexecuted.                                  |
+| 203  | Time-ranged statement-level query insights — bucket the metrics we already collect; add p95 + live tail | feat/obs | do/studio         | P2  | M      | LOW  | DONE & REMOVED — 1m/5m/15m/1h ranges over time-bucketed statement metrics, p50/p95 beside the mean. Follow-on (AI recommendations over the series) deliberately not started.                                                                                                                                                                    |
+| 204  | Studio operation console — a tape of what Studio itself issued                                          | dx/obs   | studio            | P3  | S–M    | LOW  | DONE & REMOVED — operation tape recorded through a Proxy over the admin client, so coverage is true by construction rather than by remembering to call a helper.                                                                                                                                                                                |
+| 205  | Studio data-grid parity + URL state — pinning, match highlight, typed search, column virtualization     | dx/perf  | studio/do         | P2  | M–L    | LOW  | DONE & REMOVED — pinning, match highlighting, typed date search, column windowing, reverse-relation counts, URL state. **Infinite scroll: decided against** — pagination gives a stable position, an exact count, and export semantics that mean "these rows"; the perf motive was the vertical axis, which row virtualization already answers. |
+
+### Notes
+
+- **200 is the headline gap and the cheapest big win**, because three of its four
+  pieces already exist: the structural snapshot format and its `safe`/`breaking`
+  diff (`codegen/src/schema-drift.ts`), and the React Flow canvas
+  (`studio/src/features/schema/`). What is missing is **history** — the drift gate
+  keeps exactly one committed baseline at `lunora/.lunora-schema.json` and
+  overwrites it. The plan makes the DO the ledger (a reserved
+  `__lunora_schema_history` table appended by `runShardMigrations`) so the view
+  works in production, and moves the pure diff into top-level `shared/` so
+  codegen and studio can both use it without a dependency edge.
+  **Do not conflate the two ledgers**: `defineMigration` is hand-written _data_
+  migration, schema is applied at runtime from `defineSchema`. The plan shows
+  schema versions on the timeline and correlates data migrations into it.
+- **203's framing was corrected mid-analysis.** The first read said "we have no
+  query insights"; that is wrong. `do/src/query-metrics.ts` already records
+  per-normalized-statement aggregates into `__lunora_metrics_queries`, surfaced
+  via `getMetrics().queryStats` in a "Query insights" tab
+  (`studio/src/features/reports/metrics-panel.tsx:123`). They are **lifetime
+  cumulative counters with a mean and no time axis**, so the real work is
+  time-bucketing (the `function-metrics.ts` `__lunora_metrics_buckets` pattern,
+  applied to statements) plus percentiles and a range selector.
+- **201 carries a design decision worth preserving**: the SQL editor is a plain
+  `<textarea>` with a hand-rolled gutter and autocomplete, not CodeMirror.
+  Adopting CodeMirror to get squiggles would be a bundle-size decision affecting
+  every embedded Studio and would obsolete two working, tested components — the
+  plan renders diagnostics via an overlay + a problems row instead, and makes
+  "adopt CodeMirror" a STOP-and-report, not an improvisation.
+- **202's product decision, as landed**: the model runs server-side on the
+  app's own Workers AI binding, so no key or provider ships in the browser and
+  no row values leave the machine (chart inference sends column names, types,
+  and the row count — asserted by a test). Every affordance is hidden when the
+  deployment has no `AI` binding, mirroring how `schemaEditable` gates the
+  schema-authoring overlay.
+- **204 has a single clean choke point** — every Studio admin call flows through
+  `studio/src/lib/internal.ts` + `hooks/use-admin-query.ts`. It records operation
+  _shapes_ (function, shard, argument summary, duration, outcome), never row
+  payloads, and complements the server-side audit log rather than duplicating it.
+- **205 protected what we already do better** (cascade preview, staged edits,
+  facets, masking, SQL export) as explicit non-goals. **Infinite scroll was
+  decided against**: pagination gives a stable position, an exact count, and
+  export semantics that mean "these rows". The perf motive behind the other
+  tradeoff was the vertical axis, which row virtualization already answers.
+
+### Recommended execution order
+
+Spent — the whole wave shipped in one branch (PR #229).
 
 ## Notes for executors (carried from prior waves)
 

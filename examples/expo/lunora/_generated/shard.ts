@@ -141,6 +141,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "flags": false,
     "kv": false,
     "mail": false,
+    "notifications": false,
     "payments": false,
     "queues": false,
     "scheduler": false,
@@ -148,6 +149,9 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "vectors": false,
     "workflows": false
 };
+
+/** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "6f23fc340f8c517a", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"messages\": {\n      \"fields\": {\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"text\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_created\": {\n          \"fields\": [\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -555,7 +559,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false });
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
             this.migrated = true;
         }
 

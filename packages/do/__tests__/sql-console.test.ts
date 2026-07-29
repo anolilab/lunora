@@ -1,7 +1,8 @@
 import type { SqlExec } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console.js";
+import { classifyStatement } from "../../../shared/sql-readonly";
+import { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */
 const stubExec = (rows: Record<string, unknown>[]): { exec: SqlExec["exec"]; lastQuery: string } => {
@@ -15,6 +16,15 @@ const stubExec = (rows: Record<string, unknown>[]): { exec: SqlExec["exec"]; las
         }) as SqlExec["exec"],
         get lastQuery() {
             return state.lastQuery;
+        },
+    };
+};
+
+/** A `SqlExec` stub whose `exec` throws — models SQLite rejecting a malformed statement. */
+const throwingExec = (message: string): SqlExec => {
+    return {
+        exec: () => {
+            throw new Error(message);
         },
     };
 };
@@ -120,5 +130,120 @@ describe("runReadonlySql", () => {
         expect(() => runReadonlySql(sql, "DELETE FROM t")).toThrow(/read-only/u);
         // The guard runs before exec, so the query was never sent.
         expect(sql.lastQuery).toBe("");
+    });
+});
+
+describe("classifyStatement offsets", () => {
+    it("points at the offending keyword in the ORIGINAL string", () => {
+        expect.assertions(3);
+
+        // Leading comment + whitespace must not shift the reported span: the
+        // editor underlines against the text the operator actually typed.
+        const query = "-- note\n  WITH x AS (SELECT 1) DELETE FROM t";
+        const rejection = classifyStatement(query);
+
+        expect(rejection?.code).toBe("SQL_NOT_READONLY");
+        expect(query.slice(rejection?.offset ?? 0, (rejection?.offset ?? 0) + (rejection?.length ?? 0))).toBe("DELETE");
+        expect(rejection?.message).toMatch(/DELETE/u);
+    });
+
+    it("points at the separating semicolon of a batch", () => {
+        expect.assertions(2);
+
+        const query = "SELECT 1; SELECT 2";
+        const rejection = classifyStatement(query);
+
+        expect(rejection?.code).toBe("SQL_MULTIPLE_STATEMENTS");
+        expect(query[rejection?.offset ?? -1]).toBe(";");
+    });
+
+    it("allows a single trailing semicolon", () => {
+        expect.assertions(1);
+
+        expect(classifyStatement("SELECT 1;")).toBeUndefined();
+    });
+});
+
+describe("lintReadonlySql", () => {
+    it("reports a gate rejection as a diagnostic instead of throwing", () => {
+        expect.assertions(3);
+
+        const sql = stubExec([]);
+        const result = lintReadonlySql(sql, "DELETE FROM t");
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]).toMatchObject({ severity: "error", source: "gate" });
+        // A refused statement is never planned, so SQLite is never touched.
+        expect(sql.lastQuery).toBe("");
+    });
+
+    it("stays quiet on an empty buffer", () => {
+        expect.assertions(1);
+
+        expect(lintReadonlySql(stubExec([]), "   ").diagnostics).toStrictEqual([]);
+    });
+
+    it("plans an allowed statement without executing it", () => {
+        expect.assertions(2);
+
+        const sql = stubExec([{ detail: "SEARCH t USING INDEX t_by_id (id=?)" }]);
+        const result = lintReadonlySql(sql, "SELECT * FROM t WHERE id = 1");
+
+        expect(sql.lastQuery).toBe("EXPLAIN QUERY PLAN SELECT * FROM t WHERE id = 1");
+        expect(result.diagnostics).toStrictEqual([]);
+    });
+
+    it("warns on a full table scan in the plan", () => {
+        expect.assertions(2);
+
+        const result = lintReadonlySql(stubExec([{ detail: "SCAN messages" }]), "SELECT * FROM messages");
+
+        expect(result.diagnostics[0]).toMatchObject({ severity: "warning", source: "plan" });
+        expect(result.diagnostics[0]?.message).toMatch(/messages/u);
+    });
+
+    it("warns once per table when the plan scans it more than once", () => {
+        expect.assertions(2);
+
+        const result = lintReadonlySql(
+            stubExec([{ detail: "SCAN messages" }, { detail: "SCAN messages AS m2" }, { detail: "SCAN threads" }]),
+            "SELECT * FROM messages, messages m2, threads",
+        );
+
+        // A self-join scans one table twice; two identical sentences would read
+        // as two problems.
+        expect(result.diagnostics).toHaveLength(2);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toStrictEqual([
+            "full table scan on `messages` — this query reads every row",
+            "full table scan on `threads` — this query reads every row",
+        ]);
+    });
+
+    it("stays quiet on plan steps that read no table", () => {
+        expect.assertions(1);
+
+        // `SCAN CONSTANT ROW` / `SCAN SUBQUERY n` are SQLite's wording for a
+        // constant select and a materialized subquery — neither is a table.
+        expect(lintReadonlySql(stubExec([{ detail: "SCAN CONSTANT ROW" }, { detail: "SCAN SUBQUERY 1" }]), "SELECT 1").diagnostics).toStrictEqual([]);
+    });
+
+    it("maps a SQLite syntax error onto the offending token", () => {
+        expect.assertions(3);
+
+        const query = "SELECT * FRM t";
+        const result = lintReadonlySql(throwingExec('near "FRM": syntax error'), query);
+
+        expect(result.diagnostics[0]).toMatchObject({ severity: "error", source: "syntax" });
+        expect(result.diagnostics[0]?.offset).toBe(query.indexOf("FRM"));
+        expect(result.diagnostics[0]?.length).toBe(3);
+    });
+
+    it("falls back to a span-less diagnostic when the token can't be located", () => {
+        expect.assertions(2);
+
+        const result = lintReadonlySql(throwingExec("no such table: ghost"), "SELECT * FROM ghost");
+
+        expect(result.diagnostics[0]?.offset).toBeUndefined();
+        expect(result.diagnostics[0]?.message).toMatch(/no such table/u);
     });
 });

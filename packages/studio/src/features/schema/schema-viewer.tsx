@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShardInput } from "../../components/shard-input";
 import { StorageTierBadge, TIER_META } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
@@ -149,6 +148,13 @@ const IndexList = ({
     </div>
 );
 
+/** Underline tab, matching the Migrations page so the two read as one system. */
+const schemaTabClass = (active: boolean): string =>
+    cn(
+        "border-b-2 px-3 py-2 font-mono text-[11px] tracking-widest uppercase outline-none transition-colors",
+        active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+    );
+
 /**
  * Schema overview that shows both storage tiers so the distinction is never a
  * mystery. The shard section lists every user table in the selected Durable
@@ -168,11 +174,15 @@ const IndexList = ({
  * configured the global section simply reports it, and the shard section still
  * works.
  */
+// react-doctor-disable-next-line react-doctor/prefer-useReducer -- the six values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~670 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: SchemaViewerProps): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [view, setView] = useState<SchemaView>("list");
+    // Graph first: the diagram answers "what shape is this database", which is the
+    // question you open this page with. The table list is the drill-down.
+    const [view, setView] = useState<SchemaView>("graph");
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [tableFilter, setTableFilter] = useState<string>("");
     const [tables, setTables] = useState<TableInfo[] | null>(null);
@@ -241,6 +251,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async schema load, re-run when the debounced shard settles
         fireAndForget(refresh(debouncedShard));
         fireAndForget(refreshGlobal());
     }, [refresh, refreshGlobal, debouncedShard]);
@@ -328,6 +339,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
 
         if (tables.some((table) => table.name === initialTable)) {
             appliedTable.current = initialTable;
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- deep-link sync: expands `initialTable` once the async tables arrive, guarded against re-firing by a ref
             fireAndForget(toggle(initialTable));
         }
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
@@ -412,6 +424,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
         }
 
         fireAndForget(
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- lazy column probe gated on view + shard, not derived state
             probeSchema(
                 shardKey,
                 tables.map((table) => table.name),
@@ -476,27 +489,30 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
             <div className="flex flex-wrap items-center gap-3">
                 <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
 
-                <div aria-label={t("Schema view")} className="flex gap-1.5" data-testid="sc-view-toggle" role="group">
-                    <Button
-                        aria-pressed={view === "list"}
-                        data-testid="sc-view-list"
-                        onClick={showList}
-                        size="xs"
-                        type="button"
-                        variant={view === "list" ? "default" : "outline"}
-                    >
-                        {t("Table list")}
-                    </Button>
-                    <Button
-                        aria-pressed={view === "graph"}
+                {/* Tabs, not a pair of toggle buttons: these are two views of one
+                    thing, and the Migrations page next door already reads this
+                    way. Matches its underline idiom so the two pages agree. */}
+                <div aria-label={t("Schema view")} className="flex items-center gap-1" data-testid="sc-view-toggle" role="tablist">
+                    <button
+                        aria-selected={view === "graph"}
+                        className={schemaTabClass(view === "graph")}
                         data-testid="sc-view-graph"
                         onClick={showGraph}
-                        size="xs"
+                        role="tab"
                         type="button"
-                        variant={view === "graph" ? "default" : "outline"}
                     >
                         {t("Graph")}
-                    </Button>
+                    </button>
+                    <button
+                        aria-selected={view === "list"}
+                        className={schemaTabClass(view === "list")}
+                        data-testid="sc-view-list"
+                        onClick={showList}
+                        role="tab"
+                        type="button"
+                    >
+                        {t("Table list")}
+                    </button>
                 </div>
             </div>
 

@@ -1,16 +1,20 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
-import type { FilterClause, TableInfo } from "../../lib/admin";
+import type { ColumnMeta, FilterClause, TableInfo, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions } from "../../lib/internal";
+import { usePersistedValue } from "../../lib/browser-storage";
+import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
 import { maskColumnsForTable, maskRows, mergeSensitiveColumns } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
+import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
+import { backRelationKey, backRelationsFor } from "./back-relations";
 import type { TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import DataFacets from "./data-facets";
@@ -21,6 +25,7 @@ import DataQueryBar from "./data-query-bar";
 import { GenerateRowsDialog } from "./generate-rows-dialog";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
+import { useBackRelations } from "./hooks/use-back-relations";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { useGenerateRows } from "./hooks/use-generate-rows";
 import useMaskPolicies from "./hooks/use-mask-policies";
@@ -29,6 +34,15 @@ import RowFormEditor from "./row-form";
 import { ShardExplorer } from "./shard-explorer";
 import { StagedDiffPanel } from "./staged-edits";
 import { TableListSidebar } from "./table-list-sidebar";
+
+/** Browser-local store for per-table pinned columns. */
+const PINNED_COLUMNS_KEY = "lunora-studio-pinned-columns";
+
+/** Browser-local store for per-table enabled reverse-relation columns. */
+const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
+
+/** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
+const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
 interface DataBrowserProps {
     /**
@@ -49,6 +63,8 @@ interface DataBrowserProps {
     readonly initialFilters?: FilterClause[];
     /** Sort to hydrate from a shared link / saved query. */
     readonly initialOrderBy?: DataView["orderBy"];
+    /** Comma-separated pinned columns from the URL; wins over the per-browser default. */
+    readonly initialPins?: string;
     /** Substring search to hydrate from a shared link / saved query. */
     readonly initialSearch?: string;
     /** Shard key the browser targets on first load. Defaults to the root shard. */
@@ -159,6 +175,7 @@ const DataBrowserViewControls = ({
     maskOn,
     onAddRow,
     onBulkDelete,
+    onAskAiFilter,
     onClearTable,
     onFilterChange,
     onFiltersChange,
@@ -179,6 +196,8 @@ const DataBrowserViewControls = ({
     /** Whether the "Mask sensitive columns" preview is on. */
     maskOn: boolean;
     onAddRow: () => void;
+    /** Ask the model for structured clauses; omitted when no AI binding is available. */
+    onAskAiFilter?: (prompt: string) => void;
     onBulkDelete: () => void;
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -236,7 +255,14 @@ const DataBrowserViewControls = ({
                     </ConfirmButton>
                 )}
             </div>
-            <DataFilters columns={columns} filters={filters} onFiltersChange={onFiltersChange} onSearchChange={onFilterChange} search={filter} />
+            <DataFilters
+                columns={columns}
+                filters={filters}
+                onAskAi={onAskAiFilter}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={onFilterChange}
+                search={filter}
+            />
         </div>
     );
 };
@@ -258,11 +284,13 @@ const DataBrowserViewControls = ({
  * touches the server — pagination still flows through `readTablePage`. All of
  * that state lives in {@link useDataBrowser}; this component is just the markup.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~811 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const DataBrowser = ({
     editable = false,
     globalTableNames,
     initialFilters,
     initialOrderBy,
+    initialPins,
     initialSearch,
     initialShardKey,
     onNavigateToGlobal,
@@ -273,6 +301,30 @@ export const DataBrowser = ({
     schemaSwitch,
     tableParam,
 }: DataBrowserProps): ReactElement => {
+    // Reverse relations ("← messages") are opt-in per table: resolving them is
+    // proportional to relations × page size, and most sessions never look at
+    // them. The EDGES are derived from schema metadata the studio can fetch once;
+    // only the COUNTS need a per-page round trip.
+    const schemaQuery = useAdminQuery<TablesColumnsResult>(ADMIN_FUNCTIONS.describeTables, {}, { shardKey: initialShardKey ?? "" });
+    const columnsByTable = schemaQuery.data?.columnsByTable ?? EMPTY_COLUMNS_BY_TABLE;
+    const [backRelationsOn, setBackRelationsOn] = usePersistedValue<Record<string, string[]>>(BACK_RELATIONS_KEY, {});
+
+    // MEMOIZED DELIBERATELY, unlike the derivations below. This feeds
+    // `activeBackRelations` → the grid's `columnDefs` → `useReactTable`, and
+    // react-table resets its internal state (column sizing, row selection) the
+    // moment `columns` changes identity. React Compiler would hold it stable, but
+    // a compiler bail-out here is a visible bug, not a slow render.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: react-table resets on a new `columns` identity
+    const resolveBackRelations = useCallback(
+        (table: string) => {
+            const enabled = new Set(backRelationsOn[table]);
+
+            return backRelationsFor(table, columnsByTable).filter((relation) => enabled.has(backRelationKey(relation)));
+        },
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `columnsByTable` IS `schemaQuery.data?.columnsByTable`, destructured above; the deps are complete
+        [backRelationsOn, columnsByTable],
+    );
+
     const {
         addRow,
         bulkDelete,
@@ -309,6 +361,7 @@ export const DataBrowser = ({
         pageError,
         previewRef,
         pageSize,
+        queryShardKey,
         rangeEnd,
         rangeStart,
         saveEdit,
@@ -330,7 +383,101 @@ export const DataBrowser = ({
         total,
         viewMode,
         writeError,
-    } = useDataBrowser({ initialFilters, initialOrderBy, initialSearch, initialShardKey, onSelectTable, onViewChange, pageSize: initialPageSize, tableParam });
+    } = useDataBrowser({
+        initialFilters,
+        initialOrderBy,
+        initialSearch,
+        initialShardKey,
+        onSelectTable,
+        onViewChange,
+        pageSize: initialPageSize,
+        resolveBackRelations,
+        tableParam,
+    });
+
+    // Natural-language filtering. The model returns STRUCTURED clauses which
+    // land in the visible filter rows for the operator to see and edit — the
+    // query never runs off un-reviewed model output.
+    const assistant = useSqlAssistant(shardKey);
+
+    const askAiFilter = (prompt: string): void => {
+        const apply = async (): Promise<void> => {
+            const clauses = await assistant.suggestFilter(prompt, selectedTable ?? "");
+
+            if (clauses !== undefined) {
+                onFiltersChange(
+                    clauses.map((clause) => {
+                        // The wire value is `unknown`; a filter row is a string
+                        // input, so only scalars round-trip meaningfully.
+                        const raw: unknown = clause.value;
+                        const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
+
+                        return { column: clause.column, operator: clause.operator, value };
+                    }),
+                );
+            }
+        };
+
+        fireAndForget(apply());
+    };
+
+    // Available reverse edges for the open table, and the counts for the loaded
+    // page. Only the switched-on edges are resolved; the rest cost nothing.
+    // Plain derivations — React Compiler memoizes them, and `useBackRelations`
+    // keys its fetch on a serialised signature rather than these identities, so
+    // nothing downstream cares whether they are stable.
+    const availableBackRelations = selectedTable === null ? [] : backRelationsFor(selectedTable, columnsByTable);
+    const enabledBackRelations = new Set(backRelationsOn[selectedTable ?? ""]);
+    // One pass, not map-then-filter: a page is up to a few hundred rows.
+    const pageIds: string[] = [];
+
+    for (const row of page?.rows ?? []) {
+        const id = row._id ?? row.id;
+
+        if (typeof id === "string" && id !== "") {
+            pageIds.push(id);
+        }
+    }
+    // The DEBOUNCED shard, matching the page these ids came from — the live one
+    // would refetch per keystroke and could count children on a shard other than
+    // the one whose rows are on screen.
+    const backRelationCounts = useBackRelations(enabledBackRelations, availableBackRelations, pageIds, queryShardKey);
+
+    const onToggleBackRelation = (key: string): void => {
+        setBackRelationsOn((current) => {
+            const forTable = selectedTable ?? "";
+            const existing: string[] = current[forTable] ?? [];
+
+            return { ...current, [forTable]: existing.includes(key) ? existing.filter((entry) => entry !== key) : [...existing, key] };
+        });
+    };
+
+    // Pinned columns, per table, persisted on this browser. Per table because a
+    // pin is a statement about THAT table's shape ("keep the email visible"),
+    // not a global preference; persisted because re-pinning on every navigation
+    // would make the feature not worth using.
+    const [pinsByTable, setPinsByTable] = usePersistedValue<Record<string, string[]>>(PINNED_COLUMNS_KEY, {});
+    // `selectedTable` is null before a table is chosen; key on "" so the lookup
+    // is total and no pins are ever attributed to the wrong table.
+    const pinKey = selectedTable ?? "";
+    // STORAGE wins, with the URL as the seed for a table nobody has pinned on
+    // this browser yet. The precedence was the other way round, which made every
+    // pin/unpin a no-op for the rest of the session whenever `?pins=` was
+    // present — the toggle wrote to storage that was never read again.
+    const stored = pinsByTable[pinKey];
+    const pinnedColumns = stored === undefined ? new Set((initialPins ?? "").split(",").filter((name) => name !== "")) : new Set(stored);
+
+    const onTogglePin = (columnId: string): void => {
+        setPinsByTable((current) => {
+            // Seed from whatever is displayed (storage, else the URL) so the
+            // first toggle after arriving on a `?pins=` link edits that set
+            // rather than starting from empty.
+            const existing: string[] = current[pinKey] ?? [...pinnedColumns];
+            const next = existing.includes(columnId) ? existing.filter((id) => id !== columnId) : [...existing, columnId];
+
+            return { ...current, [pinKey]: next };
+        });
+    };
 
     const client = useLunora();
 
@@ -503,6 +650,7 @@ export const DataBrowser = ({
                                 liveError={liveError}
                                 maskOn={maskOn}
                                 onAddRow={addRow}
+                                onAskAiFilter={assistant.unavailable ? undefined : askAiFilter}
                                 onBulkDelete={bulkDelete}
                                 onClearTable={clearTable}
                                 onFilterChange={onFilterChange}
@@ -527,10 +675,13 @@ export const DataBrowser = ({
 
                             {viewMode === "table" && page.rows.length > 0 && (
                                 <GridActionsBar
+                                    backRelations={availableBackRelations}
                                     columns={page.columns}
                                     editable={editable}
+                                    enabledBackRelations={enabledBackRelations}
                                     name={selectedTable ?? "export"}
                                     onBulkDelete={onBulkDeleteSelected}
+                                    onToggleBackRelation={onToggleBackRelation}
                                     onToggleTranspose={onToggleTranspose}
                                     rows={page.rows}
                                     table={table.table}
@@ -588,18 +739,24 @@ export const DataBrowser = ({
 
                         {viewMode === "table" && page.rows.length > 0 && !transposed && (
                             <DataBrowserTableView
+                                attachScroll={table.attachScroll}
+                                backRelationCounts={backRelationCounts}
                                 edit={edit}
                                 editable={editable}
+                                highlight={filter}
                                 mask={maskView}
                                 onDelete={onRowDelete}
                                 onEdit={onRowEdit}
                                 onInspect={setInspecting}
+                                onTogglePin={onTogglePin}
+                                pinnedColumns={pinnedColumns}
                                 refs={references}
-                                scrollRef={table.scrollRef}
+                                scrollLeft={table.scrollLeft}
                                 scrollToIndex={table.scrollToIndex}
                                 table={table.table}
                                 tableRows={table.tableRows}
                                 tbodyStyle={table.tbodyStyle}
+                                viewportWidth={table.viewportWidth}
                                 virtualRows={table.virtualRows}
                             />
                         )}

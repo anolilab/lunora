@@ -136,13 +136,9 @@ const triggerDownload = (url: string, filename: string): void => {
     anchor.remove();
 };
 
-/**
- * The file browser's controller: owns all listing/pagination, prefix +
- * folder-navigation, sort, view + thumbnail-size, share-link expiry, selection +
- * bulk delete, copy, delete and upload state, and composes {@link useKeySelection}.
- * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
- * stay presentational.
- */
+/** Selection identity for a bucket object: its full key. */
+const keyOf = (object: StorageObject): string => object.key;
+
 const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): FileBrowserModel => {
     const client = useLunora();
 
@@ -242,6 +238,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             setError(undefined);
             setBusy(true);
 
+            // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `finally`, and this one cannot be flattened: the `try` returns early, and the busy flag has to be released on that path too
             try {
                 const page = await storageApi.list({ cursor, limit: pageSize, prefix: searchPrefix });
 
@@ -275,6 +272,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     );
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async listing on mount and on prefix change
         fireAndForget(list(initialPrefix ?? "", undefined, false));
     }, [list, initialPrefix]);
 
@@ -320,6 +318,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         const keys = keysSignature === "" ? [] : keysSignature.split("\n");
 
         if (keys.length === 0) {
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async records-to-files join for the loaded keys, with a cancellation flag
             setReferences({});
 
             return undefined;
@@ -352,7 +351,6 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         };
     }, [client, keysSignature, referenceShard]);
 
-    const keyOf = (object: StorageObject): string => object.key;
     const {
         allSelected,
         clear: clearSelection,
@@ -426,17 +424,19 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             (async (): Promise<void> => {
                 try {
                     for (const key of selected) {
-                        // eslint-disable-next-line no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key
+                        /* eslint-disable no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key */
+                        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: R2 deletes are ordered so a failure pins the offending key instead of leaving a half-applied batch
                         await storageApi.remove(key);
+                        /* eslint-enable no-await-in-loop */
                     }
 
                     await list(prefix, undefined, false);
                     clearSelection();
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -507,9 +507,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     await list(prefix, undefined, false);
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -531,9 +531,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     await list(prefix, undefined, false);
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };
@@ -544,7 +544,10 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     useEffect(() => {
         // Invalidate any in-flight orphan check so its (old-shard) result can't land.
         orphanSeq.current += 1;
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- invalidates a whole-bucket orphan result when the reference shard changes; a stale result must not survive the switch
+        // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- invalidating the orphan result is one logical reset split across two pieces of state; merging them would mean a wider state object for no behavioural gain
         setDanglingReferences(undefined);
+        // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- invalidating the orphan result is one logical reset split across two pieces of state; merging them would mean a wider state object for no behavioural gain
         setDanglingTruncated(false);
     }, [referenceShard]);
 
@@ -603,10 +606,10 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                         setDanglingTruncated(false);
                         setError(errorMessage(error_));
                     }
-                } finally {
-                    if (seq === orphanSeq.current) {
-                        setDanglingBusy(false);
-                    }
+                }
+
+                if (seq === orphanSeq.current) {
+                    setDanglingBusy(false);
                 }
             })(),
         );
@@ -686,5 +689,12 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     };
 };
 
+/**
+ * The file browser's controller: owns all listing/pagination, prefix +
+ * folder-navigation, sort, view + thumbnail-size, share-link expiry, selection +
+ * bulk delete, copy, delete and upload state, and composes {@link useKeySelection}.
+ * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
+ * stay presentational.
+ */
 export { THUMBNAIL_URL_TTL, useFileBrowser };
 export type { FileBrowserModel, FileView };

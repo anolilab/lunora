@@ -13,6 +13,7 @@ import type { MaskView } from "../../lib/mask-preview";
 import { maskCell } from "../../lib/mask-preview";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
+import { columnWindow, pinnedOffsets } from "./column-window";
 import { CellValue, GridContainer } from "./data-grid";
 import type { StagedEditsModel } from "./staged-edits";
 import { coerceCellValue } from "./staged-edits";
@@ -75,17 +76,54 @@ const sizedCellStyle = (width: number): CSSProperties => {
 };
 
 /**
- * Style for the first data column when pinned: the {@link sizedCellStyle} base
- * made `sticky` just right of the frozen select column, so the primary-key column
- * stays put during horizontal scroll.
+ * Style for a pinned data column: the {@link sizedCellStyle} base made `sticky`
+ * at a cumulative left offset, so several pinned columns stack correctly instead
+ * of overlapping.
+ *
+ * `offsetPx` is the summed width of the pinned columns BEFORE this one. The
+ * earlier single-column version hard-coded `left: PINNED_DATA_LEFT`, which was
+ * correct only while exactly one column could be pinned — every column past the
+ * first would have stacked on top of it.
  */
-const pinnedDataCellStyle = (width: number): CSSProperties => {
-    return { ...sizedCellStyle(width), left: PINNED_DATA_LEFT, position: "sticky", zIndex: 2 };
+const pinnedDataCellStyle = (width: number, offsetPx: number): CSSProperties => {
+    return { ...sizedCellStyle(width), left: `calc(${PINNED_DATA_LEFT} + ${offsetPx.toString()}px)`, position: "sticky", zIndex: 2 };
 };
 
 /** Borderless per-row action button (Details / Edit / Delete). */
 const ROW_BTN =
     "rounded-md px-2 py-0.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
+
+/**
+ * The search term to highlight inside one cell, or `undefined` for none.
+ *
+ * A MASKED cell is never highlighted: the highlight reveals WHERE in the
+ * redacted value the match landed, which leaks exactly the position the mask
+ * exists to hide.
+ */
+const cellHighlight = (highlight: string | undefined, mask: MaskView, column: string): string | undefined =>
+    mask.enabled && mask.columns.has(column) ? undefined : highlight;
+
+/** Namespace prefix keeping reverse-relation column ids from ever colliding with a real column. */
+const BACK_RELATION_PREFIX = "__back__:";
+
+/** Column id for a reverse-relation column. */
+const backRelationColumnId = (relation: { column: string; table: string }): string => `${BACK_RELATION_PREFIX}${relation.table}.${relation.column}`;
+
+/**
+ * One reverse-relation cell: how many rows of the child table point at this row.
+ *
+ * An absent entry means zero — the server omits childless parents rather than
+ * shipping a row per one, so the payload does not grow with the page. A dash
+ * rather than "0" while counts are still loading, so an empty relation reads
+ * differently from an unanswered one.
+ */
+const BackRelationCell = ({ counts, rowId: id }: { counts: Readonly<Record<string, number>> | undefined; rowId: string }): ReactElement => {
+    if (counts === undefined) {
+        return <span className="text-muted-foreground/50">—</span>;
+    }
+
+    return <span className="tabular-nums">{counts[id] ?? 0}</span>;
+};
 
 /** A loaded row keyed by column name. */
 type TableRow = Record<string, unknown>;
@@ -368,6 +406,7 @@ const CellEditor = ({
 
     return (
         <input
+            aria-label={column}
             className="w-full rounded border border-ring bg-background px-1 py-0.5 font-mono text-xs outline-none"
             data-testid={`db-cell-input-${recordId}-${column}`}
             defaultValue={formatCell(initial)}
@@ -385,7 +424,20 @@ const CellEditor = ({
  * editable and the column isn't a meta column — double-click opens an inline
  * {@link CellEditor} that stages the change.
  */
-const EditableCell = ({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; mask: MaskView; refs: GridReferences }): ReactElement => {
+const EditableCell = ({
+    cell,
+    edit,
+    highlight,
+    mask,
+    refs,
+}: {
+    cell: Cell<TableRow, unknown>;
+    edit: GridEdit;
+    /** Active row-search term, highlighted inside matching cells. */
+    highlight?: string;
+    mask: MaskView;
+    refs: GridReferences;
+}): ReactElement => {
     const column = cell.column.id;
     const rawValue = cell.getValue();
     const id = rowId(cell.row.original);
@@ -467,11 +519,16 @@ const EditableCell = ({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown
     return (
         <>
             <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
-                <CellValue value={display} />
+                <CellValue highlight={cellHighlight(highlight, mask, column)} value={display} />
             </span>
             <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
         </>
     );
+};
+
+/** Accept the drop — without `preventDefault` the browser refuses the target. */
+const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
+    event.preventDefault();
 };
 
 /**
@@ -484,7 +541,8 @@ const GridHeaderCell = ({
     draggedRef,
     header,
     masked = false,
-    pinned = false,
+    onTogglePin,
+    pinnedOffset,
     table,
 }: {
     draggedRef: React.RefObject<null | string>;
@@ -492,16 +550,14 @@ const GridHeaderCell = ({
     /** Show a "masked" chip: this column is covered by a `.use(mask(...))` policy (static annotation, independent of the toggle). */
     masked?: boolean;
     /** Freeze this header at the left edge (the primary-key column) during horizontal scroll. */
-    pinned?: boolean;
+    onTogglePin: (columnId: string) => void;
+    /** Summed width of the pinned columns before this one, or `undefined` when unpinned. */
+    pinnedOffset?: number;
     table: Table<TableRow>;
 }): ReactElement => {
     const onDragStart = (): void => {
         // eslint-disable-next-line no-param-reassign -- a ref's `.current` is mutable by design; it carries the drag source across handlers
         draggedRef.current = header.column.id;
-    };
-
-    const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
-        event.preventDefault();
     };
 
     const onDrop = (): void => {
@@ -528,12 +584,12 @@ const GridHeaderCell = ({
 
     return (
         <th
-            className={cn("text-start text-xs font-medium text-muted-foreground", pinned && "border-e border-border bg-muted")}
+            className={cn("group/head text-start text-xs font-medium text-muted-foreground", pinnedOffset !== undefined && "border-e border-border bg-muted")}
             draggable
             onDragOver={onDragOver}
             onDragStart={onDragStart}
             onDrop={onDrop}
-            style={pinned ? pinnedDataCellStyle(header.getSize()) : sizedCellStyle(header.getSize())}
+            style={pinnedOffset === undefined ? sizedCellStyle(header.getSize()) : pinnedDataCellStyle(header.getSize(), pinnedOffset)}
         >
             <button
                 className="inline-flex max-w-full cursor-grab items-center gap-1 truncate outline-none hover:text-foreground"
@@ -553,6 +609,24 @@ const GridHeaderCell = ({
                     masked
                 </span>
             )}
+            {/* Pin toggle. Freezing more than one column is the point: an operator
+                scanning a wide table usually wants the key AND the one human-readable
+                column (name, email) to stay put, not just the key. */}
+            <button
+                aria-label={pinnedOffset === undefined ? `Pin ${header.column.id}` : `Unpin ${header.column.id}`}
+                aria-pressed={pinnedOffset !== undefined}
+                className={cn(
+                    "ms-1 rounded-sm px-1 text-[0.625rem] outline-none transition-opacity hover:bg-accent focus-visible:bg-accent",
+                    pinnedOffset === undefined ? "opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100" : "opacity-100 text-foreground",
+                )}
+                data-testid={`db-pin-${header.column.id}`}
+                onClick={() => {
+                    onTogglePin(header.column.id);
+                }}
+                type="button"
+            >
+                📌
+            </button>
             <span
                 aria-hidden="true"
                 className="absolute inset-y-0 end-0 w-1 cursor-col-resize touch-none select-none hover:bg-ring/60 data-[resizing=true]:bg-ring"
@@ -630,27 +704,44 @@ const DataBrowserTableView = ({
     onDelete,
     onEdit,
     onInspect,
+    highlight,
+    backRelationCounts,
+    attachScroll,
+    onTogglePin,
+    pinnedColumns,
     refs,
-    scrollRef,
+    scrollLeft,
     scrollToIndex,
     table,
     tableRows,
     tbodyStyle,
+    viewportWidth,
     virtualRows,
 }: {
+    /** Callback ref for the scroll container. */
+    attachScroll: (node: HTMLDivElement | null) => void;
+    /** Reverse-relation counts, keyed `table.column` → parent id → count. */
+    backRelationCounts: Readonly<Record<string, Readonly<Record<string, number>>>>;
     edit: GridEdit;
     editable: boolean;
+    /** Active row-search term, highlighted inside matching cells. */
+    highlight?: string;
     /** Mask preview state: the active table's masked columns + whether the toggle is on. Drives the header chips and per-cell redaction. */
     mask: MaskView;
     onDelete: (id: null | string) => void;
     onEdit: (id: null | string, original: TableRow) => void;
     onInspect: (original: TableRow) => void;
+    onTogglePin: (columnId: string) => void;
+    /** Column ids frozen at the left edge, in no particular order — the render derives offsets from visible order. */
+    pinnedColumns: ReadonlySet<string>;
     refs: GridReferences;
-    scrollRef: React.RefObject<HTMLDivElement | null>;
+    /** Horizontal scroll offset + measured viewport width, driving the column window. */
+    scrollLeft: number;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
     tbodyStyle: CSSProperties;
+    viewportWidth: number;
     virtualRows: { index: number; size: number; start: number }[];
 }): ReactElement => {
     // Carries the column id being dragged between a header's dragstart and the
@@ -717,13 +808,30 @@ const DataBrowserTableView = ({
     };
 
     // Keep the focused row in view as it moves past the virtual window's edge.
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- scroll-sync effect: it drives the virtualizer's imperative scrollToIndex from the COMMITTED `active` cell, so the row exists before we scroll to it — see the eslint-disable inside
     useEffect(() => {
         /* eslint-disable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent -- scroll-sync effect: drives the virtualizer's imperative scrollToIndex from the committed `active` cell so the focused row is rendered before we scroll to it, and so programmatic `active` changes (not just keydown) stay in view */
         if (active !== null) {
+            // react-doctor-disable-next-line react-doctor/no-pass-live-state-to-parent -- same scroll-sync effect: `scrollToIndex` is the virtualizer's imperative handle, not parent state
+            // react-doctor-disable-next-line react-doctor/no-prop-callback-in-effect -- same scroll-sync effect: `scrollToIndex` is the virtualizer's imperative handle, not parent state
             scrollToIndex(active.row);
         }
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent */
     }, [active, scrollToIndex]);
+
+    const visibleColumns = table.getVisibleLeafColumns().map((column) => {
+        return { getSize: () => column.getSize(), id: column.id };
+    });
+    const columnSlice = columnWindow(visibleColumns, pinnedColumns, scrollLeft, viewportWidth);
+
+    // Derived from the VISIBLE column order each render, so reordering or hiding a
+    // pinned column re-flows the rest instead of leaving a gap.
+    const pinOffsets = pinnedOffsets(
+        table.getVisibleLeafColumns().map((column) => {
+            return { getSize: () => column.getSize(), id: column.id };
+        }),
+        pinnedColumns,
+    );
 
     const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
         const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
@@ -742,21 +850,34 @@ const DataBrowserTableView = ({
         return (
             <tr className="border-b border-border text-xs transition-colors hover:bg-muted/50" data-testid="db-row" key={tableRow.id} style={rowStyle}>
                 <RowSelectCell row={tableRow} />
+                {columnSlice.leadPx > 0 && <td aria-hidden="true" style={{ flex: `0 0 ${columnSlice.leadPx.toString()}px` }} />}
                 {tableRow.getVisibleCells().map((cell, colIndex) => {
-                    // The first data column is frozen beside the select column.
-                    const pinned = colIndex === 0;
+                    if (!columnSlice.ids.has(cell.column.id)) {
+                        return null;
+                    }
+
+                    const offset = pinOffsets.get(cell.column.id);
                     const ring = active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : "";
 
                     return (
                         <td
-                            className={cn("group/cell truncate font-mono text-muted-foreground", pinned && "border-e border-border bg-background", ring)}
+                            className={cn(
+                                "group/cell truncate font-mono text-muted-foreground",
+                                offset !== undefined && "border-e border-border bg-background",
+                                ring,
+                            )}
                             key={cell.id}
-                            style={pinned ? pinnedDataCellStyle(cell.column.getSize()) : sizedCellStyle(cell.column.getSize())}
+                            style={offset === undefined ? sizedCellStyle(cell.column.getSize()) : pinnedDataCellStyle(cell.column.getSize(), offset)}
                         >
-                            <EditableCell cell={cell} edit={edit} mask={mask} refs={refs} />
+                            {cell.column.id.startsWith(BACK_RELATION_PREFIX) ? (
+                                <BackRelationCell counts={backRelationCounts[cell.column.id.slice(BACK_RELATION_PREFIX.length)]} rowId={key} />
+                            ) : (
+                                <EditableCell cell={cell} edit={edit} highlight={highlight} mask={mask} refs={refs} />
+                            )}
                         </td>
                     );
                 })}
+                {columnSlice.tailPx > 0 && <td aria-hidden="true" style={{ flex: `0 0 ${columnSlice.tailPx.toString()}px` }} />}
                 <td className="flex items-center gap-1" style={ACTION_CELL_STYLE}>
                     <button
                         className={ROW_BTN}
@@ -800,21 +921,28 @@ const DataBrowserTableView = ({
 
     return (
         <GridContainer layout="fill">
-            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={scrollRef} role="grid" style={SCROLL_STYLE} tabIndex={0}>
+            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={attachScroll} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
                             <SelectAllHeaderCell table={table} />
-                            {table.getFlatHeaders().map((header, index) => (
-                                <GridHeaderCell
-                                    draggedRef={draggedColumn}
-                                    header={header}
-                                    key={header.id}
-                                    masked={mask.columns.has(header.column.id)}
-                                    pinned={index === 0}
-                                    table={table}
-                                />
-                            ))}
+                            {columnSlice.leadPx > 0 && <th aria-hidden="true" style={{ flex: `0 0 ${columnSlice.leadPx.toString()}px` }} />}
+                            {table
+                                .getFlatHeaders()
+                                .map((header) =>
+                                    columnSlice.ids.has(header.column.id) ? (
+                                        <GridHeaderCell
+                                            draggedRef={draggedColumn}
+                                            header={header}
+                                            key={header.id}
+                                            masked={mask.columns.has(header.column.id)}
+                                            onTogglePin={onTogglePin}
+                                            pinnedOffset={pinOffsets.get(header.column.id)}
+                                            table={table}
+                                        />
+                                    ) : null,
+                                )}
+                            {columnSlice.tailPx > 0 && <th aria-hidden="true" style={{ flex: `0 0 ${columnSlice.tailPx.toString()}px` }} />}
                             <th aria-label="Row actions" style={ACTION_CELL_STYLE} />
                         </tr>
                     </thead>
@@ -827,11 +955,15 @@ const DataBrowserTableView = ({
 
 /** What {@link useDataBrowserTable} hands back to the component. */
 interface DataBrowserTableModel {
-    scrollRef: React.RefObject<HTMLDivElement | null>;
+    /** Callback ref for the scroll container — installs the measurement when the node mounts. */
+    attachScroll: (node: HTMLDivElement | null) => void;
+    /** Horizontal scroll offset, driving the column window. */
+    scrollLeft: number;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
     tbodyStyle: CSSProperties;
+    viewportWidth: number;
     virtualRows: { index: number; size: number; start: number }[];
 }
 
@@ -842,7 +974,12 @@ interface DataBrowserTableModel {
  * Column order (drag-to-reorder) and sizing (drag-to-resize) are managed
  * internally by TanStack; the `sorting` state stays owned by the caller.
  */
-const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSortingChange: OnChangeFn<SortingState>): DataBrowserTableModel => {
+const useDataBrowserTable = (
+    page: TablePage | null,
+    sorting: SortingState,
+    onSortingChange: OnChangeFn<SortingState>,
+    backRelations: ReadonlyArray<{ column: string; table: string }> = [],
+): DataBrowserTableModel => {
     const columns = page?.columns;
     const rows = page?.rows;
     const references = page?.refs;
@@ -859,14 +996,29 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         // No `cell` renderer: every body cell is rendered by EditableCell (see
         // renderRow), which owns the foreign-key/value/edit branching. The column
         // def only needs the accessor (for sorting), the header, and the id.
-        return columns.map((column) => {
+        const defs: ColumnDef<TableRow>[] = columns.map((column) => {
             return {
                 accessorFn: (row: TableRow) => row[column],
                 header: references?.[column] === undefined ? column : `${column} →`,
                 id: column,
             };
         });
-    }, [columns, references]);
+
+        // Reverse relations render as extra, read-only columns after the real
+        // ones. `← table` mirrors the `column →` marker a forward FK already
+        // carries, so the direction of an edge is readable at a glance.
+        for (const relation of backRelations) {
+            defs.push({
+                accessorFn: () => undefined,
+                enableSorting: false,
+                header: `← ${relation.table}`,
+                id: backRelationColumnId(relation),
+            });
+        }
+
+        return defs;
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `columns`/`references` ARE `page.columns`/`page.refs`, destructured above; the deps are complete
+    }, [backRelations, columns, references]);
 
     // `data` MUST keep a stable reference across renders: react-table resets its
     // internal state (column sizing, row selection, …) whenever `data` changes
@@ -874,6 +1026,7 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
     // `rows ?? []` would hand a fresh `[]` every render — react-table then resets +
     // re-renders forever, hard-hanging the data tab. Memoizing pins the empty array
     // (and the loaded page's rows) to one reference until the rows actually change.
+    // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `rows` IS `page?.rows`, destructured above and listed in the deps
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
     // Row selection (for bulk delete / export-of-selected) and column visibility
@@ -891,6 +1044,7 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
     // (drag-to-reorder) and sizing (drag-to-resize) are managed internally by
     // TanStack — a stale order referencing a previous table's columns is simply
     // ignored, so the columns fall back to default order on a fresh table.
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Table returns functions the compiler refuses to memoize; the alternative is not using the library
     const table = useReactTable<TableRow>({
         columnResizeMode: "onChange",
         columns: columnDefs,
@@ -942,6 +1096,50 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         [virtualizer],
     );
 
+    // Horizontal scroll + viewport width, for the column window.
+    //
+    // Attached by a CALLBACK REF, not an effect. The scroll container lives in
+    // `DataBrowserTableView`, which only mounts once a page has rows — so an
+    // effect in this hook (which lives in the always-mounted `DataBrowser`) ran
+    // while `scrollRef.current` was still null, returned early, and with `[]`
+    // deps never ran again. The window then measured a 0px viewport forever and
+    // fell back to rendering every column, silently disabling the whole feature.
+    // A callback ref fires exactly when the node appears and again when it goes.
+    //
+    // It RETURNS its cleanup (React 19's callback-ref contract) rather than
+    // parking a teardown in a second ref: React calls the returned function when
+    // the node detaches, so the listener and observer cannot outlive the node
+    // they were attached to, and there is no hand-rolled teardown bookkeeping to
+    // get wrong.
+    const [horizontal, setHorizontal] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
+
+    const attachScroll = useCallback((node: HTMLDivElement | null): (() => void) | undefined => {
+        scrollRef.current = node;
+
+        if (node === null) {
+            return undefined;
+        }
+
+        const sync = (): void => {
+            setHorizontal((current) =>
+                current.left === node.scrollLeft && current.width === node.clientWidth ? current : { left: node.scrollLeft, width: node.clientWidth },
+            );
+        };
+
+        // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- this callback ref RETURNS its cleanup (below), which React invokes when the node detaches
+        node.addEventListener("scroll", sync, { passive: true });
+
+        const observer = new ResizeObserver(sync);
+
+        observer.observe(node);
+
+        return () => {
+            node.removeEventListener("scroll", sync);
+            observer.disconnect();
+            scrollRef.current = null;
+        };
+    }, []);
+
     const virtualRows = virtualizer.getVirtualItems();
     const totalSize = virtualizer.getTotalSize();
     // The tbody spans the full virtual height so the scrollbar reflects all rows
@@ -951,7 +1149,7 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
 
     const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
 
-    return { scrollRef, scrollToIndex, table, tableRows, tbodyStyle, virtualRows };
+    return { attachScroll, scrollLeft: horizontal.left, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth: horizontal.width, virtualRows };
 };
 
 export { DataBrowserTableView, rowId, useDataBrowserTable };

@@ -1,3 +1,17 @@
+// The snapshot format + diff are defined in the bundler-inlined `shared/` module
+// (shared with `@lunora/studio`); re-exported here because this barrel is the
+// package's published API and the CLI consumes them through it.
+export type {
+    DriftChange,
+    DriftScope,
+    FieldSnapshot,
+    IndexSnapshot,
+    RelationSnapshot,
+    SchemaDrift,
+    SchemaSnapshot,
+    TableSnapshot,
+} from "../../../shared/schema-snapshot";
+export { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 export type { LintSchemaOptions } from "./advisor";
 export { formatAdvisories, lintSchema } from "./advisor";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
@@ -81,25 +95,8 @@ export type { PlatformDiagnostic } from "./platform-target";
 export { DEFAULT_TARGET, platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "./platform-target";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
-export type {
-    DriftChange,
-    FieldSnapshot,
-    IndexSnapshot,
-    RelationSnapshot,
-    SchemaDrift,
-    SchemaDriftDecision,
-    SchemaSnapshot,
-    TableSnapshot,
-} from "./schema-drift";
-export {
-    buildSchemaSnapshot,
-    diffSchemaSnapshots,
-    evaluateSchemaDrift,
-    parseSchemaSnapshot,
-    SCHEMA_SNAPSHOT_VERSION,
-    SchemaSnapshotParseError,
-    serializeSchemaSnapshot,
-} from "./schema-drift";
+export type { SchemaDriftDecision } from "./schema-drift";
+export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
 export { redact, secretKindOf } from "./secret-rules";

@@ -15,7 +15,8 @@ import { stat, unlink } from "node:fs/promises";
 
 import { LunoraError } from "@lunora/errors";
 
-import resolveAdminBaseUrl from "../util/admin-url";
+import { resolveAdminBearer } from "../util/admin-token";
+import { resolveAdminBaseUrl } from "../util/admin-url";
 import type { Logger } from "../util/logger";
 import type { FetchLike } from "./run/handler";
 
@@ -173,17 +174,20 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         return { bytes: 0, code: 1, rows: 0 };
     }
 
-    const token = options.token ?? process.env["LUNORA_ADMIN_TOKEN"];
+    // Resolve the target FIRST: the `.dev.vars` fallback is gated on the request's
+    // real destination, and with no `--url` that comes from the dev-server record,
+    // not from the (undefined) flag.
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
+    if (baseUrl === undefined) {
         return { bytes: 0, code: 1, rows: 0 };
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
 
-    if (baseUrl === undefined) {
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
         return { bytes: 0, code: 1, rows: 0 };
     }
 
@@ -306,10 +310,18 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return undefined;
     }
 
-    const token = options.token ?? process.env["LUNORA_ADMIN_TOKEN"];
+    // Resolved before the token so the `.dev.vars` fallback is gated on the
+    // request's real destination rather than on the (possibly absent) flag.
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
         return undefined;
     }
@@ -327,12 +339,6 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
 
         options.logger.error(`failed to stat ${options.file}: ${message}`);
 
-        return undefined;
-    }
-
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
-
-    if (baseUrl === undefined) {
         return undefined;
     }
 

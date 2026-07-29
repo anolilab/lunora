@@ -61,12 +61,20 @@
             {
                 "queue": "notifications",
                 "max_retries": 3,
+                "dead_letter_queue": "notifications-dlq",
+            },
+            {
+                "queue": "notifications-dlq",
             },
         ],
         "producers": [
             {
                 "binding": "QUEUE_NOTIFICATIONS",
                 "queue": "notifications",
+            },
+            {
+                "binding": "QUEUE_NOTIFICATIONS_DLQ",
+                "queue": "notifications-dlq",
             },
         ],
     },

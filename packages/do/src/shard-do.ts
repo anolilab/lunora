@@ -164,9 +164,11 @@ import {
     readRequestLog,
     REQUEST_LOG_TABLE,
 } from "./request-log";
+import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import { foldTraces, SpanBuffer } from "./span-buffer";
+import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { resolveTraceAnchor } from "./trace-context";
@@ -3024,6 +3026,7 @@ abstract class ShardDO {
             flags: false,
             kv: false,
             mail: false,
+            notifications: false,
             payments: false,
             queues: false,
             scheduler: false,
@@ -6306,6 +6309,14 @@ abstract class ShardDO {
             return this.handleExplainIssue(args);
         }
 
+        // The three AI-assistant writes share one shape (parse → call → audit →
+        // respond), so they dispatch from a map rather than three more arms.
+        const aiHandler = this.aiAdminHandlers()[functionPath];
+
+        if (aiHandler !== undefined) {
+            return aiHandler(args);
+        }
+
         const triaged = await this.handleIssueTriageOp(functionPath, args);
 
         if (triaged !== undefined) {
@@ -6472,7 +6483,11 @@ abstract class ShardDO {
      * overwritten here for the duration of the dispatch and restored after, so
      * the forge can't leak into a later request. The target path is validated to
      * be a non-admin function, so it can't be used to re-enter the admin plane.
-     * The studio only surfaces this tool behind a loopback-dev gate.
+     *
+     * Callers: the studio surfaces it behind a loopback-dev gate (`runAsIdentity`),
+     * and `lunora run --as` dispatches through it from the CLI. That gate was
+     * always UI-only — the server-side authority is, and remains, the admin
+     * bearer check above.
      */
     private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseRunAsArgs(args);
@@ -6731,6 +6746,125 @@ abstract class ShardDO {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
         } else if (result.reason !== "no-ai-binding") {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
+        }
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiGenerateSql` — the SQL editor's opt-in
+     * natural-language draft / repair.
+     *
+     * Grounds the prompt in this shard's REAL tables and columns, so the model
+     * names things that exist rather than plausible fiction. The engine validates
+     * its own output against the same read-only gate `runSql` enforces, so what
+     * comes back here is already safe to hand the editor — and is handed over
+     * UNEXECUTED regardless.
+     *
+     * Audited like every other privileged admin action: an AI-drafted statement
+     * is still an operator asking the database a question.
+     */
+    private async handleGenerateSql(args: Record<string, unknown>): Promise<Response> {
+        this.ensureMigrated();
+
+        const sql = this.state.storage.sql as unknown as SqlExec;
+        // Reuse the same column reader `describeTables` serves the Studio from —
+        // a second schema path would be a second thing to keep in step.
+        const schema = listTables(sql).map((table) => {
+            return { columns: this.tableColumns(table.name).map((column) => column.name), table: table.name };
+        });
+        const result = await generateSql((this.env as Record<string, unknown> | undefined)?.["AI"], args, schema);
+
+        if (result.degraded) {
+            if (result.reason !== "no-ai-binding") {
+                this.recordAudit("aiGenerateSql", { detail: { reason: result.reason } });
+            }
+        } else {
+            // The statement itself is recorded: it is what the operator is about
+            // to be handed, and an audit trail that omits it explains nothing.
+            this.recordAudit("aiGenerateSql", { detail: { sql: result.sql } });
+        }
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /** The AI-assistant admin writes, keyed by function path. */
+    private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
+        return {
+            [ADMIN_FUNCTIONS.aiAvailable]: () => Promise.resolve(this.handleAiAvailable()),
+            [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
+            [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
+            [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
+        };
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiTableFilter` — a natural-language filter for the
+     * data browser, grounded in the browsed table's real columns.
+     *
+     * Returns STRUCTURED clauses, never SQL, so the browser's existing filter
+     * validation and parameter binding apply unchanged.
+     */
+    private async handleAiTableFilter(args: Record<string, unknown>): Promise<Response> {
+        this.ensureMigrated();
+
+        const table = typeof args["table"] === "string" ? args["table"] : "";
+        const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
+        }
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiAvailable` — does this deployment have an `AI`
+     * binding at all?
+     *
+     * The studio asks ONCE on mount so it can decide whether to paint the
+     * assistant affordances. Without it the only way to find out was to issue a
+     * real request and read `no-ai-binding` off the failure — which meant an app
+     * with no binding rendered "Draft SQL" and "Suggest chart" buttons that did
+     * nothing until the operator clicked one, and only then made them vanish.
+     *
+     * Deliberately NOT part of `studioFeatures()`: those flags are computed at
+     * codegen time from imports and declared dependencies, while a binding is a
+     * runtime property of `env`. Folding a runtime probe into that codegen-owned
+     * contract would make its drift guard meaningless.
+     *
+     * No model call, no audit entry — it reads one property off `env`.
+     */
+    private handleAiAvailable(): Response {
+        return jsonResponse({ result: { available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined } }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiChartConfig` — infer a chart for a result set.
+     *
+     * The caller sends the result's SHAPE (column names, inferred types, row
+     * count), never its values: per plan 202's Phase 0, inference running on the
+     * user's own account is not the same as the operator expecting a model to
+     * read their rows, and the shape is enough to choose an axis.
+     */
+    private async handleAiChartConfig(args: Record<string, unknown>): Promise<Response> {
+        // Bounded at the boundary: these names are CALLER-supplied (a result set
+        // the studio just rendered), and every other input on this surface is
+        // capped. An uncapped list is an unbounded prompt, twice over with the retry.
+        const columns = Array.isArray(args["columns"])
+            ? (args["columns"] as unknown[]).filter((name): name is string => typeof name === "string").slice(0, 64)
+            : [];
+        const rawTypes = typeof args["types"] === "object" && args["types"] !== null ? (args["types"] as Record<string, unknown>) : undefined;
+        const types =
+            rawTypes === undefined
+                ? undefined
+                : Object.fromEntries(Object.entries(rawTypes).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+        const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
+        const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });
         }
 
         return jsonResponse({ result }, 200);
@@ -7088,6 +7222,15 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
             return this.readAdminRunSql(sql, args);
+        }
+
+        // The SQL linter + schema-version ledger reads live in their own module
+        // and register through a lookup, so this chain does not grow an arm per
+        // resolver — see `schema-history-reads.ts`.
+        const schemaHistoryRead = resolveSchemaHistoryRead(functionPath, ADMIN_FUNCTION_PREFIX, sql, args, ADMIN_WILDCARD);
+
+        if (schemaHistoryRead !== undefined) {
+            return schemaHistoryRead;
         }
 
         const tableSignal = this.readAdminTableSignal(functionPath, sql, args);

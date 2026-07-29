@@ -215,6 +215,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         flags: usage.flags || signals.dependencies.has("@lunora/flags"),
         kv: usage.kv || signals.dependencies.has("@lunora/bindings/kv"),
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
+        notifications: usage.notify || signals.dependencies.has("@lunora/notify"),
         payments: usage.payments || signals.hasPaymentTables,
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import type { SqlExec } from "@lunora/shard-engine";
 import {
     normalizeSql,
+    pruneQueryBuckets,
+    QUERY_BUCKET_RETENTION,
     QUERY_METRICS_MAX_SQL_LEN,
     QUERY_METRICS_MAX_STATEMENTS,
     QUERY_METRICS_TABLE,
+    readQueryInsights,
     readQueryMetrics,
     recordQueryMetric,
 } from "../src/query-metrics";
@@ -245,5 +249,117 @@ describe("recordQueryMetric + readQueryMetrics", () => {
         expect.assertions(1);
 
         expect(QUERY_METRICS_TABLE).toBe("__lunora_metrics_queries");
+    });
+});
+
+describe("time-bucketed query insights", () => {
+    const at = (minute: number): number => 1_700_000_000_000 + minute * 60_000;
+
+    it("answers 'what is hot NOW' rather than 'since the shard was created'", () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        // An old statement hammered 100× an hour ago…
+        for (let index = 0; index < 100; index += 1) {
+            recordQueryMetric(sql, "SELECT * FROM old", 1, 1, 0, at(0));
+        }
+
+        // …and a new one run 5× in the last minute.
+        for (let index = 0; index < 5; index += 1) {
+            recordQueryMetric(sql, "SELECT * FROM hot", 50, 1, 0, at(70));
+        }
+
+        const recent = readQueryInsights(sql, 5 * 60_000, at(70));
+
+        // The lifetime leaderboard would rank `old` first on exec count; the
+        // ranged read must only see what happened inside the window.
+        expect(recent.entries).toHaveLength(1);
+        expect(recent.entries[0]?.normalizedSql).toContain("hot");
+    });
+
+    it("interpolates percentiles from the latency histogram", () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        // 90 fast executions and 10 slow: p50 sits in a low bucket, p95 in a high
+        // one. Deliberately NOT 95/5 — at exactly 5% the 95th sample is still a
+        // fast one, so nearest-rank p95 correctly reports the low bucket and the
+        // assertion would be testing the boundary rather than the tail.
+        for (let index = 0; index < 90; index += 1) {
+            recordQueryMetric(sql, "SELECT * FROM t", 1, 1, 0, at(0));
+        }
+
+        for (let index = 0; index < 10; index += 1) {
+            recordQueryMetric(sql, "SELECT * FROM t", 900, 1, 0, at(0));
+        }
+
+        const [entry] = readQueryInsights(sql, 5 * 60_000, at(0)).entries;
+
+        expect(entry?.p50DurationMs).toBeLessThanOrEqual(5);
+        expect(entry?.p95DurationMs).toBeGreaterThanOrEqual(500);
+    });
+
+    it("reports the tracked-statement cap so the UI can avoid implying totality", () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        recordQueryMetric(sql, "SELECT 1", 1, 0, 0, at(0));
+
+        const result = readQueryInsights(sql, 60_000, at(0));
+
+        expect(result.capped).toBe(false);
+        expect(result.trackedStatements).toBe(1);
+    });
+
+    it("emits one chart point per window, oldest first", () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        recordQueryMetric(sql, "SELECT 1", 10, 0, 0, at(0));
+        recordQueryMetric(sql, "SELECT 1", 30, 0, 0, at(1));
+
+        const { buckets } = readQueryInsights(sql, 10 * 60_000, at(1));
+
+        expect(buckets.map((bucket) => bucket.execCount)).toStrictEqual([1, 1]);
+        expect(buckets[1]?.avgDurationMs).toBe(30);
+    });
+
+    it("prunes windows past the retention horizon", () => {
+        expect.assertions(1);
+
+        const { sql } = createSqliteExec();
+
+        recordQueryMetric(sql, "SELECT 1", 1, 0, 0, at(0));
+        pruneQueryBuckets(sql, at(QUERY_BUCKET_RETENTION + 10));
+
+        // Bounded growth is load-bearing here: rows are statements × windows.
+        expect(readQueryInsights(sql, 60 * 60_000, at(QUERY_BUCKET_RETENTION + 10)).entries).toStrictEqual([]);
+    });
+
+    it("never lets a bucket-table failure break the lifetime counters", () => {
+        expect.assertions(2);
+
+        const real = createSqliteExec().sql;
+        // Fail ONLY the bucket table's statements, so the lifetime path is truly
+        // exercised. Using a healthy handle here passed whether or not the
+        // try/catch existed — a green test for an invariant it never checked.
+        const sql = {
+            exec: (query: string, ...parameters: unknown[]) => {
+                if (query.includes("_queries_buckets")) {
+                    throw new Error("bucket table unavailable");
+                }
+
+                return real.exec(query, ...parameters);
+            },
+        } as unknown as SqlExec;
+
+        expect(() => {
+            recordQueryMetric(sql, "SELECT 1", 5, 1, 0, at(0));
+        }).not.toThrow();
+        expect(readQueryMetrics(sql)[0]?.execCount).toBe(1);
     });
 });

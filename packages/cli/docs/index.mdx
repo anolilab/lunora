@@ -36,6 +36,7 @@ lunora codegen [--api-spec <spec>]      # one-shot codegen
             [--format <pretty|json>]
 lunora run <fn> [--args <json>]         # send a single RPC to a running worker
             [--shard <key>] [--url <u>]
+            [--as <userId>] [--claims <json>] #   run as an identity (identity-gated apps)
 lunora insights [--shard <key>]         # write-conflict / error / latency hot-spots
             [--limit n] [--json] [--prod --url <u>]
 lunora reset [--all] [--yes]            # clear local Miniflare state
@@ -288,6 +289,29 @@ the worker from the link automatically. The bulk / destructive commands
 (`export`, `import`, `migrate`, `backup`, `seed`, `insights`) use the link only
 under `--prod`, so a production link never silently becomes the target of an
 unguarded write. The link carries only public identifiers — never secrets.
+
+### Calling a function that requires a signed-in user
+
+`lunora run` sends an anonymous RPC. Any app that configures `authorizeShard` —
+the recommended posture — default-denies that, so the call comes back
+`FORBIDDEN_SHARD` no matter what you pass.
+
+`--as` is the way through: it dispatches via the admin-gated `runAs` op, which
+forges the named identity for that one call, so the function and any RLS
+middleware observe that user instead of an anonymous caller.
+
+```bash
+lunora run messages:list --as user_123
+lunora run messages:list --as user_123 --claims '{"org":"acme"}'   # extra identity claims
+```
+
+It needs the admin bearer, resolved in this order: `--token`, then
+`LUNORA_ADMIN_TOKEN`, then `.dev.vars` — the last only for a loopback target, so
+a dev secret is never sent to a deployed worker. Against your own dev server that
+means no flags at all.
+
+Identity forging is admin-gated, refuses to target reserved admin functions, and
+is recorded in the shard's audit trail. Treat the admin bearer accordingly.
 
 ### `lunora deployments`
 

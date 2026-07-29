@@ -94,6 +94,7 @@ const TableListSidebar = ({ header, onReload, onSelect, prefix, reloadLabel, sel
         return needle === "" ? tables : tables.filter((item) => item.name.toLowerCase().includes(needle));
     }, [query, tables]);
 
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
         count: filtered.length,
         estimateSize: () => TABLE_ROW_HEIGHT,

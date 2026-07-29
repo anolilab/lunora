@@ -1,16 +1,20 @@
 <script setup lang="ts">
+import { computed } from "vue";
+
 import { isFlowEnabled } from "../core/flow-gate";
 import { createTwoFactorSetupController } from "../core/two-factor-setup";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const context = useAuthUI();
-const t = context.localization;
-const enabled = isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard");
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "twoFactor", "TwoFactorSetupCard"));
 const { actions, state } = useController(createTwoFactorSetupController);
 </script>
 

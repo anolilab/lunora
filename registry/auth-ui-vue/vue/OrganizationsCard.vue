@@ -6,18 +6,21 @@ import { slugify } from "../core/labels";
 import { createOrganizationsController } from "../core/organization-list";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
-import { useAuthUI } from "./provider";
+import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
 // Generated, not hard-coded: two cards on one page must not collide.
 const uid = useId();
-const context = useAuthUI();
-const t = context.localization;
-// Resolved before the controller is built: a gated-off card must not fire the
-// resource auto-load on mount just to render nothing.
-const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
-const { actions, state } = useController((context_) => createOrganizationsController(context_, { autoLoad: enabled }));
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "organization", "OrganizationsCard"));
+// Read inside the factory rather than captured: `useController` re-runs it when
+// the discovered context lands, and a gated-off card must not fire the resource
+// auto-load just to render nothing.
+const { actions, state } = useController((context_) => createOrganizationsController(context_, { autoLoad: enabled.value }));
 
 const name = ref("");
 const slug = ref("");

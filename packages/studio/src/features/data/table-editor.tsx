@@ -1,10 +1,11 @@
 import { useLunora } from "@lunora/react";
 import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
+import { useMirroredRef } from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { DataViewSearch } from "../../lib/data-view-params";
 import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";
@@ -57,6 +58,16 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
     );
 };
 
+/** Copy the current deep link. A no-op where the clipboard API is unavailable (insecure context). */
+const onCopyLink = (): void => {
+    try {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
+        fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
+    } catch {
+        /* clipboard unavailable (insecure context) — nothing to copy to */
+    }
+};
+
 /**
  * The Table editor: browses your application's tables across both storage tiers
  * from one section. A schema switch in the sidebar header (Supabase's
@@ -90,8 +101,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     // `navigate`). Without this, mirroring the loaded view back to the URL on a
     // deep-link load (`/data?table=…`) fires a `navigate({ to: "/data" })` that
     // clobbers an in-flight tab switch — you couldn't leave the data tab.
-    const searchRef = useRef(search);
-    searchRef.current = search;
+    const searchRef = useMirroredRef(search);
 
     // True while the data route is the active one. The URL-mirroring callbacks below
     // all `navigate({ to: "/data" })`; some fire from deferred effects/microtasks that
@@ -147,6 +157,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
                 }),
             );
         }
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `tier` and `tableParameter` ARE `view.tier` / `view.table`, destructured above and listed in the deps
     }, [globalTableNames, navigate, tableParameter, tier]);
 
     // Switch tier via the schema dropdown: write `?schema=…` and clear `?table` (the
@@ -240,15 +251,6 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
 
     // Copy the current view's full URL to the clipboard. Best-effort: a missing/
     // throwing clipboard (insecure context) is swallowed — the URL is still in the bar.
-    const onCopyLink = (): void => {
-        try {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
-            fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
-        } catch {
-            /* clipboard unavailable (insecure context) — nothing to copy to */
-        }
-    };
-
     // Persist the current view under a name, then refresh the toolbar's list.
     const onSaveQuery = (name: string, snapshot: DataView): void => {
         setSavedQueries(saveQuery(name, snapshot));
@@ -292,6 +294,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
             globalTableNames={globalTableNames}
             initialFilters={view.filters}
             initialOrderBy={view.orderBy}
+            initialPins={search.pins}
             initialSearch={view.search}
             initialShardKey={view.shard ?? initialShardKey}
             onNavigateToGlobal={onNavigateToGlobal}

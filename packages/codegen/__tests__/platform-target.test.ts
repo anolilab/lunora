@@ -21,6 +21,7 @@ const ALL_OFF: FeatureUsage = {
     images: false,
     kv: false,
     mail: false,
+    notify: false,
     payments: false,
     pipelines: false,
     r2sql: false,

@@ -1,7 +1,7 @@
 import type { CronJobInfo } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { Badge } from "../../components/ui/badge";
@@ -48,6 +48,19 @@ const IDLE: RunState = { kind: "idle" };
  * demand.
  */
 
+const cronRunner = (
+    client: ReturnType<typeof useLunora>,
+    loadCronJobs: CronTriggersPanelProps["loadCronJobs"],
+    runCronJob: CronTriggersPanelProps["runCronJob"],
+): ((name: string) => Promise<{ name: string; ran: boolean }>) | undefined => {
+    if (runCronJob !== undefined) {
+        return runCronJob;
+    }
+
+    return loadCronJobs === undefined ? (name: string) => client.runCronJob(name) : undefined;
+};
+
+/** How to run a trigger, or `undefined` when the panel is read-only: the host's runner wins; otherwise the client can run what it also lists. A custom loader without a runner stays read-only. */
 export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPanelProps = {}): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -64,13 +77,7 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
     // Running is available when the host supplies a runner, or when the panel is
     // sourcing triggers from the client (then the client can run them too). A
     // custom `loadCronJobs` without a `runCronJob` stays read-only.
-    const runImpl = useMemo<((name: string) => Promise<{ name: string; ran: boolean }>) | undefined>(() => {
-        if (runCronJob !== undefined) {
-            return runCronJob;
-        }
-
-        return loadCronJobs === undefined ? (name: string) => client.runCronJob(name) : undefined;
-    }, [client, loadCronJobs, runCronJob]);
+    const runImpl = cronRunner(client, loadCronJobs, runCronJob);
 
     const run = async (name: string): Promise<void> => {
         if (runImpl === undefined) {

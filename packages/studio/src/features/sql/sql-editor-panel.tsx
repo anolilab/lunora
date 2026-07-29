@@ -7,15 +7,21 @@ import { ShardInput } from "../../components/shard-input";
 import { Alert } from "../../components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
-import type { SqlConsoleResult } from "../../lib/admin";
+import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { newId, usePersistedList, usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import { CellValue } from "../data/data-grid";
 import { ExportMenu } from "../data/grid-features";
+import { EDITOR_TEXT_CLASS } from "./editor-spans";
 import formatSql from "./format-sql";
+import { useSqlAssistant } from "./hooks/use-sql-assistant";
+import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
+import { SqlAssistantBar } from "./sql-assistant-bar";
 import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
+import type { SqlDiagnostic } from "./sql-diagnostics";
+import { DiagnosticsOverlay, DiagnosticsRow } from "./sql-diagnostics-ui";
 import type { HistoryEntry, SavedQuery } from "./sql-query-sidebar";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import { referencedTables, useSqlSchema } from "./sql-schema";
@@ -45,12 +51,22 @@ const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5re
 type ResultTab = "chart" | "explain" | "results";
 
 /**
- * One editor tab's ephemeral output — the last run's result/error plus which result
- * pane is shown. Kept as a single per-tab record (not three parallel maps) so a
- * write touches one entry and closing a tab is one `delete`.
+ * One editor tab's ephemeral output — the last run's result/error, the statement
+ * that failed, the inferred chart, and which result pane is shown. Kept as a
+ * single per-tab record (not parallel maps) so a write touches one entry and
+ * closing a tab is one `delete`.
+ *
+ * Everything here is per-TAB because everything here describes one tab's last
+ * run. Holding `failed`/`chart` as panel-wide state let a failure in tab A arm
+ * "Fix this" in tab B against a statement B never ran, and let A's inferred axes
+ * render over B's unrelated columns.
  */
 interface TabOutput {
+    /** Model-inferred chart for THIS tab's result, or undefined for the manual one. */
+    readonly chart?: AssistantChartConfig;
     readonly error: null | string;
+    /** THIS tab's last FAILED statement, frozen at failure time — see `run`. */
+    readonly failed?: { error: string; sql: string };
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
 }
@@ -89,14 +105,14 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
     );
 };
 
-/**
- * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
- * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
- * editor pane, and a Results / Explain pane with a Run control + shard selector.
- * Read-only — the `__lunora_admin__:runSql` RPC rejects everything but
- * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
- * tables (use the Data grid's inline edit for mutations).
- */
+/** One result-pane tab's classes, selected or not. */
+const tabClass = (selected: boolean): string =>
+    `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
+
+/** The tab the editor opens with on a fresh browser: the first template. */
+const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
+
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~840 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -108,7 +124,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     // Multiple editor tabs: each persisted tab owns its draft + the saved-query
     // it mirrors; the result/error/pane are kept per tab in ephemeral maps so a
     // reload restores the open tabs (and their text) but re-runs for results.
-    const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
     const { activeId: activeTabId, setActiveId: setActiveTabId, setTabs, tabs } = usePersistedTabs(seedTab);
 
     // One ephemeral output record per tab id (result + error + result-pane). Not
@@ -126,6 +141,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const [pendingBulk, setPendingBulk] = useState<BulkClose | null>(null);
 
     const gutterRef = useRef<HTMLDivElement | null>(null);
+    const overlayRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<HTMLTextAreaElement | null>(null);
     const privateListRef = useRef<HTMLUListElement | null>(null);
     const listboxId = useId();
@@ -138,7 +154,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const draft = activeTab.sql;
     const { activeId } = activeTab;
     const output = outputs[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
-    const { error, result } = output;
+    const { chart: inferredChart, error, failed: failedRun, result } = output;
     const tab = output.pane;
 
     // Patch the active tab's persisted fields (draft text and/or saved-query link).
@@ -146,22 +162,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setTabs((current) => current.map((each) => (each.id === activeTab.id ? { ...each, ...patch } : each)));
     };
 
-    // Replace the active tab's ephemeral result/error/pane in one shot. An omitted
-    // `pane` keeps whatever pane was showing (defaulting to "results").
-    const setActiveOutput = (next: { error: null | string; pane?: ResultTab; result: null | SqlConsoleResult }): void => {
+    // Merge a patch into the active tab's ephemeral output. Omitted keys keep
+    // their previous value; a key present as `undefined` clears it (which is how
+    // a fresh run drops the previous failure and inferred chart).
+    const patchActiveOutput = (patch: Partial<TabOutput>): void => {
         setOutputs((current) => {
             const previous = current[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
 
-            return { ...current, [activeTab.id]: { error: next.error, pane: next.pane ?? previous.pane, result: next.result } };
-        });
-    };
-
-    // Switch the active tab's result pane (Results/Chart) without touching its rows.
-    const setActivePane = (pane: ResultTab): void => {
-        setOutputs((current) => {
-            const previous = current[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
-
-            return { ...current, [activeTab.id]: { ...previous, pane } };
+            return { ...current, [activeTab.id]: { ...previous, ...patch } };
         });
     };
 
@@ -172,6 +180,28 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         if (activeId !== null) {
             setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: value } : query)));
         }
+    };
+
+    const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
+    const assistant = useSqlAssistant(shardKey);
+
+    const inferChart = (): void => {
+        if (result === null) {
+            return;
+        }
+
+        const apply = async (): Promise<void> => {
+            // The result's SHAPE only — never its rows (plan 202 Phase 0).
+            const chart = await assistant.inferChart({
+                columns: result.columns,
+                rowCount: result.rowCount,
+                types: Object.fromEntries(result.columns.map((column) => [column, typeof (result.rows[0]?.[column] ?? "")])),
+            });
+
+            patchActiveOutput({ chart });
+        };
+
+        fireAndForget(apply());
     };
 
     const autocomplete = useSqlAutocomplete(schema, editorRef, setDraft);
@@ -226,14 +256,17 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
 
-            setActiveOutput({ error: null, pane: mode, result: next });
+            patchActiveOutput({ chart: undefined, error: null, failed: undefined, pane: mode, result: next });
             recordShard(shardKey);
             recordHistory(sql);
         } catch (error_: unknown) {
-            setActiveOutput({ error: errorMessage(error_), pane: mode, result: null });
-        } finally {
-            setRunning(false);
+            // Capture the statement that actually failed. "Fix this" previously
+            // read the live draft, so any edit after the failure asked the model
+            // to repair text that never ran, against an error it never produced.
+            patchActiveOutput({ chart: undefined, error: errorMessage(error_), failed: { error: errorMessage(error_), sql }, pane: mode, result: null });
         }
+
+        setRunning(false);
     };
 
     const onRun = (): void => {
@@ -305,18 +338,40 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         });
     };
 
-    // Keep the line-number gutter aligned with the textarea's scroll.
+    // Keep the line-number gutter and the diagnostics overlay aligned with the
+    // textarea's scroll. The overlay tracks both axes — a wide statement scrolls
+    // horizontally, and a squiggle that doesn't follow is worse than none.
     const onEditorScroll = (event: React.UIEvent<HTMLTextAreaElement>): void => {
+        const { scrollLeft, scrollTop } = event.currentTarget;
+
         if (gutterRef.current !== null) {
-            gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+            gutterRef.current.scrollTop = scrollTop;
         }
+
+        if (overlayRef.current !== null) {
+            overlayRef.current.scrollTop = scrollTop;
+            overlayRef.current.scrollLeft = scrollLeft;
+        }
+    };
+
+    // Reveal and select a diagnostic's span from the problems row, so a message
+    // like "unknown table `userz`" lands the caret on `userz`.
+    const revealDiagnostic = (diagnostic: SqlDiagnostic): void => {
+        const node = editorRef.current;
+
+        if (node === null || diagnostic.offset === undefined) {
+            return;
+        }
+
+        node.focus();
+        node.setSelectionRange(diagnostic.offset, diagnostic.offset + (diagnostic.length ?? 0));
     };
 
     // Load `sql` into the active tab as a fresh draft, link it to `savedId` (or
     // unlink with `null`), and clear that tab's stale result/error.
     const loadIntoActiveTab = (sql: string, savedId: null | string): void => {
         setTabs((current) => current.map((each) => (each.id === activeTab.id ? { ...each, activeId: savedId, sql } : each)));
-        setActiveOutput({ error: null, result: null });
+        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null });
     };
 
     const newQuery = (): void => {
@@ -464,7 +519,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     const showResults = (): void => {
-        setActivePane("results");
+        patchActiveOutput({ pane: "results" });
     };
 
     const showExplain = (): void => {
@@ -472,7 +527,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     const showChart = (): void => {
-        setActivePane("chart");
+        patchActiveOutput({ pane: "chart" });
     };
 
     const toggleSplit = (): void => {
@@ -483,9 +538,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const onSearchChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
     };
-
-    const tabClass = (selected: boolean): string =>
-        `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
 
     // Editor + results share a flex container; `splitView` flips its axis (and the
     // results pane from a bottom band to a right column) — the only layout change.
@@ -629,40 +681,48 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                 {/* Editor + results workspace — stacked, or split side-by-side. */}
                 <div className={workspaceClass}>
-                    {/* Line-numbered editor pane. */}
-                    <div className="flex min-h-0 min-w-0 flex-1">
-                        <div
-                            aria-hidden="true"
-                            className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
-                            ref={gutterRef}
-                            style={GUTTER_STYLE}
-                        >
-                            {Array.from({ length: lineCount }, (_, index) => (
-                                <div key={index}>{index + 1}</div>
-                            ))}
+                    {/* Line-numbered editor pane, with the assistant bar, diagnostics overlay + problems row. */}
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        <SqlAssistantBar assistant={assistant} failed={failedRun} onGenerated={setDraft} />
+                        <div className="flex min-h-0 min-w-0 flex-1">
+                            <div
+                                aria-hidden="true"
+                                className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
+                                ref={gutterRef}
+                                style={GUTTER_STYLE}
+                            >
+                                {Array.from({ length: lineCount }, (_, index) => (
+                                    <div key={index}>{index + 1}</div>
+                                ))}
+                            </div>
+                            {/* The background lives on the wrapper, not the textarea: the
+                                overlay sits behind the (transparent) textarea, so an opaque
+                                textarea would hide every squiggle. */}
+                            <div className="relative min-w-0 flex-1 bg-background">
+                                <DiagnosticsOverlay diagnostics={diagnostics} draft={draft} scrollRef={overlayRef} />
+                                <textarea
+                                    aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
+                                    aria-autocomplete="list"
+                                    aria-controls={autocompleteState === null ? undefined : listboxId}
+                                    aria-expanded={autocompleteState !== null}
+                                    aria-label={t("SQL query")}
+                                    className={`relative size-full resize-none bg-transparent outline-none ${EDITOR_TEXT_CLASS}`}
+                                    data-testid="sql-input"
+                                    onBlur={onEditorBlur}
+                                    onChange={onDraftChange}
+                                    onKeyDown={onEditorKeyDown}
+                                    onScroll={onEditorScroll}
+                                    onSelect={onEditorSelect}
+                                    placeholder="SELECT * FROM …"
+                                    ref={editorRef}
+                                    role="combobox"
+                                    spellCheck={false}
+                                    value={draft}
+                                />
+                                <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
+                            </div>
                         </div>
-                        <div className="relative min-w-0 flex-1">
-                            <textarea
-                                aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
-                                aria-autocomplete="list"
-                                aria-controls={autocompleteState === null ? undefined : listboxId}
-                                aria-expanded={autocompleteState !== null}
-                                aria-label={t("SQL query")}
-                                className="size-full resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
-                                data-testid="sql-input"
-                                onBlur={onEditorBlur}
-                                onChange={onDraftChange}
-                                onKeyDown={onEditorKeyDown}
-                                onScroll={onEditorScroll}
-                                onSelect={onEditorSelect}
-                                placeholder="SELECT * FROM …"
-                                ref={editorRef}
-                                role="combobox"
-                                spellCheck={false}
-                                value={draft}
-                            />
-                            <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
-                        </div>
+                        <DiagnosticsRow diagnostics={diagnostics} onSelect={revealDiagnostic} />
                     </div>
 
                     {/* Results pane. */}
@@ -674,6 +734,18 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                             <button className={tabClass(tab === "chart")} data-testid="sql-tab-chart" onClick={showChart} type="button">
                                 {t("Chart")}
                             </button>
+                            {/* Chart inference, hidden without an AI binding. */}
+                            {!assistant.unavailable && tab === "chart" && result !== null && (
+                                <button
+                                    className={tabClass(false)}
+                                    data-testid="sql-infer-chart"
+                                    disabled={assistant.pending("chart")}
+                                    onClick={inferChart}
+                                    type="button"
+                                >
+                                    {assistant.pending("chart") ? t("Thinking…") : t("Suggest chart")}
+                                </button>
+                            )}
                             <button className={tabClass(tab === "explain")} data-testid="sql-tab-explain" onClick={showExplain} type="button">
                                 {t("Explain")}
                             </button>
@@ -740,7 +812,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                             {error === null && result !== null && (
                                 <div data-testid="sql-result">
-                                    {tab === "chart" ? <SqlResultChart result={result} /> : <SqlResultTable result={result} />}
+                                    {tab === "chart" ? <SqlResultChart axes={inferredChart} result={result} /> : <SqlResultTable result={result} />}
                                     <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="sql-count">
                                         {result.truncated
                                             ? t("Showing the first {max} of {count} rows.", { count: result.rowCount, max: result.rows.length })
@@ -756,4 +828,12 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     );
 };
 
+/**
+ * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
+ * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
+ * editor pane, and a Results / Explain pane with a Run control + shard selector.
+ * Read-only — the `__lunora_admin__:runSql` RPC rejects everything but
+ * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
+ * tables (use the Data grid's inline edit for mutations).
+ */
 export type { SqlEditorPanelProps };

@@ -98,9 +98,9 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
             setExportCount(result.rows.length);
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const importShard = async (): Promise<void> => {
@@ -132,9 +132,9 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
             invalidateAdmin(ADMIN_FUNCTIONS.listTables);
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const insertedTotal = importResult === null ? 0 : Object.values(importResult.inserted).reduce((sum, count) => sum + count, 0);

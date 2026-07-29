@@ -1,5 +1,4 @@
 import type { ChangeEvent, MouseEvent, ReactElement, RefObject } from "react";
-import { useMemo } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
@@ -119,6 +118,13 @@ interface SqlQuerySidebarProps {
     readonly search: string;
 }
 
+/** Saved queries whose name contains `search` (case-insensitive); all of them when it is blank. */
+const matchingQueries = (queries: ReadonlyArray<SavedQuery>, search: string): SavedQuery[] => {
+    const needle = search.trim().toLowerCase();
+
+    return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
+};
+
 /**
  * The SQL editor's left rail: a search box + new-query button, the browser-persisted
  * PRIVATE saved queries, the canned REFERENCE templates, and the run HISTORY. Pure
@@ -140,11 +146,7 @@ const SqlQuerySidebar = ({
     search,
 }: SqlQuerySidebarProps): ReactElement => {
     const t = useT();
-    const filtered = useMemo<SavedQuery[]>(() => {
-        const needle = search.trim().toLowerCase();
-
-        return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
-    }, [queries, search]);
+    const filtered = matchingQueries(queries, search);
 
     return (
         <aside className="flex h-full w-64 shrink-0 flex-col border-e border-border bg-sidebar">

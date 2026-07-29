@@ -269,3 +269,33 @@ describe("seedPlan", () => {
         expect(posts.every((post) => names.has(post.title as string))).toBe(true);
     });
 });
+
+describe("seedPlan — reproducibility", () => {
+    const eventsSchema = defineSchema({
+        events: defineTable({ createdAt: v.number(), name: v.string() }),
+    });
+
+    it("is byte-identical for the same (seed, now) pair", () => {
+        expect.assertions(1);
+
+        // The determinism the package promises: same seed AND same clock
+        // reference yields the same rows, which is what makes a seeded
+        // screenshot or a bug report replayable.
+        const first = seedPlan(eventsSchema, { defaultCount: 5, now: 1_785_000_000_000, seed: 7 });
+        const second = seedPlan(eventsSchema, { defaultCount: 5, now: 1_785_000_000_000, seed: 7 });
+
+        expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    });
+
+    it("moves time-valued columns when only `now` changes", () => {
+        expect.assertions(1);
+
+        // `now` is the one input that is not covered by `seed`; a caller that
+        // forgets it would silently lose reproducibility, which is why
+        // `generateValue` takes it with no default.
+        const early = seedPlan(eventsSchema, { defaultCount: 5, now: 1_700_000_000_000, seed: 7 });
+        const late = seedPlan(eventsSchema, { defaultCount: 5, now: 1_785_000_000_000, seed: 7 });
+
+        expect(JSON.stringify(late)).not.toBe(JSON.stringify(early));
+    });
+});

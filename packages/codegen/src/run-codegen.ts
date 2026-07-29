@@ -6,6 +6,8 @@ import type { Finding } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
 import { Project } from "ts-morph";
 
+import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
+import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
 import { discoverAgents } from "./discover-agents";
@@ -94,8 +96,7 @@ import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { PlatformDiagnostic } from "./platform-target";
 import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
-import type { SchemaSnapshot } from "./schema-drift";
-import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot } from "./schema-drift";
 
 /**
  * Committed, tracked baseline file holding the blessed structural schema
@@ -635,6 +636,21 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflows,
     });
     const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+    // Structural schema snapshot for the pre-deploy drift gate. Built from the
+    // discovered schema + the declared migration ids; the CLI gate diffs the
+    // CURRENT snapshot against the committed baseline. Always computed (cheap,
+    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
+    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
+    // so a routine codegen run never silently moves the goalposts the gate
+    // measures against.
+    const schemaSnapshot = buildSchemaSnapshot(
+        schema,
+        migrations.map((migration) => migration.id),
+    );
+    // The SAME snapshot is threaded into the emitted shard so the DO records it
+    // in its `__lunora_schema_history` ledger on cold start (plan 200). One
+    // builder feeds both the deploy gate and the Studio's schema history, so the
+    // two can never describe different shapes.
     const shardContent = emitShard({
         advisories,
         agents,
@@ -659,6 +675,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         queues,
         rlsMetadata,
         schema,
+        schemaSnapshot,
         shapes,
         storageRules: storageRulesMetadata,
         studioFeatures,
@@ -767,17 +784,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const openApiModuleContent = emitOpenApiModule(openApiDocument);
     const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
 
-    // Structural schema snapshot for the pre-deploy drift gate. Built from the
-    // discovered schema + the declared migration ids; the CLI gate diffs the
-    // CURRENT snapshot against the committed baseline. Always computed (cheap,
-    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
-    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
-    // so a routine codegen run never silently moves the goalposts the gate
-    // measures against.
-    const schemaSnapshot = buildSchemaSnapshot(
-        schema,
-        migrations.map((migration) => migration.id),
-    );
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 

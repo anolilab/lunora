@@ -66,6 +66,7 @@ describe("schemaViewer", () => {
                 <SchemaViewer schemaEditable />
             </LunoraProvider>,
         );
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-messages");
 
@@ -81,6 +82,7 @@ describe("schemaViewer", () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-messages");
 
@@ -91,6 +93,7 @@ describe("schemaViewer", () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-messages");
 
@@ -103,6 +106,7 @@ describe("schemaViewer", () => {
         const mock = createClient();
 
         render(renderViewer(mock));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-toggle-messages"));
 
@@ -123,6 +127,7 @@ describe("schemaViewer", () => {
         expect.assertions(3);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-toggle-messages"));
 
@@ -138,6 +143,7 @@ describe("schemaViewer", () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-toggle-users"));
         await screen.findByTestId("sc-columns-users");
@@ -150,6 +156,7 @@ describe("schemaViewer", () => {
         expect.assertions(2);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-global-table-user");
 
@@ -164,6 +171,7 @@ describe("schemaViewer", () => {
         const mock = createClient();
 
         render(renderViewer(mock));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-global-toggle-session"));
 
@@ -182,6 +190,7 @@ describe("schemaViewer", () => {
         expect.assertions(2);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-users");
 
@@ -197,8 +206,8 @@ describe("schemaViewer", () => {
 
         render(renderViewer(createClient()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // A single canvas holds both a shard node (`messages`) and a global node (`user`).
         await screen.findByTestId("sd-node-messages");
@@ -217,8 +226,8 @@ describe("schemaViewer", () => {
 
         render(renderViewer(createClient()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // `session.userId` carries a `ref` from `readGlobalTablePage`'s `refs` map
         // (no schema entry), so its node row shows the FK badge → the global→global
@@ -239,6 +248,7 @@ describe("schemaViewer", () => {
         });
 
         render(renderViewer(mock));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         // Shard tables render regardless of the global failure.
         await screen.findByTestId("sc-table-messages");

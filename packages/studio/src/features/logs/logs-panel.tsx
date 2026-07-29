@@ -303,6 +303,7 @@ const summarizeLogs = (entries: ReadonlyArray<LogEntry>): LogSummary => {
         pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
     }
 
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over LOG_LEVELS, a five-element constant
     const byLevel: SummaryBucket[] = LOG_LEVELS.filter((level) => levelCounts.has(level)).map((level) => {
         return { count: levelCounts.get(level) ?? 0, key: level };
     });
@@ -380,6 +381,7 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
  * For the raw, un-attributed request firehose (which Lunora deliberately does
  * NOT re-stream), a deep-link to Cloudflare Workers Observability is provided.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~801 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
     const t = useT();
 
@@ -491,6 +493,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     // hundreds of <div>s. See the jsdom note on `flooredRectObserver`.
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
         count: activeCount,
         estimateSize: () => ROW_HEIGHT,

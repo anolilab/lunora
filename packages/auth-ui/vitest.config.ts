@@ -18,7 +18,9 @@ export default getVitestConfig(
             coverage: {
                 // The controllers are what the thresholds are about; the ports are
                 // thin bindings over them, covered by per-port render tests.
-                include: ["src/core/**", "src/react/**"],
+                // `emails/` is in because it ships as its own registry item and
+                // is plain React, so the react project covers it like any view.
+                include: ["src/core/**", "src/emails/**", "src/react/**"],
             },
             projects: [
                 {

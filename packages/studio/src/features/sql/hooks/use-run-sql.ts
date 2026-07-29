@@ -48,10 +48,10 @@ export const useRunSql = (sql: string, shardKey: string): RunSqlState => {
                     setResult(undefined);
                     setError(errorMessage(error_));
                 }
-            } finally {
-                if (!token.cancelled) {
-                    setLoading(false);
-                }
+            }
+
+            if (!token.cancelled) {
+                setLoading(false);
             }
         },
         [client, sql, shardKey],
@@ -60,6 +60,7 @@ export const useRunSql = (sql: string, shardKey: string): RunSqlState => {
     useEffect(() => {
         const token = { cancelled: false };
 
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async run with a cancellation token, which is what effects are for
         fireAndForget(run(token));
 
         return () => {

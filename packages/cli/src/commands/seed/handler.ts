@@ -28,6 +28,8 @@ interface SeedCommandOptions {
     dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
     logger: Logger;
+    /** Epoch-ms reference for time-valued columns; pin with `seed` for byte-identical rows. */
+    now?: number;
     prod?: boolean;
     /** Wipe local `.wrangler/state` before seeding (local dev only). */
     reset?: boolean;
@@ -235,6 +237,9 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
     const schema = schemaFromIr(ir);
     const plan = seedPlan(schema, {
         defaultCount: options.count ?? 10,
+        // Omitted → `seedPlan` stamps the current clock. Passing it pins the one
+        // input `--seed` does not cover, which is what makes a run replayable.
+        now: options.now,
         only: options.table === undefined ? undefined : [options.table],
         seed: options.seed ?? 0,
     });
@@ -293,6 +298,7 @@ const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({
         logger,
         prod: options.prod === true,
         reset: options.reset === true,
+        now: options.now,
         seed: options.seed,
         table: options.table,
         token: options.token,

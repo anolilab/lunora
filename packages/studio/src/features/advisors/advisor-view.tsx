@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
@@ -104,6 +104,17 @@ const levelCount = (t: TFunction, level: AdvisorLevel, count: number): string =>
 const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
     ({ error: t("No errors detected"), info: t("No suggestions"), warning: t("No warnings detected") })[level];
 
+/** Count the advisories at each level, so the level tabs can show their totals. */
+const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> => {
+    const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
+
+    for (const row of rows ?? []) {
+        tally[row.level] += 1;
+    }
+
+    return tally;
+};
+
 /**
  * Shared Advisor content — a 1-to-1 of Supabase Studio's Advisor layout: a row of
  * severity tabs (Errors / Warnings / Info) with per-level counts, a toolbar, and a
@@ -115,15 +126,7 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
     const t = useT();
     const [active, setActive] = useState<AdvisorLevel>("error");
 
-    const counts = useMemo<Record<AdvisorLevel, number>>(() => {
-        const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
-
-        for (const row of rows ?? []) {
-            tally[row.level] += 1;
-        }
-
-        return tally;
-    }, [rows]);
+    const counts = tallyByLevel(rows);
 
     const visible = (rows ?? []).filter((row) => row.level === active);
 

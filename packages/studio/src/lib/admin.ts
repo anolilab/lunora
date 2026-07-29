@@ -32,7 +32,12 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    aiAvailable: "__lunora_admin__:aiAvailable",
+    aiChartConfig: "__lunora_admin__:aiChartConfig",
+    aiGenerateSql: "__lunora_admin__:aiGenerateSql",
+    aiTableFilter: "__lunora_admin__:aiTableFilter",
     assignIssue: "__lunora_admin__:assignIssue",
+    backRelationCounts: "__lunora_admin__:backRelationCounts",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
     clearQueueMessages: "__lunora_admin__:clearQueueMessages",
     clearTable: "__lunora_admin__:clearTable",
@@ -51,6 +56,7 @@ export const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    lintSql: "__lunora_admin__:lintSql",
     listFlags: "__lunora_admin__:listFlags",
     listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
     listQueues: "__lunora_admin__:listQueues",
@@ -62,6 +68,7 @@ export const ADMIN_FUNCTIONS = {
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
+    getQueryInsights: "__lunora_admin__:getQueryInsights",
     getQueueMessages: "__lunora_admin__:getQueueMessages",
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
@@ -79,6 +86,8 @@ export const ADMIN_FUNCTIONS = {
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
     resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
+    schemaHistory: "__lunora_admin__:schemaHistory",
+    schemaVersion: "__lunora_admin__:schemaVersion",
     runAs: "__lunora_admin__:runAs",
     runMigration: "__lunora_admin__:runMigration",
     runSql: "__lunora_admin__:runSql",
@@ -550,6 +559,7 @@ export interface StudioFeaturesResult {
     flags: boolean;
     kv: boolean;
     mail: boolean;
+    notifications: boolean;
     payments: boolean;
     queues: boolean;
     scheduler: boolean;
@@ -1302,6 +1312,133 @@ export interface SqlConsoleResult {
     rowCount: number;
     rows: Record<string, unknown>[];
     truncated: boolean;
+}
+
+/**
+ * Payload of an `aiGenerateSql` admin call, mirroring `@lunora/do`'s
+ * `GenerateSqlResult`. A discriminated union on `degraded` so the ok arm's `sql`
+ * is guaranteed by the type rather than by convention.
+ */
+export type GenerateSqlResult = { degraded: false; sql: string } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** Payload of an `aiTableFilter` call — structured clauses, never SQL. */
+export type GenerateFilterResult = { clauses: FilterClause[]; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** A chart the editor can render, inferred from a result set's SHAPE only. */
+export interface AssistantChartConfig {
+    kind: "area" | "bar" | "line";
+    x: string;
+    y: string[];
+}
+
+/** Whether the deployment has an `AI` binding — the gate for every assistant affordance. */
+export interface AiAvailableResult {
+    available: boolean;
+}
+
+/** Payload of an `aiChartConfig` call. */
+export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
+export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
+
+/** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
+export interface BackRelation {
+    column: string;
+    table: string;
+}
+
+/** Counts for one reverse edge, keyed by parent id. An absent id has no children. */
+export interface BackRelationCounts extends BackRelation {
+    counts: Record<string, number>;
+}
+
+/** Payload of a `backRelationCounts` admin call. */
+export interface BackRelationCountsResult {
+    relations: BackRelationCounts[];
+}
+
+/** The ranges the query-insights selector offers. */
+export type QueryInsightRange = "1h" | "1m" | "5m" | "15m";
+
+/** One statement's activity within the selected range. Mirrors `@lunora/do`'s `QueryInsightEntry`. */
+export interface QueryInsightEntry {
+    avgDurationMs: number;
+    execCount: number;
+    normalizedSql: string;
+    /** Interpolated from a fixed latency histogram — accurate to its bucket's width, not exact. */
+    p50DurationMs: number;
+    p95DurationMs: number;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+
+/** One point on the throughput/latency charts. */
+export interface QueryInsightBucket {
+    avgDurationMs: number;
+    bucketMs: number;
+    execCount: number;
+}
+
+/**
+ * Payload of a `getQueryInsights` admin call. `capped` reports that
+ * the tracked-statement cap was hit, so the view can say "showing N of a capped
+ * set" instead of implying it shows everything.
+ */
+export interface QueryInsightsResult {
+    buckets: QueryInsightBucket[];
+    capped: boolean;
+    entries: QueryInsightEntry[];
+    trackedStatements: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaHistory` call: every schema version this
+ * shard has recorded, newest first, WITHOUT the snapshot payloads (they are tens
+ * of KB each — fetch one with `schemaVersion`).
+ */
+export interface SchemaVersionsResult {
+    versions: SchemaVersionSummary[];
+}
+
+/** One recorded schema version's identity + when the shard first ran it. */
+export interface SchemaVersionSummary {
+    /** Epoch millis the version was first seen on this shard. */
+    appliedAt: number;
+    /** Content hash of the snapshot — the version's identity. */
+    hash: string;
+    /** Monotonic apply order. */
+    seq: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaVersion` call: one version's full
+ * snapshot JSON. `version` is absent for an unknown hash (a stale deep link, or
+ * a version pruned past the ledger's retention cap) — an empty state, not an error.
+ */
+export interface SchemaVersionDetail {
+    version?: SchemaVersionSummary & { snapshotJson: string };
+}
+
+/**
+ * Payload of a `__lunora_admin__:lintSql` call, mirroring `@lunora/do`'s
+ * `SqlLintResult`: diagnostics to render in the editor plus the query plan the
+ * statement would use. Optional on the wire — a worker predating the RPC simply
+ * rejects the call, and the editor keeps its client-side diagnostics.
+ */
+export interface SqlLintResult {
+    diagnostics: SqlLintDiagnostic[];
+    plan: string[];
+}
+
+/** One server-produced editor diagnostic; `offset`/`length` index into the linted query. */
+export interface SqlLintDiagnostic {
+    length?: number;
+    message: string;
+    offset?: number;
+    severity: "error" | "warning";
+    source: "gate" | "plan" | "syntax";
 }
 
 /**

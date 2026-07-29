@@ -25,9 +25,9 @@ export const useAsyncSubmit = (): { busy: boolean; error: null | string; run: (a
                     await action();
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
                 }
+
+                setBusy(false);
             })(),
         );
     };

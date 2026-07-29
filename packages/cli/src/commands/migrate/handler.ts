@@ -15,7 +15,7 @@ import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
-import resolveAdminBaseUrl from "../../util/admin-url";
+import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -508,7 +508,7 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
         return undefined;
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
         return undefined;

@@ -109,9 +109,9 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         } catch (error) {
             setRunResult(null);
             setRunError(errorMessage(error));
-        } finally {
-            setRunning(false);
         }
+
+        setRunning(false);
     };
 
     const runMigration = (): void => {
@@ -131,7 +131,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     };
 
     return (
-        <div className="flex flex-col gap-3" data-testid="lunora-migrations">
+        <div className="flex flex-col gap-3 pt-4" data-testid="lunora-migrations">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="mg" />
@@ -208,7 +208,12 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                     />
                     <select
                         aria-label={t("Direction")}
-                        className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        // Mirrors `Input`'s tokens (h-8, px-2.5, text-xs) rather
+                        // than hand-rolling its own: this select had drifted to
+                        // h-9/text-sm, so one row held three different control
+                        // heights. There is no Select primitive to import yet —
+                        // when there is, this should use it.
+                        className="flex h-8 rounded-md border border-input bg-transparent px-2.5 py-1 text-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 dark:bg-input/30"
                         data-testid="mg-direction"
                         onChange={onDirectionChange}
                         value={direction}
@@ -228,7 +233,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                         {t("Dry run")}
                     </Label>
                     {dryRun ? (
-                        <Button data-testid="mg-run" disabled={running || !shardSettled} onClick={runMigration} size="sm" type="button">
+                        <Button data-testid="mg-run" disabled={running || !shardSettled} onClick={runMigration} type="button">
                             {running ? t("Running…") : t("Run")}
                         </Button>
                     ) : (

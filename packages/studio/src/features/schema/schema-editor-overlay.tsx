@@ -52,6 +52,7 @@ interface SchemaEditorOverlayProps {
  * Mounted only when `SchemaViewer` receives `schemaEditable` (set by the
  * loopback dev hosts), so it is absent from a deployed/read-only studio.
  */
+// react-doctor-disable-next-line react-doctor/no-giant-component -- ~381 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverlayProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
@@ -93,9 +94,9 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
             }
         } catch (error) {
             setResult({ kind: "error", message: error instanceof Error ? error.message : String(error) });
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const onSubmitTable = (): void => {
@@ -229,6 +230,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="sc-editor-column-form">
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="sc-editor-column-table">{t("Table name")}</Label>
+                            {/* react-doctor-disable-next-line react-doctor/control-has-associated-label -- labelled by the `<Label htmlFor="sc-editor-column-table">` directly above; the rule only recognises a nested or aria label */}
                             <select
                                 className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
                                 data-testid="sc-editor-column-table"
@@ -249,6 +251,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                         </div>
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="sc-editor-column-type">{t("Column type")}</Label>
+                            {/* react-doctor-disable-next-line react-doctor/control-has-associated-label -- labelled by the `<Label htmlFor="sc-editor-column-type">` directly above; the rule only recognises a nested or aria label */}
                             <select
                                 className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
                                 data-testid="sc-editor-column-type"
@@ -283,6 +286,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="sc-editor-index-form">
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="sc-editor-index-table">{t("Table name")}</Label>
+                            {/* react-doctor-disable-next-line react-doctor/control-has-associated-label -- labelled by the `<Label htmlFor="sc-editor-index-table">` directly above; the rule only recognises a nested or aria label */}
                             <select
                                 className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
                                 data-testid="sc-editor-index-table"

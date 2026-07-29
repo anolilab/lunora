@@ -129,9 +129,9 @@ export const LogDrainsPanel = (): ReactElement => {
             setResult({ kind: "success", latencyMs: Math.round(performance.now() - startedAt), status: response.status });
         } catch (error) {
             setResult({ kind: "error", message: errorMessage(error) });
-        } finally {
-            setSending(false);
         }
+
+        setSending(false);
     };
 
     const onSendTest = (): void => {

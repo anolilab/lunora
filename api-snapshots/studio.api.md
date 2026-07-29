@@ -13,7 +13,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 const ADMIN_FUNCTIONS: {
+    readonly aiAvailable: "__lunora_admin__:aiAvailable";
+    readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
+    readonly backRelationCounts: "__lunora_admin__:backRelationCounts";
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
     readonly clearTable: "__lunora_admin__:clearTable";
@@ -32,6 +37,7 @@ const ADMIN_FUNCTIONS: {
     readonly getFanoutMetrics: "__lunora_admin__:getFanoutMetrics";
     readonly getFunctionStats: "__lunora_admin__:getFunctionStats";
     readonly getIssues: "__lunora_admin__:getIssues";
+    readonly lintSql: "__lunora_admin__:lintSql";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listPushSubscriptions: "__lunora_admin__:listPushSubscriptions";
     readonly listQueues: "__lunora_admin__:listQueues";
@@ -43,6 +49,7 @@ const ADMIN_FUNCTIONS: {
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly getMetrics: "__lunora_admin__:getMetrics";
     readonly getPitrBookmark: "__lunora_admin__:getPitrBookmark";
+    readonly getQueryInsights: "__lunora_admin__:getQueryInsights";
     readonly getQueueMessages: "__lunora_admin__:getQueueMessages";
     readonly getRequestLog: "__lunora_admin__:getRequestLog";
     readonly getSecurityAudit: "__lunora_admin__:getSecurityAudit";
@@ -59,6 +66,8 @@ const ADMIN_FUNCTIONS: {
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
+    readonly schemaHistory: "__lunora_admin__:schemaHistory";
+    readonly schemaVersion: "__lunora_admin__:schemaVersion";
     readonly runAs: "__lunora_admin__:runAs";
     readonly runMigration: "__lunora_admin__:runMigration";
     readonly runSql: "__lunora_admin__:runSql";
@@ -266,7 +275,7 @@ const DEFAULT_LOCALE = "en";
 ### `DataBrowser` (const)
 
 ```ts
-const DataBrowser: ({ editable, globalTableNames, initialFilters, initialOrderBy, initialSearch, initialShardKey, onNavigateToGlobal, onSelectTable, onViewChange, pageSize: initialPageSize, queryBar, schemaSwitch, tableParam }: DataBrowserProps) => ReactElement;
+const DataBrowser: ({ editable, globalTableNames, initialFilters, initialOrderBy, initialPins, initialSearch, initialShardKey, onNavigateToGlobal, onSelectTable, onViewChange, pageSize: initialPageSize, queryBar, schemaSwitch, tableParam }: DataBrowserProps) => ReactElement;
 ```
 
 ### `DataBrowserProps` (interface)
@@ -277,6 +286,7 @@ interface DataBrowserProps {
     readonly globalTableNames?: ReadonlySet<string>;
     readonly initialFilters?: FilterClause[];
     readonly initialOrderBy?: DataView["orderBy"];
+    readonly initialPins?: string;
     readonly initialSearch?: string;
     readonly initialShardKey?: string;
     readonly onNavigateToGlobal?: (table: string, id: string) => void;
@@ -300,9 +310,10 @@ interface DataBrowserProps {
 ### `DataFilters` (const)
 
 ```ts
-const DataFilters: ({ columns, filters, onFiltersChange, onSearchChange, search }: {
+const DataFilters: ({ columns, filters, onAskAi, onFiltersChange, onSearchChange, search }: {
     columns: ReadonlyArray<string>;
     filters: ReadonlyArray<EditableFilter>;
+    onAskAi?: (prompt: string) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
     onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
     search: string;

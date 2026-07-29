@@ -13,6 +13,7 @@ import { resetFlowWarnings } from "../../src/core";
 import AuthUIProvider from "../../src/vue/AuthUIProvider.vue";
 import MagicLinkCard from "../../src/vue/MagicLinkCard.vue";
 import SignInCard from "../../src/vue/SignInCard.vue";
+import SignUpCard from "../../src/vue/SignUpCard.vue";
 import type { FakeClient } from "../fake-client";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
 
@@ -79,6 +80,30 @@ describe("vue flow gate", () => {
     });
 });
 
+describe("vue PasswordStrength", () => {
+    it("re-derives the checklist as the password is typed", async () => {
+        expect.assertions(4);
+
+        renderInProvider(SignUpCard, bareClient());
+
+        // Nothing to show for an empty field.
+        expect(document.querySelector(".lunora-auth-strength")).toBeNull();
+
+        await fireEvent.update(screen.getByLabelText("Password"), "short");
+
+        const unmet = document.querySelector(".lunora-auth-strength__item") as HTMLElement;
+
+        expect(unmet.className).not.toContain("lunora-auth-strength__item--met");
+        expect(unmet.textContent).toContain("At least 8 characters");
+
+        // The prop is a `computed`, not a setup-time snapshot, so the same node
+        // flips to met without a remount.
+        await fireEvent.update(screen.getByLabelText("Password"), "hunter2hunter2");
+
+        expect((document.querySelector(".lunora-auth-strength__item") as HTMLElement).className).toContain("lunora-auth-strength__item--met");
+    });
+});
+
 describe("vue theme", () => {
     it("applies only the changed tokens to the card", () => {
         expect.assertions(2);
@@ -91,7 +116,9 @@ describe("vue theme", () => {
                         {
                             authClient: bareClient().client,
                             nav: fakeNav(),
-                            theme: (defaults: ThemeTokens) => ({ ...defaults, primary: "rebeccapurple" }),
+                            theme: (defaults: ThemeTokens) => {
+                                return { ...defaults, primary: "rebeccapurple" };
+                            },
                         },
                         { default: () => h(SignInCard) },
                     ),

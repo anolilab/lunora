@@ -276,6 +276,7 @@ const LiveConnectionsCard = ({ subs }: { readonly subs: SubscriptionsResult | nu
 /** The latest durable admin operations (newest first). */
 const RecentActivityCard = ({ entries }: { readonly entries: ReadonlyArray<AuditEntry> }): ReactElement => {
     const t = useT();
+    // react-doctor-disable-next-line react-hooks-js/purity -- relative timestamps have to read the wall clock; the value is display-only and is meant to advance on every render
     const now = Date.now();
 
     return (

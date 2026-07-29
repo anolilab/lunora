@@ -33,6 +33,7 @@ import { migrateSearchState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { rankTableName, sortColumnName } from "./rank";
+import { recordSchemaVersion } from "./schema-history";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
@@ -207,7 +208,19 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
  * here. The DO sees them via the D1 adapter exposed elsewhere.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { runShardMigrations }`), per the repo's no-default-mixing convention
-export const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: boolean } = {}): void => {
+export const runShardMigrations = (
+    sql: SqlExec,
+    schema: SchemaLike,
+    options: { cdc?: boolean; schemaSnapshot?: { hash: string; json: string } } = {},
+): void => {
+    // Record this schema shape in the version ledger before touching any table.
+    // Codegen threads the snapshot it already computes for the deploy gate, so
+    // the ledger and the gate can never describe different shapes. Absent (a
+    // hand-built DO, or a project on an older codegen) simply means no history.
+    if (options.schemaSnapshot !== undefined) {
+        recordSchemaVersion(sql, options.schemaSnapshot.hash, options.schemaSnapshot.json);
+    }
+
     // Before any table: the search backfill records its progress here, and it
     // runs inside the per-table pass below.
     migrateSearchState(sql);

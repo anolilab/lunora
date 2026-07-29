@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import { generateValue } from "../src/generate-value";
 
+/** A fixed epoch so no assertion depends on the wall clock. */
+const NOW = 1_785_000_000_000;
+
 /** Build a validator annotated with JSON-Schema constraint metadata (mirrors how `.check()` attaches `constraints`). */
 const withConstraints = (validator: Validator, constraints: Record<string, unknown>): Validator => {
     const inner = validator as { _meta?: Record<string, unknown> };
@@ -19,7 +22,7 @@ describe("generateValue — string minLength", () => {
         expect.hasAssertions();
 
         const validator = withConstraints(v.string(), { minLength: 20 });
-        const value = generateValue(validator, "slug", "test-input");
+        const value = generateValue(validator, "slug", "test-input", NOW);
 
         expect(typeof value).toBe("string");
         expect((value as string).length).toBeGreaterThanOrEqual(20);
@@ -29,7 +32,7 @@ describe("generateValue — string minLength", () => {
         expect.hasAssertions();
 
         const validator = withConstraints(v.string(), { maxLength: 5, minLength: 3 });
-        const value = generateValue(validator, "code", "test-input");
+        const value = generateValue(validator, "code", "test-input", NOW);
 
         expect(typeof value).toBe("string");
         expect((value as string).length).toBeGreaterThanOrEqual(3);
@@ -41,7 +44,7 @@ describe("generateValue — string minLength", () => {
 
         const validator = withConstraints(v.string(), { maxLength: 3, minLength: 10 });
 
-        expect(() => generateValue(validator, "code", "test-input")).toThrow(/minLength.*maxLength/u);
+        expect(() => generateValue(validator, "code", "test-input", NOW)).toThrow(/minLength.*maxLength/u);
     });
 });
 
@@ -51,14 +54,14 @@ describe("generateValue — number constraints", () => {
 
         const validator = withConstraints(v.number(), { maximum: 10, minimum: 100 });
 
-        expect(() => generateValue(validator, "score", "test-input")).toThrow(/minimum.*maximum/u);
+        expect(() => generateValue(validator, "score", "test-input", NOW)).toThrow(/minimum.*maximum/u);
     });
 
     it("uses a float when the bounds are non-integers", () => {
         expect.hasAssertions();
 
         const validator = withConstraints(v.number(), { maximum: 1, minimum: 0.5 });
-        const value = generateValue(validator, "ratio", "test-input") as number;
+        const value = generateValue(validator, "ratio", "test-input", NOW) as number;
 
         expect(typeof value).toBe("number");
         expect(value).toBeGreaterThanOrEqual(0.5);
@@ -72,7 +75,7 @@ describe("generateValue — record key validator", () => {
 
         const keyValidator = withConstraints(v.string(), { minLength: 8 }) as unknown as Validator<string>;
         const validator = v.record(keyValidator, v.boolean());
-        const value = generateValue(validator, "flags", "test-input") as Record<string, unknown>;
+        const value = generateValue(validator, "flags", "test-input", NOW) as Record<string, unknown>;
         const keys = Object.keys(value);
 
         expect(keys.length).toBeGreaterThan(0);
@@ -85,7 +88,7 @@ describe("generateValue — bigint wire representation", () => {
     it("emits a plain number (not BigInt) so the value is JSON-serialisable", () => {
         expect.hasAssertions();
 
-        const value = generateValue(v.bigint(), "count", "test-input");
+        const value = generateValue(v.bigint(), "count", "test-input", NOW);
 
         expect(typeof value).toBe("number");
         // Must be an integer and within the safe integer range.
@@ -101,7 +104,7 @@ describe("generateValue — bytes wire representation", () => {
     it("emits a number[] that survives JSON round-trip without a custom replacer", () => {
         expect.hasAssertions();
 
-        const value = generateValue(v.bytes(), "data", "test-input");
+        const value = generateValue(v.bytes(), "data", "test-input", NOW);
 
         expect(Array.isArray(value)).toBe(true);
         expect((value as number[]).every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)).toBe(true);
@@ -118,10 +121,64 @@ describe("generateValue — bytes wire representation", () => {
     it("produces a revivable ArrayBuffer via Uint8Array.from for the testing adapter", () => {
         expect.hasAssertions();
 
-        const value = generateValue(v.bytes(), "payload", "test-input") as number[];
+        const value = generateValue(v.bytes(), "payload", "test-input", NOW) as number[];
         const { buffer } = Uint8Array.from(value);
 
         expect(buffer).toBeInstanceOf(ArrayBuffer);
         expect(new Uint8Array(buffer)).toHaveLength(value.length);
+    });
+});
+
+describe("generateValue — time-named number columns", () => {
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+    it.each(["createdAt", "updatedAt", "publishedAt", "expiresAt", "eventTimestamp", "startDate", "deletedSince", "validUntil"])(
+        "seeds %s as an epoch-ms timestamp inside the recent window",
+        (field) => {
+            expect.assertions(2);
+
+            const value = generateValue(v.number(), field, `${field}-input`, NOW) as number;
+
+            expect(value).toBeLessThanOrEqual(NOW);
+            expect(value).toBeGreaterThanOrEqual(NOW - SIX_MONTHS_MS);
+        },
+    );
+
+    it.each([
+        "rating",
+        "latitude",
+        "longitude",
+        "category",
+        "quantity",
+        "format",
+        "timeout",
+        "candidateId",
+        "updateCount",
+        "seat",
+        "responseTime",
+        "loadTime",
+        "elapsedTime",
+    ])("leaves %s as a plain number", (field) => {
+        expect.assertions(1);
+
+        // Matching is on the last WORD: `format` ends in "at", `candidateId`
+        // contains "date", `timeout` contains "time" — a latitude of 1.78e12
+        // is not a latitude.
+        expect(generateValue(v.number(), field, `${field}-input`, NOW)).toBeLessThanOrEqual(1000);
+    });
+
+    it("lets declared bounds win over the name", () => {
+        expect.assertions(1);
+
+        // A schema that says 0..5 means a rating, whatever the column is called.
+        const validator = withConstraints(v.number(), { maximum: 5, minimum: 0 });
+
+        expect(generateValue(validator, "createdAt", "bounded-input", NOW)).toBeLessThanOrEqual(5);
+    });
+
+    it("is deterministic for the same seed input and clock", () => {
+        expect.assertions(1);
+
+        expect(generateValue(v.number(), "createdAt", "same-input", NOW)).toBe(generateValue(v.number(), "createdAt", "same-input", NOW));
     });
 });

@@ -1,0 +1,62 @@
+<script setup lang="ts">
+// The accounts signed in on *this device*, with switch and sign-out-just-this.
+//
+// Not <SessionsCard>, which lists this account's sessions across every device.
+// The two are a keystroke apart in better-auth's API and mean opposite things.
+import { computed } from "vue";
+
+import { isFlowEnabled } from "../core/flow-gate";
+import { createDeviceSessionsController } from "../core/multi-session";
+import AuthCard from "./AuthCard.vue";
+import FormBanner from "./FormBanner.vue";
+import { useAuthUIContextRef } from "./provider";
+import Skeleton from "./Skeleton.vue";
+import { useController } from "./use-controller";
+import UserView from "./UserView.vue";
+
+const context = useAuthUIContextRef();
+const t = context.value.localization;
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
+// would stay frozen on the pre-discovery answer. See `provider.ts`.
+const enabled = computed(() => isFlowEnabled(context.value, "multiSession", "MultiSessionCard"));
+// Read inside the factory rather than captured: `useController` re-runs it when
+// the discovered context lands, and a gated-off card must not fire the resource
+// auto-load just to render nothing.
+const { actions, state } = useController((context_) => createDeviceSessionsController(context_, { autoLoad: enabled.value }));
+
+// Takes the optional token straight from the row: the template can't narrow,
+// so the guard lives here rather than as a cast at the call site.
+const onSetActive = (token?: string): void => {
+    void actions.setActive(token ?? "");
+};
+
+const onRevoke = (token?: string): void => {
+    void actions.revoke(token ?? "");
+};
+</script>
+
+<template>
+    <AuthCard v-if="enabled" :title="t.multiSessionTitle">
+        <FormBanner :error="state.error" />
+        <Skeleton v-if="state.loading" :rows="2" />
+        <ul v-else class="lunora-auth-list">
+            <li v-for="entry in state.items" :key="entry.session?.token ?? entry.user?.id" class="lunora-auth-list__item">
+                <UserView compact :user="entry.user" />
+                <span class="lunora-auth-list__actions">
+                    <button
+                        class="lunora-auth-button lunora-auth-button--secondary"
+                        type="button"
+                        :disabled="state.busy"
+                        @click="onSetActive(entry.session?.token)"
+                    >
+                        {{ t.switchAccount }}
+                    </button>
+                    <button class="lunora-auth-button lunora-auth-button--danger" type="button" :disabled="state.busy" @click="onRevoke(entry.session?.token)">
+                        {{ t.signOut }}
+                    </button>
+                </span>
+            </li>
+            <li v-if="state.items.length === 0" class="lunora-auth-list__empty">{{ t.multiSessionEmpty }}</li>
+        </ul>
+    </AuthCard>
+</template>

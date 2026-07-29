@@ -1,6 +1,7 @@
 "use client";
 
 import type { MotionValue } from "motion/react";
+// react-doctor-disable-next-line react-doctor/use-lazy-motion -- `m` + LazyMotion needs a provider above every consumer; this package exports individual panels that hosts mount without the studio shell, so a missing provider would throw at runtime in someone else's app
 import { motion, useMotionValue, useMotionValueEvent, useSpring, useTransform } from "motion/react";
 import type { ComponentProps } from "react";
 import * as React from "react";
@@ -212,15 +213,20 @@ const EvilBrush = ({
 
     useEffect(() => {
         if (!isControlled) {
-            setInternalRange((previous) => {
-                const adjusted = {
-                    startIndex: Math.min(previous.startIndex, Math.max(0, totalPoints - 1)),
-                    endIndex: Math.min(previous.endIndex, Math.max(0, totalPoints - 1)),
-                };
-                lastCommittedRef.current = adjusted;
-                return adjusted;
-            });
+            // Computed OUTSIDE the updater, which is now pure. `lastCommittedRef`
+            // tracks `internalRange` exactly — every `setInternalRange` in this
+            // file writes both — so it supplies the previous range without a
+            // ref write inside an updater React may run more than once.
+            const maxIndex = Math.max(0, totalPoints - 1);
+            const adjusted = {
+                startIndex: Math.min(lastCommittedRef.current.startIndex, maxIndex),
+                endIndex: Math.min(lastCommittedRef.current.endIndex, maxIndex),
+            };
+
+            lastCommittedRef.current = adjusted;
+            setInternalRange(adjusted);
         }
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `totalPoints` IS `data.length`, computed above and listed in the deps
     }, [totalPoints, isControlled]);
 
     // ── Clamping & committing ───────────────────────────────────────────────
@@ -290,6 +296,8 @@ const EvilBrush = ({
         if (isControlled && !isDragging) {
             const syncedRange = { startIndex: controlledStart, endIndex: controlledEnd };
 
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- controlled/uncontrolled sync: mirrors the controlled range while not dragging, and there is no render-derivable value to use instead
+            // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change -- controlled/uncontrolled sync: the internal range has to follow the controlled prop while the user is not dragging, and there is no render-derivable value to use instead
             setInternalRange(syncedRange);
             lastCommittedRef.current = syncedRange;
         }
@@ -461,7 +469,9 @@ const MiniChart = ({
     strokeVariant?: "solid" | "dashed" | "animated-dashed";
     variant: EvilBrushVariant;
 }): React.ReactElement => {
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the chart's series config
     const gradients = Object.entries(chartConfig)
+        // react-doctor-disable-next-line react-doctor/js-set-map-lookups -- `keys` is the chart's series list — a handful of entries, walked once at render, so a Set costs more than it saves
         .filter(([key]) => keys.includes(key))
         .map(([dataKey, config]) => {
             return {
@@ -629,6 +639,7 @@ function useEvilBrush<TData extends Record<string, unknown>>({
     const deferredRange = React.useDeferredValue(range);
 
     useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- resets the window when the dataset length changes; a key-reset would remount the chart and drop its drag state
         setRange({
             startIndex: 0,
             endIndex: Math.max(0, data.length - 1),

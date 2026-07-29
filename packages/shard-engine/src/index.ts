@@ -278,3 +278,4 @@ export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";
+export { SCHEMA_HISTORY_MAX_VERSIONS, readSchemaHistory, readSchemaVersion, recordSchemaVersion } from "./schema-history";

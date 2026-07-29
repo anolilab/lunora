@@ -82,9 +82,19 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
         fireAndForget(fetchColumns());
     };
 
-    // Referentially stable while the data is unchanged, so consumers (the
-    // autocomplete's `refresh` callback and the panel's probe-refresh effect)
-    // can depend on it without re-firing after every render.
+    // LOAD-BEARING memo, kept deliberately. `schema` is a dependency of the
+    // autocomplete's `refresh` callback and, through it, of the panel's
+    // probe-refresh effect. A fresh object per render churns both identities, the
+    // effect fires on every render, and Escape stops dismissing the popover — it
+    // reopens on the very next render with the same suggestions at the same
+    // caret.
+    //
+    // React Compiler WOULD hold this stable in the packem build, but the vitest
+    // `component` project runs the JSX through esbuild with no compiler
+    // transform, and that suite is what gates CI — the same reasoning already
+    // recorded on `refresh`'s own `useCallback` in `sql-autocomplete-ui.tsx`.
+    // Deleting this one while keeping that one defeats it.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: see above; the CI suite runs without the compiler transform
     const schema = useMemo(() => {
         return { columns, tables };
     }, [columns, tables]);
