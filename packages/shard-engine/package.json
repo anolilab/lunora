@@ -50,16 +50,17 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage",
-        "fallow:audit": "fallow audit",
-        "fallow:dead-code": "fallow dead-code",
-        "fallow:health": "fallow health --score"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.7",
