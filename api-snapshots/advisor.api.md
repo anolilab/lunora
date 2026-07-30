@@ -840,6 +840,7 @@ type BaselineComparison = {
     comparable: true;
     dropped: ProcedureDelta[];
     newFailing: string[];
+    worsened: string[];
     projectRegressed: boolean;
     regressed: boolean;
     scoreDelta: number;

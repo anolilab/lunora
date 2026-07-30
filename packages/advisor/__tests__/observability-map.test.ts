@@ -315,6 +315,21 @@ describe("compareToBaseline", () => {
         expect(compareToBaseline(after, before)).toMatchObject({ comparable: true, projectRegressed: true, regressed: true });
     });
 
+    it("flags a rule that grew to more call sites even though the score is unchanged", () => {
+        expect.assertions(3);
+
+        const sites = (count: number): Finding[] =>
+            Array.from({ length: count }, (_, index) => finding("action_fetch_ssrf", "ERROR", { exportName: "a", file: "f", line: index }));
+
+        const before = mapOf(sites(1), procedures);
+        const after = mapOf(sites(6), procedures);
+
+        // A rule is charged once however many times it fires, so neither score moves.
+        expect(after.score).toBe(before.score);
+        expect(compareToBaseline(after, before)).toMatchObject({ comparable: true, worsened: ["f#a"] });
+        expect(compareToBaseline(after, before).comparable === true && compareToBaseline(after, before).regressed).toBe(true);
+    });
+
     it("refuses to compare across artifact versions instead of reporting a clean run", () => {
         expect.assertions(2);
 

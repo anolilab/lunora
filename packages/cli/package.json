@@ -67,6 +67,7 @@
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.21",
+        "@lunora/advisor": "1.0.0-alpha.54",
         "@lunora/bindings": "1.0.0-alpha.13",
         "@lunora/codegen": "1.0.0-alpha.76",
         "@lunora/config": "1.0.0-alpha.102",

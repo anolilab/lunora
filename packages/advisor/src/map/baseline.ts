@@ -1,5 +1,5 @@
 import { byCodepoint, MAP_VERSION } from "./score-advisor";
-import type { AdvisorMap, Coverage } from "./types";
+import type { AdvisorMap, CheckResult, Coverage } from "./types";
 
 /** Every verdict `Coverage` may take, for validating an artifact read off disk. */
 const COVERAGE_VALUES: ReadonlySet<string> = new Set<Coverage>(["clean", "exempt", "failing", "warned"]);
@@ -35,13 +35,34 @@ type BaselineComparison =
           dropped: ProcedureDelta[];
           /** Procedures that are `failing` now and were not before — new rows included. */
           newFailing: string[];
-          /** `true` when the project bucket gained rules, even if its saturated score did not move. */
+          /**
+           * Procedures whose score held but whose findings grew — a new rule fired,
+           * or an existing one fired at more call sites. Scoring charges a rule once
+           * however many times it fires, so without this signal "same rule, five more
+           * violations" would look identical to the baseline.
+           */
+          worsened: string[];
+          /** `true` when the project bucket gained rules or occurrences, even if its saturated score did not move. */
           projectRegressed: boolean;
           /** `true` when any signal above fired. */
           regressed: boolean;
           /** Current global score less the baseline's; negative is a regression. */
           scoreDelta: number;
       };
+
+/**
+ * Did this bucket's findings grow? True when a rule fired that wasn't there
+ * before, or an existing rule fired at more call sites.
+ *
+ * Needed because the score charges a rule once however many times it fires: five
+ * new SSRF sites under an already-firing rule move neither the procedure score
+ * nor the saturated project score, and would otherwise pass the gate untouched.
+ */
+const checksWorsened = (before: ReadonlyArray<CheckResult>, after: ReadonlyArray<CheckResult>): boolean => {
+    const previous = new Map(before.map((check) => [check.name, check.occurrences]));
+
+    return after.some((check) => check.occurrences > (previous.get(check.name) ?? 0));
+};
 
 /** A finite number, i.e. one that can be compared and round-tripped through JSON. */
 const isScore = (value: unknown): boolean => typeof value === "number" && Number.isFinite(value);
@@ -71,12 +92,13 @@ const isProjectBucket = (value: unknown): boolean => {
 /**
  * Diff a freshly-scored map against a committed one.
  *
- * Four independent regression signals, any of which fails a gate: the global
+ * Five independent regression signals, any of which fails a gate: the global
  * score fell, a procedure that existed before got worse, a procedure started
- * failing, or the project bucket gained rules. The per-procedure signals matter
- * because a refactor can leave the global mean flat while gutting one handler;
- * the project-rule-count signal matters because that bucket's score saturates at
- * 0, after which new schema errors would otherwise be free.
+ * failing, a procedure's findings grew without its score moving, or the project
+ * bucket gained findings. The per-procedure signals matter because a refactor can
+ * leave the global mean flat while gutting one handler; the growth signals matter
+ * because a rule is charged once however many times it fires, and the project
+ * score saturates at 0 — without them, new violations would be free.
  */
 const compareToBaseline = (current: AdvisorMap, baseline: AdvisorMap): BaselineComparison => {
     if (baseline.version !== current.version) {
@@ -86,6 +108,7 @@ const compareToBaseline = (current: AdvisorMap, baseline: AdvisorMap): BaselineC
     const before = new Map(baseline.procedures.map((entry) => [entry.id, entry]));
     const dropped: ProcedureDelta[] = [];
     const newFailing: string[] = [];
+    const worsened: string[] = [];
 
     for (const entry of current.procedures) {
         if (entry.coverage === "exempt") {
@@ -101,21 +124,27 @@ const compareToBaseline = (current: AdvisorMap, baseline: AdvisorMap): BaselineC
         if (entry.coverage === "failing" && previous?.coverage !== "failing") {
             newFailing.push(entry.id);
         }
+
+        if (checksWorsened(previous?.checks ?? [], entry.checks)) {
+            worsened.push(entry.id);
+        }
     }
 
     dropped.sort((a, b) => byCodepoint(a.id, b.id));
     newFailing.sort(byCodepoint);
+    worsened.sort(byCodepoint);
 
     const scoreDelta = current.score - baseline.score;
-    const projectRegressed = current.project.checks.length > baseline.project.checks.length;
+    const projectRegressed = checksWorsened(baseline.project.checks, current.project.checks);
 
     return {
         comparable: true,
         dropped,
         newFailing,
         projectRegressed,
-        regressed: scoreDelta < 0 || dropped.length > 0 || newFailing.length > 0 || projectRegressed,
+        regressed: scoreDelta < 0 || dropped.length > 0 || newFailing.length > 0 || worsened.length > 0 || projectRegressed,
         scoreDelta,
+        worsened,
     };
 };
 

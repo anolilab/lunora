@@ -79,6 +79,7 @@ interface CodegenOptions {
 
 ```ts
 interface CodegenResult {
+    advisorContext?: LintContext;
     advisories: ReadonlyArray<Finding>;
     agents: ReadonlyArray<AgentIR>;
     containers: ReadonlyArray<ContainerIR>;
