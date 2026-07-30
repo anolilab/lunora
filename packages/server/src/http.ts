@@ -15,12 +15,21 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
 /**
  * Context handed to an HTTP action handler. A narrower view of {@link ActionContext}:
  * HTTP actions run in the worker (the "action runtime"), separate from the
- * transactional store, so there is no direct `db` / `vectors` / `scheduler` /
- * `storage` surface — reach the data layer through `runQuery` / `runMutation` /
+ * transactional store, so there is no direct `db` / `vectors` / `storage`
+ * surface — reach the data layer through `runQuery` / `runMutation` /
  * `runAction`, which forward to the owning shard.
+ *
+ * `scheduler` IS present (it talks to the scheduler DO, not the shard) but is
+ * optional: it exists only when the app declared `.scheduler(...)` on the
+ * generated app builder. "Receive webhook → enqueue the real work → return 200"
+ * is what HTTP actions are for, so omitting it forced every app to hand-roll a
+ * hop through a mutation plus a closed allow-list of target strings
+ * (LUNORA_ISSUES #28).
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
-type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+    readonly scheduler?: ActionContext["scheduler"];
+};
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;

@@ -904,6 +904,7 @@ interface HttpActionContext {
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
+    scheduler?: SchedulerContext;
 }
 ```
 

@@ -548,7 +548,9 @@ interface GeoPointInput {
 ### `HttpActionCtx` (type)
 
 ```ts
-type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+    readonly scheduler?: ActionCtx["scheduler"];
+};
 ```
 
 ### `HttpActionHandler` (type)
