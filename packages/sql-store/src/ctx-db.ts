@@ -99,6 +99,7 @@ import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
 import { migrateSearchState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
+import { createPointReadBatcher } from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryRun, serializeColumnValue } from "./sql-exec";
 import { effectiveColumnKind } from "./value-codec";
@@ -1954,6 +1955,29 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             tableName: predicateTable,
         });
 
+    /**
+     * Point-read coalescer for `get`. Rows come back keyed by id so a missing
+     * id resolves to `null` rather than shifting the result order.
+     */
+    const pointReads = createPointReadBatcher<Record<string, unknown>>(async (table, ids) => {
+        const list = sql.join(
+            ids.map((value) => sql`${value}`),
+            sql`, `,
+        );
+        const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(table)} WHERE ${sql.identifier("id")} IN (${list})`);
+        const byId = new Map<string, Record<string, unknown>>();
+
+        for (const row of rows) {
+            const { id } = row;
+
+            if (typeof id === "string") {
+                byId.set(id, row);
+            }
+        }
+
+        return byId;
+    });
+
     const writer: DatabaseWriterLike = {
         // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
@@ -2420,9 +2444,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
-            const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`);
-
-            return decodeRow(definition, rows[0]);
+            // Coalesced: every `get` issued in this tick against `tableName`
+            // becomes ONE `IN (…)` round-trip. `Promise.all(ids.map(ctx.db.get))`
+            // is the idiomatic join, and against a remote store each of those
+            // would otherwise be its own network hop.
+            return decodeRow(definition, await pointReads.load(tableName, id));
         },
 
         async groupBy(tableName, groupOptions: GroupByOptions): Promise<ReadonlyArray<GroupByEntry>> {
