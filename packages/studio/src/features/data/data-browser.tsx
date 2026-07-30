@@ -23,8 +23,6 @@ import { RowDetailDrawer } from "./row-detail";
 import { ShardExplorer } from "./shard-explorer";
 import { TableListSidebar } from "./table-list-sidebar";
 
-/** Browser-local store for per-table pinned columns. */
-
 /** Browser-local store for per-table enabled reverse-relation columns. */
 const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
 

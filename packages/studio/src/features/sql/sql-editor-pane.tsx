@@ -1,4 +1,4 @@
-import type { ReactElement, RefObject } from "react";
+import type { CSSProperties, ReactElement, RefObject } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
@@ -10,16 +10,16 @@ import type { SqlDiagnostic } from "./sql-diagnostics";
 import { DiagnosticsOverlay, DiagnosticsRow } from "./sql-diagnostics-ui";
 
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
-const GUTTER_STYLE = { minWidth: "2.75rem", paddingInline: "0.5rem" };
+const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5rem" };
 
 /**
  * The line-numbered editor pane: the assistant bar, the gutter, the textarea with
  * its diagnostics overlay and completion popover, and the problems row.
  *
  * All of its state lives in the panel — this is the markup plus the three refs the
- * scroll-sync and caret math need. The refs are grouped because they are only ever
- * passed together, and the handlers likewise: the pane wires them to the textarea
- * and reads none of them itself.
+ * scroll-sync and caret math need. The handlers arrive as one object because the
+ * pane only forwards them to the textarea and reads none of them; the refs do NOT,
+ * for the reason noted on the props below.
  */
 const SqlEditorPane = ({
     assistant,

@@ -96,7 +96,7 @@ const useDataViewPreferences = ({
     // loaded once. Drives the "Mask sensitive columns" preview: a render-only
     // redaction of what a `.use(mask(...))` caller would see, plus the per-column
     // "masked" header chips. The operator keeps full DB access — this is a preview,
-
+    // not enforcement.
     const maskPolicies = useMaskPolicies();
     // Default the preview ON so plaintext secrets are hidden out of the box (the
     // operator reveals them by toggling). The toggle is only rendered when the

@@ -1,3 +1,11 @@
+/*
+ * Shared shell + dialog vocabulary for the organization page.
+ *
+ * `SectionCard` is the frame all four sections render inside, and `DialogState`
+ * is the one channel they report their intents through — both belong to the page
+ * as a whole rather than to any single section.
+ */
+
 import type { ReactElement, ReactNode } from "react";
 
 import { Card, CardContent } from "../../components/ui/card";
@@ -11,14 +19,6 @@ interface Column {
     readonly head: string;
     readonly render: (row: Row) => ReactNode;
 }
-
-/*
- * Shared shell + dialog vocabulary for the organization page.
- *
- * `SectionCard` is the frame all four sections render inside, and `DialogState`
- * is the one channel they report their intents through — both belong to the page
- * as a whole rather than to any single section.
- */
 
 /** A titled card with an optional header action (the section wrapper for each management list). */
 const SectionCard = ({ action, children, heading, testId }: { action?: ReactNode; children: ReactNode; heading: string; testId: string }): ReactElement => (

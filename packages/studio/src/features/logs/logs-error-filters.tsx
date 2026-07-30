@@ -7,8 +7,9 @@ import type { LogLevel } from "../../lib/admin";
 import { cn } from "../../lib/utils";
 
 /**
- * One level chip in the multi-select. Extracted so each chip owns a stable,
- * `useCallback`-bound click handler (no fresh closure per render of the map).
+ * One level chip in the multi-select. Extracted so each chip closes over its own
+ * `level` and the parent's map body stays a single element — the alternative is an
+ * inline arrow per chip, which reads worse and buries the toggle logic in JSX.
  */
 const LevelToggle = ({ level, onToggle, selected }: LevelToggleProps): ReactElement => {
     const onClick = (): void => {

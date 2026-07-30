@@ -1,13 +1,15 @@
 /**
- * Metric formatting shared by the metrics panel and its extracted surfaces.
+ * How the metrics surfaces render a duration and a hit rate.
  *
- * Its own module so the panel, the single-shard readout, and the cross-shard
- * rollup agree on how a duration and a hit rate read, instead of each carrying
- * a copy of the thresholds.
+ * Its own module so the formatting is testable without a render — these are pure
+ * branch tables, and asserting `999μs` vs `1.0ms` through a component was the
+ * reason those boundaries went unchecked. Only the single-shard readout imports it
+ * today; the rollup's hit rate arrives already reduced to a fraction, so it does
+ * not share `hitRate`'s hits/misses inputs.
  */
 
-/** Render an elapsed-millisecond duration as `1h 2m`, `3m 4s`, or `5s`. */
-const formatDuration = (ms: number): string => {
+/** A span of wall-clock time (uptime, age) as `1h 2m`, `3m 4s`, or `5s`. */
+const formatElapsed = (ms: number): string => {
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -31,8 +33,8 @@ const hitRate = (hits: number, misses: number): string => {
     return total === 0 ? "—" : `${((hits / total) * 100).toFixed(1)}%`;
 };
 
-/** A duration for display: `—` when there is none, microseconds under a millisecond. */
-const formatMs = (ms: number): string => {
+/** A per-operation latency: `—` when there is none, microseconds under a millisecond. */
+const formatLatency = (ms: number): string => {
     if (ms <= 0) {
         return "—";
     }
@@ -48,4 +50,4 @@ const formatMs = (ms: number): string => {
     return `${(ms / 1000).toFixed(2)}s`;
 };
 
-export { formatDuration, formatMs, hitRate };
+export { formatElapsed, formatLatency, hitRate };

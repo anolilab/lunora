@@ -31,9 +31,10 @@ const rateLevel = (rate: number, warn: number, crit: number): SloLevel => {
     return rate >= warn ? "warn" : "ok";
 };
 
-/** SLO thresholds (fraction 0..1). Below `warn` is healthy; at/above `crit` is breaching. */
+/** Request error rate (fraction 0..1) at which the SLO reads "warn". */
 const REQUEST_ERROR_WARN = 0.01;
 
+/** Request error rate at which it reads "crit" — at or above this is breaching. */
 const REQUEST_ERROR_CRIT = 0.05;
 
 export type { SloLevel };

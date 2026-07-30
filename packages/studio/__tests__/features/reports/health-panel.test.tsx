@@ -222,12 +222,14 @@ describe("healthPanel", () => {
         // telling the operator the volume, which is the signal that matters during an
         // incident — a badge that saturates at the cap says nothing. The case above
         // stays under the cap, so it passes either way and cannot catch this.
-        const many: LogEntry[] = Array.from({ length: 8 }, (_, index) => {return {
-            functionPath: "messages:send",
-            level: "error" as const,
-            message: `boom ${index.toString()}`,
-            timestamp: 1_700_000_000_000 + index * 1000,
-        }});
+        const many: LogEntry[] = Array.from({ length: 8 }, (_, index) => {
+            return {
+                functionPath: "messages:send",
+                level: "error" as const,
+                message: `boom ${index.toString()}`,
+                timestamp: 1_700_000_000_000 + index * 1000,
+            };
+        });
 
         render(renderPanel(clientWith(many)));
 

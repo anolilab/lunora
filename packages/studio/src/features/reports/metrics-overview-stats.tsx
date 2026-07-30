@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { useT } from "../../i18n/i18n-context";
 import type { ShardMetrics } from "../../lib/admin";
 import { formatBytes } from "../../lib/internal";
-import { formatDuration, formatMs, hitRate } from "./metrics-format";
+import { formatElapsed, formatLatency, hitRate } from "./metrics-format";
 import { Sparkline } from "./sparkline";
 import { StatCard } from "./stat-card";
 
@@ -70,10 +70,10 @@ const MetricsOverviewStats = ({
                 }
             />
             <StatCard
-                footer={latencyPercentiles.p90 > 0 ? `P90 ${formatMs(latencyPercentiles.p90)}` : undefined}
+                footer={latencyPercentiles.p90 > 0 ? `P90 ${formatLatency(latencyPercentiles.p90)}` : undefined}
                 label={t("P95 latency")}
                 testId="mt-p95"
-                value={latencyPercentiles.p95 > 0 ? formatMs(latencyPercentiles.p95) : "—"}
+                value={latencyPercentiles.p95 > 0 ? formatLatency(latencyPercentiles.p95) : "—"}
             />
             <StatCard
                 footer={metrics.cache === null ? undefined : `${metrics.cache.entries.toLocaleString()} ${t("cache entries")}`}
@@ -82,7 +82,7 @@ const MetricsOverviewStats = ({
                 value={formatBytes(metrics.databaseSize)}
             />
             <StatCard label={t("Shard")} testId="mt-shard" value={metrics.shard} />
-            <StatCard label={t("Uptime")} testId="mt-uptime" value={formatDuration(metrics.uptimeMs)} />
+            <StatCard label={t("Uptime")} testId="mt-uptime" value={formatElapsed(metrics.uptimeMs)} />
             <StatCard
                 label={t("Cache hit rate")}
                 testId="mt-cache"

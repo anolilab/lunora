@@ -24,6 +24,7 @@ import { LogsErrorFilters } from "./logs-error-filters";
 import { LogsRequestFilters } from "./logs-request-filters";
 import type { LogSummary, SummaryBucket } from "./logs-summary";
 import { LogsSummary } from "./logs-summary";
+import type { LogsView } from "./logs-view-bar";
 import { LogsViewBar } from "./logs-view-bar";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
@@ -172,7 +173,6 @@ const entriesOf = <T,>(result: unknown): T[] => {
 };
 
 /** Which feed the panel shows: the durable per-request log, or the in-memory error buffer. */
-type LogsView = "archive" | "errors" | "requests";
 
 /**
  * Build the server-side `getRequestLog` filter args, dropping empty fields so an
@@ -204,12 +204,6 @@ const buildRequestQuery = (filters: {
 
     return query;
 };
-
-/**
- * The seven log severities, in ascending order, for the multi-select control.
- * Sourced from the bundler-inlined `shared/` contract so the chip list and the
- * grouped summary stay in step with the `ctx.log` ramp itself.
- */
 
 /** A relative time-range window over the Errors buffer, or `all` (no bound). */
 type TimeRange = "15m" | "1h" | "5m" | "all";
@@ -616,4 +610,4 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
 export { filterLogs, summarizeLogs };
 export type { LogFilterCriteria, LogsPanelProps, TimeRange };
 
-export { type LogSummary, type SummaryBucket } from "./logs-summary";
+export { type LogsView } from "./logs-view-bar";

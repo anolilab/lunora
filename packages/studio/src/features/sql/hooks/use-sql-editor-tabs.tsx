@@ -2,14 +2,11 @@ import type { CSSProperties } from "react";
 import { useState } from "react";
 
 import type { AssistantChartConfig, SqlConsoleResult } from "../../../lib/admin";
-import type { SqlTab } from "../sql-tabs";
+import type { ResultTab, SqlTab } from "../sql-tabs";
 import { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, isDirty, makeTab, MAX_TABS, tabsClosedBy, usePersistedTabs } from "../sql-tabs";
 
 /** Which bulk close the tab context menu is offering / confirming. */
 type BulkClose = "all" | "others" | "right";
-
-/** Which results sub-pane is shown. */
-type ResultTab = "chart" | "explain" | "results";
 
 /**
  * One editor tab's ephemeral output — the last run's result/error, the statement
@@ -41,6 +38,31 @@ interface TabMenu {
     readonly x: number;
     readonly y: number;
 }
+
+/**
+ * The subset of {@link SqlEditorTabsModel} the tab strip renders. Named here rather
+ * than restated at the call site, so the strip cannot quietly acquire the panel's
+ * write path into tab state.
+ */
+type SqlTabStripModel = Pick<
+    SqlEditorTabsModel,
+    | "activeTab"
+    | "addEditorTab"
+    | "cancelBulk"
+    | "closeEditorTab"
+    | "closeTabMenu"
+    | "confirmBulk"
+    | "menuStyle"
+    | "onBackdropContextMenu"
+    | "onCloseAll"
+    | "onCloseOthers"
+    | "onCloseToRight"
+    | "openTabMenu"
+    | "pendingBulk"
+    | "renameTab"
+    | "tabMenu"
+    | "tabs"
+>;
 
 /** Everything {@link useSqlEditorTabs} hands back — the strip's model and the panel's write path into the active tab. */
 interface SqlEditorTabsModel {
@@ -241,7 +263,5 @@ const useSqlEditorTabs = (seedTab: () => SqlTab): SqlEditorTabsModel => {
     };
 };
 
-export { DEFAULT_TAB_OUTPUT, useSqlEditorTabs };
-export type { BulkClose, ResultTab, SqlEditorTabsModel, TabMenu, TabOutput };
-
-export { MAX_TABS } from "../sql-tabs";
+export { useSqlEditorTabs };
+export type { SqlEditorTabsModel, SqlTabStripModel };

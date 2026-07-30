@@ -204,43 +204,46 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                 </SectionCard>
             )}
 
-            <OrganizationTeams
-                onConfirmDeleteTeam={confirmDeleteTeam}
-                onDialog={setDialog}
-                onSelectTeam={setSelectedTeam}
-                selectedTeam={selectedTeam}
-                teamColumns={teamColumns}
-                teams={teams}
-                teamsEnabled={teamsEnabled}
-            />
+            {teamsEnabled && (
+                <OrganizationTeams
+                    onConfirmDeleteTeam={confirmDeleteTeam}
+                    onDialog={setDialog}
+                    onSelectTeam={setSelectedTeam}
+                    selectedTeam={selectedTeam}
+                    teamColumns={teamColumns}
+                    teams={teams}
+                />
+            )}
 
-            <OrganizationTeamMembers
-                actionBusy={actionBusy}
-                onDialog={setDialog}
-                onRemoveTeamMember={(teamMemberId) => {
-                    runAction(() => client.removeAuthOrgTeamMember({ teamMemberId }));
-                }}
-                selectedTeam={selectedTeam}
-                teamMemberColumns={teamMemberColumns}
-                teamMembers={teamMembers}
-                teamsEnabled={teamsEnabled}
-            />
+            {teamsEnabled && selectedTeam !== null && (
+                <OrganizationTeamMembers
+                    actionBusy={actionBusy}
+                    onDialog={setDialog}
+                    onRemoveTeamMember={(teamMemberId) => {
+                        runAction(() => client.removeAuthOrgTeamMember({ teamMemberId }));
+                    }}
+                    selectedTeam={selectedTeam}
+                    teamMemberColumns={teamMemberColumns}
+                    teamMembers={teamMembers}
+                />
+            )}
 
-            <OrganizationRoles
-                onConfirmDeleteRole={(roleId) => {
-                    setDialog({
-                        action: () => client.deleteAuthOrgRole({ roleId }),
-                        kind: "confirm",
-                        message: t("Delete this custom role? Members keeping it will lose its grants."),
-                        testId: "org-role-delete",
-                        title: t("Delete role"),
-                    });
-                }}
-                onDialog={setDialog}
-                roleColumns={roleColumns}
-                roles={roles}
-                rolesEnabled={rolesEnabled}
-            />
+            {rolesEnabled && (
+                <OrganizationRoles
+                    onConfirmDeleteRole={(roleId) => {
+                        setDialog({
+                            action: () => client.deleteAuthOrgRole({ roleId }),
+                            kind: "confirm",
+                            message: t("Delete this custom role? Members keeping it will lose its grants."),
+                            testId: "org-role-delete",
+                            title: t("Delete role"),
+                        });
+                    }}
+                    onDialog={setDialog}
+                    roleColumns={roleColumns}
+                    roles={roles}
+                />
+            )}
 
             {dialog?.kind === "add-member" && <MemberAddDialog onClose={closeDialog} onDone={refetchAll} organizationId={organizationId} />}
             {dialog?.kind === "invite-member" && <MemberInviteDialog onClose={closeDialog} onDone={refetchAll} organizationId={organizationId} />}

@@ -11,7 +11,6 @@ import formatSql from "./format-sql";
 import { useSqlAssistant } from "./hooks/use-sql-assistant";
 import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
 import { useSqlEditorSurface } from "./hooks/use-sql-editor-surface";
-import type { ResultTab } from "./hooks/use-sql-editor-tabs";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
 import { SqlEditorPane } from "./sql-editor-pane";
@@ -19,7 +18,7 @@ import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import { SqlResultsPane } from "./sql-results-pane";
 import { useSqlSchema } from "./sql-schema";
 import { SqlTabStrip } from "./sql-tab-strip";
-import type { SqlTab } from "./sql-tabs";
+import type { ResultTab, SqlTab } from "./sql-tabs";
 import { makeTab } from "./sql-tabs";
 
 interface SqlEditorPanelProps {

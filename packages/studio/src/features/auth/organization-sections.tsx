@@ -127,7 +127,6 @@ const OrganizationTeams = ({
     selectedTeam,
     teamColumns,
     teams,
-    teamsEnabled,
 }: {
     /** Opens the page's delete confirm for a team; the page owns the removal and the selection reset. */
     readonly onConfirmDeleteTeam: (row: Row) => void;
@@ -137,14 +136,8 @@ const OrganizationTeams = ({
     readonly selectedTeam: null | string;
     readonly teamColumns: Column[];
     readonly teams: Row[];
-    /** False when the deployment's organization plugin has teams off — the section explains that instead. */
-    readonly teamsEnabled: boolean;
 }): ReactElement => {
     const t = useT();
-
-    if (!teamsEnabled) {
-        return <></>;
-    }
 
     return (
         <SectionCard
@@ -229,23 +222,17 @@ const OrganizationTeamMembers = ({
     selectedTeam,
     teamMemberColumns,
     teamMembers,
-    teamsEnabled,
 }: {
     readonly actionBusy: boolean;
     readonly onDialog: (dialog: DialogState) => void;
     /** Asks the page to remove a team member. */
     readonly onRemoveTeamMember: (teamMemberId: string) => void;
-    /** `null` until a team is picked, which the section reports. */
-    readonly selectedTeam: null | string;
+    /** The team whose members these are. Non-null: the page renders this section only once one is picked. */
+    readonly selectedTeam: string;
     readonly teamMemberColumns: Column[];
     readonly teamMembers: Row[];
-    readonly teamsEnabled: boolean;
 }): ReactElement => {
     const t = useT();
-
-    if (!(teamsEnabled && selectedTeam !== null)) {
-        return <></>;
-    }
 
     return (
         <SectionCard
@@ -305,21 +292,14 @@ const OrganizationRoles = ({
     onDialog,
     roleColumns,
     roles,
-    rolesEnabled,
 }: {
     /** Opens the page's delete confirm for a custom role. */
     readonly onConfirmDeleteRole: (roleId: string) => void;
     readonly onDialog: (dialog: DialogState) => void;
     readonly roleColumns: Column[];
     readonly roles: Row[];
-    /** False when the plugin has no dynamic access control — the section explains that instead. */
-    readonly rolesEnabled: boolean;
 }): ReactElement => {
     const t = useT();
-
-    if (!rolesEnabled) {
-        return <></>;
-    }
 
     return (
         <SectionCard

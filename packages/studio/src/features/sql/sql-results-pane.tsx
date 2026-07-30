@@ -8,13 +8,11 @@ import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ExportMenu } from "../data/grid-features";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
 import { SqlResultTable } from "./sql-result-table";
+import type { ResultTab } from "./sql-tabs";
 
 /** One result-pane tab's classes, selected or not. */
 const tabClass = (selected: boolean): string =>
     `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
-
-/** Which results sub-pane is shown. */
-type ResultTab = "chart" | "explain" | "results";
 
 /**
  * The results pane: the Results / Chart / Explain tab bar with the Run, Format,
@@ -165,4 +163,3 @@ const SqlResultsPane = ({
 };
 
 export { SqlResultsPane };
-export type { ResultTab };

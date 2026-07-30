@@ -8,8 +8,8 @@ import { useT } from "../../i18n/i18n-context";
  * situation from "a table is selected and empty", so it explains what would put
  * something here rather than reporting zero rows.
  *
- * Its own component mostly to get the inline globe glyph out of the browser's
- * markup: eighteen lines of SVG path data between two conditionals.
+ * Its own component to keep the inline globe glyph out of the browser's markup,
+ * which was otherwise a dozen lines of SVG sitting between two conditionals.
  */
 const GlobalTablesEmptyState = (): ReactElement => {
     const t = useT();

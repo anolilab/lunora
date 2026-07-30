@@ -20,17 +20,6 @@ const DESCRIBE_TABLES = adminRef(ADMIN_FUNCTIONS.describeTables);
 /** How the schema is presented: a textual table list, or the relationship graph. */
 type SchemaView = "graph" | "list";
 
-/**
- * Everything the schema viewer explores: the shard's tables with their lazily
- * probed columns and indexes, the `.global()` (D1) tables with theirs, the
- * graph's column probe, and the view / shard / filter selection.
- *
- * Extracted from the component because the viewer was 471 lines of this behind
- * 18 lines of markup — the same split `useDataBrowser` and `useFileBrowser`
- * already use. Two schema planes (shard and global) with the same
- * expand-then-load shape live here together on purpose: the graph probe needs
- * both table lists, so separating them would mean threading one into the other.
- */
 /** Hoisted empty column map so the diagram model doesn't allocate a fresh object each render. */
 const EMPTY_COLUMNS: Readonly<Record<string, ColumnMeta[]>> = {};
 
@@ -66,6 +55,17 @@ interface SchemaExplorer {
     view: SchemaView;
 }
 
+/**
+ * Everything the schema viewer explores: the shard's tables with their lazily
+ * probed columns and indexes, the `.global()` (D1) tables with theirs, the
+ * graph's column probe, and the view / shard / filter selection.
+ *
+ * Extracted from the component because the viewer was 471 lines of this behind
+ * 18 lines of markup — the same split `useDataBrowser` and `useFileBrowser`
+ * already use. Two schema planes (shard and global) with the same
+ * expand-then-load shape live here together on purpose: the graph probe needs
+ * both table lists, so separating them would mean threading one into the other.
+ */
 const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?: string; initialTable?: string }): SchemaExplorer => {
     const client = useLunora();
     const [view, setView] = useState<SchemaView>("graph");

@@ -1,22 +1,24 @@
 import type { ReactElement } from "react";
 
 import { useT } from "../../i18n/i18n-context";
-import type { SqlEditorTabsModel } from "./hooks/use-sql-editor-tabs";
-import { MAX_TABS } from "./hooks/use-sql-editor-tabs";
+import type { SqlTabStripModel } from "./hooks/use-sql-editor-tabs";
 import TabButton from "./sql-tab-button";
+import { MAX_TABS } from "./sql-tabs";
 
 /**
  * The editor's tab strip and its right-click menu: switch, rename, close, and the
  * bulk close-others / close-to-right / close-all operations with their unsaved-work
  * discard confirm.
  *
- * Takes the tabs MODEL whole rather than its eighteen fields — every one of them
- * is rendered here and nowhere else, so a loose-prop signature would restate the
- * hook's shape without decoupling anything. `onSelect` stays separate because
- * switching tabs also closes the editor's completion popover, which is the panel's
- * concern, not the strip's.
+ * Takes the sixteen model fields it renders as one `Pick`, rather than sixteen
+ * loose props that would restate the hook's shape without decoupling anything. The
+ * `Pick` is the point: handing over the whole `SqlEditorTabsModel` would also hand
+ * the strip the panel's write path into tab state (`patchActiveTab`,
+ * `patchActiveOutput`, `unlinkQuery`) and the active tab's run output, none of which
+ * it renders. `onSelect` stays separate because switching tabs also closes the
+ * editor's completion popover, which is the panel's concern, not the strip's.
  */
-const SqlTabStrip = ({ model, onSelect }: { readonly model: SqlEditorTabsModel; readonly onSelect: (id: string) => void }): ReactElement => {
+const SqlTabStrip = ({ model, onSelect }: { readonly model: SqlTabStripModel; readonly onSelect: (id: string) => void }): ReactElement => {
     const t = useT();
     const {
         activeTab,

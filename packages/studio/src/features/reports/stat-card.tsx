@@ -2,11 +2,6 @@ import type { ReactElement, ReactNode } from "react";
 
 import { Card } from "../../components/ui/card";
 
-/*
- * Its own module because three surfaces render one: the single-shard readout,
- * the cross-shard rollup, and the panel itself.
- */
-
 /**
  * One labelled metric as a KPI card: an uppercase label on top, the value (with
  * an optional sparkline beside it), and an optional tinted footer band — the

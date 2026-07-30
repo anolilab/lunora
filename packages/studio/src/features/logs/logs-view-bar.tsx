@@ -13,6 +13,9 @@ import { cn } from "../../lib/utils";
  * Its own component because it is the only part of the panel that is the same
  * in all three views — the filter bars below it swap per view, this does not.
  */
+/** Which of the three log views is showing. Owned by the bar that switches them. */
+type LogsView = "archive" | "errors" | "requests";
+
 const LogsViewBar = ({
     liveError,
     onShardKeyChange,
@@ -29,7 +32,7 @@ const LogsViewBar = ({
     readonly onShowErrors: () => void;
     readonly onShowRequests: () => void;
     readonly shardKey: string;
-    readonly view: "archive" | "errors" | "requests";
+    readonly view: LogsView;
 }): ReactElement => {
     const t = useT();
 
@@ -85,3 +88,4 @@ const LogsViewBar = ({
 };
 
 export { LogsViewBar };
+export type { LogsView };
