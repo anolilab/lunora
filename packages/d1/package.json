@@ -66,16 +66,16 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.9",
-        "@lunora/platform": "workspace:*",
-        "@lunora/shard-engine": "workspace:*",
-        "@lunora/sql-store": "1.0.0-alpha.54",
+        "@lunora/platform": "1.0.0-alpha.1",
+        "@lunora/shard-engine": "1.0.0-alpha.1",
+        "@lunora/sql-store": "1.0.0-alpha.55",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "workspace:*",
+        "@lunora/do": "1.0.0-alpha.58",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
