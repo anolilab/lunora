@@ -4,7 +4,7 @@
 
 Lunora is deeply engineered for the Cloudflare Workers platform. Its core value—type-safe, real-time, durable state on the edge—derives from a specific stack: the Workers runtime, Durable Objects (DO) with SQLite and hibernated WebSockets, D1, R2, KV, Queues, Workflows, and the `workerd`/`wrangler` tooling ecosystem. As of mid-2026, **no open-source or third-party platform provides a drop-in replacement for this entire stack**. Supporting additional deployment targets is possible, but it is a **platform-portability project**, not a configuration tweak. It would require a host abstraction layer and, in most cases, alternative implementations of several subsystems.
 
-This document assesses the most credible open-source alternatives and maps the concrete package-by-package changes that multi-platform support would require. It is intended to inform a go/no-go decision and to serve as a reference if the team chooses to pursue plan 114 (Platform Abstraction Layer) and plan 115 (AWS Deploy Target).
+This document assesses the most credible open-source alternatives and maps the concrete package-by-package changes that multi-platform support would require. It is intended to inform a go/no-go decision and to serve as a reference if the team chooses to pursue plan 114 (multi-provider platform, including its AWS target).
 
 **Status (2026-07-24):** the go decision was taken and plan 114 is under way. `@lunora/platform` (contracts), `@lunora/platform-conformance` (TCK), and `@lunora/shard-engine` (host-neutral engine) exist; `ShardDO`'s transaction and socket-accept paths run through the contracts, and the TCK passes against both the in-memory reference host and the Cloudflare adapters in real workerd. See [Next Steps](#next-steps-if-proceeding) for what is done and what is open.
 
@@ -33,7 +33,7 @@ Rivet is an open-source "serverless game backend" and actor platform. It provide
 | **libSQL / Turso**                                       | SQLite database                           | Could replace D1 for global tables, but not the DO-local SQLite semantics.                                                                                                                                |
 | **MinIO**                                                | S3-compatible object storage              | Could replace R2 in `@lunora/storage`, but would lose Cloudflare-native signed-URL integration.                                                                                                           |
 | **NATS / JetStream**                                     | Queues / pub-sub                          | Could replace Cloudflare Queues (`@lunora/queue`), but semantics differ.                                                                                                                                  |
-| **AWS Lambda + DynamoDB + EventBridge + Step Functions** | Full serverless stack                     | Plan 115 already explores this. It is the most credible "second platform" target but requires the abstraction layer in plan 114.                                                                          |
+| **AWS Lambda + DynamoDB + EventBridge + Step Functions** | Full serverless stack                     | Plan 114's AWS half already explores this. It is the most credible "second platform" target and builds on the same plan's abstraction layer.                                                              |
 | **Vercel / Netlify / Supabase Edge Functions**           | Edge compute                              | Provide only request/response Workers-like functions. They lack durable state, actors, and most of the storage primitives Lunora relies on.                                                               |
 
 **Bottom line:** There is no "Cloudflare clone." Multi-platform support means selecting one or more alternative platforms and building adapter implementations.
@@ -191,14 +191,14 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
 2. **Adopt plan 114 before any new platform target.** The platform abstraction layer is a prerequisite. Without it, every new target requires forking the codebase.
 
-3. **Pick one alternative target first.** AWS (plan 115) is the most credible because it has managed services for every Cloudflare primitive: Lambda + API Gateway for compute, DynamoDB / Aurora for state, SQS/SNS for queues, Step Functions for workflows, S3 for storage, ElastiCache / Redis for KV/session, and Bedrock/SageMaker for AI. Rivet is also credible but smaller ecosystem.
+3. **Pick one alternative target first.** AWS (plan 114 §§6–9) is the most credible because it has managed services for every Cloudflare primitive: Lambda + API Gateway for compute, DynamoDB / Aurora for state, SQS/SNS for queues, Step Functions for workflows, S3 for storage, ElastiCache / Redis for KV/session, and Bedrock/SageMaker for AI. Rivet is also credible but smaller ecosystem.
 
 4. **Preserve the public API.** `defineSchema`, `query`, `mutation`, `action`, `.shardBy()`, `.global()`, and `ctx.*` should remain unchanged. Platform differences should be invisible to application code.
 
 5. **Package restructure (naming scheme ratified 2026-07-23):** The platform family is split as:
     - `@lunora/platform` — contracts only (types + `PlatformCapabilities`; zero-dep). **Already created.**
     - `@lunora/platform-cloudflare` — the default host; existing Cloudflare packages (`@lunora/do`, `@lunora/d1`, `@lunora/storage`, `@lunora/queue`, …) gradually fold into it.
-    - `@lunora/platform-aws` — the AWS host (plan 115).
+    - `@lunora/platform-aws` — the AWS host (plan 114 §7).
     - `@lunora/platform-node` — self-hosted/Node host (also serves local-first dev).
     - `@lunora/platform-conformance` — the behavioral TCK every host must pass.
     - `@lunora/shard-engine` — the host-neutral reactive engine extracted from `@lunora/do`.
@@ -212,8 +212,8 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
 ## Alignment with Existing Plans
 
-- **Plan 114 (`plans/114-platform-abstraction-layer.md`)** is the correct foundation. This assessment confirms the need for the `*Like` host contracts and the package restructure it proposes.
-- **Plan 115 (`plans/115-aws-deploy-target.md`)** is the most concrete next step. AWS is the only alternative platform that offers a complete enough managed-serverless portfolio to host Lunora without major feature loss.
+- **Plan 114 (`plans/114-multi-provider-platform.md`)** is the correct foundation. This assessment confirms the need for the `*Like` host contracts and the package restructure it proposes.
+- **Plan 114's AWS half (§§6–9)** is the most concrete next step. AWS is the only alternative platform that offers a complete enough managed-serverless portfolio to host Lunora without major feature loss.
 - This document should be read as supporting research for those two plans, not as a replacement.
 
 ---
@@ -301,6 +301,6 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
 13. **Create `@lunora/platform-cloudflare`** as the default composition root: re-export the adapters from `@lunora/do`, add the `@lunora/scheduler` host, and run the full four-contract TCK from one place (today's Cloudflare run reports `SchedulerHost` as a gap because `@lunora/do` has no scheduler to offer).
 
-14. **Build `@lunora/platform-aws`** (plan 115) as the first non-Cloudflare target.
+14. **Build `@lunora/platform-aws`** (plan 114 §7) as the first non-Cloudflare target.
 
 15. **Update `lunorash` exports, the Vite plugin, and the CLI** to support host selection (`target` field, default `cloudflare`).

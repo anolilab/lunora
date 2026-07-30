@@ -13,6 +13,6 @@ const platform = createShardPlatform(state);
 
 ## Why it exists
 
-So a second target is an addition rather than a refactor. `@lunora/do` depends on this package, not on Cloudflare directly — every provider API it needs arrives through a contract. Plan 115's Node/AWS host ships the same surface from `@lunora/platform-aws`, and `@lunora/do` changes only which package it composes.
+So a second target is an addition rather than a refactor. `@lunora/do` depends on this package, not on Cloudflare directly — every provider API it needs arrives through a contract. Plan 114's Node/AWS host (§§6–9) ships the same surface from `@lunora/platform-aws`, and `@lunora/do` changes only which package it composes.
 
 The adapters are verified by the conformance suites in `@lunora/platform/conformance` and `@lunora/shard-engine/conformance`, run against a real Durable Object in `@lunora/do`'s workerd project.

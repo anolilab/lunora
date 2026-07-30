@@ -16,4 +16,4 @@ Plus canonical binding projections (`KVNamespaceLike`, `R2BucketLike`, `QueueBin
 
 ## Status
 
-This package is part of plan 114 (Platform Abstraction Layer). It is the prerequisite for multi-platform support (plan 115 AWS target).
+This package is part of plan 114 (multi-provider platform). It is the prerequisite for the AWS target in the same plan (§§6–9).

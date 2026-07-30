@@ -80,7 +80,10 @@ There is an unscoped **umbrella** package `lunorash` (directory `packages/lunora
 - `@lunora/platform` — **contracts** (types + capability matrix, zero deps): `ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`, `SchedulerHost`, the canonical binding `*Like` projections, `PlatformCapabilities`. The behavioural TCK lives at the `@lunora/platform/conformance` subpath (`/conformance/suite` is the workerd-safe pure suite; the barrel adds the `node:sqlite` reference host) — the TCK versions in lockstep with the contracts it asserts, and a subpath keeps the root import types-only.
 - `@lunora/shard-engine` — the host-neutral reactive engine (extracted from `@lunora/do`).
 
-There is deliberately **no** `@lunora/platform-cloudflare` package yet: the Cloudflare adapters and the composition root (`createShardPlatform` / `createWorkerPlatform`) live in `@lunora/do`, because that is where the Durable Object code they wrap lives, and a host package with one host and zero consumers is a hypothetical seam. Mint `@lunora/platform-<target>` when a second target actually exists (plan 115) — never as subpaths of the contracts package, since each host carries its own provider deps.
+- `@lunora/platform-cloudflare` — the Cloudflare **host**: the contracts implemented over Durable Object primitives, plus the composition roots (`createShardPlatform` / `createWorkerPlatform`). `@lunora/do` depends on it and stays the Durable Object class itself; app code never imports it directly.
+- `@lunora/observability` — host-neutral telemetry (logs, metrics, traces, issues), also extracted from `@lunora/do`.
+
+Each host is its own `@lunora/platform-<target>` package — never a subpath of the contracts package, since each carries its own provider deps. `@lunora/platform` stays zero-dependency.
 
 ### Packages
 

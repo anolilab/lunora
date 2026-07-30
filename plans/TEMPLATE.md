@@ -64,7 +64,7 @@ left unstated ships a surface that silently does nothing on that target.
 Write the row even when the answer is "cloudflare only, no plan to port". The
 point of the section is that the matrix cannot quietly fall behind the code; see
 `packages/platform/docs/index.mdx` ("Adding to the matrix") for how to land the
-change itself. Plan 114 introduced this requirement; plan 115 is the second
+change itself. Plan 114 introduced this requirement, and its AWS half is the second
 target that makes it load-bearing.
 
 If the plan touches no `ctx.*` surface or binding, say so in one line and move
