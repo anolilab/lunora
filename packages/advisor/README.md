@@ -144,7 +144,7 @@ if (diff.regressed) {
 }
 ```
 
-`@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder. Full design and weights are in [`docs/observability-map.md`](./docs/observability-map.md).
+`@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder. Full reference for the scoring, verdicts, and the baseline gate is in the [package docs](https://lunora.sh/docs/packages/advisor).
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
 
