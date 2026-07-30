@@ -98,6 +98,7 @@ import { internal } from "@/lunora/_generated/api";
 const crons = cronJobs();
 
 crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
+crons.hourly("sweep sessions", { minuteUTC: 17 }, internal.presence.sweep, {});
 crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
 
 export default crons;

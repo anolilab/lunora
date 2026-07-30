@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import type { CronScheduleKind } from "@lunora/scheduler";
 import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "@lunora/scheduler";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -396,7 +397,7 @@ const cronFromCall = (
             });
         }
 
-        cron = compileCronSchedule(method as "daily" | "interval" | "monthly" | "weekly", objectLiteralValue(scheduleArgument, name));
+        cron = compileCronSchedule(method as CronScheduleKind, objectLiteralValue(scheduleArgument, name));
     }
 
     const target = resolveTarget(call, 2, name, workflowsByName, agentsByName);

@@ -1668,7 +1668,7 @@ export default crons;
 
             writeFileSync(join(workdir, "lunora", "crons.ts"), badCron);
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/must be an integer in \[1, 23\]/u);
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/interval\.hours is capped at 23/u);
             expect(existsSync(join(outputDirectory, "api.ts"))).toBe(false);
 
             // Warm: a previous good run's output must survive the failure intact,
@@ -1682,7 +1682,7 @@ export default crons;
 
             writeFileSync(join(workdir, "lunora", "crons.ts"), badCron);
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/must be an integer in \[1, 23\]/u);
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/interval\.hours is capped at 23/u);
             // Deliberately re-read rather than trusting the throw: the failure mode
             // being guarded is a write that happened anyway.
             expect(readFileSync(join(outputDirectory, "api.ts"), "utf8")).toBe(goodApi);
