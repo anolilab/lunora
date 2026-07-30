@@ -31,7 +31,7 @@ import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage, hasPaymentStoreTables } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
-import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
+import { discoverFunctions, listLunoraSourceFiles, resolveStandardSchemaType } from "./discover-functions";
 import discoverGeoIndexUsages from "./discover-geo-index-usages";
 import discoverHttpActionGuards from "./discover-http-action-guards";
 import discoverHttpHeaderWrites from "./discover-http-header-writes";
@@ -97,6 +97,7 @@ import { emitApp } from "./emit-app";
 import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
+import { setStandardTypeResolver } from "./parse-validator";
 import type { PlatformDiagnostic } from "./platform-target";
 import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
 import { buildSchemaSnapshot } from "./schema-drift";
@@ -595,6 +596,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
     // Emitted into the generated ShardDO's `studioFeatures()` override so the
     // studio hides only pages whose backing package the app genuinely never wires.
+    // Recovering a `v.from(...)` argument's type needs the checker plus the
+    // generated-file renderability guards, both of which live in
+    // `discover-functions` — registered here rather than imported by the parser,
+    // which would be a cycle (LUNORA_ISSUES #22).
+    setStandardTypeResolver(resolveStandardSchemaType);
+
     const declaredDependencies = readPackageDependencies(options.projectRoot);
     const dependencies = declaredDependencies ?? new Set<string>();
     const studioFeatures = buildStudioFeatures(featureUsage, {

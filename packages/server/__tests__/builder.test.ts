@@ -35,6 +35,56 @@ describe("builder terminal", () => {
     });
 });
 
+describe(".meta()", () => {
+    // LUNORA_ISSUES #6. Expressing per-procedure policy only as
+    // `.use(rateLimit("pins/create"))` makes it executable but not
+    // *enumerable* — you cannot generate a rate-limit registry or docs from a
+    // middleware chain. `.meta()` puts the same policy back in data.
+    it("stamps merged metadata onto the registration", () => {
+        expect.assertions(3);
+
+        const createPin = c.query
+            .meta({ rateLimit: "pins/create" })
+            .input({ id: v.string() })
+            .query(() => 1);
+
+        expect(createPin.meta).toStrictEqual({ rateLimit: "pins/create" });
+
+        // Merges, so a shared base builder can set defaults a specific
+        // procedure then extends.
+        const audited = c.query
+            .meta({ audit: true, rateLimit: "base" })
+            .meta({ rateLimit: "pins/create" })
+            .query(() => 1);
+
+        expect(audited.meta).toStrictEqual({ audit: true, rateLimit: "pins/create" });
+
+        // Absent — not an empty object — when never declared, so the no-meta
+        // path stays byte-identical.
+        expect(c.query.query(() => 1).meta).toBeUndefined();
+    });
+
+    it("exposes the metadata to middleware as ctx.meta", async () => {
+        expect.assertions(2);
+
+        // The whole point: middleware reads the policy it is meant to enforce
+        // instead of having it hard-wired at each `.use()` site.
+        let seen: unknown;
+
+        const guarded = c.query
+            .meta({ rateLimit: "pins/create" })
+            .use(async ({ ctx, next }) => {
+                seen = (ctx as { meta?: unknown }).meta;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(() => "ok");
+
+        await expect(guarded.handler({}, {})).resolves.toBe("ok");
+        expect(seen).toStrictEqual({ rateLimit: "pins/create" });
+    });
+});
+
 describe("compiled-args integration (the codegen AOT seam)", () => {
     it("dispatch validates through a compiled parser installed on the registered function's .args", async () => {
         expect.assertions(2);

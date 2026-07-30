@@ -46,6 +46,15 @@ export interface ValidatorIR {
     sourceText?: string;
     /** For `v.id("table")` — the table name. */
     tableName?: string;
+
+    /**
+     * For `v.from(externalSchema)` — the wrapped Standard Schema's inferred type,
+     * rendered as TS source. Recovered through the type checker from
+     * `~standard.types.output`, mirroring the runtime's `InferStandardOutput`.
+     * Absent when it could not be recovered safely, in which case the emitted
+     * type falls back to `unknown` (LUNORA_ISSUES #22).
+     */
+    tsType?: string;
     valueType?: ValidatorIR;
 }
 

@@ -209,7 +209,10 @@ const validatorToType = (validator: ValidatorIR): string => {
             return validator.members && validator.members.length > 0 ? validator.members.map((member) => validatorToType(member)).join(" | ") : "never";
         }
         default: {
-            return "unknown";
+            // `v.from(...)` lands here carrying `tsType` when the wrapped
+            // Standard Schema's type could be recovered (LUNORA_ISSUES #22);
+            // every other unhandled kind widens to `unknown`.
+            return validator.tsType ?? "unknown";
         }
     }
 };

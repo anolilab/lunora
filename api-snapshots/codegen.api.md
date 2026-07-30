@@ -272,6 +272,7 @@ interface FunctionIR {
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect";
+    output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
 }
@@ -780,6 +781,7 @@ interface ValidatorIR {
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
     tableName?: string;
+    tsType?: string;
     valueType?: ValidatorIR;
 }
 ```

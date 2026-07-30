@@ -4,6 +4,29 @@ import { Node } from "ts-morph";
 
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
 
+/**
+ * Resolves a `v.from(...)` argument expression to the wrapped Standard Schema's
+ * inferred type, rendered as TS source valid inside `_generated/`.
+ */
+type StandardTypeResolver = (node: Node) => string | undefined;
+
+/**
+ * Registered by the codegen run, because recovering the type needs the type
+ * checker AND the same "is this renderable in a generated file?" guards the
+ * handler-return path uses — both of which live in `discover-functions`. A
+ * module-level hook rather than a threaded parameter keeps the recursive
+ * parse functions' signatures unchanged, and importing it the other way would
+ * make a cycle (`discover-functions` already imports this module).
+ *
+ * Unset (a bare parser, a test) simply means `v.from()` stays `unknown`, which
+ * is the behaviour that predates the recovery.
+ */
+let standardTypeResolver: StandardTypeResolver | undefined;
+
+const setStandardTypeResolver = (resolver: StandardTypeResolver | undefined): void => {
+    standardTypeResolver = resolver;
+};
+
 const FIELD_NAME_RE = /^[A-Za-z_$][\w$]*$/u;
 
 /**
@@ -149,6 +172,23 @@ const renderLiteralSource = (node: Node | undefined): string => {
     return node.getText();
 };
 
+/**
+ * `v.from(externalSchema)` — recover the wrapped schema's inferred type through
+ * the registered resolver (`~standard.types.output`, the same property the
+ * runtime's `InferStandardOutput` reads).
+ *
+ * Without this, every argument behind a `v.from()` typed as `unknown` in the
+ * generated api, which broke `ctx.run*` calls, made handler args implicitly
+ * `any` under `noImplicitAny`, and gave generated clients untyped arguments
+ * (LUNORA_ISSUES #22). Falls back to a bare `from` node when unrecoverable, so
+ * the emitted type is `unknown` exactly as before.
+ */
+const parseFrom = (schemaArgument: Node | undefined): ValidatorIR => {
+    const tsType = schemaArgument && standardTypeResolver ? standardTypeResolver(schemaArgument) : undefined;
+
+    return tsType === undefined ? { kind: "from" } : { kind: "from", tsType };
+};
+
 /** Parse a single `v.NAME(...)` builder call, dispatching on the member name. */
 const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): ValidatorIR => {
     if (SCALAR_KINDS.has(member)) {
@@ -163,10 +203,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
         }
 
         case "from": {
-            // v.from(externalSchema) — the external Standard Schema validator's
-            // output type is not statically recoverable at codegen time.
-            // Emit an `unknown`-typed IR node so generated api types compile.
-            return { kind: "from" };
+            return parseFrom(first);
         }
 
         case "id": {
@@ -251,4 +288,5 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     return parseBuilderMember(member, args);
 };
 
-export { parseObjectShape, parseValidator };
+export { parseObjectShape, parseValidator, setStandardTypeResolver };
+export type { StandardTypeResolver };

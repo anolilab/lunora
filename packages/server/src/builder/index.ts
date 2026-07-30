@@ -33,12 +33,31 @@ interface BuilderState {
     args: ArgsValidator;
     /** Public-surface tag set by `.expose({ rest: true })`; stamped onto the registered function as `fn.expose`. */
     expose?: ExposeConfig;
+    /** Accumulated `.meta(...)` payload; merged across calls and stamped onto the registered function as `fn.meta`. */
+    meta?: Record<string, unknown>;
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
     /** Validator the handler's result is parsed through when `.output()` was called. */
     output?: Validator;
     /** Payment tag set by `.x402({ price })`; stamped onto the registered function as `fn.x402`. */
     x402?: X402ProcedureConfig;
 }
+
+/**
+ * Seed `ctx.meta` with the procedure's declared `.meta(...)` payload so
+ * middleware can read the policy it is supposed to enforce
+ * (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each `.use()`
+ * site — see the `meta` builder member (LUNORA_ISSUES #6).
+ *
+ * A procedure without `.meta(...)` gets the context back untouched, so the
+ * no-meta path is byte-identical.
+ */
+const withMeta = (context: unknown, meta: Record<string, unknown> | undefined): unknown => {
+    if (meta === undefined || typeof context !== "object" || context === null) {
+        return context;
+    }
+
+    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, { meta });
+};
 
 /**
  * Run the builder's middleware chain and return the fully resolved context. The
@@ -63,10 +82,11 @@ const makeHandler =
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: unknown }) => Promise<R> | R,
         output?: Validator,
+        meta?: Record<string, unknown>,
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-        const resolvedContext = await runMiddleware(middlewares, context);
+        const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
         return (output ? output.parse(result) : result) as Awaited<R>;
@@ -188,13 +208,17 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
             return {
                 args: state.args,
                 ...(state.expose ? { expose: state.expose } : {}),
-                handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
+                handler: makeHandler(state.args, state.middlewares, userHandler, state.output, state.meta),
                 kind,
+                ...(state.meta ? { meta: state.meta } : {}),
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
                 ...(state.x402 ? { x402: state.x402 } : {}),
             };
         },
+        // `.meta(obj)` MERGES so a shared base builder can set defaults a
+        // specific procedure then extends, mirroring tRPC.
+        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: { ...state.meta, ...value } }, visibility),
         output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
         // `.stream()` is meaningful only on query builders. It's harmless to expose
         // on every builder shape (callers can't hit it from action/mutation builders

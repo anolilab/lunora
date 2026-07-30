@@ -551,6 +551,13 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * Absent on ordinary registrations.
      */
     readonly lifecycle?: LifecycleEventKind;
+
+    /**
+     * Static per-procedure metadata declared with `.meta(...)`. Present so
+     * middleware (via `ctx.meta`) and tooling can read the same object; absent
+     * when the chain never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
 
     /**

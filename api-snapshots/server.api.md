@@ -27,6 +27,7 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
     expose: (config: ExposeConfig) => ActionBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
@@ -747,6 +748,7 @@ interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = un
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
@@ -759,6 +761,7 @@ interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = 
     readonly __lunoraProcedure: "mutation";
     readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [
         Output
     ] extends [
@@ -782,6 +785,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
     readonly __lunoraProcedure: "query";
     readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
     query: [
         Output
@@ -1109,6 +1113,7 @@ interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefine
     readonly __lunoraProcedure: "mutation";
     expose: (config: ExposeConfig) => MutationBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => MutationBuilder<Context, Args, Output>;
     mutation: [
         Output
     ] extends [
@@ -1357,6 +1362,7 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
     readonly __lunoraProcedure: "query";
     expose: (config: ExposeConfig) => QueryBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => QueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [
         Output
@@ -1464,6 +1470,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -4561,6 +4568,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
