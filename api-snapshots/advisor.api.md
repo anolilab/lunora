@@ -514,6 +514,7 @@ interface AdvisorProcedureProtection {
 
 ```ts
 interface AdvisorQueryRead {
+    exportName?: string;
     file: string;
     hasFilter: boolean;
     hasIndex: boolean;

@@ -36,7 +36,7 @@ const filterWithoutIndex: Lint = {
                 emit(filterWithoutIndex, {
                     cacheKey: `filter_without_index:${read.file}:${read.line.toString()}:${read.table}`,
                     detail: `Query on "${read.table}" at ${location} calls .filter() without an index — it loads every row of "${read.table}" and filters in memory.`,
-                    metadata: { file: read.file, line: read.line, table: read.table },
+                    metadata: { exportName: read.exportName, file: read.file, line: read.line, table: read.table },
                 }),
             );
         }

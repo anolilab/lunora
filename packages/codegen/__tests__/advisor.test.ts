@@ -242,6 +242,48 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
         expect(indexed.grade).toBe("excellent");
     });
 
+    it("attributes a filter-without-index read to the procedure that performs it", () => {
+        expect.assertions(3);
+
+        const schemaSource = `
+            import { defineSchema, defineTable, v } from "@lunora/server";
+            export const schema = defineSchema({ posts: defineTable({ published: v.boolean() }) });
+        `;
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+        project.createSourceFile("/virtual/lunora/schema.ts", schemaSource);
+
+        // The read sits inside the exported `list` query, so the finding belongs on
+        // that procedure's row rather than in the catch-all project bucket.
+        const reads = [{ exportName: "list", file: "posts", hasFilter: true, hasIndex: false, line: 2, table: "posts" }];
+        const procedures = [
+            {
+                callsMail: false,
+                exportName: "list",
+                fanOut: false,
+                file: "posts",
+                kind: "query" as const,
+                unboundedAiGeneration: false,
+                usesCaptcha: false,
+                usesEmailGate: false,
+                usesInsertManyUnsafe: false,
+                usesMask: false,
+                usesRateLimit: false,
+                usesRls: false,
+                visibility: "public" as const,
+                writesUserTable: false,
+            },
+        ];
+
+        const context = toAdvisorContext({ procedureProtections: procedures, queries: reads, schema: discoverSchema(project, "/virtual/lunora/schema.ts") });
+        const map = scoreAdvisor(context, runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+        const row = map.procedures.find((entry) => entry.id === "posts#list");
+
+        expect(row?.checks.map((check) => check.name)).toContain("filter_without_index");
+        expect(map.project.checks.map((check) => check.name)).not.toContain("filter_without_index");
+        expect(row?.coverage).not.toBe("clean");
+    });
+
     it("builds a context equivalent to the one lintSchema lints", () => {
         expect.assertions(1);
 

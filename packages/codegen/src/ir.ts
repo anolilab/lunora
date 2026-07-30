@@ -704,6 +704,8 @@ export interface WorkflowCallIR {
  * `query(...)` argument is not a string literal (a dynamic table — not lintable).
  */
 export interface QueryReadIR {
+    /** Exported procedure the read sits in, or `""` at module scope. */
+    exportName: string;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** The chain calls `.filter(...)`. */

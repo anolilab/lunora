@@ -497,6 +497,7 @@ const QUEUES_FILENAME = "queues.ts";
 
 ```ts
 interface QueryReadIR {
+    exportName: string;
     file: string;
     hasFilter: boolean;
     hasIndex: boolean;
