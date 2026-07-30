@@ -1648,6 +1648,96 @@ export default schema;
             expect(result.generated.drizzleShard).not.toContain("import { Id }");
         });
 
+        it("registers a default-exported procedure as <module>.default", () => {
+            expect.assertions(2);
+
+            // LUNORA_ISSUES #27: Convex registers a module's default export as
+            // `internal.<module>.default`, so ported files keep that shape. Walking
+            // only named exports did not merely lose the entry — the whole module
+            // was ABSENT from api.ts, so the caller's error read "Property
+            // '<module>' does not exist" and pointed at a file that was correct.
+            writeFileSync(
+                join(workdir, "lunora", "execute.ts"),
+                `import { internalAction, v } from "./_generated/server.js";
+
+const executeTrigger = internalAction.input({ id: v.string() }).action(async () => ({ ok: true }));
+
+export default executeTrigger;
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.api).toContain("execute: {");
+            expect(result.generated.api).toContain('default: FunctionReference<"action"');
+        });
+
+        it("reports an exported procedure the syntactic scan could not see", () => {
+            expect.assertions(3);
+
+            // LUNORA_ISSUES #39. Codegen registers an export only when its
+            // initializer is literally a builder chain, so a factory-produced
+            // procedure exists at runtime and never reaches api.ts — silently,
+            // exit 0. The error then surfaced in another package as "Property
+            // 'getUserSettings' does not exist", reading as a naming mistake
+            // rather than a dropped function. This check is type-level, so the
+            // indirection that causes the bug cannot hide it.
+            writeFileSync(
+                join(workdir, "lunora", "settings.ts"),
+                `import type { RegisteredQuery } from "@lunora/server";
+
+import { query } from "./_generated/server.js";
+
+const makeGetter = (): RegisteredQuery<{}, string> => query.input({}).query(async () => "x");
+
+export const getUserSettings = makeGetter();
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+            const finding = result.advisories.find((entry) => entry.name === "procedure_not_registered");
+
+            expect(finding).toBeDefined();
+            expect(finding?.detail).toContain("`getUserSettings`");
+            expect(finding?.remediation).toContain("Assign the builder chain directly");
+        });
+
+        it("rejects defineTable with a non-literal field map instead of emitting a column-less table", () => {
+            expect.assertions(2);
+
+            // LUNORA_ISSUES #39, the worst of the four forms: not a missing
+            // function but a table that silently loses EVERY column.
+            // `defineTable(fieldsIdentifier)` is what anyone writes to share a
+            // field map with an `.input()`, and it produced a `Doc_*` with only
+            // `_id` and `_creationTime`. No error, no advisory.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+const streamingMessagesFields = { state: v.string() };
+
+export const schema = defineSchema({
+    streamingMessages: defineTable(streamingMessagesFields),
+});
+
+export default schema;
+`,
+            );
+
+            let thrown: unknown;
+
+            try {
+                runCodegen({ projectRoot: workdir });
+            } catch (error: unknown) {
+                thrown = error;
+            }
+
+            const message = thrown instanceof Error ? thrown.message : String(thrown);
+
+            expect(message).toContain("codegen reads the field map syntactically");
+            expect(message).toContain("Inline the fields into the defineTable(...) call");
+        });
+
         it("names the constraint and the workaround for a nested index path", () => {
             expect.assertions(3);
 

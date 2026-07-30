@@ -1102,6 +1102,38 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
     };
 };
 
+/**
+ * Lift `export default &lt;procedure>` into a `&lt;module>.default` registration,
+ * matching Convex.
+ *
+ * Only named exports used to be walked, so a module whose sole registration was
+ * a default export did not merely lose that entry — the whole module was absent
+ * from `api.ts`, and the caller's error read "Property '&lt;module>' does not
+ * exist", pointing at a file that was entirely correct (LUNORA_ISSUES #27).
+ *
+ * `export = x` is CJS and never a Lunora registration. Non-procedure defaults
+ * (`export default cronJobs()`, a workflow registry) classify to `undefined`
+ * and are skipped like any other non-registration call.
+ */
+const defaultExportFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
+    const found: FunctionIR[] = [];
+
+    for (const assignment of source.getExportAssignments()) {
+        if (assignment.isExportEquals()) {
+            continue;
+        }
+
+        const call = resolveExpressionToCall(assignment.getExpression());
+        const entry = call ? functionIrFromCall(call, "default", relativePath) : undefined;
+
+        if (entry) {
+            found.push(entry);
+        }
+    }
+
+    return found;
+};
+
 /** Lift every Lunora registration in one source file into {@link FunctionIR} entries. */
 const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
     const found: FunctionIR[] = [];
@@ -1121,6 +1153,8 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
             }
         }
     }
+
+    found.push(...defaultExportFunctions(source, relativePath));
 
     return found;
 };

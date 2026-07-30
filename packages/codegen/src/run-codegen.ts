@@ -70,6 +70,7 @@ import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
 import discoverStorageUploads from "./discover-storage-uploads";
+import discoverUnregisteredProcedures from "./discover-unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover-unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover-workflow-calls";
@@ -499,7 +500,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   wranglerVariables: options.wranglerVariables,
               });
 
-    const advisories = advisorContext === undefined ? [] : runAdvisor(advisorContext, { source: "static" });
+    // A binding whose TYPE is a registered procedure but which never reached
+    // `api.ts` was dropped by the syntactic scan. Reported alongside the
+    // advisor's findings so it travels the same channel to the terminal and the
+    // studio (LUNORA_ISSUES #27/#39).
+    const advisories =
+        advisorContext === undefined
+            ? []
+            : [...runAdvisor(advisorContext, { source: "static" }), ...discoverUnregisteredProcedures(project, lunoraDirectory, functions)];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically

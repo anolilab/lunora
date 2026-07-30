@@ -633,6 +633,18 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 
             if (first && Node.isObjectLiteralExpression(first)) {
                 shape = parseObjectShape(first);
+            } else if (first) {
+                // `defineTable(fieldsIdentifier)` is what anyone writes to share a
+                // field map between the schema and an `.input()`. Codegen reads the
+                // shape syntactically, so a non-literal argument silently yielded a
+                // table with NO columns — `Doc_<table>` came out with `_id` and
+                // `_creationTime` and nothing else, with no error anywhere
+                // (LUNORA_ISSUES #39). A column-less table is never intended.
+                throw diagnosticAt(
+                    first,
+                    `table "${name}" calls defineTable(${JSON.stringify(first.getText())}), but codegen reads the field map syntactically and can only read an object literal. ` +
+                        `Inline the fields into the defineTable(...) call. To reuse them in an \`.input()\`, derive from the generated \`Doc_${name}\` / \`Insert_${name}\` type instead of sharing the runtime value.`,
+                );
             }
 
             break;
