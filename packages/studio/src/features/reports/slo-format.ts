@@ -22,8 +22,22 @@ const ratePercent = (numerator: number, denominator: number): string => {
     return `${((numerator / denominator) * 100).toFixed(1)}%`;
 };
 
-/** Classify a 0..1 rate against its warn/crit thresholds. */
+/**
+ * Classify a 0..1 rate against its warn/crit thresholds.
+ *
+ * `NaN` reads "ok": callers derive the rate as `errors / calls`, so `0 / 0` means
+ * no traffic at all, which is not a breach. Spelled out because it used to fall out
+ * of `NaN >= x` being false — the same edge `ratePercent` answers with an em-dash,
+ * so the two were handling it by accident and differently.
+ *
+ * `Infinity` (errors against zero recorded calls) deliberately still breaches: there
+ * ARE errors, and the missing denominator is not a reason to call that healthy.
+ */
 const rateLevel = (rate: number, warn: number, crit: number): SloLevel => {
+    if (Number.isNaN(rate)) {
+        return "ok";
+    }
+
     if (rate >= crit) {
         return "crit";
     }
