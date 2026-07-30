@@ -22,6 +22,7 @@ export default createConfig(
             "**/CHANGELOG.md",
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vitest.bench.config.ts",
             "**/packem.config.ts",
             "**/vite.config.ts",
             "**/wrangler.jsonc",

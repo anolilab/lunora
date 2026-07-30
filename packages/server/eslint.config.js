@@ -128,6 +128,17 @@ export default createConfig(
             "markdown/fenced-code-language": "off",
         },
     },
+    // `@lunora/search-core` is `private: true` and packem inlines it into this
+    // package's dist, so it deliberately sits in devDependencies — a runtime
+    // `dependencies` entry would make consumers try to install an unpublished
+    // package. The rule cannot see the bundling, so it reads the import as
+    // extraneous.
+    {
+        files: ["src/schema.ts"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
+        },
+    },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
     // keys of JSON.stringify'd wire payloads / canonical objects, changing the bytes on
     // the wire and breaking order-sensitive tests; prefer-expect-type-of rewrites a
