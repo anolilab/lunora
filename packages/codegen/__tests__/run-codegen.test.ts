@@ -1327,7 +1327,7 @@ export default crons;
         });
 
         it("emits drizzle column mappings for optional/array/bigint/bytes", () => {
-            expect.assertions(7);
+            expect.assertions(8);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -1347,8 +1347,12 @@ export default crons;
             expect(result.generated.drizzleGlobal).toContain('title: text("title"),');
             expect(result.generated.drizzleGlobal).not.toContain('title: text("title").notNull()');
 
-            // v.id("users") inside a same-bucket table → `.references(() => users._id)`.
-            expect(result.generated.drizzleGlobal).toContain('ownerId: text("ownerId").references(() => users._id).notNull()');
+            // v.id("users") inside a same-bucket table → `.references(…)`, with the
+            // `(): AnySQLiteColumn` return annotation drizzle requires so a
+            // self-referential FK is not circular in its own initializer
+            // (LUNORA_ISSUES #2 — TS7022/TS7024 under `noImplicitAny`).
+            expect(result.generated.drizzleGlobal).toContain('ownerId: text("ownerId").references((): AnySQLiteColumn => users._id).notNull()');
+            expect(result.generated.drizzleGlobal).toContain('import type { AnySQLiteColumn } from "@lunora/server/drizzle";');
         });
 
         it("emits drizzle.shard.ts containing shardBy/root tables", () => {
@@ -1590,6 +1594,51 @@ export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event
             // the lifecycleHookPaths override.
             expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js"');
             expect(result.generated.shard).toContain("protected override lifecycleHookPaths(event:");
+        });
+
+        it("emits self-referential FKs and Id-bearing json columns that typecheck under strict TS", () => {
+            expect.assertions(5);
+
+            // LUNORA_ISSUES #2/#3, both found by running `tsc --noEmit` over a real
+            // port's `_generated/`. A folder tree and a supersession chain are the
+            // ordinary shapes that hit them, so they land on most non-trivial apps.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    folders: defineTable({
+        name: v.string(),
+        // Self-reference: the emitted column mentions its own table binding.
+        parentId: v.optional(v.id("folders")),
+    }).index("by_parent", ["parentId"]),
+
+    streamingMessages: defineTable({
+        // A nested v.id() inside a union — the \`.$type<…>()\` annotation spells
+        // it \`Id<"folders">\`, which the drizzle file must import.
+        state: v.union(v.object({ kind: v.literal("streaming"), targetId: v.id("folders") }), v.object({ kind: v.literal("aborted"), reason: v.string() })),
+    }),
+});
+
+export default schema;
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // #2: without the annotation TypeScript cannot infer through the cycle
+            // (TS7022 on the binding, TS7024 on the callback) under noImplicitAny.
+            expect(result.generated.drizzleShard).toContain('parentId: text("parentId").references((): AnySQLiteColumn => folders._id)');
+            expect(result.generated.drizzleShard).toContain('import type { AnySQLiteColumn } from "@lunora/server/drizzle";');
+
+            // #3: the annotation references `Id`, which used to be emitted without
+            // an import → TS2304 "Cannot find name 'Id'".
+            expect(result.generated.drizzleShard).toContain('Id<"folders">');
+            expect(result.generated.drizzleShard).toContain('import type { Id } from "./dataModel.js";');
+
+            // Both imports are type-only, so the `Id` edge back into dataModel.ts —
+            // which is itself derived from these tables — is erased at compile time.
+            expect(result.generated.drizzleShard).not.toContain("import { Id }");
         });
 
         it("throws when schema.ts is missing", () => {

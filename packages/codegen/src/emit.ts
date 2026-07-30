@@ -1152,15 +1152,7 @@ const emitApi = (options: EmitApiOptions): string => {
 
     const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
-    // `HttpStreamRef` is only imported when a streaming route exists, so a
-    // stream-free project's generated api never references the type.
-    const clientImports = httpStreamsRef.block === "" ? "FunctionReference" : "FunctionReference, HttpStreamRef";
-
-    return relocateBaseQualifiers(
-        `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
-import type { ${clientImports} } from "${base.client}";
-${schedulerReferences.importLine}${dataModelImportLine}
-export interface ApiTypes {${apiBlock}}
+    const fileBody = `export interface ApiTypes {${apiBlock}}
 
 export const api = anyApi as unknown as ApiTypes;
 
@@ -1168,7 +1160,22 @@ export const api = anyApi as unknown as ApiTypes;
 export interface InternalApiTypes {${internalBlock}}
 
 export const internal = anyApi as unknown as InternalApiTypes;
-${schedulerReferences.block}${httpStreamsRef.block}`,
+${schedulerReferences.block}${httpStreamsRef.block}`;
+
+    // Import only what the body references. `HttpStreamRef` needs a streaming
+    // route; `FunctionReference` needs at least one registered function, and a
+    // project with none (or one whose discovery found none) would otherwise
+    // carry a dangling import that trips `noUnusedLocals`.
+    const clientImportNames = [
+        ...(fileBody.includes("FunctionReference<") ? ["FunctionReference"] : []),
+        ...(httpStreamsRef.block === "" ? [] : ["HttpStreamRef"]),
+    ];
+    const clientImportLine = clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${base.client}";\n` : "";
+
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
+${clientImportLine}${schedulerReferences.importLine}${dataModelImportLine}
+${fileBody}`,
         useUmbrella,
     );
 };
@@ -5241,6 +5248,20 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
     }
 };
 
+/**
+ * The FK target for a column, or `undefined` when it is not one.
+ *
+ * `v.id("targetTable")` becomes a FK only when the target lives in the same
+ * bucket — cross-bucket FKs can't be enforced (different SQLite databases).
+ * Shared by the renderer and the import scan so the two cannot disagree about
+ * which columns emit a `.references(...)`.
+ */
+const referencedTable = (validator: ValidatorIR, knownTables: ReadonlySet<string>): string | undefined => {
+    const inner = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+
+    return inner.kind === "id" && inner.tableName !== undefined && knownTables.has(inner.tableName) ? inner.tableName : undefined;
+};
+
 const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: ReadonlySet<string>): string => {
     // The column name is emitted as a bare object key (`<name>: …`) and a
     // `builder("<name>")` literal, so it must be a valid identifier like the
@@ -5248,8 +5269,6 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
     assertIdentifier(name, "drizzle column name");
 
     const column = validatorToDrizzleColumn(validator);
-    const isOptional = validator.kind === "optional";
-    const innerValidator = isOptional && validator.inner ? validator.inner : validator;
 
     const modeArgument = column.mode ? `, { mode: "${column.mode}" }` : "";
     let expression = `${column.builder}("${name}"${modeArgument})`;
@@ -5258,10 +5277,17 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
         expression += `.$type<${column.typeAnnotation}>()`;
     }
 
-    // v.id("targetTable") becomes a FK only when target lives in the same bucket;
-    // cross-bucket FKs can't be enforced (different SQLite databases).
-    if (innerValidator.kind === "id" && innerValidator.tableName && knownTables.has(innerValidator.tableName)) {
-        expression += `.references(() => ${innerValidator.tableName}._id)`;
+    const fkTable = referencedTable(validator, knownTables);
+
+    // The `(): AnySQLiteColumn` return annotation is drizzle's documented
+    // workaround for self-references: a table whose column references its own
+    // binding is circular in its own initializer, and TypeScript cannot infer
+    // through that under `noImplicitAny` (TS7022 on the binding, TS7024 on the
+    // callback). Annotating breaks the cycle. It is emitted unconditionally
+    // rather than only for statically-detected self-references — it is a no-op
+    // on ordinary FKs, and mutual cycles (a -> b -> a) need it just as much.
+    if (fkTable !== undefined) {
+        expression += `.references((): AnySQLiteColumn => ${fkTable}._id)`;
     }
 
     if (column.notNull) {
@@ -5307,20 +5333,39 @@ const renderDrizzleTable = (table: TableIR, knownTables: ReadonlySet<string>): s
     return `export const ${table.name} = sqliteTable("${table.name}", {\n${columns}\n}${indexBody});`;
 };
 
-const usedImports = (tables: ReadonlyArray<TableIR>): { columns: string[]; indexes: string[] } => {
-    const columns = new Set<string>();
-    const indexes = new Set<string>();
+interface DrizzleImports {
+    /** Value imports: column + table constructors from the drizzle subpath. */
+    columns: string[];
+    /** Value imports: `index` / `uniqueIndex`, only when the file declares indexes. */
+    indexes: string[];
+    /** True when any column emits a `.references()` FK, which is return-annotated. */
+    needsAnyColumn: boolean;
+    /** True when any `.$type&lt;…>()` annotation spells an `Id&lt;"table">`. */
+    needsId: boolean;
+}
 
+/**
+ * `.$type&lt;…>()` inlines the rendered TS type, and `validatorToType` spells a
+ * nested `v.id()` as `Id&lt;"table">` — so a `v.object` / `v.union` column
+ * carrying an id makes the file reference `Id` even though no column is an id
+ * at the top level.
+ */
+const annotationNeedsId = (column: DrizzleColumn): boolean => column.typeAnnotation?.includes('Id<"') ?? false;
+
+const usedImports = (tables: ReadonlyArray<TableIR>, knownTables: ReadonlySet<string>): DrizzleImports => {
     // `sqliteTable` is always needed. `_id` is always text, `_creationTime` is always integer.
-    columns.add("text");
-    columns.add("integer");
-    columns.add("sqliteTable");
+    const columns = new Set<string>(["integer", "sqliteTable", "text"]);
+    const indexes = new Set<string>();
+    let needsAnyColumn = false;
+    let needsId = false;
 
     for (const table of tables) {
         for (const validator of Object.values(table.shape)) {
             const column = validatorToDrizzleColumn(validator);
 
             columns.add(column.builder);
+            needsId = needsId || annotationNeedsId(column);
+            needsAnyColumn = needsAnyColumn || referencedTable(validator, knownTables) !== undefined;
         }
 
         for (const index of table.indexes) {
@@ -5328,7 +5373,12 @@ const usedImports = (tables: ReadonlyArray<TableIR>): { columns: string[]; index
         }
     }
 
-    return { columns: [...columns].toSorted((a, b) => a.localeCompare(b)), indexes: [...indexes].toSorted((a, b) => a.localeCompare(b)) };
+    return {
+        columns: [...columns].toSorted((a, b) => a.localeCompare(b)),
+        indexes: [...indexes].toSorted((a, b) => a.localeCompare(b)),
+        needsAnyColumn,
+        needsId,
+    };
 };
 
 const renderDrizzleFile = (tables: ReadonlyArray<TableIR>, useUmbrella = false): string => {
@@ -5337,14 +5387,22 @@ const renderDrizzleFile = (tables: ReadonlyArray<TableIR>, useUmbrella = false):
     }
 
     const base = baseSpecifiers(useUmbrella);
-    const { columns, indexes } = usedImports(tables);
-    const importParts = [...indexes, ...columns].toSorted((a, b) => a.localeCompare(b));
     const knownTables = new Set(tables.map((table) => table.name));
+    const { columns, indexes, needsAnyColumn, needsId } = usedImports(tables, knownTables);
+    const importParts = [...indexes, ...columns].toSorted((a, b) => a.localeCompare(b));
 
     const tableBlocks = tables.map((table) => renderDrizzleTable(table, knownTables)).join("\n\n");
 
-    return `${GENERATED_HEADER}import { ${importParts.join(", ")} } from "${base.serverDrizzle}";
+    // Both are type-only and therefore erased at compile time — the `Id` import
+    // back into `dataModel.ts` creates no runtime cycle even though the data
+    // model is itself derived from these tables.
+    const typeImports = [
+        needsAnyColumn ? `import type { AnySQLiteColumn } from "${base.serverDrizzle}";\n` : "",
+        needsId ? `import type { Id } from "./dataModel.js";\n` : "",
+    ].join("");
 
+    return `${GENERATED_HEADER}import { ${importParts.join(", ")} } from "${base.serverDrizzle}";
+${typeImports}
 ${tableBlocks}
 `;
 };

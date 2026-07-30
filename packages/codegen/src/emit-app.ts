@@ -780,7 +780,12 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
 
         const make = (bucket: R2BucketLike): Storage =>
             createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
-        const buckets: Record<string, Storage> = { default: make(defaultBucket) };
+        // Held separately from the map so \`pick\`'s fallback is a plain binding:
+        // under \`noUncheckedIndexedAccess\` a \`Record<string, Storage>\` lookup —
+        // including \`buckets.default\` — widens to \`Storage | undefined\`, which
+        // would not satisfy \`pick\`'s declared \`Storage\` return.
+        const fallbackStorage = make(defaultBucket);
+        const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
@@ -790,7 +795,7 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? buckets.default;
+        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
