@@ -179,6 +179,33 @@ explicit so both hosts implement the same one.
   (wrangler.jsonc reconcile) is CF-specific. Split inference from emission; a
   deploy driver consumes the inferred resource graph and emits provider config
   (wrangler.jsonc today; CDK in the AWS half (§§6–9)).
+- **D6 — Relocation is not the porting mechanism.** The recurring question is
+  "shouldn't `@lunora/bindings` / `storage` / `scheduler` move into
+  `@lunora/platform-cloudflare`, since they wrap Cloudflare primitives?" No —
+  and the test is empirical rather than a judgement call. Counting _real_ import
+  statements (not doc-comment mentions) of `@cloudflare/*` or `cloudflare:*` in
+  each package's `src/`:
+
+    | Package                                                                    | Provider imports in `src/`                   |
+    | -------------------------------------------------------------------------- | -------------------------------------------- |
+    | `bindings`, `storage`, `browser`, `hyperdrive`, `scheduler`, `d1`, `queue` | **0**                                        |
+    | `container`                                                                | 2, already isolated behind the `/do` subpath |
+
+    Those seven are facades over the `*Like` contracts, which is exactly what §8
+    assumes: `ctx.kv` becomes DynamoDB _behind `KVNamespaceLike`_, `ctx.storage`
+    becomes S3. The facade is the neutral part; only the injected binding differs.
+    Moving them would (a) break every app, since these are direct installs —
+    `examples/blog` depends on `@lunora/bindings` and imports
+    `@lunora/bindings/kv`; (b) invert the layering, making the host adapter a
+    public surface when app code never imports it; and (c) force each new host to
+    reimplement the facade instead of supplying a binding.
+
+    **The rule:** provider differences are handled by `*Like` injection plus the
+    capability matrix (D3), not by moving packages. When a package does carry real
+    provider code, isolate that part behind a subpath — `@lunora/container/do`
+    holds `LunoraContainer` (which pulls `cloudflare:workers`) while the root stays
+    neutral. The dividing line is **"does app code import it?"**: if yes it stays a
+    facade; if it is reached only through a contract it belongs in the host package.
 
 ## 5. Workstreams
 
@@ -311,6 +338,18 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
   `@lunora/config/cloudflare` (or stays put with the driver interface layered
   on top — decide during execution; **do not** break `@lunora/cli`/`@lunora/vite`
   imports).
+
+    **Decided: stays put — and this is the one open edge of D6.** `@lunora/config`
+    exports only `.` and `./studio-host`; `cloudflare-driver.ts` sits beside the
+    neutral `deploy-driver.ts` and `driver-registry.ts` with no subpath boundary.
+    Defensible today because the driver _interface_ is the seam and the registry
+    makes a second driver additive — but it is the one place provider code lives in
+    a nominally neutral package, which is precisely the arrangement D6 rejects
+    elsewhere. Left unsplit deliberately: with one driver, `@lunora/config/cloudflare`
+    is a seam nothing exercises, the same argument that defers the host-entry switch
+    in §5.5. **Revisit in phase 8**, when `@lunora/aws` gives the split a second
+    consumer to prove it against.
+
 - `@lunora/cli`: `deploy`/`dev` route through the driver; `--target`/config
   field selects it (default `cloudflare`, so zero behavior change).
 - **Done.** `lunora.json` gains a `target` key beside `remote`; `--target` is
@@ -608,19 +647,19 @@ Implements plan 114's `DeployDriver` (§5.3):
 Phases 0–4 are the abstraction layer and have shipped; phases 5–10 are the AWS
 target. Every phase needs a gate that can fail.
 
-| Phase | Work                                                                                                                                                            | Gate                                                                                                       | State       |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------- |
-| 0     | `@lunora/platform` types + capability matrix (§5.1); pnpm overrides entry                                                                                       | `lint:types` green repo-wide; no runtime change                                                            | **Done**    |
-| 1     | Conformance suite vs. in-memory + workerd hosts (§5.4)                                                                                                          | TCK green on both; suite reviewed as _the_ contract                                                        | **Done**    |
-| 2     | Engine extraction (§5.2), move-only then interface cut                                                                                                          | TCK + full `@lunora/do` suite + workerd gate green; goldens byte-identical                                 | **Done**    |
-| 3     | Config inference/emission split + `DeployDriver` (§5.3)                                                                                                         | CLI `deploy`/`dev` behavior unchanged on CF; config tests green                                            | **Done**    |
-| 4     | Codegen target flag + capability enforcement (§5.5); docs (§5.6)                                                                                                | default-target goldens byte-identical                                                                      | **Done**    |
-| 5     | **Spikes (timeboxed):** (a) Rivet-as-`ShardHost` 2–3 days; (b) workerd-self-host sizing 1 day; (c) Litestream-style SQLite WAL→S3 restore drill 1–2 days        | Written verdict per spike; pick §7.3 hand-rolled vs. Rivet-backed                                          | Not started |
-| 6     | **Node actor host** of the extracted engine (single process: leases, local SQLite, sockets); no AWS yet. **Must also land the host-entry emission §5.5 defers** | Passes the TCK 100%; repo suites runnable on it without workerd; `--target` selects the emitted host entry | Not started |
-| 7     | **Distribution:** lease table + fencing, consistent-hash routing, S3 WAL replication + ownership-move restore, NLB socket path                                  | TCK green under forced ownership-moves + fault injection (kill -9 owner mid-mutation → no lost/dup write)  | Not started |
-| 8     | **`@lunora/aws` deploy driver:** CDK emission, `deploy`/`sandbox`/`secret`/`tail`, Vite AWS mode + local Node-host dev                                          | Playground app deploys + runs e2e on a real AWS account; sandbox create/destroy < 2 min                    | Not started |
-| 9     | **Binding add-ons** per §8 mapping (KV/S3/SQS/SES/Bedrock/Secrets first; scheduler via EventBridge)                                                             | Per-binding conformance tests; capability matrix published; codegen enforces unsupported surfaces          | Not started |
-| 10    | **Parity hardening:** `.global()` read-your-writes shim, relay tier on fleet, region pinning, PITR-equivalent snapshots; docs + template (`init --target aws`)  | Full TCK + e2e matrix green on both clouds in CI (sandbox account)                                         | Not started |
+| Phase | Work                                                                                                                                                                                                                                                 | Gate                                                                                                       | State       |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------- |
+| 0     | `@lunora/platform` types + capability matrix (§5.1); pnpm overrides entry                                                                                                                                                                            | `lint:types` green repo-wide; no runtime change                                                            | **Done**    |
+| 1     | Conformance suite vs. in-memory + workerd hosts (§5.4)                                                                                                                                                                                               | TCK green on both; suite reviewed as _the_ contract                                                        | **Done**    |
+| 2     | Engine extraction (§5.2), move-only then interface cut                                                                                                                                                                                               | TCK + full `@lunora/do` suite + workerd gate green; goldens byte-identical                                 | **Done**    |
+| 3     | Config inference/emission split + `DeployDriver` (§5.3)                                                                                                                                                                                              | CLI `deploy`/`dev` behavior unchanged on CF; config tests green                                            | **Done**    |
+| 4     | Codegen target flag + capability enforcement (§5.5); docs (§5.6)                                                                                                                                                                                     | default-target goldens byte-identical                                                                      | **Done**    |
+| 5     | **Spikes (timeboxed):** (a) Rivet-as-`ShardHost` 2–3 days; (b) workerd-self-host sizing 1 day; (c) Litestream-style SQLite WAL→S3 restore drill 1–2 days                                                                                             | Written verdict per spike; pick §7.3 hand-rolled vs. Rivet-backed                                          | Not started |
+| 6     | **Node actor host** of the extracted engine (single process: leases, local SQLite, sockets); no AWS yet. **Must also land the host-entry emission §5.5 defers**                                                                                      | Passes the TCK 100%; repo suites runnable on it without workerd; `--target` selects the emitted host entry | Not started |
+| 7     | **Distribution:** lease table + fencing, consistent-hash routing, S3 WAL replication + ownership-move restore, NLB socket path                                                                                                                       | TCK green under forced ownership-moves + fault injection (kill -9 owner mid-mutation → no lost/dup write)  | Not started |
+| 8     | **`@lunora/aws` deploy driver:** CDK emission, `deploy`/`sandbox`/`secret`/`tail`, Vite AWS mode + local Node-host dev. Also revisit §5.3's decision to leave `cloudflare-driver.ts` unsplit in `@lunora/config` — this phase is its second consumer | Playground app deploys + runs e2e on a real AWS account; sandbox create/destroy < 2 min                    | Not started |
+| 9     | **Binding add-ons** per §8 mapping (KV/S3/SQS/SES/Bedrock/Secrets first; scheduler via EventBridge)                                                                                                                                                  | Per-binding conformance tests; capability matrix published; codegen enforces unsupported surfaces          | Not started |
+| 10    | **Parity hardening:** `.global()` read-your-writes shim, relay tier on fleet, region pinning, PITR-equivalent snapshots; docs + template (`init --target aws`)                                                                                       | Full TCK + e2e matrix green on both clouds in CI (sandbox account)                                         | Not started |
 
 Phase 6 is the first that needs a second host to exist, and it is where §5.5's
 deferred host-entry emission stops being theoretical — see §5.5 for why the fix is
