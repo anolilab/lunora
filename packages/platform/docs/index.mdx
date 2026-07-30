@@ -23,7 +23,7 @@ import type { ShardHost, SocketHost, PlatformCapabilities } from "@lunora/platfo
 | Contract         | What it owns                                                                                         |
 | ---------------- | ---------------------------------------------------------------------------------------------------- |
 | `ShardHost`      | One shard's execution slot: `runSerialized`, `transaction`, `sql`, `alarms`, `waitUntil`, `shardKey` |
-| `SocketHost`     | Hibernatable sockets: `accept`, `getSockets(tag?)`, `handleFor`, optional retagging                  |
+| `SocketHost`     | Hibernatable sockets: `accept`, `getSockets(tag?)`, `handleFor`, `idFor`, optional retagging         |
 | `ShardDirectory` | Name → stub resolution, with optional jurisdiction pinning                                           |
 | `ShardKvStore`   | Ordered key-value with prefix scan — what `ShardHost` deliberately omits                             |
 | `SchedulerHost`  | `runAfter`/`runAt`, at-least-once, optional config-time `cron`                                       |
@@ -38,6 +38,14 @@ compiles fine and fails in production:
 - **`getSockets(tag)` must return _exactly_ the tagged sockets.** A superset fans
   updates out to subscriptions that never asked for them, which across tenants is
   a data leak — so a host without native tagging filters in userland.
+- **Return your transport socket as the `SocketHandle`.** Identity lives
+  out-of-band on `idFor` precisely so you can. Fan-out is O(subscribers) and
+  `SocketHandle` is on that loop, so wrapping costs two extra call frames per
+  socket — measured at +11% to +13% on whisper delivery at 128 and 1024
+  subscribers. A wrapper also gives one socket two identities, since the runtime's
+  own message and close callbacks hand back the transport object: per-socket
+  `WeakMap` memos can then key on either and diverge. Wrapping is permitted, but
+  the host that does it pays for it.
 
 ## Capabilities
 

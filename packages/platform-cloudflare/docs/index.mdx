@@ -1,0 +1,70 @@
+---
+title: "@lunora/platform-cloudflare"
+description: The Cloudflare implementation of the @lunora/platform host contracts.
+---
+
+`@lunora/platform-cloudflare` is the Cloudflare **host**: it implements the
+`@lunora/platform` contracts over Durable Object primitives — `state.storage.sql`,
+`blockConcurrencyWhile`, the WebSocket hibernation API, alarms, and
+`DurableObjectNamespace`.
+
+You rarely import it directly. `@lunora/do`'s `ShardDO` wires it up, so an app
+gets the Cloudflare host by running on Cloudflare. Reach for it when you are
+writing your own Durable Object against the engine, or reading it as the
+reference for a second host.
+
+```ts
+import { createShardPlatform } from "@lunora/platform-cloudflare";
+
+// Inside a Durable Object constructor:
+const platform = createShardPlatform(state, env);
+```
+
+## What it provides
+
+| Factory                | Contract         | Backed by                                                           |
+| ---------------------- | ---------------- | ------------------------------------------------------------------- |
+| `createShardHost`      | `ShardHost`      | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction` |
+| `createSocketHost`     | `SocketHost`     | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`   |
+| `createShardAlarms`    | alarm surface    | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                     |
+| `createShardKvStore`   | `ShardKvStore`   | `storage.list` with prefix scan                                     |
+| `createShardDirectory` | `ShardDirectory` | `idFromName` / `get`, with jurisdiction pinning                     |
+| `createShardPlatform`  | all of the above | one call, for a DO constructor                                      |
+| `createWorkerPlatform` | worker-tier host | the fetch/scheduled/queue entry, outside a shard                    |
+
+## Two things it does deliberately
+
+**The socket _is_ the handle.** `getSockets` returns the runtime `WebSocket`
+objects unchanged rather than wrapping them, and identity comes from
+`SocketHost.idFor`. Fan-out is O(subscribers) and `SocketHandle` sits on that
+loop, so a wrapper's two extra call frames per socket measured at +11% to +13% on
+whisper delivery at 128 and 1024 subscribers. It also gave one socket two
+identities — the runtime's own `webSocketMessage` / `webSocketClose` callbacks
+hand back the transport object, so per-socket `WeakMap` memos could key on either
+and silently diverge.
+
+Socket ids therefore live in a durable accept-time tag (`lunora-socket:<uuid>`),
+because Cloudflare has no built-in socket identifier that survives hibernation
+but does persist the tags passed to `acceptWebSocket`. After a wake,
+`state.getTags(ws)` hands the same id back.
+
+**No `setTag` / `removeTag`.** Cloudflare freezes a socket's tags at
+`acceptWebSocket`. The `SocketHost` contract makes mutable tagging optional
+precisely so a host can decline it: omitting both methods tells callers to close
+and re-accept rather than silently losing a retag. Declaring them as no-ops would
+be a lie the engine could route on.
+
+## Conformance
+
+This host is proven by the same two suites any host must pass — the host contract
+suite from `@lunora/platform/conformance` and the engine suite from
+`@lunora/shard-engine/conformance` — run against real workerd rather than a
+double:
+
+```bash
+LUNORA_WORKERD_TESTS=1 pnpm --filter "@lunora/do" run test
+```
+
+Those runs are the regression net for the behaviour that only appears on a real
+runtime: hibernation, attachment survival across a recycle, and socket identity
+after a wake.
