@@ -13,5 +13,5 @@ Install dependencies and start the dev server with your package manager
 ```
 
 Open <http://localhost:8787/> for the Lunora welcome page. All other routes
-(RPC, WebSocket subscriptions, and the `/_lunora` Studio) are served by the
+(RPC, WebSocket subscriptions, and the `/__lunora` Studio) are served by the
 worker as usual.

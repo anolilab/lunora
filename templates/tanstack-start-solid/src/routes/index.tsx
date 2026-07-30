@@ -136,7 +136,7 @@ function WelcomePage() {
                                 </svg>
                             </span>
                         </a>
-                        <a class="card mini" href="/_lunora">
+                        <a class="card mini" href="/__lunora">
                             <div class="mc">
                                 <span class="ic">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
