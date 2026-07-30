@@ -4689,11 +4689,15 @@ interface SearchIndexDefinition {
 
 ### `SearchLanguage` (type)
 
-Re-exported from `@lunora/search-core` — signature tracked at its source.
+```ts
+type SearchLanguage = (typeof SEARCH_LANGUAGES)[number];
+```
 
 ### `SearchStrategy` (type)
 
-Re-exported from `@lunora/search-core` — signature tracked at its source.
+```ts
+type SearchStrategy = (typeof SEARCH_STRATEGIES)[number];
+```
 
 ### `Secrets` (interface)
 
