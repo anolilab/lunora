@@ -590,7 +590,6 @@ interface SocketHandle {
     readonly bufferedAmount?: number;
     close: (code?: number, reason?: string) => void;
     deserializeAttachment: () => unknown;
-    readonly id: string;
     send: (data: string | ArrayBufferLike | Blob | ArrayBufferView) => void;
     serializeAttachment: (value: unknown) => void;
 }
@@ -603,6 +602,7 @@ interface SocketHost {
     accept: (socket: unknown, attachment?: unknown, tags?: ReadonlyArray<string>) => SocketHandle;
     getSockets: (tag?: string) => SocketHandle[];
     handleFor: (socket: unknown) => SocketHandle | undefined;
+    idFor: (socket: SocketHandle) => string;
     removeTag?: (socket: SocketHandle, tag?: string) => void;
     setTag?: (socket: SocketHandle, tag: string) => void;
 }

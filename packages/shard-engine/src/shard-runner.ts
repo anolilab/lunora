@@ -67,14 +67,25 @@ export class ShardRunner {
      * lives here rather than being restated at each callback. Per-socket state
      * (subscription and shape memos, snapshots, stream cancellers, rate buckets,
      * relay cohort memos) is stored in `WeakMap`s keyed by the object the caller
-     * passes. Enumeration yields the host's `SocketHandle`; a runtime callback
-     * yields the provider's own socket. Keying those against each other would
-     * silently miss every lookup — no error, just state that appears to vanish.
+     * passes. If enumeration and the runtime's callbacks ever yield different
+     * objects for one socket, keying those against each other silently misses
+     * every lookup — no error, just state that appears to vanish.
      *
-     * Resolving through the host collapses both into one identity, because a
-     * host returns the SAME cached handle for a given socket. The raw fallback
-     * is not a compromise: a socket the host cannot map is one enumeration
-     * cannot see either, so nothing else will ever key against it.
+     * **On a host that returns its transport socket as the `SocketHandle` — which
+     * the contract now steers every host toward, and which Cloudflare does — this
+     * is the identity function.** `handleFor` answers with the same object it was
+     * given, so the two worlds were never apart. It is kept, rather than inlined
+     * away, because the contract still permits a host whose transport cannot
+     * satisfy `SocketHandle` to wrap: for that host this call is what reconciles
+     * the two identities, and removing it would break it silently in exactly the
+     * way described above.
+     *
+     * Note the cost is per FRAME, not per socket — the fan-out loops iterate
+     * `sockets()` directly. That is deliberate: a per-socket version of this call
+     * is what made the wrapper expensive.
+     *
+     * The raw fallback is not a compromise: a socket the host cannot map is one
+     * enumeration cannot see either, so nothing else will ever key against it.
      */
     public socketFor(raw: unknown): ShardSocketLike {
         return this.socketHost.handleFor(raw) ?? (raw as ShardSocketLike);

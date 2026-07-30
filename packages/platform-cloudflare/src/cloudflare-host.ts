@@ -199,7 +199,7 @@ const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
  *
  * Cloudflare has no built-in socket identifier that survives hibernation, but
  * it does persist the tags passed to `acceptWebSocket`. Minting an id tag at
- * accept therefore buys the `SocketHandle.id` stability the contract requires:
+ * accept therefore buys the `SocketHost.idFor` stability the contract requires:
  * after a recycle, `state.getTags(ws)` hands the same id back.
  */
 const ID_TAG_PREFIX = "lunora-socket:";
@@ -253,47 +253,6 @@ const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
 };
 
 /**
- * A `SocketHandle` backed by a Cloudflare hibernatable `WebSocket`.
- *
- * Attachments are read/written through the WebSocket's own
- * `serializeAttachment` / `deserializeAttachment` methods, which the runtime
- * persists across hibernation.
- */
-class CloudflareSocketHandle implements SocketHandle {
-    public readonly id: string;
-
-    private readonly ws: WebSocket;
-
-    /** Live outbound queue depth, read through to the runtime socket. */
-    public get bufferedAmount(): number | undefined {
-        const { bufferedAmount } = this.ws as { bufferedAmount?: unknown };
-
-        return typeof bufferedAmount === "number" ? bufferedAmount : undefined;
-    }
-
-    public constructor(ws: WebSocket, id: string) {
-        this.ws = ws;
-        this.id = id;
-    }
-
-    public close(code?: number, reason?: string): void {
-        this.ws.close(code, reason);
-    }
-
-    public deserializeAttachment(): unknown {
-        return (this.ws as { deserializeAttachment?: () => unknown }).deserializeAttachment?.();
-    }
-
-    public send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
-        this.ws.send(data as ArrayBuffer | string);
-    }
-
-    public serializeAttachment(value: unknown): void {
-        (this.ws as { serializeAttachment?: (value: unknown) => void }).serializeAttachment?.(value);
-    }
-}
-
-/**
  * Build the socket host for a DO.
  *
  * Note what is deliberately absent: `setTag` / `removeTag`. Cloudflare freezes
@@ -302,31 +261,6 @@ class CloudflareSocketHandle implements SocketHandle {
  * tells callers to re-accept instead.
  */
 const createSocketHost = (state: DurableObjectState): SocketHost => {
-    /** Handle cache so one WebSocket maps to one handle within a wake. */
-    const liveHandles = new WeakMap<WebSocket, CloudflareSocketHandle>();
-
-    /**
-     * Memo of the mapped handle array, per tag.
-     *
-     * `getSockets` is the fan-out hot path — every whisper and every delta poke
-     * walks it — and mapping the runtime's socket array to handles on each call
-     * allocated a fresh N-element array and did N `WeakMap` lookups per
-     * broadcast. At 1024 subscribers that measured ~3x the cost of the raw walk
-     * it replaced, which is a price the abstraction should not charge.
-     *
-     * Validity is decided in O(1) from two facts, not by re-comparing the array:
-     * a socket can only ENTER through {@link SocketHost.accept}, which bumps
-     * `generation`, and can only LEAVE by closing, which shortens the runtime's
-     * array. So an unchanged generation AND an unchanged length together mean an
-     * unchanged set — including the swap case (one closes, one opens), because
-     * the open bumps the generation even though the length comes back equal.
-     *
-     * The array is handed out by reference, so callers must treat it as
-     * read-only; the ones that need to hold or reorder it already copy.
-     */
-    let generation = 0;
-    const mappedByTag = new Map<string, { generation: number; handles: SocketHandle[]; length: number }>();
-
     /**
      * Sockets this host has already determined are not its own.
      *
@@ -336,24 +270,25 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
      * that we never accepted — the `webSocketMessage` sender in a fan-out
      * benchmark, a relay-tier peer — pays that scan on every single frame.
      *
-     * Safe to keep forever because it can only become stale in one direction, and
-     * that direction is already covered: a socket enters through `accept`, which
-     * populates `liveHandles`, and `handleFor` checks that FIRST. So a later
-     * accept always wins over a cached negative.
+     * Safe to keep forever because it can only become stale in one direction: a
+     * socket enters through `accept`, which records a fallback id, and
+     * `handleFor` checks ownership before consulting this set. So a later accept
+     * always wins over a cached negative.
      */
     const notOurs = new WeakSet<WebSocket>();
 
     /**
-     * Membership set for the last-resort ownership test, memoized on the same
-     * (generation, length) pair as {@link mappedByTag}.
+     * Membership set for the last-resort ownership test.
      *
      * The test itself is unavoidable — a test double can seed `getWebSockets()`
      * without ever calling `accept`, so such a socket is genuinely live yet
-     * carries neither a tag nor a fallback id, and refusing it would hand back
-     * the raw socket and split the per-socket memo identity. What IS avoidable is
-     * re-deriving it: `includes` walked the whole array on every inbound frame,
-     * turning a question about one socket into O(live sockets) per message.
+     * carries neither a tag nor a fallback id. What IS avoidable is re-deriving
+     * it: `includes` walked the whole array on every inbound frame, turning a
+     * question about one socket into O(live sockets) per message. Invalidated by
+     * `accept` (the only way in, which bumps `generation`) or by a length change
+     * (the only way out, closing).
      */
+    let generation = 0;
     let membership: undefined | { generation: number; length: number; set: WeakSet<WebSocket> };
 
     const liveSet = (): WeakSet<WebSocket> => {
@@ -366,19 +301,6 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
         return membership.set;
     };
 
-    const getHandle = (ws: WebSocket): CloudflareSocketHandle => {
-        const existing = liveHandles.get(ws);
-
-        if (existing !== undefined) {
-            return existing;
-        }
-
-        const handle = new CloudflareSocketHandle(ws, readSocketId(state, ws));
-        liveHandles.set(ws, handle);
-
-        return handle;
-    };
-
     return {
         accept: (socket, attachment, tags) => {
             const ws = socket as WebSocket;
@@ -389,70 +311,43 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             // synchronous so no frame can arrive against an unstamped socket.
             state.acceptWebSocket(ws, [`${ID_TAG_PREFIX}${id}`, ...(tags ?? [])]);
             fallbackIds.set(ws, id);
-            // Invalidate every tag's memo: this socket may match any of them.
             generation += 1;
 
-            const handle = new CloudflareSocketHandle(ws, id);
-            liveHandles.set(ws, handle);
-
             if (attachment !== undefined) {
-                handle.serializeAttachment(attachment);
+                (ws as { serializeAttachment?: (value: unknown) => void }).serializeAttachment?.(attachment);
             }
 
-            return handle;
+            return ws as SocketHandle;
         },
-        // `state.getWebSockets(tag)` filters natively and exactly, which is the
-        // contract's requirement — a superset would fan updates out across
-        // subscriptions that never asked for them. Still called every time: it is
-        // the source of truth, and cheap. What the memo above avoids is re-mapping
-        // its result to handles on every fan-out.
-        getSockets: (tag) => {
-            const raw = state.getWebSockets(tag);
-            const key = tag ?? "";
-            const memo = mappedByTag.get(key);
 
-            if (memo?.generation === generation && memo.length === raw.length) {
-                return memo.handles;
-            }
+        // The runtime socket IS the handle, so there is nothing to map and no
+        // memo to keep: `state.getWebSockets(tag)` filters natively and exactly,
+        // which is the contract's requirement — a superset would fan updates out
+        // across subscriptions that never asked for them.
+        //
+        // This used to map the array to wrapper handles and memoize the result on
+        // a (generation, length) pair to avoid re-mapping per fan-out. Both the
+        // mapping and the memo guarding it are gone with the wrapper.
+        getSockets: (tag) => state.getWebSockets(tag) as SocketHandle[],
 
-            const handles = raw.map((ws) => getHandle(ws));
-
-            mappedByTag.set(key, { generation, handles, length: raw.length });
-
-            return handles;
-        },
         handleFor: (socket) => {
             const ws = socket as WebSocket;
-            const cached = liveHandles.get(ws);
 
-            if (cached !== undefined) {
-                return cached;
-            }
-
-            // A socket the runtime hands to `webSocketMessage`/`webSocketClose`
-            // may predate this wake, so there may be no cached handle: rebuild it
-            // from the durable id tag. The guard matters — `readSocketId` mints a
-            // wake-local id for ANY socket, so without it an unaccepted socket
-            // would be handed a handle it should never have.
+            // An ownership test, not a translation — the socket the runtime hands
+            // to `webSocketMessage`/`webSocketClose` is already the handle. All
+            // this decides is whether it is one of ours, so a socket we never
+            // accepted is not handed back as if it were.
             //
-            // Asked in O(1). This was `state.getWebSockets().includes(ws)`, which
-            // materializes the whole socket array and scans it linearly on every
-            // miss — and `webSocketMessage` misses once per socket per wake, so a
-            // shard with many subscribers paid O(N) to answer a question about one
-            // socket. An accepted socket carries the durable id tag, which is the
-            // same fact read directly.
-            if (hasIdTag(state, ws)) {
-                return getHandle(ws);
+            // Asked in O(1) for the common cases. An accepted socket carries the
+            // durable id tag, which survives hibernation; doubles that never
+            // implement `getTags` still went through `accept`, which records a
+            // fallback id.
+            if (hasIdTag(state, ws) || fallbackIds.has(ws)) {
+                return ws as SocketHandle;
             }
 
-            // Doubles that never implement `getTags` still went through `accept`
-            // here, which records a fallback id.
             if (notOurs.has(ws)) {
                 return undefined;
-            }
-
-            if (fallbackIds.has(ws)) {
-                return getHandle(ws);
             }
 
             // Last resort: ownership by membership, answered from the memo above
@@ -460,13 +355,15 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             // real runtime, where every live socket was accepted and matched
             // above — it exists for doubles that seed `getWebSockets()` directly.
             if (liveSet().has(ws)) {
-                return getHandle(ws);
+                return ws as SocketHandle;
             }
 
             notOurs.add(ws);
 
             return undefined;
         },
+
+        idFor: (socket) => readSocketId(state, socket as WebSocket),
     };
 };
 

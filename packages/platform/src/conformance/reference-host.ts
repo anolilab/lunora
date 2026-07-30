@@ -334,6 +334,9 @@ const createReferenceHost = (): ReferenceHost => {
         },
     };
 
+    /** `SocketHandle` -> stable id, the reference host's answer for `idFor`. */
+    const handleIds = new WeakMap<SocketHandle, string>();
+
     const createHandle = (socket: ReferenceSocket): SocketHandle => {
         const handle: SocketHandle = {
             bufferedAmount: socket.bufferedAmount,
@@ -341,7 +344,6 @@ const createReferenceHost = (): ReferenceHost => {
                 socket.closed = true;
             },
             deserializeAttachment: () => socket.attachment,
-            id: socket.id,
             send: (data) => {
                 // Keep text as text. `received` has always been typed
                 // `(string | ArrayBuffer)[]`, but encoding unconditionally made
@@ -355,6 +357,10 @@ const createReferenceHost = (): ReferenceHost => {
             },
         };
         socket.handle = handle;
+        // Identity out-of-band, exactly as `SocketHost.idFor` requires. The
+        // reference host could trivially keep an `id` property here, but then it
+        // would not be exercising the contract a real host has to satisfy.
+        handleIds.set(handle, socket.id);
 
         return handle;
     };
@@ -388,8 +394,9 @@ const createReferenceHost = (): ReferenceHost => {
             return filtered.map((s) => s.handle);
         },
         handleFor: (rawSocket) => [...runtimeSockets.values()].find((s) => s.raw === rawSocket)?.handle,
+        idFor: (handle) => handleIds.get(handle) ?? "",
         removeTag: (handle, tag) => {
-            const socketState = runtimeSockets.get(handle.id);
+            const socketState = runtimeSockets.get(handleIds.get(handle) ?? "");
 
             if (socketState === undefined) {
                 return;
@@ -401,14 +408,15 @@ const createReferenceHost = (): ReferenceHost => {
                 socketState.tags.delete(tag);
             }
 
-            durableTags.set(handle.id, new Set(socketState.tags));
+            durableTags.set(handleIds.get(handle) ?? "", new Set(socketState.tags));
         },
         setTag: (handle, tag) => {
-            const socketState = runtimeSockets.get(handle.id);
+            const id = handleIds.get(handle) ?? "";
+            const socketState = runtimeSockets.get(id);
 
             if (socketState !== undefined) {
                 socketState.tags.add(tag);
-                durableTags.set(handle.id, new Set(socketState.tags));
+                durableTags.set(id, new Set(socketState.tags));
             }
         },
     };
@@ -565,7 +573,8 @@ const createReferenceHost = (): ReferenceHost => {
         // Text frames only: every Lunora wire frame is JSON, and returning
         // binary as a lossy string would let a corrupted frame read as a
         // delivered one.
-        readFrames: (handle: SocketHandle) => (runtimeSockets.get(handle.id)?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
+        readFrames: (handle: SocketHandle) =>
+            (runtimeSockets.get(handleIds.get(handle) ?? "")?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
         restoreSocket: (id: string, attachment: unknown) => {
             const socketState: ReferenceSocket = {
                 attachment,

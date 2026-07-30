@@ -30,7 +30,33 @@
  * retag must instead close and re-accept the socket with new tags.
  */
 
-/** Opaque socket handle the host returns from `accept`. */
+/**
+ * The socket the engine sends through.
+ *
+ * Deliberately **not** a wrapper object. A host is expected to return its own
+ * transport socket here, unchanged — which is why identity lives out-of-band on
+ * {@link SocketHost.idFor} rather than as an `id` property on this interface.
+ *
+ * Two reasons, one measured and one structural:
+ *
+ * 1. **Fan-out is O(subscribers) and this interface is on that loop.** Whisper
+ * delivery, shape pokes and delta delivery all walk every socket calling
+ * `deserializeAttachment` then `send`. When those forwarded through a wrapper,
+ * the two extra call frames per socket cost +1.11 ns/socket — +11% to +13% on
+ * whisper fan-out at 128 and 1024 subscribers, against a per-socket body of
+ * only ~6-7 ns. An `id` property is the only thing a wrapper was needed for,
+ * and it is read a handful of times outside the hot loops.
+ * 2. **A wrapper creates two identities for one socket.** Enumeration would
+ * yield handles while the runtime's own message/close callbacks yield the
+ * transport socket, so every per-socket `WeakMap` memo could key on either and
+ * diverge. Returning the transport socket collapses that: there is one object,
+ * so {@link SocketHost.handleFor} is an ownership test rather than a
+ * translation, and the memos cannot disagree.
+ *
+ * A host whose transport genuinely cannot satisfy this shape may still wrap —
+ * nothing here forbids it — but it pays the per-socket cost itself instead of
+ * charging every other host for it.
+ */
 export interface SocketHandle {
     /**
      * Bytes queued for send but not yet flushed, when the transport reports it.
@@ -45,8 +71,6 @@ export interface SocketHandle {
     close: (code?: number, reason?: string) => void;
     /** Read the attachment previously stored with `serializeAttachment`. */
     deserializeAttachment: () => unknown;
-    /** Unique per-socket identifier, stable across hibernation. */
-    readonly id: string;
     /** Send a text or binary frame. */
     send: (data: string | ArrayBufferLike | Blob | ArrayBufferView) => void;
     /** Persist attachment state for this socket. */
@@ -90,6 +114,21 @@ export interface SocketHost {
      * provider type. Returns `undefined` for a socket this host never accepted.
      */
     handleFor: (socket: unknown) => SocketHandle | undefined;
+
+    /**
+     * The socket's unique identifier, stable across hibernation.
+     *
+     * Out-of-band rather than a property on {@link SocketHandle} so a host can
+     * return its transport socket unchanged — see the note there for why that
+     * matters on the fan-out path. A host supplies identity however it can: a
+     * durable tag minted at accept (Cloudflare), a registry key, a `WeakMap`.
+     *
+     * Must answer consistently for the same socket within a wake AND across a
+     * recycle, since the engine uses it to reassociate a rehydrated socket with
+     * its subscription state. Callers outside the O(subscribers) loops are the
+     * intended consumers; do not reach for this per socket per frame.
+     */
+    idFor: (socket: SocketHandle) => string;
 
     /**
      * Remove a tag from a live socket — all of them when `tag` is omitted.

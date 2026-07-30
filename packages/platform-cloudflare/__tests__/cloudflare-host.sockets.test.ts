@@ -3,18 +3,24 @@ import { describe, expect, it } from "vitest";
 import { createSocketHost } from "../src/cloudflare-host";
 
 /**
- * The `getSockets` handle memo.
+ * The Cloudflare socket host's identity and ownership rules.
  *
- * `getSockets` is the fan-out hot path, so it caches the mapped handle array and
- * validates it in O(1) instead of re-mapping every call. Validity rests on one
- * argument: a socket can only ENTER through `accept` (which bumps a generation)
- * and can only LEAVE by closing (which shortens the runtime's array), so an
- * unchanged generation AND an unchanged length together mean an unchanged set.
+ * The load-bearing property is that **the runtime socket IS the `SocketHandle`**.
+ * This host used to return a `CloudflareSocketHandle` wrapper, which cost two
+ * extra call frames per socket on every fan-out (+11-13% on whisper delivery at
+ * 128 and 1024 subscribers) and created two objects for one socket — enumeration
+ * handed out wrappers while `webSocketMessage`/`webSocketClose` hand back the
+ * transport socket, so any per-socket `WeakMap` memo could key on either and
+ * diverge.
  *
- * These tests exist because that argument has one non-obvious case — a close and
- * an accept between two reads, where the length comes back equal and only the
- * generation reveals the change. A memo keyed on length alone passes every other
- * test here and silently serves a stale socket forever.
+ * These tests pin the property that replaced it, because it is invisible in
+ * ordinary use: everything still works if a wrapper creeps back, just slower and
+ * with the identity split silently restored.
+ *
+ * The `getSockets` handle memo these tests used to cover is gone with the
+ * wrapper. It existed only to avoid re-mapping N sockets to N wrappers per
+ * broadcast; with nothing to map, `getSockets` reads through to the runtime,
+ * which is both cheaper and impossible to serve stale.
  */
 
 /** A hibernatable-socket double: the surface the host adapter touches. */
@@ -46,66 +52,69 @@ const stateWith = (live: FakeSocket[]) => {
             live.push(socket);
         },
         getTags: (socket: FakeSocket) => tags.get(socket) ?? [],
-        // A FRESH array each call, the way workerd behaves — so a memo cannot
-        // rely on reference equality of the runtime's own result.
+        // A FRESH array each call, the way workerd behaves.
         getWebSockets: (tag?: string) => (tag === undefined ? [...live] : live.filter((s) => (tags.get(s) ?? []).includes(tag))),
     };
 };
 
-describe("createSocketHost getSockets memo", () => {
-    it("returns a stable handle array while the socket set is unchanged", () => {
-        expect.assertions(2);
+describe("createSocketHost socket identity", () => {
+    it("hands back the transport socket itself, not a wrapper", () => {
+        expect.assertions(3);
 
         const live: FakeSocket[] = [];
         const host = createSocketHost(stateWith(live) as never);
+        const socket = new FakeSocket();
 
-        host.accept(new FakeSocket());
-        host.accept(new FakeSocket());
+        const handle = host.accept(socket);
 
-        const first = host.getSockets();
-        const second = host.getSockets();
-
-        // Same array instance: the whole point is that a fan-out does not
-        // re-map N sockets on every broadcast.
-        expect(second).toBe(first);
-        expect(first).toHaveLength(2);
+        // All three routes to a socket must yield the SAME object. A wrapper
+        // satisfies the `SocketHandle` type while failing every one of these, so
+        // this is the assertion that keeps it out.
+        expect(handle).toBe(socket);
+        expect(host.getSockets()[0]).toBe(socket);
+        expect(host.handleFor(socket)).toBe(socket);
     });
 
-    it("re-maps after an accept, so a new socket is never missed", () => {
-        expect.assertions(2);
-
-        const live: FakeSocket[] = [];
-        const host = createSocketHost(stateWith(live) as never);
-
-        host.accept(new FakeSocket());
-
-        const before = host.getSockets();
-
-        host.accept(new FakeSocket());
-
-        const after = host.getSockets();
-
-        expect(after).not.toBe(before);
-        expect(after).toHaveLength(2);
-    });
-
-    it("re-maps after a close, so a gone socket is never served", () => {
+    it("gives enumeration and the runtime's own callbacks one identity", () => {
         expect.assertions(1);
 
         const live: FakeSocket[] = [];
         const host = createSocketHost(stateWith(live) as never);
+        const socket = new FakeSocket();
 
-        host.accept(new FakeSocket());
-        host.accept(new FakeSocket());
-        host.getSockets();
+        host.accept(socket);
 
-        // The runtime drops a closed socket from its own array.
-        live.pop();
+        const resolved = host.handleFor(socket);
 
-        expect(host.getSockets()).toHaveLength(1);
+        // `webSocketMessage` receives the transport socket; fan-out iterates
+        // `getSockets()`. When those were different objects, a per-socket memo
+        // keyed on one could not see writes made through the other — the bug
+        // `handleFor` existed to paper over.
+        expect(resolved !== undefined && host.getSockets().includes(resolved)).toBe(true);
     });
 
-    it("re-maps when a close and an accept leave the count unchanged", () => {
+    it("keeps a socket's id stable across calls and across a wake", () => {
+        expect.assertions(2);
+
+        const live: FakeSocket[] = [];
+        const state = stateWith(live);
+        const host = createSocketHost(state as never);
+        const socket = new FakeSocket();
+
+        const handle = host.accept(socket);
+        const id = host.idFor(handle);
+
+        expect(host.idFor(handle)).toBe(id);
+
+        // A fresh host is the hibernation wake: new isolate, no in-memory state.
+        // The id survives because it was minted into a durable accept-time tag,
+        // which is what lets a rehydrated socket find its subscription again.
+        expect(createSocketHost(state as never).idFor(handle)).toBe(id);
+    });
+});
+
+describe("createSocketHost getSockets", () => {
+    it("reads through to the runtime's live set", () => {
         expect.assertions(3);
 
         const live: FakeSocket[] = [];
@@ -114,22 +123,39 @@ describe("createSocketHost getSockets memo", () => {
         host.accept(new FakeSocket());
         host.accept(new FakeSocket());
 
-        const before = host.getSockets();
-        const beforeIds = before.map((handle) => handle.id);
+        expect(host.getSockets()).toHaveLength(2);
 
-        // The swap: one socket closes, another is accepted. Length comes back to
-        // 2, so ONLY the generation distinguishes this from "nothing happened".
+        // The runtime drops a closed socket from its own array. With no memo in
+        // front of it there is no staleness to invalidate — including the swap
+        // case (one closes, one opens) that a length-keyed memo got wrong.
         live.pop();
+
+        expect(host.getSockets()).toHaveLength(1);
+
         host.accept(new FakeSocket());
 
-        const after = host.getSockets();
-
-        expect(after).toHaveLength(2);
-        expect(after).not.toBe(before);
-        // The departed socket's handle is gone and the new one is present.
-        expect(after.map((handle) => handle.id)).not.toStrictEqual(beforeIds);
+        expect(host.getSockets()).toHaveLength(2);
     });
 
+    it("returns exactly the sockets carrying a tag", () => {
+        expect.assertions(3);
+
+        const live: FakeSocket[] = [];
+        const host = createSocketHost(stateWith(live) as never);
+
+        const a = host.accept(new FakeSocket(), undefined, ["room-a"]);
+        const b = host.accept(new FakeSocket(), undefined, ["room-b"]);
+
+        // Asserted by IDENTITY, not by count: both tags hold exactly one socket,
+        // so a host that crossed them returns the right LENGTH and the wrong
+        // SOCKET — a fan-out delivering room-a's frame to room-b.
+        expect(host.getSockets("room-a")).toStrictEqual([a]);
+        expect(host.getSockets("room-b")).toStrictEqual([b]);
+        expect(host.getSockets()).toHaveLength(2);
+    });
+});
+
+describe("createSocketHost handleFor ownership", () => {
     it("resolves a socket accepted before this wake without scanning the socket set", () => {
         expect.assertions(3);
 
@@ -148,21 +174,22 @@ describe("createSocketHost getSockets memo", () => {
         const accepted = new FakeSocket();
 
         // Accept through one host, then resolve through a FRESH one. That is the
-        // hibernation wake: a new isolate, empty handle cache, and a socket the
-        // runtime hands straight to `webSocketMessage`. Resolving it through the
-        // cache is the easy path; this is the one that used to scan.
+        // hibernation wake: a new isolate and a socket the runtime hands straight
+        // to `webSocketMessage`.
         createSocketHost(state as never).accept(accepted);
 
         const afterWake = createSocketHost(state as never);
 
         scans = 0;
 
-        expect(afterWake.handleFor(accepted)).toBeDefined();
+        expect(afterWake.handleFor(accepted)).toBe(accepted);
         // Answering a question about ONE socket must not materialize and walk the
         // whole socket array — `webSocketMessage` asks it once per socket per wake.
         expect(scans).toBe(0);
 
-        // A socket this host never accepted is still refused.
+        // A socket this host never accepted is still refused. Now that the handle
+        // and the socket are one object, refusing is the only thing standing
+        // between a foreign socket and being treated as a subscriber.
         expect(afterWake.handleFor(new FakeSocket())).toBeUndefined();
     });
 
@@ -205,11 +232,11 @@ describe("createSocketHost getSockets memo", () => {
 
         expect(host.handleFor(socket)).toBeUndefined();
 
-        // `accept` populates the handle cache, which `handleFor` consults BEFORE
-        // the negative set — so the stale "not ours" can never shadow it.
-        const handle = host.accept(socket);
+        // `accept` records a fallback id, which `handleFor` consults BEFORE the
+        // negative set — so the stale "not ours" can never shadow it.
+        host.accept(socket);
 
-        expect(host.handleFor(socket)?.id).toBe(handle.id);
+        expect(host.handleFor(socket)).toBe(socket);
     });
 
     it("answers ownership for a stream of unknown sockets without re-walking per call", () => {
@@ -236,13 +263,13 @@ describe("createSocketHost getSockets memo", () => {
 
         live.push(seeded);
 
-        expect(host.handleFor(seeded)).toBeDefined();
+        expect(host.handleFor(seeded)).toBe(seeded);
 
         // DISTINCT sockets, each seen once. That is the shape `webSocketMessage`
         // actually produces on a fan-out — the sender rotates through a pool, so
-        // neither the handle cache nor the negative cache ever hits and every
-        // frame reaches this path. Walking the socket array here turned a question
-        // about ONE socket into O(live sockets) per message.
+        // the negative cache never hits and every frame reaches this path. Walking
+        // the socket array here turned a question about ONE socket into
+        // O(live sockets) per message.
         for (let index = 0; index < 20; index += 1) {
             expect(host.handleFor(new FakeSocket())).toBeUndefined();
         }
@@ -250,36 +277,11 @@ describe("createSocketHost getSockets memo", () => {
         expect(iterations).toBe(1);
 
         // A socket that joins later still resolves: the length change invalidates
-        // the memo, exactly as it does for the handle array.
+        // the membership memo.
         const joined = new FakeSocket();
 
         live.push(joined);
 
-        expect(host.handleFor(joined)).toBeDefined();
-    });
-
-    it("memoizes each tag independently", () => {
-        expect.assertions(3);
-
-        const live: FakeSocket[] = [];
-        const host = createSocketHost(stateWith(live) as never);
-
-        const a = host.accept(new FakeSocket(), undefined, ["room-a"]);
-        const b = host.accept(new FakeSocket(), undefined, ["room-b"]);
-
-        // Asserted by IDENTITY, not by count: both tags hold exactly one socket,
-        // so a memo shared across tags returns the right LENGTH and the wrong
-        // SOCKET — a fan-out delivering room-a's frame to room-b.
-        expect(host.getSockets("room-a").map((handle) => handle.id)).toStrictEqual([a.id]);
-        expect(host.getSockets("room-b").map((handle) => handle.id)).toStrictEqual([b.id]);
-
-        const byId = (left: string, right: string): number => left.localeCompare(right);
-
-        expect(
-            host
-                .getSockets()
-                .map((handle) => handle.id)
-                .toSorted(byId),
-        ).toStrictEqual([a.id, b.id].toSorted(byId));
+        expect(host.handleFor(joined)).toBe(joined);
     });
 });

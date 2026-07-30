@@ -147,6 +147,7 @@ describe("@lunora/platform contracts", () => {
             // socket type. `undefined` for an unknown socket is a valid answer;
             // omitting the method is not.
             handleFor: () => undefined,
+            idFor: () => "socket-1",
         };
 
         expect(socketHost.accept).toBeDefined();

@@ -14,6 +14,7 @@
  * built through the composition root (`createShardPlatform`) rather than the
  * individual adapters — so a wiring mistake in the root fails here too.
  */
+import type { SocketHandle } from "@lunora/platform";
 import { createShardPlatform } from "@lunora/platform-cloudflare";
 import type { EngineHostFactory } from "@lunora/shard-engine/conformance";
 import { defineEngineContractSuite } from "@lunora/shard-engine/conformance";
@@ -36,7 +37,7 @@ let currentState: DurableObjectState | undefined;
  * answers — on a real transport the only observer of a `send` is the peer.
  */
 // eslint-disable-next-line vitest/require-hook -- module-scope test state, reset per test by the `it` wrapper rather than by a hook (the suite owns the hooks)
-let peers = new Map<string, { received: string[]; ws: WebSocket }>();
+let peers = new Map<SocketHandle, { received: string[]; ws: WebSocket }>();
 
 /** The most recently minted peer, awaiting the id its server end is about to get. */
 let pendingPeer: { received: string[]; ws: WebSocket } | undefined;
@@ -73,12 +74,18 @@ const createEngineHost: EngineHostFactory = () => {
             // delivery bug.
             await scheduler.wait(0);
 
-            return peers.get(socket.id)?.received ?? [];
+            return peers.get(socket)?.received ?? [];
         },
         // `accept` is wrapped rather than passed through so the peer minted by
-        // `createSocket` can be keyed on the id the host issues — the suite
+        // `createSocket` can be keyed on the handle the host issues — the suite
         // knows sockets only by their handle, and the handle is the only thing
         // that links the two ends.
+        //
+        // Keyed on the handle OBJECT, not on an id: the Cloudflare host returns
+        // the transport socket as the handle, so the object the suite holds is
+        // the same one the runtime hands to `webSocketMessage`. A wrapping host
+        // would still work here — one handle per socket is the contract either
+        // way — but object keying is what proves the identity did not split.
         sockets: {
             ...sockets,
             accept: (socket, attachment, tags) => {
@@ -93,7 +100,7 @@ const createEngineHost: EngineHostFactory = () => {
                         }
                     });
                     peer.ws.accept();
-                    peers.set(handle.id, peer);
+                    peers.set(handle, peer);
                     pendingPeer = undefined;
                 }
 

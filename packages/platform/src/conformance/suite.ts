@@ -1,4 +1,5 @@
 import { resolveShard } from "../index";
+import type { SocketHandle } from "../socket-host";
 import type { ConformanceHostFactory } from "./reference-host";
 
 /**
@@ -176,10 +177,12 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const host = await createHost();
                 const handle = host.socket.accept(rawSocket(host), { user: "ada" });
 
-                expect(handle.id).toBeDefined();
+                expect(host.socket.idFor(handle)).toBeDefined();
 
                 handle.send("hello");
-                expect(host.socket.getSockets().map((socket) => socket.id)).toContain(handle.id);
+                // Through `idFor` rather than object identity: a host is allowed
+                // to wrap, so the leg must pass for a wrapping host too.
+                expect(host.socket.getSockets().map((socket) => host.socket.idFor(socket))).toContain(host.socket.idFor(handle));
 
                 // "Did not throw" is not delivery. A host that silently dropped
                 // every frame would pass the rest of this leg while breaking
@@ -231,7 +234,7 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const handle = host.socket.accept(rawSocket(host), attachment);
 
                 host.simulateRecycle();
-                const restored = host.restoreSocket(handle.id, attachment);
+                const restored = host.restoreSocket(host.socket.idFor(handle), attachment);
                 expect(restored.deserializeAttachment()).toEqual(attachment);
 
                 host.cleanup?.();
@@ -250,12 +253,14 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const b = host.socket.accept(rawSocket(host), {}, ["room-b"]);
                 const untagged = host.socket.accept(rawSocket(host), {});
 
-                expect(host.socket.getSockets("room-a").map((socket) => socket.id)).toStrictEqual([a.id]);
-                expect(host.socket.getSockets("room-b").map((socket) => socket.id)).toStrictEqual([b.id]);
+                const idOf = (socket: SocketHandle): string => host.socket.idFor(socket);
+
+                expect(host.socket.getSockets("room-a").map(idOf)).toStrictEqual([idOf(a)]);
+                expect(host.socket.getSockets("room-b").map(idOf)).toStrictEqual([idOf(b)]);
                 // An untagged socket leaks into no tagged fan-out, and an
                 // unknown tag matches nothing.
-                expect(host.socket.getSockets("room-c").map((socket) => socket.id)).toStrictEqual([]);
-                expect(host.socket.getSockets().map((socket) => socket.id)).toContain(untagged.id);
+                expect(host.socket.getSockets("room-c").map(idOf)).toStrictEqual([]);
+                expect(host.socket.getSockets().map(idOf)).toContain(idOf(untagged));
 
                 host.cleanup?.();
             });
@@ -271,7 +276,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const raw = rawSocket(host);
                 const handle = host.socket.accept(raw, {});
 
-                expect(host.socket.handleFor(raw)?.id).toBe(handle.id);
+                const resolved = host.socket.handleFor(raw);
+
+                expect(resolved !== undefined && host.socket.idFor(resolved)).toBe(host.socket.idFor(handle));
                 expect(host.socket.handleFor(rawSocket(host))).toBeUndefined();
 
                 host.cleanup?.();
@@ -311,10 +318,10 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const socket = host.socket.accept(rawSocket(host), {});
 
                 host.socket.setTag(socket, "room-a");
-                expect(host.socket.getSockets("room-a").map((handle) => handle.id)).toStrictEqual([socket.id]);
+                expect(host.socket.getSockets("room-a").map((handle) => host.socket.idFor(handle))).toStrictEqual([host.socket.idFor(socket)]);
 
                 host.socket.removeTag?.(socket, "room-a");
-                expect(host.socket.getSockets("room-a").map((handle) => handle.id)).toStrictEqual([]);
+                expect(host.socket.getSockets("room-a").map((handle) => host.socket.idFor(handle))).toStrictEqual([]);
 
                 host.cleanup?.();
             });
