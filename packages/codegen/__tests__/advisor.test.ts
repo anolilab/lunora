@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { formatAdvisories, lintSchema } from "../src/advisor";
+import { formatAdvisories, lintSchema, mapSchema } from "../src/advisor";
 import discoverSchema from "../src/discover-schema";
 import { runCodegen } from "../src/index";
 
@@ -216,5 +216,30 @@ export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: 
 
         expect(finding).toBeDefined();
         expect(finding?.metadata).toMatchObject({ callee: "extend", file: "server" });
+    });
+});
+
+describe("mapSchema (codegen → advisor coverage map)", () => {
+    const STAMP = "2026-07-30T00:00:00.000Z";
+
+    it("scores the same evidence lintSchema lints, penalising the unindexed schema", () => {
+        expect.assertions(3);
+
+        const unindexed = mapSchema({ schema: irFrom(UNINDEXED) }, { generatedAt: STAMP });
+        const indexed = mapSchema({ schema: irFrom(INDEXED) }, { generatedAt: STAMP });
+
+        // The FK finding names no procedure, so it lands in the project bucket.
+        expect(unindexed.project.checks.some((check) => check.name === "unindexed_foreign_key")).toBe(true);
+        expect(unindexed.score).toBeLessThan(indexed.score);
+        expect(indexed.grade).toBe("excellent");
+    });
+
+    it("reuses findings a caller already has rather than linting twice", () => {
+        expect.assertions(1);
+
+        const options = { schema: irFrom(UNINDEXED) };
+        const findings = lintSchema(options);
+
+        expect(mapSchema(options, { findings, generatedAt: STAMP })).toStrictEqual(mapSchema(options, { generatedAt: STAMP }));
     });
 });

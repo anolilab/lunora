@@ -1119,6 +1119,14 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 const lintSchema: (options: LintSchemaOptions) => Finding[];
 ```
 
+### `mapSchema` (const)
+
+```ts
+const mapSchema: (options: LintSchemaOptions, mapOptions?: ScoreAdvisorOptions & {
+    findings?: ReadonlyArray<Finding>;
+}) => AdvisorMap;
+```
+
 ### `parseSchemaSnapshot` (const)
 
 ```ts

@@ -348,6 +348,20 @@ interface AdvisorMailRecipientAccess {
 }
 ```
 
+### `AdvisorMap` (interface)
+
+```ts
+interface AdvisorMap {
+    generatedAt: string;
+    grade: Grade;
+    procedures: ProcedureScore[];
+    project: ProjectScore;
+    score: number;
+    summary: MapSummary;
+    version: number;
+}
+```
+
 ### `AdvisorMaskProcedure` (interface)
 
 ```ts
@@ -815,10 +829,44 @@ interface AnalyticsRuntimeMetrics {
 }
 ```
 
+### `BaselineComparison` (interface)
+
+```ts
+interface BaselineComparison {
+    comparable: boolean;
+    dropped: ProcedureDelta[];
+    newDark: string[];
+    regressed: boolean;
+    scoreDelta: number;
+}
+```
+
 ### `Category` (type)
 
 ```ts
 type Category = "PERFORMANCE" | "SCHEMA" | "SECURITY";
+```
+
+### `CheckResult` (interface)
+
+```ts
+interface CheckResult {
+    level: Level;
+    name: string;
+    weight: number;
+}
+```
+
+### `Coverage` (type)
+
+```ts
+type Coverage = "dark" | "exempt" | "instrumented" | "partial";
+```
+
+### `DEFAULT_WEIGHT_BY_LEVEL` (const)
+
+```ts
+const DEFAULT_WEIGHT_BY_LEVEL: Readonly<Record<Level, number>>;
 ```
 
 ### `Facing` (type)
@@ -844,6 +892,12 @@ interface Finding {
 }
 ```
 
+### `Grade` (type)
+
+```ts
+type Grade = "at-risk" | "excellent" | "good" | "needs-work";
+```
+
 ### `Level` (type)
 
 ```ts
@@ -863,6 +917,7 @@ interface Lint {
     run: (context: LintContext) => Finding[];
     source: LintSource;
     title: string;
+    weight?: number;
 }
 ```
 
@@ -903,7 +958,6 @@ interface LintContext {
     notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
     notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
-    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
     privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
     procedureProtections?: ReadonlyArray<AdvisorProcedureProtection>;
@@ -924,6 +978,7 @@ interface LintContext {
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableSamples?: ReadonlyArray<AdvisorTableSample>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
     workflows?: ReadonlyArray<AdvisorWorkflow>;
@@ -935,6 +990,72 @@ interface LintContext {
 
 ```ts
 type LintSource = "runtime" | "static";
+```
+
+### `MAP_VERSION` (const)
+
+```ts
+const MAP_VERSION = 1;
+```
+
+### `MapSummary` (interface)
+
+```ts
+interface MapSummary {
+    dark: number;
+    exempt: number;
+    findings: number;
+    instrumented: number;
+    partial: number;
+    procedures: number;
+}
+```
+
+### `PARTIAL_FLOOR` (const)
+
+```ts
+const PARTIAL_FLOOR = 50;
+```
+
+### `PROJECT_WEIGHT` (const)
+
+```ts
+const PROJECT_WEIGHT = 1;
+```
+
+### `ProcedureDelta` (interface)
+
+```ts
+interface ProcedureDelta {
+    after: number;
+    before: number;
+    id: string;
+}
+```
+
+### `ProcedureScore` (interface)
+
+```ts
+interface ProcedureScore {
+    checks: CheckResult[];
+    coverage: Coverage;
+    exportName: string;
+    file: string;
+    id: string;
+    kind: "action" | "mutation" | "query";
+    score: number;
+    visibility: "internal" | "public";
+    weight: number;
+}
+```
+
+### `ProjectScore` (interface)
+
+```ts
+interface ProjectScore {
+    checks: CheckResult[];
+    score: number;
+}
 ```
 
 ### `RUNTIME_LINTS` (const)
@@ -956,6 +1077,16 @@ interface RunAdvisorOptions {
 
 ```ts
 const STATIC_LINTS: ReadonlyArray<Lint>;
+```
+
+### `ScoreAdvisorOptions` (interface)
+
+```ts
+interface ScoreAdvisorOptions {
+    exempt?: ReadonlyArray<string>;
+    generatedAt?: string;
+    lints?: ReadonlyArray<Lint>;
+}
 ```
 
 ### `actionFetchSsrf` (const)
@@ -1054,6 +1185,12 @@ const browserUserUrlWithoutAllowlist: Lint;
 const circularFk: Lint;
 ```
 
+### `compareToBaseline` (const)
+
+```ts
+const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => BaselineComparison;
+```
+
 ### `constraintValidator` (const)
 
 ```ts
@@ -1088,6 +1225,12 @@ const containerRuntimeEgressRelaxation: Lint;
 
 ```ts
 const containerStartEnableInternetOverride: Lint;
+```
+
+### `coverageFromScore` (const)
+
+```ts
+const coverageFromScore: (score: number) => Exclude<Coverage, "exempt">;
 ```
 
 ### `dedupeCacheKeys` (const)
@@ -1160,6 +1303,12 @@ const geoIndexFieldNotGeopoint: Lint;
 
 ```ts
 const geoIndexUnused: Lint;
+```
+
+### `gradeFromScore` (const)
+
+```ts
+const gradeFromScore: (score: number) => Grade;
 ```
 
 ### `hardcodedSecret` (const)
@@ -1306,6 +1455,12 @@ const outputProjectionMissingOnPublicRead: Lint;
 const ownerFieldFromArgsNotAuth: Lint;
 ```
 
+### `parseAdvisorMap` (const)
+
+```ts
+const parseAdvisorMap: (value: unknown) => AdvisorMap | undefined;
+```
+
 ### `paymentCreateWithoutAuthorize` (const)
 
 ```ts
@@ -1340,6 +1495,12 @@ const privilegedDispatchUnvalidatedPayload: Lint;
 
 ```ts
 const privilegedFanoutFromPublicProcedure: Lint;
+```
+
+### `procedureWeight` (const)
+
+```ts
+const procedureWeight: (procedure: Pick<AdvisorProcedureProtection, "kind" | "visibility">) => number;
 ```
 
 ### `publicArgumentUsesAny` (const)
@@ -1412,6 +1573,27 @@ const rlsUncoveredTable: Lint;
 
 ```ts
 const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding[];
+```
+
+### `scoreAdvisor` (const)
+
+```ts
+const scoreAdvisor: (context: LintContext, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
+```
+
+### `scoreGlobal` (const)
+
+```ts
+const scoreGlobal: (entries: ReadonlyArray<{
+    score: number;
+    weight: number;
+}>) => number;
+```
+
+### `scoreProcedure` (const)
+
+```ts
+const scoreProcedure: (checks: ReadonlyArray<CheckResult>) => number;
 ```
 
 ### `shapeTargetsGlobalTable` (const)

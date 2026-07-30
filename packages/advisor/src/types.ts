@@ -30,7 +30,6 @@ import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
-import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
@@ -50,6 +49,7 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
 import type { AdvisorTableSample } from "./table-samples";
+import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 import type { AdvisorWranglerVariable } from "./wrangler-variables";
@@ -452,13 +452,6 @@ export interface LintContext {
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
 
     /**
-     * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /
-     * `undefined`) — the `unrestricted_where_branch` lint input. Supplied by the
-     * codegen feeder only.
-     */
-    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
-
-    /**
      * Payment webhook-adapter constructions (`createStripeAdapter` /
      * `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`) — the payment-webhook wide-tolerance lint's input. Each row's
      * `toleranceSeconds` is the statically-known `webhookToleranceSeconds` replay
@@ -525,6 +518,8 @@ export interface LintContext {
      */
     ratelimitKeySelectors?: ReadonlyArray<AdvisorRatelimitKeySelector>;
 
+    rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
+
     /* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
 
     /**
@@ -537,7 +532,6 @@ export interface LintContext {
      * feeder; absent for runtime callers, where the lint finds nothing.
      */
     /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
-    rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
 
     /**
      * `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list reads
@@ -654,6 +648,13 @@ export interface LintContext {
     tableScans?: ReadonlyArray<AdvisorTableScan>;
 
     /**
+     * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /
+     * `undefined`) — the `unrestricted_where_branch` lint input. Supplied by the
+     * codegen feeder only.
+     */
+    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
+
+    /**
      * `ctx.vectors.&lt;method>(index, { namespace, … })` calls whose `namespace` is
      * derived from the handler's `args` with no server-side scoping — the
      * `vectors_namespace_from_user_input` input. A Vectorize namespace partitions one
@@ -715,4 +716,16 @@ export interface Lint {
     source: LintSource;
     /** Short headline shared by every finding. */
     title: string;
+
+    /**
+     * Penalty this lint subtracts from a procedure's 100-point observability
+     * score when it fires — see `scoreProcedure`. Omit to fall back to the
+     * severity ladder in `DEFAULT_WEIGHT_BY_LEVEL`, which is what almost every
+     * lint wants; set it only to over- or under-weight a rule relative to its
+     * `level` (e.g. a WARN that matters more than its severity suggests).
+     *
+     * Purely advisory: `runAdvisor` ignores it, so a lint's findings are
+     * unaffected whether or not it is set.
+     */
+    weight?: number;
 }

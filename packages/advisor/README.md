@@ -93,6 +93,40 @@ const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { 
 
 A missing metric degrades to an empty array rather than throwing, so a partially configured read path still returns what it can.
 
+### Observability map (score, coverage, baseline)
+
+`runAdvisor` answers "what is wrong?". `scoreAdvisor` answers "how are we doing, and did it get worse?" — a scored coverage map over your procedures, modeled on [`evlog map`](https://www.evlog.dev/cli/map). It is a pure function over findings you already have, so it never re-runs a lint:
+
+```ts
+import { runAdvisor, scoreAdvisor } from "@lunora/advisor";
+
+const findings = runAdvisor(context, { source: "static" });
+const map = scoreAdvisor(context, findings);
+
+console.log(map.score, map.grade); // 84 "good"
+console.log(map.summary); // { dark: 1, exempt: 0, findings: 6, instrumented: 9, partial: 2, procedures: 12 }
+```
+
+Each procedure starts at 100 and loses each fired lint's weight (`Lint.weight`, else a severity ladder: `ERROR` 20 / `WARN` 10 / `INFO` 5), then rolls up into a weighted global mean — public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket that also counts toward the grade.
+
+Commit the map and gate CI on it:
+
+```ts
+import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
+
+const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
+const diff = baseline && compareToBaseline(map, baseline);
+
+// Three independent signals: the global score fell, an existing procedure got
+// worse, or one went dark. The middle one catches a refactor that guts a single
+// handler while leaving the mean flat.
+if (diff?.regressed) {
+    process.exitCode = 1;
+}
+```
+
+`@lunora/codegen` exposes `mapSchema()` to build the map straight from the feeder. Full design, weights, and the divergences from `evlog map` are in [`docs/observability-map.md`](./docs/observability-map.md).
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
 
 ## Related

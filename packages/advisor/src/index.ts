@@ -20,9 +20,9 @@ import allowUnauthenticatedShardAccessEnabled from "./lints/static/allow-unauthe
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
 import authCsrfCheckDisabled from "./lints/static/auth-csrf-check-disabled";
 import authEmailVerificationDisabled from "./lints/static/auth-email-verification-disabled";
+import authScimWithoutTransactions from "./lints/static/auth-scim-without-transactions";
 import authSecureCookiesDisabled from "./lints/static/auth-secure-cookies-disabled";
 import authSessionFreshageZero from "./lints/static/auth-session-freshage-zero";
-import authScimWithoutTransactions from "./lints/static/auth-scim-without-transactions";
 import authTrustedOriginsWildcard from "./lints/static/auth-trusted-origins-wildcard";
 import browserAllowPrivateTargets from "./lints/static/browser-allow-private-targets";
 import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-without-allowlist";
@@ -142,9 +142,9 @@ export { default as allowUnauthenticatedShardAccessEnabled } from "./lints/stati
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
 export { default as authCsrfCheckDisabled } from "./lints/static/auth-csrf-check-disabled";
 export { default as authEmailVerificationDisabled } from "./lints/static/auth-email-verification-disabled";
+export { default as authScimWithoutTransactions } from "./lints/static/auth-scim-without-transactions";
 export { default as authSecureCookiesDisabled } from "./lints/static/auth-secure-cookies-disabled";
 export { default as authSessionFreshageZero } from "./lints/static/auth-session-freshage-zero";
-export { default as authScimWithoutTransactions } from "./lints/static/auth-scim-without-transactions";
 export { default as authTrustedOriginsWildcard } from "./lints/static/auth-trusted-origins-wildcard";
 export { default as browserAllowPrivateTargets } from "./lints/static/browser-allow-private-targets";
 export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browser-user-url-without-allowlist";
@@ -224,6 +224,21 @@ export { default as workflowDuplicateStepName } from "./lints/static/workflow-du
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
 export type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
+export type { BaselineComparison, ProcedureDelta } from "./map/baseline";
+export { compareToBaseline, parseAdvisorMap } from "./map/baseline";
+export {
+    coverageFromScore,
+    DEFAULT_WEIGHT_BY_LEVEL,
+    gradeFromScore,
+    PARTIAL_FLOOR,
+    procedureWeight,
+    PROJECT_WEIGHT,
+    scoreGlobal,
+    scoreProcedure,
+} from "./map/score";
+export type { ScoreAdvisorOptions } from "./map/score-advisor";
+export { MAP_VERSION, scoreAdvisor } from "./map/score-advisor";
+export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore } from "./map/types";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorMaskStrategy } from "./mask-strategies";
 export type { AdvisorMutatorWrite } from "./mutator-writes";

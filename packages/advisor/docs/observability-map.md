@@ -1,6 +1,6 @@
 # Design: an observability "map" (score + coverage + baseline) for `@lunora/advisor`
 
-**Status:** proposal · **Owner:** advisor · **Prior art:** [`evlog map`](https://github.com/HugoRCD/evlog) (`@evlog/cli`)
+**Status:** phase 1 shipped · **Owner:** advisor · **Prior art:** [`evlog map`](https://github.com/HugoRCD/evlog) (`@evlog/cli`)
 
 This doc evaluates porting the [`evlog map`](https://www.evlog.dev/cli/map) command into
 `@lunora/advisor` and proposes a Lunora-native shape. The short version: port the
@@ -30,12 +30,12 @@ Pipeline (`packages/cli/src/lib/map/` in `HugoRCD/evlog`):
    `error-handling`, `page-error-handling`, `error-catalog`, `ai-logging`,
    `auth-identity`.
 4. **Scoring** (`score.ts`):
-   - `scoreRoute` starts at 100 and subtracts each failed rule's weight (fallback
-     10, clamped ≥ 0).
-   - `scoreGlobal` = weighted average excluding `exempt` routes — high-sensitivity
-     handlers ×2, pages ×0.5, default ×1.
-   - `gradeFromScore` → `excellent` (≥ 90) / `good` (≥ 70) / `needs-work` (≥ 50) /
-     `at-risk`.
+    - `scoreRoute` starts at 100 and subtracts each failed rule's weight (fallback
+      10, clamped ≥ 0).
+    - `scoreGlobal` = weighted average excluding `exempt` routes — high-sensitivity
+      handlers ×2, pages ×0.5, default ×1.
+    - `gradeFromScore` → `excellent` (≥ 90) / `good` (≥ 70) / `needs-work` (≥ 50) /
+      `at-risk`.
 5. **Output**: writes `evlog.map.json`; routes roll up as
    `instrumented` / `partial` / `dark` / `exempt`. Flags: `--baseline [ref]` diffs
    against the committed map to catch regressions, `--min-score <n>` exits non-zero
@@ -57,12 +57,12 @@ baseline/regression artifact, **no** observability/logging lints.
 
 ## 3. Fit and the two separable pieces
 
-| | `evlog map` | `@lunora/advisor` |
-| --- | --- | --- |
-| Model | scored **coverage map** over entry points | flat **`Finding[]`** over a `LintContext` |
-| Evidence | own per-framework `oxc-parser` scan | central **codegen feeder** facts |
-| Output | score + grade + map file + baseline + matrix | boolean findings, no score/coverage |
-| Rules | evlog wide-event API | Lunora schema/security/perf |
+|          | `evlog map`                                  | `@lunora/advisor`                         |
+| -------- | -------------------------------------------- | ----------------------------------------- |
+| Model    | scored **coverage map** over entry points    | flat **`Finding[]`** over a `LintContext` |
+| Evidence | own per-framework `oxc-parser` scan          | central **codegen feeder** facts          |
+| Output   | score + grade + map file + baseline + matrix | boolean findings, no score/coverage       |
+| Rules    | evlog wide-event API                         | Lunora schema/security/perf               |
 
 The port splits cleanly:
 
@@ -73,14 +73,14 @@ The port splits cleanly:
   wide-event API. The Lunora equivalents either already exist or map to Lunora
   primitives, and their evidence is already in the feeder:
 
-  | evlog rule | Lunora equivalent | feeder input |
-  | --- | --- | --- |
-  | `error-catalog` | `@lunora/errors` `ERROR_CATALOG` | (exists) |
-  | `ai-logging` | `@lunora/ai` raw runs | `aiRawRuns`, `aiToolSideEffects` |
-  | `auth-identity` | `ctx.auth` identity reads | `identityClaimReads`, `procedureProtections` |
-  | `wide-event` / `context` / `structured-errors` / `error-handling` | **new** Lunora instrumentation-coverage lints over procedure bodies | new feeder facts (see §5) |
+    | evlog rule                                                        | Lunora equivalent                                                   | feeder input                                 |
+    | ----------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------- |
+    | `error-catalog`                                                   | `@lunora/errors` `ERROR_CATALOG`                                    | (exists)                                     |
+    | `ai-logging`                                                      | `@lunora/ai` raw runs                                               | `aiRawRuns`, `aiToolSideEffects`             |
+    | `auth-identity`                                                   | `ctx.auth` identity reads                                           | `identityClaimReads`, `procedureProtections` |
+    | `wide-event` / `context` / `structured-errors` / `error-handling` | **new** Lunora instrumentation-coverage lints over procedure bodies | new feeder facts (see §5)                    |
 
-We do **not** need evlog's framework adapters: Lunora *is* the framework, and the
+We do **not** need evlog's framework adapters: Lunora _is_ the framework, and the
 entry-point set is already enumerated by the feeder as procedures.
 
 ## 4. Proposed shape — `scoreAdvisor()` over `runAdvisor()`
@@ -99,12 +99,12 @@ Keep `runAdvisor()` exactly as is. Add a thin, pure scoring layer that consumes 
   to the Advisors table unchanged while only the instrumentation family drives the
   grade.
 - **Rollup (mirrors evlog `score.ts`):**
-  - `scoreProcedure(findings)` = 100 − Σ failed-lint weights, clamped ≥ 0.
-  - `scoreGlobal` = weighted mean over non-exempt procedures — weight public
-    handlers ↑, internal ↓ (Lunora analog of evlog's high-sensitivity ×2 / page
-    ×0.5).
-  - `gradeFromScore` → reuse evlog's `excellent`/`good`/`needs-work`/`at-risk` bands.
-  - Coverage rollup per procedure → `instrumented` / `partial` / `dark` / `exempt`.
+    - `scoreProcedure(findings)` = 100 − Σ failed-lint weights, clamped ≥ 0.
+    - `scoreGlobal` = weighted mean over non-exempt procedures — weight public
+      handlers ↑, internal ↓ (Lunora analog of evlog's high-sensitivity ×2 / page
+      ×0.5).
+    - `gradeFromScore` → reuse evlog's `excellent`/`good`/`needs-work`/`at-risk` bands.
+    - Coverage rollup per procedure → `instrumented` / `partial` / `dark` / `exempt`.
 - **Artifact:** write `lunora.advisor.map.json` (version, timestamp, per-procedure
   scores + checks, global score + grade, summary tallies) — the baseline unit.
 - **Baseline + CI gate:** `--baseline [ref]` diffs against the committed map;
@@ -136,25 +136,68 @@ These are advisory (`INFO`/`WARN`), carry a `weight`, and feed the score.
 
 Port the **machinery**, author the **rules** natively.
 
-- **Phase 1 — machinery.** `scoreAdvisor()` + `weight` on `Lint` + coverage rollup +
-  `lunora.advisor.map.json` + `--min-score` / `--baseline`. No new lints; existing
-  security/perf findings can seed weights so the score is meaningful on day one.
+- **Phase 1 — machinery. ✅ shipped.** `scoreAdvisor()` + `weight` on `Lint` +
+  coverage rollup + the `AdvisorMap` artifact + `compareToBaseline` /
+  `parseAdvisorMap`, reachable from the real feeder via `@lunora/codegen`'s
+  `mapSchema()`. No new lints; existing security/perf findings seed the weights,
+  so the score is meaningful on day one.
 - **Phase 2 — observability lints.** Add the §5 family + the one or two new feeder
   facts they need.
-- **Phase 3 — Studio panel.** Grade + coverage matrix over the artifact.
+- **Phase 3 — Studio panel + CLI surface.** Grade + coverage matrix over the
+  artifact; a command that writes `lunora.advisor.map.json` and exposes
+  `--min-score` / `--baseline` as a CI gate (the library half of that gate — score
+  comparison and regression detection — already exists).
+
+### What shipped in phase 1
+
+| Piece                                                           | Where                              |
+| --------------------------------------------------------------- | ---------------------------------- |
+| `weight?: number` on `Lint` (advisory; `runAdvisor` ignores it) | `src/types.ts`                     |
+| Score/grade/coverage primitives                                 | `src/map/score.ts`                 |
+| `scoreAdvisor()` → `AdvisorMap`                                 | `src/map/score-advisor.ts`         |
+| `compareToBaseline()` / `parseAdvisorMap()`                     | `src/map/baseline.ts`              |
+| Artifact + row types                                            | `src/map/types.ts`                 |
+| Feeder integration `mapSchema()`                                | `@lunora/codegen` `src/advisor.ts` |
+
+Decisions taken while building, and where they diverge from `evlog map`:
+
+- **Severity ladder instead of a flat fallback.** `evlog` subtracts a flat 10 for an
+  unweighted rule; we spread it over `Level` (`ERROR` 20 / `WARN` 10 / `INFO` 5)
+  because Lunora's lints already carry a calibrated severity. An explicit
+  `Lint.weight` still overrides.
+- **The project bucket counts toward the grade.** `evlog` keeps project-level
+  suggestions out of its score. Schema debt (missing index, circular FK) names no
+  procedure, and excluding it would let an app with a wrecked schema and clean
+  handlers grade `excellent`, so the bucket is folded into the global mean as a
+  single weight-1 entry.
+- **Scoring is pure and re-reads existing findings.** `scoreAdvisor` takes the
+  `Finding[]` a caller already has rather than running lints itself, so the map
+  never double-runs a rule and `runAdvisor`'s lint core is untouched.
+- **Attribution is `metadata.file` + `metadata.exportName`.** A finding whose pair
+  matches no feeder-declared procedure falls back to the project bucket rather
+  than being dropped.
+- **`generatedAt` is caller-supplied.** Defaulted to now, but passed explicitly by
+  tests and reproducible builds so the artifact is byte-stable.
 
 ## 7. Licensing / attribution
 
 `evlog` is FSL-1.1-Apache-2.0; `@lunora/advisor` is FSL-1.1-Apache-2.0 — compatible.
-We are porting *ideas and the scoring formula*, not lifting source (the framework
+We are porting _ideas and the scoring formula_, not lifting source (the framework
 adapters and rule bodies are rewritten against the feeder). Credit `evlog map` as
 prior art in the code and this doc regardless.
 
 ## 8. Open questions
 
-1. Should the observability score live **inside** `@lunora/advisor` or in a thin
-   `@lunora/advisor/map` subpath, to keep `runAdvisor`'s pure-lint core untouched?
-2. Weighting for `public` vs `internal` vs `query` procedures — start with
-   public ×2 / internal ×0.5 / query ×0.5 and tune against a real app.
-3. Does the codegen feeder run often enough to make the map a natural `lunora dev`
-   artifact, or is it a `lunora advisor --map` on-demand + CI-only concern?
+1. ~~Subpath or main entry?~~ **Resolved:** `src/map/*`, re-exported from the
+   package index. A separate `@lunora/advisor/map` export would have meant new
+   packem/`exports` config for no isolation benefit — `runAdvisor`'s core is
+   already untouched because scoring is a pure function over its output.
+2. ~~Procedure weights?~~ **Resolved as proposed** — public ×2 / internal ×0.5 /
+   query ×0.5, with `query` winning when both apply (`evlog`'s "page wins" rule).
+   Still worth tuning against a real app; the constants are in one place.
+3. **Still open.** Does the codegen feeder run often enough to make the map a
+   natural `lunora dev` artifact, or is it an on-demand + CI-only concern? This
+   decides the phase-3 CLI surface — `mapSchema()` supports either.
+4. **New.** Should `exempt` entries be declared in config (a `lunora.config`
+   key) or inline in source (an `evlog`-style directive comment)? Phase 1 takes
+   the list as a caller-supplied option and leaves the source of truth open.
