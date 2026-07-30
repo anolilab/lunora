@@ -3019,8 +3019,8 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: workspace:*
-        version: link:../observability
+        specifier: 1.0.0-alpha.1
+        version: 1.0.0-alpha.1
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
