@@ -4,7 +4,9 @@ import {
     ensureFunctionMetricsTables,
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKET_RETENTION,
+    FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_MAX_PATHS,
+    FUNCTION_METRICS_READ_LIMIT,
     FUNCTION_METRICS_TABLE,
     mergeScanAttribution,
     readFunctionMetricBuckets,
@@ -210,6 +212,34 @@ describe("recordFunctionMetric", () => {
         expect(row?.scannedTables).toHaveLength(2);
     });
 
+    it("keys index hits on the table AND the index, not either alone", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        // Two indexes on ONE table, plus one index name shared ACROSS tables — the
+        // shapes a fixture of (posts,byAuthor)+(users,byEmail) cannot distinguish.
+        // Keying on the index alone, or the table alone, collapses entries here and
+        // makes a live index record zero reads, which is exactly what the dead-index
+        // lint would then flag as dead.
+        recordFunctionMetric(
+            sql,
+            dispatch({
+                indexHits: [
+                    { index: "byAuthor", table: "posts" },
+                    { index: "byCreated", table: "posts" },
+                    { index: "byCreated", table: "users" },
+                ],
+            }),
+        );
+
+        const hits = readFunctionMetricIndexHits(sql);
+
+        expect(hits).toHaveLength(3);
+        expect(hits.every((hit) => hit.reads === 1)).toBe(true);
+    });
+
     it("counts one index read per distinct table/index pair per dispatch", () => {
         expect.assertions(2);
 
@@ -255,7 +285,7 @@ describe("recordFunctionMetric", () => {
     });
 
     it("drops a brand-new path once the accumulator is at its cap", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const harness = createSqliteExec();
         const { sql } = harness;
@@ -275,6 +305,11 @@ describe("recordFunctionMetric", () => {
 
         expect(count?.["n"]).toBe(FUNCTION_METRICS_MAX_PATHS);
         expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'attacker:random'`)).toStrictEqual([]);
+        // The satellites matter as much as the accumulator: a guard that only
+        // protected the accumulator would leave the bucket, scan and index tables
+        // growing without bound, which is the whole reason the cap exists.
+        expect(readFunctionMetricBuckets(sql, "attacker:random")).toStrictEqual([]);
+        expect(readFunctionMetricScans(sql).get("attacker:random")).toBeUndefined();
     });
 
     it("keeps accumulating an already-tracked path past the cap", () => {
@@ -376,8 +411,10 @@ describe("time-series buckets", () => {
         recordFunctionMetric(sql, dispatch({ path: "old:fn", ts: 0 }));
         recordFunctionMetric(sql, dispatch({ path: "new:fn", ts: FUNCTION_METRICS_BUCKET_MS * (FUNCTION_METRICS_BUCKET_RETENTION + 10) }));
 
-        // The trim's subquery is scoped by path. Were it global, one busy
-        // function's clock would evict every other function's history.
+        // What actually protects `old:fn` here is the outer `WHERE path = ?`, not
+        // the subquery's scope — a global subquery still passes this. Kept because
+        // the property is worth pinning: writing one path must never evict
+        // another's history, however the trim is expressed.
         expect(readFunctionMetricBuckets(sql, "old:fn")).toHaveLength(1);
         expect(readFunctionMetricBuckets(sql, "new:fn")).toHaveLength(1);
     });
@@ -396,6 +433,33 @@ describe("time-series buckets", () => {
                 .map((bucket) => bucket.path)
                 .toSorted((a, b) => a.localeCompare(b)),
         ).toStrictEqual(["a:fn", "b:fn"]);
+    });
+});
+
+describe("bounded reads", () => {
+    it("caps the all-paths bucket read and keeps the most recent window", () => {
+        expect.assertions(3);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        ensureFunctionMetricsTables(sql);
+
+        // `getMetrics` calls this on every Studio Metrics load, so its row count is
+        // (tracked functions x retained buckets). Unbounded, 100 active functions
+        // over a day of minute-buckets is ~144k rows in a ~128MB isolate.
+        for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT + 50; index += 1) {
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('posts:list', ?, 1, 0)`, index * 60_000);
+        }
+
+        const buckets = readFunctionMetricBuckets(sql);
+
+        expect(buckets).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+        // Newest window kept, not the stalest one — a chart of the oldest 1000
+        // buckets is worse than useless.
+        expect(buckets.at(-1)?.bucketMs).toBe((FUNCTION_METRICS_READ_LIMIT + 49) * 60_000);
+        // Still oldest-first, so it plots left to right.
+        expect(buckets[0]!.bucketMs).toBeLessThan(buckets.at(-1)!.bucketMs);
     });
 });
 

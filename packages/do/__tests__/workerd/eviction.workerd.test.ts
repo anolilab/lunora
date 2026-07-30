@@ -301,7 +301,7 @@ describe("shardDO websocket upgrade — durable socket identity", () => {
 
         // `ShardDO`'s upgrade path must accept through `SocketHost`, not call
         // `state.acceptWebSocket` directly. The accept-time tag is what makes
-        // `SocketHandle.id` survive hibernation and what lets `handleFor` resolve
+        // `SocketHost.idFor` survive hibernation and what lets `handleFor` resolve
         // a raw socket in O(1) after a wake instead of scanning the socket set.
         // Accepting behind the host's back still works — it just silently loses
         // both, which no other assertion here would notice.

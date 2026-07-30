@@ -15,6 +15,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { analyzedSearchText, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 

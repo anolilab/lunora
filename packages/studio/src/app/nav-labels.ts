@@ -31,6 +31,7 @@ const useNavLabels = (): NavLabels => {
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: the shell feeds this object to the document-title effect as a dependency, so a fresh one re-sets `document.title` every render
     const tabLabel = useMemo(() => {
         return {
+            advisorHealth: t("Health score"),
             agents: t("Agents"),
             analytics: t("Analytics"),
             api: t("API"),
@@ -92,6 +93,7 @@ const useNavLabels = (): NavLabels => {
 
     // One-line section descriptions for the page header.
     const tabDescription = {
+        advisorHealth: t("Score your app's advisor findings: a grade, the coverage split, and every procedure ranked worst-first."),
         agents: t("Inspect agent threads, message timelines, tool calls, and token usage."),
         analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
         api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),

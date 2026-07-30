@@ -16,6 +16,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";

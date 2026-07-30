@@ -232,7 +232,16 @@ const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
     const { getTags } = state as { getTags?: (ws: WebSocket) => string[] };
 
     if (typeof getTags === "function") {
-        const idTag = getTags.call(state, ws).find((tag) => tag.startsWith(ID_TAG_PREFIX));
+        // Guarded like `hasIdTag`: `getTags` rejects a socket the runtime does not
+        // know, and `idFor` is public contract surface documented to return an id
+        // — not to throw at a caller holding a closed socket.
+        let idTag: string | undefined;
+
+        try {
+            idTag = getTags.call(state, ws).find((tag) => tag.startsWith(ID_TAG_PREFIX));
+        } catch {
+            idTag = undefined;
+        }
 
         if (idTag !== undefined) {
             return idTag.slice(ID_TAG_PREFIX.length);
@@ -246,10 +255,12 @@ const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
     }
 
     fallbackCounter += 1;
-    const id = `cf-socket-${String(fallbackCounter)}`;
-    fallbackIds.set(ws, id);
 
-    return id;
+    // Deliberately NOT recorded in `fallbackIds`. That map is ownership evidence
+    // consulted by `handleFor`, and `accept` is its only legitimate writer — a
+    // read-only id lookup that wrote to it would let `idFor(x)` on a foreign
+    // socket turn a cached "not ours" into "ours" on the next `handleFor(x)`.
+    return `cf-socket-${String(fallbackCounter)}`;
 };
 
 /**
@@ -342,7 +353,11 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             // durable id tag, which survives hibernation; doubles that never
             // implement `getTags` still went through `accept`, which records a
             // fallback id.
-            if (hasIdTag(state, ws) || fallbackIds.has(ws)) {
+            // `fallbackIds` first: it is an O(1) WeakMap hit for every socket this
+            // wake accepted, whereas `hasIdTag` is a `getTags` host call that
+            // allocates an array on every inbound frame. Both are ownership
+            // evidence, so the union is unchanged — only the cost order is.
+            if (fallbackIds.has(ws) || hasIdTag(state, ws)) {
                 return ws as SocketHandle;
             }
 

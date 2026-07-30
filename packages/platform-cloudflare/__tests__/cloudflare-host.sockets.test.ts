@@ -239,6 +239,23 @@ describe("createSocketHost handleFor ownership", () => {
         expect(host.handleFor(socket)).toBe(socket);
     });
 
+    it("does not let an id lookup launder a foreign socket into ownership", () => {
+        expect.assertions(3);
+
+        const live: FakeSocket[] = [];
+        const host = createSocketHost(stateWith(live) as never);
+        const stranger = new FakeSocket();
+
+        expect(host.handleFor(stranger)).toBeUndefined();
+
+        // `idFor` mints a fallback id for any socket. If that mint were recorded in
+        // the same map `handleFor` treats as ownership evidence, this read would
+        // silently promote a socket we refused a moment ago — turning a lookup into
+        // a grant, for every socket host in the isolate.
+        expect(host.idFor(stranger as never)).toBeDefined();
+        expect(host.handleFor(stranger)).toBeUndefined();
+    });
+
     it("answers ownership for a stream of unknown sockets without re-walking per call", () => {
         expect.assertions(23);
 

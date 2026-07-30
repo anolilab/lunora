@@ -52,10 +52,19 @@ const EXPLAIN_ISSUE_MODEL_CAP = 120;
 const EXPLAIN_ISSUE_CONTEXT_CAP = 200;
 
 /**
- * Delimiter fencing the caller-supplied error report inside the model prompt. A
- * fixed marker the caller cannot forge past, because every caller-supplied field
- * is length-capped well below any useful escape and the marker is stated in the
- * system prompt as the untrusted-data boundary.
+ * Delimiter fencing the caller-supplied error report inside the model prompt.
+ *
+ * The caps do NOT make this unforgeable — that was the original claim here and it
+ * was wrong. The marker is 38 characters and the fields are capped at 2000
+ * (`sampleMessage`) and 200 (`title`/`culprit`), so an attacker who can shape a
+ * thrown error message has ample room to embed the marker verbatim, close the
+ * block early, and continue in the position where Lunora's own curated guidance
+ * appears — reading to the model as catalog-backed fact rather than as reported
+ * data.
+ *
+ * So the marker is stripped from every caller-supplied field before fencing (see
+ * {@link fenceSafe}). That is what makes the boundary hold; the system prompt
+ * naming it is the second layer, not the first.
  */
 const UNTRUSTED_FENCE = "-----BEGIN UNTRUSTED ERROR REPORT-----";
 
@@ -65,6 +74,16 @@ const UNTRUSTED_FENCE = "-----BEGIN UNTRUSTED ERROR REPORT-----";
  * open indefinitely; racing a timer degrades to the grounded hint instead.
  */
 const EXPLAIN_ISSUE_TIMEOUT_MS = 10_000;
+
+/**
+ * Strip the fence marker from caller-supplied text so it cannot close the
+ * untrusted block early. Applied to every field that enters the fenced report.
+ *
+ * Replaced rather than rejected: an error message that happens to contain the
+ * marker is still a real error the operator needs explained, and refusing it
+ * would turn a cosmetic collision into a denied explanation.
+ */
+const fenceSafe = (value: string): string => value.replaceAll(UNTRUSTED_FENCE, "[fence]");
 
 /**
  * Structural projection of the Workers `AI` binding's `run` method — declared
@@ -205,14 +224,14 @@ const runExplainIssueModel = async (
     const report: string[] = [];
 
     if (issue.title !== undefined) {
-        report.push(`Title: ${issue.title}`);
+        report.push(`Title: ${fenceSafe(issue.title)}`);
     }
 
     if (issue.culprit !== undefined) {
-        report.push(`Source: ${issue.culprit}`);
+        report.push(`Source: ${fenceSafe(issue.culprit)}`);
     }
 
-    report.push(`Error message: ${issue.sampleMessage}`);
+    report.push(`Error message: ${fenceSafe(issue.sampleMessage)}`);
 
     const facts = [UNTRUSTED_FENCE, report.join("\n"), UNTRUSTED_FENCE];
 

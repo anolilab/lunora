@@ -30,7 +30,6 @@ import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
-import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
@@ -50,6 +49,7 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
 import type { AdvisorTableSample } from "./table-samples";
+import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 import type { AdvisorWranglerVariable } from "./wrangler-variables";
@@ -452,13 +452,6 @@ export interface LintContext {
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
 
     /**
-     * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /
-     * `undefined`) — the `unrestricted_where_branch` lint input. Supplied by the
-     * codegen feeder only.
-     */
-    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
-
-    /**
      * Payment webhook-adapter constructions (`createStripeAdapter` /
      * `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`) — the payment-webhook wide-tolerance lint's input. Each row's
      * `toleranceSeconds` is the statically-known `webhookToleranceSeconds` replay
@@ -536,8 +529,8 @@ export interface LintContext {
      * the schema's PII-named columns before nudging. Supplied by the codegen
      * feeder; absent for runtime callers, where the lint finds nothing.
      */
-    /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
     rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
+    /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
 
     /**
      * `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list reads
@@ -652,6 +645,13 @@ export interface LintContext {
      * and shards. Absent for static callers, where the lint finds nothing.
      */
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+
+    /**
+     * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /
+     * `undefined`) — the `unrestricted_where_branch` lint input. Supplied by the
+     * codegen feeder only.
+     */
+    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
 
     /**
      * `ctx.vectors.&lt;method>(index, { namespace, … })` calls whose `namespace` is

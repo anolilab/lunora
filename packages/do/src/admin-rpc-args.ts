@@ -14,8 +14,6 @@
  * and the behaviour provably identical.
  */
 
-/* eslint-disable no-secrets/no-secrets -- reserved admin RPC + workflow type names are framework constants, not credentials */
-
 import { LunoraError } from "@lunora/errors";
 import type { IndexHit, IssueSeverity, IssueStatus, LogEntry, TraceAnchor } from "@lunora/observability";
 import { ISSUE_SEVERITIES, ISSUE_STATUSES } from "@lunora/observability";
@@ -311,7 +309,7 @@ const parseSeverityArgument = (args: Record<string, unknown>): IssueSeverity | n
 
 /**
  * Minimal structural shape of a created/fetched workflow instance handle, mirrored
- * from `@lunora/workflow`'s `WorkflowInstanceLike` so `@lunora/do` stays free of a
+ * from `@lunora/workflow`'s WorkflowInstanceLike so `@lunora/do` stays free of a
  * dependency on the workflow package. Only the members the admin ops touch (`id`
  * and `status()`) are modelled.
  */
@@ -330,7 +328,7 @@ interface WorkflowBindingHandle {
     get: (id: string) => Promise<WorkflowInstanceHandle>;
 }
 
-/** Parsed `__lunora_admin__:createWorkflowInstance` payload: which declared workflow to start, plus optional id/params. */
+/** Parsed `createWorkflowInstance` admin-RPC payload: which declared workflow to start, plus optional id/params. */
 interface CreateWorkflowInstanceArgs {
     exportName: string;
     id?: string;
@@ -338,7 +336,7 @@ interface CreateWorkflowInstanceArgs {
 }
 
 /**
- * Validate the `__lunora_admin__:createWorkflowInstance` payload. Requires a
+ * Validate the `createWorkflowInstance` admin-RPC payload. Requires a
  * non-empty `exportName` (the `lunora/workflows.ts` export the handle is addressed
  * by); `id` and `params` are optional. Throws a 400 `LunoraError` on a bad shape.
  */
@@ -354,14 +352,14 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
     return { exportName, id, params: args["params"] };
 };
 
-/** Parsed `__lunora_admin__:getWorkflowInstanceStatus` payload: which workflow and which instance to inspect. */
+/** Parsed getWorkflowInstanceStatus admin-RPC payload: which workflow and which instance to inspect. */
 interface GetWorkflowInstanceStatusArgs {
     exportName: string;
     id: string;
 }
 
 /**
- * Validate the `__lunora_admin__:getWorkflowInstanceStatus` payload. Requires both
+ * Validate the getWorkflowInstanceStatus admin-RPC payload. Requires both
  * a non-empty `exportName` and a non-empty instance `id`. Throws a 400
  * `LunoraError` otherwise.
  */

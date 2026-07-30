@@ -7,6 +7,7 @@ import type {
     AdvisorSchema,
     AdvisorShape,
     Finding,
+    LintContext,
 } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 
@@ -159,23 +160,6 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
     });
 
 /**
- * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
- * found in function bodies: query reads feed `filter_without_index`, insert writes
- * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
- * rls procedure snapshots feed `rls_uncovered_table`, mask procedure
- * snapshots feed `mask_uncovered_pii_column`, and per-column mask strategies
- * feed `mask_weak_hash_strategy_on_pii`; declared containers
- * feed the `container_*` lints; declared workflows (with their durable step labels)
- * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
- * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
- * calls inside query/mutation handlers feed the `nondeterministic_query_mutation` lint
- * (all default empty for callers that don't analyze functions/containers/workflows).
- * The IR types are structurally identical to the advisor's evidence types so they
- * pass straight through without conversion. Returns the findings; surfacing them
- * (console, error overlay, studio Advisors table) is the caller's choice.
- */
-
-/**
  * Named inputs for {@link lintSchema}. Every feeder is a discrete key rather than
  * a positional argument: the feeder list grows every few releases and many IR
  * types are structurally similar (`{file, exportName, line}`-shaped evidence),
@@ -184,7 +168,7 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
  * corrupt a security advisory. `schema` is the only required field; every other
  * feeder defaults to "not analyzed" when omitted.
  */
-export interface LintSchemaOptions {
+interface LintSchemaOptions {
     adminRoutes?: ReadonlyArray<AdminRouteIR>;
     aiRawRuns?: ReadonlyArray<AiRawRunIR>;
     aiToolSideEffects?: ReadonlyArray<AiToolSideEffectIR>;
@@ -240,65 +224,95 @@ export interface LintSchemaOptions {
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 
-export const lintSchema = (options: LintSchemaOptions): Finding[] =>
-    runAdvisor(
-        {
-            adminRoutes: options.adminRoutes,
-            aiRawRuns: options.aiRawRuns,
-            aiToolSideEffects: options.aiToolSideEffects,
-            argumentDerivedFetches: options.argumentDerivedFetches,
-            argValidators: options.argumentValidators,
-            authApiCalls: options.authApiCalls,
-            authConfigs: options.authConfigs,
-            browserUrlAccesses: options.browserUrlAccesses,
-            configCalls: options.configCalls,
-            containerKeyAccesses: options.containerKeyAccesses,
-            containerOverrides: options.containerOverrides,
-            containers: options.containers,
-            exportSinks: options.exportSinks,
-            failOpenGuards: options.failOpenGuards,
-            flagSecurityDefaults: options.flagSecurityDefaults,
-            geoIndexUsages: options.geoIndexUsages,
-            httpActionGuards: options.httpActionGuards,
-            httpHeaderWrites: options.httpHeaderWrites,
-            identityClaimReads: options.identityClaimReads,
-            imageDeliveryUrlAccesses: options.imageDeliveryUrlAccesses,
-            inserts: options.inserts,
-            kvKeyAccesses: options.kvKeyAccesses,
-            mailRecipientAccesses: options.mailRecipientAccesses,
-            maskProcedures: options.maskProcedures,
-            maskStrategies: options.maskStrategies,
-            mutatorWrites: options.mutatorWrites,
-            nondeterministicCalls: options.nondeterministicCalls,
-            normalizeIdAuthorizations: options.normalizeIdAuthorizations,
-            notifyCalls: options.notifyCalls,
-            notifyConfig: options.notifyConfig,
-            ownerFieldWrites: options.ownerFieldWrites,
-            unrestrictedWhereBranches: options.unrestrictedWhereBranches,
-            paymentWebhooks: options.paymentWebhooks,
-            privilegedDispatches: options.privilegedDispatches,
-            procedureProtections: options.procedureProtections,
-            queries: options.queries ?? [],
-            queues: options.queues,
-            r2sqlCalls: options.r2sqlCalls,
-            ratelimitKeySelectors: options.ratelimitKeySelectors,
-            rawRowReturns: options.rawRowReturns,
-            relationLoads: options.relationLoads,
-            rlsProcedures: options.rlsProcedures,
-            schema: toAdvisorSchema(options.schema),
-            secretLiterals: options.secretLiterals,
-            shapes: options.shapes === undefined ? undefined : toAdvisorShapes(options.shapes),
-            softDeleteReads: options.softDeleteReads,
-            sqlInterpolations: options.sqlInterpolations,
-            storageKeyAccesses: options.storageKeyAccesses,
-            storageUploads: options.storageUploads,
-            vectorNamespaceAccesses: options.vectorNamespaceAccesses,
-            workflowCalls: options.workflowCalls,
-            workflows: options.workflows,
-            wranglerVariables: options.wranglerVariables,
-        },
-        { source: "static" },
-    );
+/**
+ * Normalize feeder options into the advisor's {@link LintContext} — the input
+ * both `runAdvisor` and `scoreAdvisor` take. Shared by {@link lintSchema} so the
+ * lint run and the scored map always see byte-identical evidence.
+ *
+ * Exported instead of a `mapSchema(options)` convenience that lints *and* scores:
+ * such a wrapper would either re-run every rule or need a `findings` escape hatch
+ * nothing could validate against its `options`, so mismatched findings would
+ * silently produce a wrong map. Two lines at the call site buys that away:
+ *
+ * ```ts
+ * const context = toAdvisorContext(options);
+ * const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }));
+ * ```
+ */
+const toAdvisorContext = (options: LintSchemaOptions): LintContext =>
+    ({
+        adminRoutes: options.adminRoutes,
+        aiRawRuns: options.aiRawRuns,
+        aiToolSideEffects: options.aiToolSideEffects,
+        argumentDerivedFetches: options.argumentDerivedFetches,
+        argValidators: options.argumentValidators,
+        authApiCalls: options.authApiCalls,
+        authConfigs: options.authConfigs,
+        browserUrlAccesses: options.browserUrlAccesses,
+        configCalls: options.configCalls,
+        containerKeyAccesses: options.containerKeyAccesses,
+        containerOverrides: options.containerOverrides,
+        containers: options.containers,
+        exportSinks: options.exportSinks,
+        failOpenGuards: options.failOpenGuards,
+        flagSecurityDefaults: options.flagSecurityDefaults,
+        geoIndexUsages: options.geoIndexUsages,
+        httpActionGuards: options.httpActionGuards,
+        httpHeaderWrites: options.httpHeaderWrites,
+        identityClaimReads: options.identityClaimReads,
+        imageDeliveryUrlAccesses: options.imageDeliveryUrlAccesses,
+        inserts: options.inserts,
+        kvKeyAccesses: options.kvKeyAccesses,
+        mailRecipientAccesses: options.mailRecipientAccesses,
+        maskProcedures: options.maskProcedures,
+        maskStrategies: options.maskStrategies,
+        mutatorWrites: options.mutatorWrites,
+        nondeterministicCalls: options.nondeterministicCalls,
+        normalizeIdAuthorizations: options.normalizeIdAuthorizations,
+        notifyCalls: options.notifyCalls,
+        notifyConfig: options.notifyConfig,
+        ownerFieldWrites: options.ownerFieldWrites,
+        paymentWebhooks: options.paymentWebhooks,
+        privilegedDispatches: options.privilegedDispatches,
+        procedureProtections: options.procedureProtections,
+        queries: options.queries ?? [],
+        queues: options.queues,
+        r2sqlCalls: options.r2sqlCalls,
+        ratelimitKeySelectors: options.ratelimitKeySelectors,
+        rawRowReturns: options.rawRowReturns,
+        relationLoads: options.relationLoads,
+        rlsProcedures: options.rlsProcedures,
+        schema: toAdvisorSchema(options.schema),
+        secretLiterals: options.secretLiterals,
+        shapes: options.shapes === undefined ? undefined : toAdvisorShapes(options.shapes),
+        softDeleteReads: options.softDeleteReads,
+        sqlInterpolations: options.sqlInterpolations,
+        storageKeyAccesses: options.storageKeyAccesses,
+        storageUploads: options.storageUploads,
+        unrestrictedWhereBranches: options.unrestrictedWhereBranches,
+        vectorNamespaceAccesses: options.vectorNamespaceAccesses,
+        workflowCalls: options.workflowCalls,
+        workflows: options.workflows,
+        wranglerVariables: options.wranglerVariables,
+    }) satisfies LintContext;
+
+/**
+ * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
+ * found in function bodies: query reads feed `filter_without_index`, insert writes
+ * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
+ * rls procedure snapshots feed `rls_uncovered_table`, mask procedure
+ * snapshots feed `mask_uncovered_pii_column`, and per-column mask strategies
+ * feed `mask_weak_hash_strategy_on_pii`; declared containers
+ * feed the `container_*` lints; declared workflows (with their durable step labels)
+ * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
+ * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
+ * calls inside query/mutation handlers feed the `nondeterministic_query_mutation` lint
+ * (all default empty for callers that don't analyze functions/containers/workflows).
+ * The IR types are structurally identical to the advisor's evidence types so they
+ * pass straight through without conversion. Returns the findings; surfacing them
+ * (console, error overlay, studio Advisors table) is the caller's choice.
+ */
+export const lintSchema = (options: LintSchemaOptions): Finding[] => runAdvisor(toAdvisorContext(options), { source: "static" });
 
 /**
  * Render advisor findings as a single multi-line string for console surfacing:
@@ -315,3 +329,6 @@ export const formatAdvisories = (findings: ReadonlyArray<Finding>): string => {
 
     return [header, ...lines].join("\n");
 };
+
+export { toAdvisorContext };
+export type { LintSchemaOptions };

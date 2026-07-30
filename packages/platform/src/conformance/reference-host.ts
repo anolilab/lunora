@@ -394,7 +394,18 @@ const createReferenceHost = (): ReferenceHost => {
             return filtered.map((s) => s.handle);
         },
         handleFor: (rawSocket) => [...runtimeSockets.values()].find((s) => s.raw === rawSocket)?.handle,
-        idFor: (handle) => handleIds.get(handle) ?? "",
+        idFor: (handle) => {
+            const id = handleIds.get(handle);
+
+            if (id === undefined) {
+                // Loudly, not `?? ""`: the suite now compares tag fan-out BY ID, so
+                // a host whose registration silently missed would return [""] vs
+                // [""] and pass a crossed-tag check it should fail.
+                throw new Error("reference host: idFor called with a handle this host never issued");
+            }
+
+            return id;
+        },
         removeTag: (handle, tag) => {
             const socketState = runtimeSockets.get(handleIds.get(handle) ?? "");
 

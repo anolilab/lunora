@@ -11,6 +11,7 @@ export type { ErrorBoundaryProps } from "./components/error-boundary";
 export { ErrorBoundary } from "./components/error-boundary";
 export type { ShardInputProps } from "./components/shard-input";
 export { ShardInput } from "./components/shard-input";
+export { default as AdvisorHealthPanel } from "./features/advisors/advisor-health-panel";
 export type { Insight, InsightKind, InsightSeverity, InsightThresholds } from "./features/advisors/derive-insights";
 export { DEFAULT_INSIGHT_THRESHOLDS, deriveInsights } from "./features/advisors/derive-insights";
 export type { InsightsPanelProps } from "./features/advisors/insights-panel";

@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runAdvisor, scoreAdvisor } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { formatAdvisories, lintSchema } from "../src/advisor";
+import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
 import discoverSchema from "../src/discover-schema";
 import { runCodegen } from "../src/index";
 
@@ -179,6 +180,70 @@ export const ghost = defineShape({ table: "mesages", where: () => ({}) });
         expect(byName("shape_unknown_table")[0]?.metadata).toMatchObject({ exportName: "ghost", table: "mesages" });
     });
 
+    it("reads observability facts off real handler bodies", () => {
+        expect.assertions(4);
+
+        writeFileSync(
+            join(workdir, "lunora", "ops.ts"),
+            `import { action, mutation } from "@lunora/server";
+export const quiet = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+export const loud = mutation({ args: {}, handler: async (ctx) => { ctx.log.info("did it"); } });
+export const risky = action({ args: {}, handler: async (ctx) => { await ctx.fetch("https://example.com"); } });
+export const careful = action({ args: {}, handler: async (ctx) => { try { await ctx.fetch("https://example.com"); } catch { /* degraded */ } } });
+`,
+            "utf8",
+        );
+
+        const names = new Set(runCodegen({ projectRoot: workdir }).advisories.map((advisory) => `${advisory.name}:${String(advisory.metadata.exportName)}`));
+
+        expect(names).toContain("error_without_catalog:quiet");
+        expect(names).toContain("procedure_without_structured_event:quiet");
+        expect(names).not.toContain("procedure_without_structured_event:loud");
+        // `risky` has no catch; `careful` does.
+        expect([...names].filter((name) => name.startsWith("action_without_error_handling:"))).toStrictEqual(["action_without_error_handling:risky"]);
+    });
+
+    it.each([
+        ["prose mentioning the directive", "// Do NOT add lunora-advisor-exempt to this one."],
+        ["a longer token", "// TODO(LUN-9): lunora-advisor-exempt-later once the audit lands"],
+    ])("does not exempt on %s", (_label, comment) => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "prose.ts"),
+            `import { mutation } from "@lunora/server";\n${comment}\nexport const handler = mutation({ args: {}, handler: async () => {} });\n`,
+            "utf8",
+        );
+
+        const rows = runCodegen({ dryRun: true, projectRoot: workdir }).advisorContext?.procedureProtections ?? [];
+
+        // A false positive here silences the procedure in compareToBaseline forever.
+        expect(rows.find((row) => row.exportName === "handler")?.exempt).toBe(false);
+    });
+
+    it("reads a source-level exemption directive above an export", () => {
+        expect.assertions(3);
+
+        writeFileSync(
+            join(workdir, "lunora", "legacy.ts"),
+            `import { mutation } from "@lunora/server";
+// lunora-advisor-exempt -- legacy endpoint, removed in Q3
+export const legacy = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+export const current = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+`,
+            "utf8",
+        );
+
+        const context = runCodegen({ dryRun: true, projectRoot: workdir }).advisorContext;
+        const rows = context?.procedureProtections ?? [];
+        const exempted = rows.find((row) => row.exportName === "legacy");
+
+        expect(exempted?.exempt).toBe(true);
+        expect(exempted?.exemptReason).toBe("legacy endpoint, removed in Q3");
+        // The directive is per-export, not per-file.
+        expect(rows.find((row) => row.exportName === "current")?.exempt).toBe(false);
+    });
+
     it('flags a `.public()` table with a PII column under `.rls("required")` (full discover → lint path)', () => {
         expect.assertions(2);
 
@@ -216,5 +281,86 @@ export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: 
 
         expect(finding).toBeDefined();
         expect(finding?.metadata).toMatchObject({ callee: "extend", file: "server" });
+    });
+});
+
+describe("toAdvisorContext (codegen → advisor coverage map)", () => {
+    const STAMP = "2026-07-30T00:00:00.000Z";
+
+    /** The documented two-line call site: one context, feeding both the lint run and the score. */
+    const mapOf = (source: string) => {
+        const context = toAdvisorContext({ schema: irFrom(source) });
+
+        return scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+    };
+
+    it("scores the same evidence lintSchema lints, penalising the unindexed schema", () => {
+        expect.assertions(3);
+
+        const unindexed = mapOf(UNINDEXED);
+        const indexed = mapOf(INDEXED);
+
+        // The FK finding names no procedure, so it lands in the project bucket.
+        expect(unindexed.project.checks.some((check) => check.name === "unindexed_foreign_key")).toBe(true);
+        expect(unindexed.score).toBeLessThan(indexed.score);
+        expect(indexed.grade).toBe("excellent");
+    });
+
+    it("attributes a filter-without-index read to the procedure that performs it", () => {
+        expect.assertions(3);
+
+        const schemaSource = `
+            import { defineSchema, defineTable, v } from "@lunora/server";
+            export const schema = defineSchema({ posts: defineTable({ published: v.boolean() }) });
+        `;
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+        project.createSourceFile("/virtual/lunora/schema.ts", schemaSource);
+
+        // The read sits inside the exported `list` query, so the finding belongs on
+        // that procedure's row rather than in the catch-all project bucket.
+        const reads = [{ exportName: "list", file: "posts", hasFilter: true, hasIndex: false, line: 2, table: "posts" }];
+        const procedures = [
+            {
+                callsMail: false,
+                emitsEvent: false,
+                exempt: false,
+                exemptReason: "",
+                exportName: "list",
+                handlesErrors: false,
+                reachesOutbound: false,
+                runsAiGeneration: false,
+                throwsBareError: false,
+                fanOut: false,
+                file: "posts",
+                kind: "query" as const,
+                unboundedAiGeneration: false,
+                usesCaptcha: false,
+                usesEmailGate: false,
+                usesInsertManyUnsafe: false,
+                usesMask: false,
+                usesRateLimit: false,
+                usesRls: false,
+                visibility: "public" as const,
+                writesUserTable: false,
+            },
+        ];
+
+        const context = toAdvisorContext({ procedureProtections: procedures, queries: reads, schema: discoverSchema(project, "/virtual/lunora/schema.ts") });
+        const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+        const row = map.procedures.find((entry) => entry.id === "posts#list");
+
+        expect(row?.checks.map((check) => check.name)).toContain("filter_without_index");
+        expect(map.project.checks.map((check) => check.name)).not.toContain("filter_without_index");
+        expect(row?.coverage).not.toBe("clean");
+    });
+
+    it("normalizes the feeder options into evidence the lints can read", () => {
+        expect.assertions(2);
+
+        const context = toAdvisorContext({ procedureProtections: [], queries: [], schema: irFrom(UNINDEXED) });
+
+        expect(context.schema.tables.map((table) => table.name)).toStrictEqual(["users", "posts"]);
+        expect(runAdvisor(context, { source: "static" }).map((finding) => finding.name)).toContain("unindexed_foreign_key");
     });
 });

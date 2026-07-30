@@ -692,10 +692,9 @@ const RowSelectCell = ({ row }: { row: Row<TableRow> }): ReactElement => {
 /**
  * The virtualized table: a leading select column, a sortable, resizable,
  * reorderable header derived from react-table's flat headers, plus the windowed
- * rows positioned absolutely inside a full-height tbody. All model state (`table`,
- * `tableRows`, `virtualRows`, `tbodyStyle`, `scrollRef`) is owned by the parent;
- * edit/delete are surfaced as callbacks so this stays a pure render of the page's
- * rows.
+ * rows positioned absolutely inside a full-height tbody. All of that model state is
+ * owned by the parent and arrives as one `tableModel`; edit/delete are surfaced as
+ * callbacks so this stays a pure render of the page's rows.
  */
 const DataBrowserTableView = ({
     edit,
@@ -706,20 +705,11 @@ const DataBrowserTableView = ({
     onInspect,
     highlight,
     backRelationCounts,
-    attachScroll,
     onTogglePin,
     pinnedColumns,
     refs,
-    scrollLeft,
-    scrollToIndex,
-    table,
-    tableRows,
-    tbodyStyle,
-    viewportWidth,
-    virtualRows,
+    tableModel,
 }: {
-    /** Callback ref for the scroll container. */
-    attachScroll: (node: HTMLDivElement | null) => void;
     /** Reverse-relation counts, keyed `table.column` → parent id → count. */
     backRelationCounts: Readonly<Record<string, Readonly<Record<string, number>>>>;
     edit: GridEdit;
@@ -735,15 +725,16 @@ const DataBrowserTableView = ({
     /** Column ids frozen at the left edge, in no particular order — the render derives offsets from visible order. */
     pinnedColumns: ReadonlySet<string>;
     refs: GridReferences;
-    /** Horizontal scroll offset + measured viewport width, driving the column window. */
-    scrollLeft: number;
-    scrollToIndex: (index: number) => void;
-    table: Table<TableRow>;
-    tableRows: Row<TableRow>[];
-    tbodyStyle: CSSProperties;
-    viewportWidth: number;
-    virtualRows: { index: number; size: number; start: number }[];
+
+    /**
+     * The react-table instance plus the virtualizer's window and scroll plumbing,
+     * taken whole: these eight fields are one measured view of one table, they are
+     * always produced and passed together, and none is meaningful alone.
+     */
+    tableModel: DataBrowserTableModel;
 }): ReactElement => {
+    const { attachScroll, scrollLeft, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth, virtualRows } = tableModel;
+
     // Carries the column id being dragged between a header's dragstart and the
     // drop target's drop, for reordering.
     const draggedColumn = useRef<null | string>(null);

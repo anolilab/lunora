@@ -80,6 +80,7 @@ interface CodegenOptions {
 
 ```ts
 interface CodegenResult {
+    advisorContext?: LintContext;
     advisories: ReadonlyArray<Finding>;
     agents: ReadonlyArray<AgentIR>;
     containers: ReadonlyArray<ContainerIR>;
@@ -518,6 +519,7 @@ const QUEUES_FILENAME = "queues.ts";
 
 ```ts
 interface QueryReadIR {
+    exportName: string;
     file: string;
     hasFilter: boolean;
     hasIndex: boolean;
@@ -1093,7 +1095,7 @@ const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalyti
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1198,6 +1200,12 @@ const secretKindOf: (value: string) => string | undefined;
 
 ```ts
 const serializeSchemaSnapshot: (snapshot: SchemaSnapshot) => string;
+```
+
+### `toAdvisorContext` (const)
+
+```ts
+const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
 ```
 
 ### `validatorIrToJsonSchema` (const)

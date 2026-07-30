@@ -1,11 +1,8 @@
 import { useLunora } from "@lunora/react";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
-import { Card, CardContent } from "../../components/ui/card";
-import { EmptyState } from "../../components/ui/empty-state";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
@@ -19,20 +16,10 @@ import {
     TeamFormDialog,
     TeamMemberAddDialog,
 } from "./organization-dialogs";
+import type { Column, DialogState } from "./organization-primitives";
+import { ManagedTable, SectionCard } from "./organization-primitives";
+import { OrganizationMembers, OrganizationRoles, OrganizationTeamMembers, OrganizationTeams } from "./organization-sections";
 import type { Row } from "./types";
-
-/** Which secondary dialog (if any) the detail view has open, plus its row context. */
-type DialogState =
-    | null
-    | { kind: "add-member" }
-    | { action: () => Promise<void>; kind: "confirm"; message: string; testId: string; title: string }
-    | { kind: "invite-member" }
-    | { kind: "member-role"; member: Row }
-    | { kind: "role-create" }
-    | { kind: "role-edit"; role: Row }
-    | { kind: "team-add-member"; teamId: string }
-    | { kind: "team-create" }
-    | { kind: "team-rename"; team: Row };
 
 interface OrganizationDetailProps {
     /** The organization being managed. */
@@ -43,69 +30,6 @@ interface OrganizationDetailProps {
     readonly teamsEnabled: boolean;
 }
 
-interface Column {
-    readonly className?: string;
-    readonly head: string;
-    readonly render: (row: Row) => ReactNode;
-}
-
-/** A titled card with an optional header action (the section wrapper for each management list). */
-const SectionCard = ({ action, children, heading, testId }: { action?: ReactNode; children: ReactNode; heading: string; testId: string }): ReactElement => (
-    <Card className="overflow-hidden py-0" data-testid={testId}>
-        <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-            <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{heading}</span>
-            {action !== undefined && <div className="flex items-center gap-2">{action}</div>}
-        </header>
-        <CardContent className="px-0">{children}</CardContent>
-    </Card>
-);
-
-/** A table of rows with a per-row actions cell, keyed by the row's `id`. */
-const ManagedTable = ({
-    columns,
-    rowActions,
-    rowPrefix,
-    rows,
-}: {
-    columns: Column[];
-    rowActions: (row: Row) => ReactNode;
-    rowPrefix: string;
-    rows: Row[];
-}): ReactElement => {
-    const t = useT();
-
-    return (
-        <Table>
-            <TableHeader>
-                <TableRow>
-                    {columns.map((column) => (
-                        <TableHead key={column.head}>{column.head}</TableHead>
-                    ))}
-                    <TableHead aria-label={t("Actions")} />
-                </TableRow>
-            </TableHeader>
-            <TableBody>
-                {rows.map((row) => {
-                    const id = formatCell(row["id"]);
-
-                    return (
-                        <TableRow data-testid={`${rowPrefix}-${id}`} key={id}>
-                            {columns.map((column) => (
-                                <TableCell className={column.className} key={column.head}>
-                                    {column.render(row)}
-                                </TableCell>
-                            ))}
-                            <TableCell>
-                                <div className="flex justify-end gap-1">{rowActions(row)}</div>
-                            </TableCell>
-                        </TableRow>
-                    );
-                })}
-            </TableBody>
-        </Table>
-    );
-};
-
 /**
  * Management surface for a single selected organization: its members (add
  * existing / invite by email / change role / remove), pending invitations
@@ -115,7 +39,6 @@ const ManagedTable = ({
  * the whole surface also polls via {@link useAutoRefresh} since the auth store
  * is HTTP-only with no live channel.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~551 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled }: OrganizationDetailProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -247,75 +170,15 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                 </p>
             )}
 
-            <SectionCard
-                action={
-                    <>
-                        <Button
-                            data-testid="org-open-add-member"
-                            onClick={() => {
-                                setDialog({ kind: "add-member" });
-                            }}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("Add member")}
-                        </Button>
-                        <Button
-                            data-testid="org-open-invite-member"
-                            onClick={() => {
-                                setDialog({ kind: "invite-member" });
-                            }}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("Invite member")}
-                        </Button>
-                    </>
-                }
-                heading={t("Members")}
-                testId="org-members"
-            >
-                {members.length === 0 ? (
-                    <div className="p-3">
-                        <EmptyState testId="org-members-empty" title={t("No members.")} />
-                    </div>
-                ) : (
-                    <ManagedTable
-                        columns={memberColumns}
-                        rowActions={(row) => (
-                            <>
-                                <Button
-                                    data-testid={`org-member-role-${formatCell(row["id"])}`}
-                                    onClick={() => {
-                                        setDialog({ kind: "member-role", member: row });
-                                    }}
-                                    size="xs"
-                                    type="button"
-                                    variant="ghost"
-                                >
-                                    {t("Change role")}
-                                </Button>
-                                <Button
-                                    data-testid={`org-remove-member-${formatCell(row["id"])}`}
-                                    disabled={actionBusy}
-                                    onClick={() => {
-                                        runAction(() => client.removeAuthOrgMember({ memberId: formatCell(row["id"]) }));
-                                    }}
-                                    size="xs"
-                                    type="button"
-                                    variant="ghost"
-                                >
-                                    {t("Remove")}
-                                </Button>
-                            </>
-                        )}
-                        rowPrefix="org-member"
-                        rows={members}
-                    />
-                )}
-            </SectionCard>
+            <OrganizationMembers
+                actionBusy={actionBusy}
+                memberColumns={memberColumns}
+                members={members}
+                onDialog={setDialog}
+                onRemoveMember={(memberId) => {
+                    runAction(() => client.removeAuthOrgMember({ memberId }));
+                }}
+            />
 
             {invitations.length > 0 && (
                 <SectionCard heading={t("Invitations")} testId="org-invitations">
@@ -342,183 +205,44 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
             )}
 
             {teamsEnabled && (
-                <SectionCard
-                    action={
-                        <Button
-                            data-testid="org-open-create-team"
-                            onClick={() => {
-                                setDialog({ kind: "team-create" });
-                            }}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("New team")}
-                        </Button>
-                    }
-                    heading={t("Teams")}
-                    testId="org-teams"
-                >
-                    {teams.length === 0 ? (
-                        <div className="p-3">
-                            <EmptyState testId="org-teams-empty" title={t("No teams.")} />
-                        </div>
-                    ) : (
-                        <ManagedTable
-                            columns={teamColumns}
-                            rowActions={(row) => (
-                                <>
-                                    <Button
-                                        aria-pressed={selectedTeam === formatCell(row["id"])}
-                                        data-testid={`org-team-select-${formatCell(row["id"])}`}
-                                        onClick={() => {
-                                            setSelectedTeam(formatCell(row["id"]));
-                                        }}
-                                        size="xs"
-                                        type="button"
-                                        variant="ghost"
-                                    >
-                                        {t("Members")}
-                                    </Button>
-                                    <Button
-                                        data-testid={`org-team-rename-${formatCell(row["id"])}`}
-                                        onClick={() => {
-                                            setDialog({ kind: "team-rename", team: row });
-                                        }}
-                                        size="xs"
-                                        type="button"
-                                        variant="ghost"
-                                    >
-                                        {t("Rename")}
-                                    </Button>
-                                    <Button
-                                        data-testid={`org-team-delete-${formatCell(row["id"])}`}
-                                        onClick={() => {
-                                            confirmDeleteTeam(row);
-                                        }}
-                                        size="xs"
-                                        type="button"
-                                        variant="ghost"
-                                    >
-                                        {t("Delete")}
-                                    </Button>
-                                </>
-                            )}
-                            rowPrefix="org-team"
-                            rows={teams}
-                        />
-                    )}
-                </SectionCard>
+                <OrganizationTeams
+                    onConfirmDeleteTeam={confirmDeleteTeam}
+                    onDialog={setDialog}
+                    onSelectTeam={setSelectedTeam}
+                    selectedTeam={selectedTeam}
+                    teamColumns={teamColumns}
+                    teams={teams}
+                />
             )}
 
             {teamsEnabled && selectedTeam !== null && (
-                <SectionCard
-                    action={
-                        <Button
-                            data-testid="org-open-add-team-member"
-                            onClick={() => {
-                                setDialog({ kind: "team-add-member", teamId: selectedTeam });
-                            }}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("Add member")}
-                        </Button>
-                    }
-                    heading={t("Team members")}
-                    testId="org-team-members"
-                >
-                    {teamMembers.length === 0 ? (
-                        <div className="p-3">
-                            <EmptyState testId="org-team-members-empty" title={t("No team members.")} />
-                        </div>
-                    ) : (
-                        <ManagedTable
-                            columns={teamMemberColumns}
-                            rowActions={(row) => (
-                                <Button
-                                    data-testid={`org-team-remove-member-${formatCell(row["id"])}`}
-                                    disabled={actionBusy}
-                                    onClick={() => {
-                                        runAction(() => client.removeAuthOrgTeamMember({ teamMemberId: formatCell(row["id"]) }));
-                                    }}
-                                    size="xs"
-                                    type="button"
-                                    variant="ghost"
-                                >
-                                    {t("Remove")}
-                                </Button>
-                            )}
-                            rowPrefix="org-team-member"
-                            rows={teamMembers}
-                        />
-                    )}
-                </SectionCard>
+                <OrganizationTeamMembers
+                    actionBusy={actionBusy}
+                    onDialog={setDialog}
+                    onRemoveTeamMember={(teamMemberId) => {
+                        runAction(() => client.removeAuthOrgTeamMember({ teamMemberId }));
+                    }}
+                    selectedTeam={selectedTeam}
+                    teamMemberColumns={teamMemberColumns}
+                    teamMembers={teamMembers}
+                />
             )}
 
             {rolesEnabled && (
-                <SectionCard
-                    action={
-                        <Button
-                            data-testid="org-open-create-role"
-                            onClick={() => {
-                                setDialog({ kind: "role-create" });
-                            }}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("New role")}
-                        </Button>
-                    }
-                    heading={t("Roles")}
-                    testId="org-roles"
-                >
-                    {roles.length === 0 ? (
-                        <div className="p-3">
-                            <EmptyState testId="org-roles-empty" title={t("No custom roles.")} />
-                        </div>
-                    ) : (
-                        <ManagedTable
-                            columns={roleColumns}
-                            rowActions={(row) => (
-                                <>
-                                    <Button
-                                        data-testid={`org-role-edit-${formatCell(row["id"])}`}
-                                        onClick={() => {
-                                            setDialog({ kind: "role-edit", role: row });
-                                        }}
-                                        size="xs"
-                                        type="button"
-                                        variant="ghost"
-                                    >
-                                        {t("Edit")}
-                                    </Button>
-                                    <Button
-                                        data-testid={`org-role-delete-${formatCell(row["id"])}`}
-                                        onClick={() => {
-                                            setDialog({
-                                                action: () => client.deleteAuthOrgRole({ roleId: formatCell(row["id"]) }),
-                                                kind: "confirm",
-                                                message: t("Delete this custom role? Members keeping it will lose its grants."),
-                                                testId: "org-role-delete",
-                                                title: t("Delete role"),
-                                            });
-                                        }}
-                                        size="xs"
-                                        type="button"
-                                        variant="ghost"
-                                    >
-                                        {t("Delete")}
-                                    </Button>
-                                </>
-                            )}
-                            rowPrefix="org-role"
-                            rows={roles}
-                        />
-                    )}
-                </SectionCard>
+                <OrganizationRoles
+                    onConfirmDeleteRole={(roleId) => {
+                        setDialog({
+                            action: () => client.deleteAuthOrgRole({ roleId }),
+                            kind: "confirm",
+                            message: t("Delete this custom role? Members keeping it will lose its grants."),
+                            testId: "org-role-delete",
+                            title: t("Delete role"),
+                        });
+                    }}
+                    onDialog={setDialog}
+                    roleColumns={roleColumns}
+                    roles={roles}
+                />
             )}
 
             {dialog?.kind === "add-member" && <MemberAddDialog onClose={closeDialog} onDone={refetchAll} organizationId={organizationId} />}

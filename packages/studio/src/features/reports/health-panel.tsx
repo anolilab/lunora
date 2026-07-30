@@ -12,12 +12,15 @@ import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapshot, MigrationStatusRow } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { loadRecentShards } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
+import { HealthDigest } from "./health-digest";
 import { shardsToAggregate } from "./metrics-aggregate";
 import type { ShardSloResult, SloTotals } from "./slo-aggregate";
 import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "./slo-aggregate";
+import type { SloLevel } from "./slo-format";
+import { rateLevel, ratePercent, REQUEST_ERROR_CRIT, REQUEST_ERROR_WARN } from "./slo-format";
 import { Sparkline } from "./sparkline";
 
 interface HealthPanelProps {
@@ -39,28 +42,12 @@ const MIN_FANOUT_INTERVAL_MS = 2000;
 
 /** Functions shown in the "by error rate" list, worst first. */
 const TOP_FUNCTION_LIMIT = 5;
-
-/** SLO thresholds (fraction 0..1). Below `warn` is healthy; at/above `crit` is breaching. */
-const REQUEST_ERROR_WARN = 0.01;
-const REQUEST_ERROR_CRIT = 0.05;
 // Auth failures tolerate a higher floor — users mistype passwords — so the bands are wider.
 const AUTH_FAIL_WARN = 0.1;
 const AUTH_FAIL_CRIT = 0.3;
 // Scheduler backlog is an absolute job count, not a rate.
 const BACKLOG_WARN = 1;
 const BACKLOG_CRIT = 50;
-
-type SloLevel = "crit" | "ok" | "warn";
-
-/** Classify a 0..1 rate against its warn/crit thresholds. */
-const rateLevel = (rate: number, warn: number, crit: number): SloLevel => {
-    if (rate >= crit) {
-        return "crit";
-    }
-
-    return rate >= warn ? "warn" : "ok";
-};
-
 /** Classify an absolute count (e.g. backlog) against warn/crit thresholds. `0` is always healthy. */
 const countLevel = (count: number, warn: number, crit: number): SloLevel => {
     if (count >= crit) {
@@ -68,22 +55,6 @@ const countLevel = (count: number, warn: number, crit: number): SloLevel => {
     }
 
     return count >= warn ? "warn" : "ok";
-};
-
-/** Map an SLO level to a Badge variant, so a breach reads red at a glance. */
-const LEVEL_VARIANT: Record<SloLevel, "default" | "destructive" | "secondary"> = {
-    crit: "destructive",
-    ok: "secondary",
-    warn: "default",
-};
-
-/** A 0..1 rate as a percentage string, or `—` when the denominator is zero (no traffic yet). */
-const ratePercent = (numerator: number, denominator: number): string => {
-    if (denominator === 0) {
-        return "—";
-    }
-
-    return `${((numerator / denominator) * 100).toFixed(1)}%`;
 };
 
 /**
@@ -289,7 +260,6 @@ const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[];
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
 // react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~641 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -549,71 +519,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
             </div>
 
             {/* Functions by error rate + recent errors, side by side. */}
-            <div className="grid gap-3 lg:grid-cols-2">
-                <Card className="gap-0 py-0" data-testid="hl-functions">
-                    <header className="border-b border-border px-4 py-3">
-                        <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Functions by error rate")}</span>
-                    </header>
-                    {worstFunctions.length === 0 ? (
-                        <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="hl-functions-empty">
-                            {t("No function activity yet.")}
-                        </p>
-                    ) : (
-                        <ul className="divide-y divide-border">
-                            {worstFunctions.map((stat) => (
-                                <li className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs" data-testid="hl-fn-row" key={stat.path}>
-                                    <span className="truncate font-mono text-foreground">{stat.path}</span>
-                                    <span className="flex shrink-0 items-center gap-2">
-                                        <span className="tabular-nums text-muted-foreground">{t("{count} calls", { count: stat.calls.toString() })}</span>
-                                        <Badge variant={LEVEL_VARIANT[rateLevel(stat.errors / stat.calls, REQUEST_ERROR_WARN, REQUEST_ERROR_CRIT)]}>
-                                            {ratePercent(stat.errors, stat.calls)}
-                                        </Badge>
-                                    </span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </Card>
-
-                <Card className="gap-0 py-0">
-                    <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                        <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Recent errors")}</span>
-                        <Badge data-testid="hl-error-count" variant={recentErrors.length > 0 ? "destructive" : "outline"}>
-                            {recentErrors.length}
-                        </Badge>
-                    </header>
-
-                    {logsError !== null && (
-                        <p className="px-4 py-8 text-center text-sm text-destructive" data-testid="hl-logs-error" role="alert">
-                            {logsError}
-                        </p>
-                    )}
-
-                    {logsError === null && topErrors.length === 0 && (
-                        <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="hl-errors-empty">
-                            {t("No recent errors.")}
-                        </p>
-                    )}
-
-                    {topErrors.length > 0 && (
-                        <ul className="divide-y divide-border">
-                            {topErrors.map((entry, index) => (
-                                <li
-                                    className="flex flex-col gap-0.5 px-4 py-2 text-xs"
-                                    data-testid="hl-error-row"
-                                    key={`${entry.timestamp.toString()}-${index.toString()}`}
-                                >
-                                    <span className="flex items-center gap-2">
-                                        <time className="shrink-0 text-muted-foreground">{formatTimestamp(entry.timestamp)}</time>
-                                        {entry.functionPath !== undefined && <span className="truncate font-mono text-foreground">{entry.functionPath}</span>}
-                                    </span>
-                                    <span className="text-destructive">{entry.message}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </Card>
-            </div>
+            <HealthDigest errorCount={recentErrors.length} logsError={logsError} topErrors={topErrors} worstFunctions={worstFunctions} />
 
             {/* Shards seen. */}
             <Card className="gap-0 py-0">

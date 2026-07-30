@@ -14,6 +14,7 @@
 
 /* eslint-disable no-restricted-syntax -- `sql\`…\`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 import { LunoraError } from "@lunora/errors";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
     assertSearchWithinCap,
     createSearchAnalyzer,

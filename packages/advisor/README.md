@@ -93,6 +93,59 @@ const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { 
 
 A missing metric degrades to an empty array rather than throwing, so a partially configured read path still returns what it can.
 
+### Observability map (score, coverage, baseline)
+
+`runAdvisor` answers "what is wrong?". `scoreAdvisor` answers "how are we doing, and did it get worse?" — a scored coverage map over your procedures. It is a pure function over findings you already have, so it never re-runs a lint:
+
+```ts
+import { fromServerSchema, runAdvisor, scoreAdvisor } from "@lunora/advisor";
+
+import schema from "./lunora/schema";
+
+const context = { schema: fromServerSchema(schema) };
+const findings = runAdvisor(context, { source: "static" });
+const map = scoreAdvisor(context.procedureProtections ?? [], findings);
+
+console.log(map.score, map.grade); // e.g. 84 "good"
+console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
+```
+
+Each procedure starts at 100 and loses each fired **rule's** weight (`Lint.weight`, else a severity ladder: `ERROR` 20 / `WARN` 10 / `INFO` 5) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
+
+The verdicts are `clean` / `warned` / `failing` / `exempt` — named for severity, because the score is driven by every lint family rather than an observability family.
+
+Commit the map and gate CI on it:
+
+```ts
+import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
+
+const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
+
+if (baseline === undefined) {
+    // Missing, hand-edited, or written by an older MAP_VERSION. Fail loudly —
+    // treating it as "no regression" would silently disable the gate forever.
+    throw new Error("advisor baseline is unreadable; regenerate lunora.advisor.map.json");
+}
+
+const diff = compareToBaseline(map, baseline);
+
+// `comparable` must be narrowed before `regressed` is reachable, so a stale
+// baseline cannot read as a clean run.
+if (!diff.comparable) {
+    throw new Error(`advisor baseline not comparable: ${diff.reason}`);
+}
+
+// Five independent signals: the global score fell, an existing procedure got
+// worse, one started failing, one's findings grew without its score moving, or
+// the project bucket gained findings. The growth signals matter because a rule is
+// charged once however many times it fires, and the project score saturates at 0.
+if (diff.regressed) {
+    process.exitCode = 1;
+}
+```
+
+`@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder, and `lunora advisor` wraps all of this as a command. Full reference for the scoring, verdicts, and the baseline gate is in the [package docs](https://lunora.sh/docs/packages/advisor).
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
 
 ## Related

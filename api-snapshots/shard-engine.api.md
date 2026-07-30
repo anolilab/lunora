@@ -32,6 +32,7 @@ const ADMIN_FUNCTIONS: {
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
+    readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";
     readonly getCapturedMail: "__lunora_admin__:getCapturedMail";
@@ -122,6 +123,43 @@ const AGG_VALUE: Name;
 
 ```ts
 const AUDIT_LOG_TABLE = "__lunora_audit__";
+```
+
+### `AdvisorProcedure` (interface)
+
+```ts
+interface AdvisorProcedure {
+    callsMail: boolean;
+    emitsEvent?: boolean;
+    exempt?: boolean;
+    exemptReason?: string;
+    exportName: string;
+    fanOut: boolean;
+    file: string;
+    handlesErrors?: boolean;
+    hasEmailArg?: boolean;
+    kind: "action" | "mutation" | "query";
+    reachesOutbound?: boolean;
+    runsAiGeneration?: boolean;
+    throwsBareError?: boolean;
+    unboundedAiGeneration: boolean;
+    usesCaptcha: boolean;
+    usesEmailGate: boolean;
+    usesInsertManyUnsafe: boolean;
+    usesMask: boolean;
+    usesRateLimit: boolean;
+    usesRls: boolean;
+    visibility: "internal" | "public";
+    writesUserTable: boolean;
+}
+```
+
+### `AdvisorProceduresResult` (interface)
+
+```ts
+interface AdvisorProceduresResult {
+    procedures: AdvisorProcedure[];
+}
 ```
 
 ### `AdvisoriesResult` (interface)

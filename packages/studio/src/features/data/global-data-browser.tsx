@@ -1,18 +1,16 @@
 import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@lunora/client";
 import { useLunora } from "@lunora/react";
-import type { MouseEvent, ReactElement, ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { EmptyState } from "../../components/ui/empty-state";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useMirroredRef } from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
 import DataFacets from "./data-facets";
-import { CellValue, GridContainer } from "./data-grid";
-import GridPagination from "./grid-pagination";
+import { GlobalDataPage } from "./global-data-page";
+import { GlobalTablesEmptyState } from "./global-tables-empty-state";
 import { useFacets } from "./hooks/use-facets";
 import { TableListSidebar } from "./table-list-sidebar";
 
@@ -51,41 +49,12 @@ const NO_TABLES: ReadonlyArray<GlobalTableInfo> = [];
 const NO_COLUMNS: ReadonlyArray<string> = [];
 
 /**
- * A stable React key for a global-table row. `.global()` docs carry an `_id`
- * primary key; the positional fallback only applies to the rare idless page.
- */
-const rowKey = (row: Record<string, unknown>, index: number): string => {
-    const id = row["_id"];
-
-    return typeof id === "string" || typeof id === "number" ? String(id) : `row-${index.toString()}`;
-};
-
-/** Render a facet/filter value for a removable chip, distinguishing NULL and the empty string from a real value. */
-const chipValue = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "∅";
-    }
-
-    if (value === "") {
-        return "(empty)";
-    }
-
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above.
-    return String(value);
-};
-
-/**
  * Read-only browser for `.global()` (D1-backed) tables. Twin of `DataBrowser`,
  * but not shard-scoped: it lists tables via `listGlobalTables()` and pages rows
  * via `readGlobalTablePage()`. Laid out like Supabase's Table Editor — a left
  * table sidebar + a bordered grid with a paginated footer — and gated by the
  * server's `LUNORA_ADMIN_TOKEN`.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~458 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const GlobalDataBrowser = ({
     initialTable,
     onSelectTable,
@@ -215,9 +184,7 @@ export const GlobalDataBrowser = ({
     };
 
     // Remove one active drill-down filter (its chip's ✕).
-    const removeFilter = (event: MouseEvent<HTMLButtonElement>): void => {
-        const index = Number(event.currentTarget.dataset["index"]);
-
+    const removeFilter = (index: number): void => {
         applyFilters(filtersRef.current.filter((_, position) => position !== index));
     };
 
@@ -336,29 +303,7 @@ export const GlobalDataBrowser = ({
                     </p>
                 )}
 
-                {tables !== null && tables.length === 0 && (
-                    <div className="flex flex-1 items-center justify-center p-6">
-                        <EmptyState
-                            description={t("Tables marked .global() (D1-backed, region-replicated) will appear here.")}
-                            icon={
-                                <svg
-                                    aria-hidden="true"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={1.6}
-                                    viewBox="0 0 24 24"
-                                >
-                                    <circle cx="12" cy="12" r="9" />
-                                    <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
-                                </svg>
-                            }
-                            testId="gdb-empty"
-                            title={t("No global tables.")}
-                        />
-                    </div>
-                )}
+                {tables !== null && tables.length === 0 && <GlobalTablesEmptyState />}
 
                 {pageError !== null && (
                     <p className="shrink-0 border-b border-border px-4 py-2 text-sm text-destructive" data-testid="gdb-page-error" role="alert">
@@ -373,74 +318,17 @@ export const GlobalDataBrowser = ({
                 )}
 
                 {page !== null && (
-                    <div className="flex min-h-0 flex-1 flex-col" data-testid="gdb-page">
-                        {filters.length > 0 && (
-                            <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-4 py-2 text-xs" data-testid="gdb-filters">
-                                {filters.map((filter, index) => (
-                                    <span
-                                        className="inline-flex items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5"
-                                        data-testid="gdb-filter-chip"
-                                        key={`${filter.column}:${chipValue(filter.value)}`}
-                                    >
-                                        <span className="font-medium text-foreground">{filter.column}</span>
-                                        <span className="text-muted-foreground">=</span>
-                                        <span className="font-mono text-foreground">{chipValue(filter.value)}</span>
-                                        <button
-                                            aria-label={t("Remove filter")}
-                                            className="ml-0.5 text-muted-foreground hover:text-foreground"
-                                            data-index={index}
-                                            data-testid="gdb-filter-remove"
-                                            onClick={removeFilter}
-                                            type="button"
-                                        >
-                                            ✕
-                                        </button>
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-
-                        <GridContainer layout="fill">
-                            <div className="min-h-0 flex-1 overflow-auto">
-                                <Table data-testid="gdb-rows">
-                                    <TableHeader>
-                                        <TableRow>
-                                            {page.columns.map((column) => (
-                                                <TableHead key={column}>{column}</TableHead>
-                                            ))}
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {page.rows.map((row, rowIndex) => (
-                                            <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
-                                                {page.columns.map((column) => (
-                                                    <TableCell className="max-w-xs truncate font-mono text-xs" key={column}>
-                                                        <CellValue value={row[column]} />
-                                                    </TableCell>
-                                                ))}
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        </GridContainer>
-
-                        <div className="flex shrink-0 items-center border-t border-border px-4 py-2">
-                            <GridPagination
-                                hasNext={hasNext}
-                                hasPrevious={hasPrevious}
-                                onJumpToPage={jumpToPage}
-                                onNext={goNext}
-                                onPageSizeChange={changePageSize}
-                                onPrevious={goPrevious}
-                                pageSize={pageSize}
-                                prefix="gdb"
-                                rangeEnd={rangeEnd}
-                                rangeStart={rangeStart}
-                                total={total}
-                            />
-                        </div>
-                    </div>
+                    <GlobalDataPage
+                        filters={filters}
+                        onChangePageSize={changePageSize}
+                        onJumpToPage={jumpToPage}
+                        onNext={goNext}
+                        onPrevious={goPrevious}
+                        onRemoveFilter={removeFilter}
+                        page={page}
+                        pageSize={pageSize}
+                        pagination={{ hasNext, hasPrevious, rangeEnd, rangeStart, total }}
+                    />
                 )}
             </div>
 

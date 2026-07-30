@@ -57,7 +57,7 @@ pnpm add @lunora/config
 Validate a project's `wrangler.jsonc` from disk. `validateWranglerProject` finds the config file, parses the JSONC, discovers the schema (to know whether a `DB` D1 binding or Vectorize bindings are required), and returns a structured report:
 
 ```ts
-import { validateWranglerProject } from "@lunora/config";
+import { validateWranglerProject } from "@lunora/config/cloudflare";
 
 const { report, wranglerPath } = validateWranglerProject({ projectRoot: process.cwd() });
 
@@ -70,7 +70,7 @@ for (const warning of report.warnings) console.warn(warning);
 If you already hold a parsed config object, `validateWranglerConfig` (aliased as `validateWrangler`) is the pure, I/O-free form. Pass the discovered `SchemaInfo` so it knows which bindings the schema demands:
 
 ```ts
-import { validateWranglerConfig } from "@lunora/config";
+import { validateWranglerConfig } from "@lunora/config/cloudflare";
 
 const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
 // report: { valid: boolean; errors: string[]; warnings: string[] }

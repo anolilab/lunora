@@ -1084,6 +1084,16 @@ shard explorer, mask policies. Their `stream` view is Prisma-Postgres-specific
   decided against**: pagination gives a stable position, an exact count, and
   export semantics that mean "these rows". The perf motive behind the other
   tradeoff was the vertical axis, which row virtualization already answers.
+- **The wave's react-doctor debt is closed.** The sweep that ended the wave took
+  `packages/studio` from 232 findings to 0, but ten `no-giant-component`
+  findings were _suppressed_ rather than fixed, since splitting a panel is its
+  own refactor. PR #237 did the splits (all ten now 195–294 lines, from
+  306–714) and deleted every suppression, closing
+  [#230](https://github.com/anolilab/lunora/issues/230). Two findings worth
+  carrying forward: `grid-features.tsx` holds a second `CONTROL_BTN` without the
+  `aria-pressed:*` variants (a trap for anyone moving toolbar markup), and
+  grouping refs into one prop makes the React Compiler bail out of a whole
+  component — pass refs individually.
 
 ### Recommended execution order
 

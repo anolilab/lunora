@@ -68,6 +68,7 @@ import {
 import type { ShardHost, SocketHost } from "@lunora/platform";
 import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
+    AdvisorProcedure,
     AdvisoryFinding,
     AuditLogResult,
     CdcChange,
@@ -1854,6 +1855,21 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated advisory list
     protected advisories(): AdvisoryFinding[] {
+        return [];
+    }
+
+    /**
+     * Every declared procedure, surfaced via
+     * `__lunora_admin__:getAdvisorProcedures`. Discovered by the codegen feeder
+     * and emitted into the generated subclass, which overrides this.
+     *
+     * Separate from {@link advisories} because it is the denominator, not the
+     * numerator: findings say what is wrong, this says how much exists to be
+     * right, and the studio's health score needs both. The base class can't see
+     * the user's functions, so it reports none.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated procedure list
+    protected advisorProcedures(): AdvisorProcedure[] {
         return [];
     }
 
@@ -6325,6 +6341,11 @@ abstract class ShardDO {
             return { advisories: [...this.advisories(), ...this.runtimeAdvisories()] };
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getAdvisorProcedures) {
+            // The health map's denominator — deployment-wide, like the advisories above.
+            return { procedures: this.advisorProcedures() };
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.rlsPolicies) {
             // Read-only RLS metadata (codegen-emitted, via `rlsMetadata()`): the
             // policies + roles the studio's inspector lists. Schema-wide, so it
@@ -8329,7 +8350,7 @@ abstract class ShardDO {
         //
         // Accepted through `SocketHost`, not `state.acceptWebSocket` directly, so
         // the socket carries the host's accept-time id tag. That tag is what makes
-        // `SocketHandle.id` durable across hibernation and what lets `handleFor`
+        // `SocketHost.idFor` durable across hibernation and what lets `handleFor`
         // answer in O(1) after a wake instead of scanning the socket set —
         // accepting behind the host's back would leave both to fall back.
         //

@@ -94,6 +94,8 @@ export type {
 } from "@lunora/shard-engine";
 export type {
     AdvisoriesResult,
+    AdvisorProcedure,
+    AdvisorProceduresResult,
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,

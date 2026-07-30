@@ -2283,6 +2283,9 @@ importers:
       '@bomb.sh/tab':
         specifier: 0.0.21
         version: 0.0.21(cac@6.7.14)(citty@0.2.2)(commander@15.0.0)
+      '@lunora/advisor':
+        specifier: workspace:*
+        version: link:../advisor
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
@@ -2799,9 +2802,6 @@ importers:
       '@lunora/platform-cloudflare':
         specifier: workspace:*
         version: link:../platform-cloudflare
-      '@lunora/search-core':
-        specifier: workspace:*
-        version: link:../search-core
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3849,9 +3849,6 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
-      '@lunora/search-core':
-        specifier: workspace:*
-        version: link:../search-core
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1)
@@ -3862,6 +3859,9 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
+      '@lunora/search-core':
+        specifier: workspace:*
+        version: link:../search-core
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -3947,9 +3947,6 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
-      '@lunora/search-core':
-        specifier: workspace:*
-        version: link:../search-core
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3966,6 +3963,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
+      '@lunora/search-core':
+        specifier: workspace:*
+        version: link:../search-core
       '@types/node':
         specifier: catalog:types
         version: 26.1.1

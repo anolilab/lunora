@@ -1,6 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { QueryReadIR } from "./ir";
 
@@ -91,6 +92,7 @@ const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR
             }
 
             reads.push({
+                exportName: enclosingExportName(call),
                 file: relativePath,
                 hasFilter: true,
                 hasIndex: methods.some((method) => INDEX_METHODS.has(method)),

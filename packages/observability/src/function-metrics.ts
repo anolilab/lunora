@@ -451,7 +451,7 @@ const readFunctionMetricIndexHits = (sql: SqlExec): FunctionMetricIndexHit[] => 
 
     const rows = runSql<{ index_name: string; reads: number; table_name: string }>(
         sql,
-        `SELECT table_name, index_name, reads FROM "${FUNCTION_METRICS_INDEX_TABLE}" ORDER BY table_name ASC, index_name ASC`,
+        `SELECT table_name, index_name, reads FROM "${FUNCTION_METRICS_INDEX_TABLE}" ORDER BY table_name ASC, index_name ASC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
     ).toArray();
 
     return rows.map((row): FunctionMetricIndexHit => {
@@ -538,19 +538,28 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
 const readFunctionMetricBuckets = (sql: SqlExec, path?: string): (FunctionMetricBucket & { path: string })[] => {
     ensureFunctionMetricsTables(sql);
 
+    // Bounded like the other reads, and for the same reason: the all-paths arm is
+    // what `getMetrics` calls on every Studio Metrics load, so its row count is
+    // (tracked functions x retained buckets) — 100 active functions over a day of
+    // minute-buckets is ~144k rows and ~60MB in a ~128MB isolate.
+    //
+    // Selected NEWEST-first so the cut drops the oldest history rather than the
+    // most recent, then reversed to restore the oldest-first order a chart plots
+    // left-to-right. Ordering the scan ASC and limiting would have kept the
+    // stalest window and thrown away what the panel is actually for.
     const rows =
         path === undefined
             ? runSql<{ bucket_ms: number; calls: number; errors: number; path: string }>(
                   sql,
-                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" ORDER BY bucket_ms ASC, path ASC`,
+                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" ORDER BY bucket_ms DESC, path ASC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
               ).toArray()
             : runSql<{ bucket_ms: number; calls: number; errors: number; path: string }>(
                   sql,
-                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ? ORDER BY bucket_ms ASC`,
+                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ? ORDER BY bucket_ms DESC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
                   path,
               ).toArray();
 
-    return rows.map((row) => {
+    return rows.toReversed().map((row) => {
         return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path };
     });
 };

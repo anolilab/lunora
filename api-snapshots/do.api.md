@@ -21,6 +21,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `AdvisorProcedure` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `AdvisorProceduresResult` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `AdvisoriesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -753,6 +761,7 @@ abstract class ShardDO {
     protected tableColumns(_table: string): ColumnMeta[];
     protected storageColumns(): Record<string, string[]>;
     protected advisories(): AdvisoryFinding[];
+    protected advisorProcedures(): AdvisorProcedure[];
     protected rlsMetadata(): RlsPoliciesResult;
     protected maskMetadata(): MaskPoliciesResult;
     protected storageRulesMetadata(): StorageRulesResult;
