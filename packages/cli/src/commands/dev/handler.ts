@@ -346,6 +346,12 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };
         }
 
+        if (options.worker === false) {
+            options.logger.warn(
+                `--no-worker does not apply to the ${flavor} flavor: Vite owns the worker, codegen and studio in-process. Run your framework's dev script instead.`,
+            );
+        }
+
         return {
             codegenEnabled: false,
             flavor,
@@ -354,10 +360,12 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,
             studioPort: options.port ?? DEFAULT_STUDIO_PORT,
-            // The vite / framework-worker flavors still spawn a child (the
-            // framework dev server, plus a wrangler sidecar) — `--no-worker`
-            // only suppresses the standalone `wrangler dev` this command owns.
-            workerEnabled: options.worker !== false,
+            // Always true here. On these flavors the child is the FRAMEWORK dev
+            // server (Vite runs the worker, codegen and studio in-process), not
+            // the standalone `wrangler dev` this command owns — so there is
+            // nothing for `--no-worker` to hand to an external runner, and
+            // honouring it would park the process having started nothing.
+            workerEnabled: true,
             workerOrigin: `http://localhost:${String(DEFAULT_VITE_PORT)}`,
             workerPort: DEFAULT_VITE_PORT,
             wrangler: {

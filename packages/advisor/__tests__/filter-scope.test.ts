@@ -80,6 +80,16 @@ describe("filter_on_primary_key", () => {
         expect(findings[0]?.remediation).toContain("ctx.db.get(id)");
     });
 
+    it("does not fire on an inequality filter, which ctx.db.get cannot express", () => {
+        expect.assertions(1);
+
+        // `.filter((d) => d._id !== excludeId)` is "every row except this one" —
+        // a legitimate read. Flagging it would tell the author to replace it
+        // with `ctx.db.get(id)`, which returns the opposite set. The feeder's
+        // regex is what enforces this; the lint only sees the boolean.
+        expect(filterOnPrimaryKey.run({ queries: [read("notes", { filtersPrimaryKey: false })], schema: schema() })).toHaveLength(0);
+    });
+
     it("fires independently of the index and shard tier", () => {
         expect.assertions(2);
 

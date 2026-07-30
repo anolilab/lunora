@@ -66,7 +66,11 @@ const chainMethods = (queryCall: CallExpression): string[] => {
  * Matched on the predicate's source text rather than its AST — the shapes are
  * few and fixed, and a false negative costs only a missed nudge.
  */
-const PRIMARY_KEY_PREDICATE_RE = /\b[A-Za-z_$][\w$]*\._id\s*[!=]==?/u;
+// Equality ONLY. `[!=]==?` also matched `!==`, and `.filter((d) => d._id !== x)`
+// — "every row except this one" — is a legitimate read that `ctx.db.get(id)`
+// cannot express, so flagging it inverted the query the remediation suggested.
+// The lint's whole claim is that it needs no triage; inequality breaks that.
+const PRIMARY_KEY_PREDICATE_RE = /\b[A-Za-z_$][\w$]*\._id\s*===?[^=]/u;
 
 /**
  * Whether the chain's `.filter()` predicate tests `_id`.

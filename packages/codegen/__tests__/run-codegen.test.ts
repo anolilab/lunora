@@ -1648,6 +1648,60 @@ export default schema;
             expect(result.generated.drizzleShard).not.toContain("import { Id }");
         });
 
+        it("marks only an EQUALITY filter on _id as primary-key-addressable", () => {
+            expect.assertions(2);
+
+            // The regex used to be `[!=]==?`, which also matched `!==`. An
+            // inequality filter is "every row except this one" — not something
+            // `ctx.db.get(id)` can express — so flagging it inverted the query.
+            writeFileSync(
+                join(workdir, "lunora", "reads.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+export const one = query.input({ id: v.string() }).query(async ({ ctx, args }) =>
+    ctx.db.query("messages").filter((d) => d._id === args.id).first());
+
+export const others = query.input({ id: v.string() }).query(async ({ ctx, args }) =>
+    ctx.db.query("messages").filter((d) => d._id !== args.id).collect());
+`,
+            );
+
+            const findings = runCodegen({ projectRoot: workdir }).advisories.filter((a) => a.name === "filter_on_primary_key");
+
+            expect(findings).toHaveLength(1);
+            expect(findings[0]?.detail).toContain("reads:");
+        });
+
+        it("renders a recovered v.from() type into the emitted api, end to end", () => {
+            expect.assertions(2);
+
+            // LUNORA_ISSUES #22, and a lesson about where to test. The unit test
+            // in parse-validator-from.test.ts registers the resolver itself and
+            // stops at the IR, so it passed while the real pipeline produced
+            // `unknown` twice over: the resolver was registered AFTER discovery
+            // ran, and `SCALAR_TYPE_BY_KIND` short-circuited `from` before the
+            // switch arm that reads the recovered type. This asserts the thing
+            // users actually get.
+            writeFileSync(
+                join(workdir, "lunora", "profile.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+declare const emailSchema: Std<string>;
+
+export const byEmail = query.input({ email: v.from(emailSchema) }).query(async () => 1);
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.api).toContain('byEmail: FunctionReference<"query", { email: string }');
+            expect(result.generated.api).not.toContain("{ email: unknown }");
+        });
+
         it("types the reference from .output(), not the handler's inferred return", () => {
             expect.assertions(4);
 

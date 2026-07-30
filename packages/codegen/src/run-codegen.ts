@@ -367,6 +367,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // exactly as createCodegenProject would.
     const project = options.project ?? createCodegenProject(lunoraDirectory);
 
+    // MUST run before anything parses validators — `discoverSchema` and
+    // `discoverFunctions` below are where `v.from(...)` is read, and an
+    // unregistered resolver silently yields `unknown` for every one of them.
+    // Recovering the type needs the checker plus the generated-file
+    // renderability guards, both of which live in `discover-functions`;
+    // registered here rather than imported by the parser, which would be a
+    // cycle (LUNORA_ISSUES #22).
+    setStandardTypeResolver(resolveStandardSchemaType);
+
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
     const functions = discoverFunctions(project, lunoraDirectory);
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -596,12 +605,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
     // Emitted into the generated ShardDO's `studioFeatures()` override so the
     // studio hides only pages whose backing package the app genuinely never wires.
-    // Recovering a `v.from(...)` argument's type needs the checker plus the
-    // generated-file renderability guards, both of which live in
-    // `discover-functions` — registered here rather than imported by the parser,
-    // which would be a cycle (LUNORA_ISSUES #22).
-    setStandardTypeResolver(resolveStandardSchemaType);
-
     const declaredDependencies = readPackageDependencies(options.projectRoot);
     const dependencies = declaredDependencies ?? new Set<string>();
     const studioFeatures = buildStudioFeatures(featureUsage, {

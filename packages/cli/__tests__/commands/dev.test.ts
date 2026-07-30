@@ -59,6 +59,26 @@ describe("lunora dev", () => {
             expect(plan.workerOrigin).toContain(String(plan.workerPort));
         });
 
+        it("refuses --no-worker on the vite flavor instead of parking on nothing", () => {
+            expect.assertions(3);
+
+            // The gate lives on the shared run path, so a flavor-agnostic
+            // `workerEnabled: false` would have suppressed the FRAMEWORK dev
+            // server too — and the vite plan sets codegen and studio to false
+            // because Vite runs them in-process. The process would have parked
+            // having started literally nothing, while logging that codegen was
+            // running.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "^1.0.0" } }), "utf8");
+
+            const messages: string[] = [];
+            const logger = { ...silentLogger(), warn: (message: string) => messages.push(message) };
+            const plan = planDevCommand({ cwd: workdir, logger, worker: false });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.workerEnabled).toBe(true);
+            expect(messages.some((message) => message.includes("--no-worker does not apply"))).toBe(true);
+        });
+
         it("keeps the worker enabled by default", () => {
             expect.assertions(1);
 

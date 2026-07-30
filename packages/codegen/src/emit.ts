@@ -129,10 +129,6 @@ const SCALAR_TYPE_BY_KIND: Record<string, string> = {
     bytes: "ArrayBuffer",
     // Epoch-millisecond numbers; the distinction is semantic only.
     date: "number",
-    // v.from() wraps an external Standard Schema validator whose output type is
-    // not statically recoverable at codegen time — emit `unknown` so the
-    // generated api types still compile without depending on the library.
-    from: "unknown",
     // A geographic point stored as a `{ lat, lng }` JSON object.
     geoPoint: "{ lat: number; lng: number }",
     null: "null",
@@ -175,6 +171,14 @@ const validatorToType = (validator: ValidatorIR): string => {
         case "array": {
             return `Array<${validator.inner ? validatorToType(validator.inner) : "unknown"}>`;
         }
+        case "from": {
+            // Recovered from the wrapped Standard Schema's `~standard.types.output`
+            // by `resolveStandardSchemaType`; `unknown` when it could not be
+            // rendered safely (LUNORA_ISSUES #22). Deliberately NOT in
+            // `SCALAR_TYPE_BY_KIND` — that map short-circuits before this switch,
+            // which silently made the recovered type unreachable.
+            return validator.tsType ?? "unknown";
+        }
         case "id": {
             const tableName = validator.tableName ?? "_unknown_";
 
@@ -209,10 +213,7 @@ const validatorToType = (validator: ValidatorIR): string => {
             return validator.members && validator.members.length > 0 ? validator.members.map((member) => validatorToType(member)).join(" | ") : "never";
         }
         default: {
-            // `v.from(...)` lands here carrying `tsType` when the wrapped
-            // Standard Schema's type could be recovered (LUNORA_ISSUES #22);
-            // every other unhandled kind widens to `unknown`.
-            return validator.tsType ?? "unknown";
+            return "unknown";
         }
     }
 };
