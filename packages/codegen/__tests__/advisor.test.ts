@@ -203,6 +203,24 @@ export const careful = action({ args: {}, handler: async (ctx) => { try { await 
         expect([...names].filter((name) => name.startsWith("action_without_error_handling:"))).toStrictEqual(["action_without_error_handling:risky"]);
     });
 
+    it.each([
+        ["prose mentioning the directive", "// Do NOT add lunora-advisor-exempt to this one."],
+        ["a longer token", "// TODO(LUN-9): lunora-advisor-exempt-later once the audit lands"],
+    ])("does not exempt on %s", (_label, comment) => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "prose.ts"),
+            `import { mutation } from "@lunora/server";\n${comment}\nexport const handler = mutation({ args: {}, handler: async () => {} });\n`,
+            "utf8",
+        );
+
+        const rows = runCodegen({ dryRun: true, projectRoot: workdir }).advisorContext?.procedureProtections ?? [];
+
+        // A false positive here silences the procedure in compareToBaseline forever.
+        expect(rows.find((row) => row.exportName === "handler")?.exempt).toBe(false);
+    });
+
     it("reads a source-level exemption directive above an export", () => {
         expect.assertions(3);
 
@@ -273,7 +291,7 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
     const mapOf = (source: string) => {
         const context = toAdvisorContext({ schema: irFrom(source) });
 
-        return scoreAdvisor(context, runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+        return scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
     };
 
     it("scores the same evidence lintSchema lints, penalising the unindexed schema", () => {
@@ -311,6 +329,7 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
                 exportName: "list",
                 handlesErrors: false,
                 reachesOutbound: false,
+                runsAiGeneration: false,
                 throwsBareError: false,
                 fanOut: false,
                 file: "posts",
@@ -328,7 +347,7 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
         ];
 
         const context = toAdvisorContext({ procedureProtections: procedures, queries: reads, schema: discoverSchema(project, "/virtual/lunora/schema.ts") });
-        const map = scoreAdvisor(context, runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+        const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
         const row = map.procedures.find((entry) => entry.id === "posts#list");
 
         expect(row?.checks.map((check) => check.name)).toContain("filter_without_index");
@@ -336,11 +355,12 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
         expect(row?.coverage).not.toBe("clean");
     });
 
-    it("builds a context equivalent to the one lintSchema lints", () => {
-        expect.assertions(1);
+    it("normalizes the feeder options into evidence the lints can read", () => {
+        expect.assertions(2);
 
-        const options = { schema: irFrom(UNINDEXED) };
+        const context = toAdvisorContext({ procedureProtections: [], queries: [], schema: irFrom(UNINDEXED) });
 
-        expect(runAdvisor(toAdvisorContext(options), { source: "static" })).toStrictEqual(lintSchema(options));
+        expect(context.schema.tables.map((table) => table.name)).toStrictEqual(["users", "posts"]);
+        expect(runAdvisor(context, { source: "static" }).map((finding) => finding.name)).toContain("unindexed_foreign_key");
     });
 });

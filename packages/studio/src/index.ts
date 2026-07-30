@@ -15,6 +15,7 @@ export type { Insight, InsightKind, InsightSeverity, InsightThresholds } from ".
 export { DEFAULT_INSIGHT_THRESHOLDS, deriveInsights } from "./features/advisors/derive-insights";
 export type { InsightsPanelProps } from "./features/advisors/insights-panel";
 export { InsightsPanel } from "./features/advisors/insights-panel";
+export { default as AdvisorHealthPanel } from "./features/advisors/advisor-health-panel";
 export { default as SecurityAdvisorPanel } from "./features/advisors/security-advisor-panel";
 export type { ApiDocsPanelProps } from "./features/api/api-docs-panel";
 export { default as ApiDocsPanel } from "./features/api/api-docs-panel";

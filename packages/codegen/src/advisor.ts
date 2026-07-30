@@ -225,11 +225,21 @@ interface LintSchemaOptions {
 }
 
 /**
- * Normalize the feeder options into the advisor's {@link LintContext}. Shared by
- * {@link lintSchema} and {@link toAdvisorContext} so the lint run and the scored map
- * always see byte-identical evidence.
+ * Normalize feeder options into the advisor's {@link LintContext} — the input
+ * both `runAdvisor` and `scoreAdvisor` take. Shared by {@link lintSchema} so the
+ * lint run and the scored map always see byte-identical evidence.
+ *
+ * Exported instead of a `mapSchema(options)` convenience that lints *and* scores:
+ * such a wrapper would either re-run every rule or need a `findings` escape hatch
+ * nothing could validate against its `options`, so mismatched findings would
+ * silently produce a wrong map. Two lines at the call site buys that away:
+ *
+ * ```ts
+ * const context = toAdvisorContext(options);
+ * const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }));
+ * ```
  */
-const toLintContext = (options: LintSchemaOptions): LintContext =>
+const toAdvisorContext = (options: LintSchemaOptions): LintContext =>
     ({
         adminRoutes: options.adminRoutes,
         aiRawRuns: options.aiRawRuns,
@@ -302,27 +312,7 @@ const toLintContext = (options: LintSchemaOptions): LintContext =>
  * pass straight through without conversion. Returns the findings; surfacing them
  * (console, error overlay, studio Advisors table) is the caller's choice.
  */
-export const lintSchema = (options: LintSchemaOptions): Finding[] => runAdvisor(toLintContext(options), { source: "static" });
-
-/**
- * Normalize feeder options into the advisor's `LintContext` — the input both
- * `runAdvisor` and `scoreAdvisor` take.
- *
- * Exported instead of a `mapSchema(options)` convenience so the map stays a pure
- * function of findings the caller already has. A wrapper that lints *and* scores
- * would either re-run every rule or need a `findings` escape hatch that nothing
- * can check against `options` — pass mismatched findings and you get a silently
- * wrong map. Two lines at the call site buys that away:
- *
- * ```ts
- * const context = toAdvisorContext(options);
- * const map = scoreAdvisor(context, runAdvisor(context, { source: "static" }), { lints: STATIC_LINTS });
- * ```
- *
- * Pass `STATIC_LINTS` as `lints` so any `Lint.weight` is honoured; omit it and
- * every finding falls back to the severity ladder.
- */
-export const toAdvisorContext = (options: LintSchemaOptions): LintContext => toLintContext(options);
+export const lintSchema = (options: LintSchemaOptions): Finding[] => runAdvisor(toAdvisorContext(options), { source: "static" });
 
 /**
  * Render advisor findings as a single multi-line string for console surfacing:
@@ -340,4 +330,5 @@ export const formatAdvisories = (findings: ReadonlyArray<Finding>): string => {
     return [header, ...lines].join("\n");
 };
 
+export { toAdvisorContext };
 export type { LintSchemaOptions };

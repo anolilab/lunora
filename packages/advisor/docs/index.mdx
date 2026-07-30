@@ -241,7 +241,7 @@ import { fromServerSchema, runAdvisor, scoreAdvisor } from "@lunora/advisor";
 import schema from "./lunora/schema";
 
 const context = { schema: fromServerSchema(schema) };
-const map = scoreAdvisor(context, runAdvisor(context, { source: "static" }));
+const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }));
 
 console.log(map.score, map.grade); // e.g. 84 "good"
 ```
@@ -279,12 +279,30 @@ Grades band the global score: `excellent` (≥ 90), `good` (≥ 70), `needs-work
     not a statement about telemetry.
 </Callout>
 
+### From the command line
+
+`lunora advisor` does all of this for you — scores the app, writes
+`lunora.advisor.map.json`, and gates on it:
+
+```sh
+lunora advisor                    # score, print a summary, write the artifact
+lunora advisor --all              # every procedure, grouped by file
+lunora advisor --entry m#send     # one procedure and the rules that fired
+lunora advisor --min-score 80     # exit 1 below 80
+lunora advisor --baseline         # exit 1 on any regression vs the committed map
+lunora advisor --no-write         # score without touching the artifact
+```
+
+The artifact is stamped deterministically, so committing it and re-running leaves
+no diff unless something actually changed.
+
 ### Gate CI on a committed baseline
 
 Write the map to `lunora.advisor.map.json`, commit it, and compare against it on
-each run. `compareToBaseline` reports four independent regression signals: the
+each run. `compareToBaseline` reports five independent regression signals: the
 global score fell, an existing procedure got worse, a procedure started failing,
-or the project bucket gained rules.
+a procedure's findings grew without its score moving, or the project bucket
+gained findings.
 
 ```ts
 import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";

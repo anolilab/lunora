@@ -1,7 +1,6 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
-/** Default artifact path, relative to the project root. */
-const DEFAULT_MAP_PATH = "lunora.advisor.map.json";
+import DEFAULT_MAP_PATH from "./constants";
 
 const advisorCommand: Command = {
     description: "Score your app's advisor findings into a health map, and gate CI on it",
@@ -28,12 +27,16 @@ const advisorCommand: Command = {
         { description: "Inspect a single procedure by `file#exportName`", name: "entry", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Exit non-zero when the global score is below this value (0-100)", name: "min-score", type: String },
-        { description: "Do not write the map artifact to disk", name: "no-write", type: Boolean },
         { description: `Where to write the map (default ${DEFAULT_MAP_PATH})`, name: "out", type: String },
+        // Declared positively. cerebro reads a `no-`-prefixed name as the negative
+        // half of a negatable boolean, so `name: "no-write"` would parse to the key
+        // `write` and the handler's `noWrite` would be permanently undefined —
+        // silently writing the artifact even when the user asked it not to.
+        { description: "Write the map artifact to disk (default true; use --no-write to skip)", name: "write", type: Boolean },
     ],
 };
 
-export { advisorCommand, DEFAULT_MAP_PATH };
+export { advisorCommand };
 
 export type AdvisorOptions = CreateOptions<{
     all: boolean | undefined;
@@ -41,6 +44,6 @@ export type AdvisorOptions = CreateOptions<{
     entry: string | undefined;
     format: string | undefined;
     "min-score": string | undefined;
-    "no-write": boolean | undefined;
     out: string | undefined;
+    write: boolean | undefined;
 }>;

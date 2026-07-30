@@ -15,6 +15,7 @@
 
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
+import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
 import type { CapturedMail } from "@lunora/mail";
 // Canonical registered-device wire type, owned by `@lunora/notify` (the
 // secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
@@ -427,22 +428,15 @@ export interface TablesColumnsResult {
 export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
 
 /**
- * One static schema advisory, mirroring `@lunora/advisor`'s `Finding` (served by
- * `__lunora_admin__:getAdvisories`). These are codegen-time lints baked into the
- * deployed worker — they refresh on every codegen run (dev: on save; prod: on deploy).
+ * One static schema advisory served by `__lunora_admin__:getAdvisories` — the
+ * advisor's own `Finding`. These are codegen-time lints baked into the deployed
+ * worker; they refresh on every codegen run (dev: on save; prod: on deploy).
+ *
+ * Aliased rather than re-declared: studio depends on `@lunora/advisor`, so a
+ * hand-kept copy would only be one more shape to drift, and the health panel
+ * feeds these straight into `scoreAdvisor`.
  */
-export interface AdvisoryFinding {
-    cacheKey: string;
-    categories: string[];
-    description: string;
-    detail: string;
-    facing: "EXTERNAL" | "INTERNAL";
-    level: AdvisoryLevel;
-    metadata: Record<string, unknown>;
-    name: string;
-    remediation: string;
-    title: string;
-}
+export type AdvisoryFinding = Finding;
 
 /** Payload of a `__lunora_admin__:getAdvisories` call, mirroring `@lunora/do`'s `AdvisoriesResult`. */
 export interface AdvisoriesResult {
@@ -450,36 +444,14 @@ export interface AdvisoriesResult {
 }
 
 /**
- * One declared procedure, mirroring `@lunora/advisor`'s
- * `AdvisorProcedureProtection` — the health map's denominator, served by
- * `__lunora_admin__:getAdvisorProcedures`.
+ * Payload of a `__lunora_admin__:getAdvisorProcedures` call.
+ *
+ * Reuses `@lunora/advisor`'s type rather than re-declaring the 20-field shape:
+ * studio already depends on that package, so a local copy would be one more
+ * transcription to keep in lockstep for no isolation benefit.
  */
-export interface AdvisorProcedure {
-    callsMail: boolean;
-    emitsEvent?: boolean;
-    exempt?: boolean;
-    exemptReason?: string;
-    exportName: string;
-    fanOut: boolean;
-    file: string;
-    handlesErrors?: boolean;
-    kind: "action" | "mutation" | "query";
-    reachesOutbound?: boolean;
-    throwsBareError?: boolean;
-    unboundedAiGeneration: boolean;
-    usesCaptcha: boolean;
-    usesEmailGate: boolean;
-    usesInsertManyUnsafe: boolean;
-    usesMask: boolean;
-    usesRateLimit: boolean;
-    usesRls: boolean;
-    visibility: "internal" | "public";
-    writesUserTable: boolean;
-}
-
-/** Payload of a `__lunora_admin__:getAdvisorProcedures` call. */
 export interface AdvisorProceduresResult {
-    procedures: AdvisorProcedure[];
+    procedures: AdvisorProcedureProtection[];
 }
 
 /** The operation an RLS policy gates, mirroring `@lunora/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */

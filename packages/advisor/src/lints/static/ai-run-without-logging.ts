@@ -10,8 +10,11 @@ import type { Lint } from "../../types";
  * recording that the call happened there is no way to attribute spend, compare a
  * bad answer against the prompt that produced it, or notice a retry storm.
  *
- * Fires only where the feeder saw both an AI generation and no event, so a
- * handler whose body could not be read is left alone.
+ * Keyed on whether the handler runs a model at all — bounded or not. An earlier
+ * cut reused the `unboundedAiGeneration` / raw-run signals, which meant the
+ * correctly-bounded `generateText({ …, maxOutputTokens })` — the common case, and
+ * the one this rule exists for — was never flagged, while procedures another lint
+ * had already caught were charged twice.
  */
 const aiRunWithoutLogging: Lint = {
     categories: ["PERFORMANCE"],
@@ -22,17 +25,14 @@ const aiRunWithoutLogging: Lint = {
     name: "ai_run_without_logging",
     remediation: 'Emit an event around the generation — `ctx.span("<name>", …)`, or a `ctx.log` line carrying the model and token usage.',
     run: (context) => {
-        if (context.procedureProtections === undefined || context.aiRawRuns === undefined) {
+        if (context.procedureProtections === undefined) {
             return [];
         }
 
-        const runsBy = new Set(context.aiRawRuns.map((run) => `${run.file}#${run.exportName}`));
         const findings = [];
 
         for (const procedure of context.procedureProtections) {
-            const generates = procedure.unboundedAiGeneration || runsBy.has(`${procedure.file}#${procedure.exportName}`);
-
-            if (!generates || procedure.emitsEvent !== false) {
+            if (procedure.runsAiGeneration !== true || procedure.emitsEvent !== false) {
                 continue;
             }
 

@@ -2,32 +2,39 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 import type { AdvisorMap, BaselineComparison } from "@lunora/advisor";
-import { compareToBaseline, parseAdvisorMap, scoreAdvisor, STATIC_LINTS } from "@lunora/advisor";
+import { compareToBaseline, parseAdvisorMap, scoreAdvisor } from "@lunora/advisor";
 import { runCodegen } from "@lunora/codegen";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import DEFAULT_MAP_PATH from "./constants";
 import type { AdvisorOptions } from "./index";
-import { DEFAULT_MAP_PATH } from "./index";
 import { formatEntry, formatMatrix, formatSummary } from "./report";
 
 interface AdvisorCommandOptions {
+    /**
+     * Stamp for the artifact. Defaults to the epoch rather than "now": the map is
+     * meant to be committed, and a wall-clock stamp would leave it dirty in git
+     * after every run, training people to ignore the diff that is the gate's whole
+     * point. Pass a real timestamp when you want one.
+     */
+    generatedAt?: string;
     /** Render every procedure as a check matrix, not just the ones with findings. */
     all?: boolean;
-    /** Committed map to diff against; `""` means "use the default path". */
-    baseline?: string;
+    /** Committed map to diff against. A valueless flag arrives as `null`, an explicit one as a path; both mean "gate on it". */
+    baseline?: null | string;
     cwd?: string;
     /** Inspect a single `file#exportName`. */
     entry?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
     logger: Logger;
-    /** Fail when the global score is below this. */
-    minScore?: number;
-    /** Suppress writing the artifact. */
-    noWrite?: boolean;
+    /** Fail when the global score is below this. Raw, so a valueless flag stays distinguishable from 0. */
+    minScore?: null | number | string;
+    /** Write the artifact; defaults to true. */
+    write?: boolean;
     /** Where to write the artifact. */
     out?: string;
 }
@@ -39,15 +46,37 @@ interface AdvisorCommandResult {
     error?: string;
     /** The scored map; absent only when the run aborted before scoring. */
     map?: AdvisorMap;
+    /** `true` when `--min-score` was given and the score fell below it. */
+    belowMinScore?: boolean;
     /** Where the artifact was written, when it was. */
     written?: string;
 }
 
+/** See {@link AdvisorCommandOptions.generatedAt} — a committed artifact must not churn. */
+const STABLE_STAMP = new Date(0).toISOString();
+
 /** Resolve a possibly-relative path against the project root. */
 const resolveIn = (projectRoot: string, path: string): string => (isAbsolute(path) ? path : join(projectRoot, path));
 
-/** `--min-score` must be a real percentage; anything else is a typo that would silently disable the gate. */
-const invalidMinScore = (minScore: number | undefined): boolean => minScore !== undefined && !(Number.isFinite(minScore) && minScore >= 0 && minScore <= 100);
+/**
+ * `--min-score` must be a real percentage. Parsed from the raw flag rather than a
+ * pre-coerced number because `Number(null)` and `Number("")` are both `0`, and a
+ * threshold of 0 can never fail — so `--min-score` with its value omitted, or
+ * `--min-score "$UNSET_VAR"` in CI, would silently disable the gate.
+ */
+const parseMinScore = (raw: number | string | null | undefined): { error: string } | { value: number | undefined } => {
+    if (raw === undefined) {
+        return { value: undefined };
+    }
+
+    if (raw === null || raw === "") {
+        return { error: "--min-score needs a value between 0 and 100" };
+    }
+
+    const value = Number(raw);
+
+    return Number.isFinite(value) && value >= 0 && value <= 100 ? { value } : { error: "--min-score must be a number between 0 and 100" };
+};
 
 /**
  * Read the committed baseline and diff against it.
@@ -56,8 +85,11 @@ const invalidMinScore = (minScore: number | undefined): boolean => minScore !== 
  * missing, hand-edited, or older-version baseline means the gate cannot verify
  * anything, and treating that as clean would silently disable it forever.
  */
-const diffAgainstBaseline = (map: AdvisorMap, projectRoot: string, baselineOption: string): { comparison: BaselineComparison } | { error: string } => {
-    const path = resolveIn(projectRoot, baselineOption === "" ? DEFAULT_MAP_PATH : baselineOption);
+const diffAgainstBaseline = (map: AdvisorMap, projectRoot: string, baselineOption: null | string): { comparison: BaselineComparison } | { error: string } => {
+    // cerebro hands a valueless `--baseline` through as `null`, not `""`; both mean
+    // "use the committed default", and neither may reach `isAbsolute`, which throws
+    // on a non-string.
+    const path = resolveIn(projectRoot, baselineOption === null || baselineOption === "" ? DEFAULT_MAP_PATH : baselineOption);
 
     if (!existsSync(path)) {
         return { error: `baseline not found at ${path} — generate one with \`lunora advisor\` and commit it` };
@@ -66,11 +98,14 @@ const diffAgainstBaseline = (map: AdvisorMap, projectRoot: string, baselineOptio
     const baseline = parseAdvisorMap(JSON.parse(readFileSync(path, "utf8")));
 
     if (baseline === undefined) {
-        return { error: `baseline at ${path} is unreadable or was written by an older version — regenerate it` };
+        return { error: `baseline at ${path} is malformed — regenerate it with \`lunora advisor\`` };
     }
 
     return { comparison: compareToBaseline(map, baseline) };
 };
+
+/** A version mismatch is "cannot verify", so it must fail the gate like any regression. */
+const describeIncomparable = (reason: string): string => `baseline is not comparable (${reason}) — regenerate it; this run verified nothing`;
 
 /** Pick the view the flags asked for. */
 const render = (map: AdvisorMap, options: AdvisorCommandOptions, comparison: BaselineComparison | undefined): string => {
@@ -101,12 +136,12 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
         return { error: formatError };
     }
 
-    if (invalidMinScore(options.minScore)) {
-        const message = "--min-score must be a number between 0 and 100";
+    const minScore = parseMinScore(options.minScore);
 
-        options.logger.error(message);
+    if ("error" in minScore) {
+        options.logger.error(minScore.error);
 
-        return { error: message };
+        return { error: minScore.error };
     }
 
     const { advisorContext, advisories } = runCodegen({ dryRun: true, projectRoot });
@@ -119,17 +154,13 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
         return { error: message };
     }
 
-    // `STATIC_LINTS` is exactly the set codegen ran, so any `Lint.weight` is honoured.
-    const map = scoreAdvisor(advisorContext, advisories, { lints: STATIC_LINTS });
+    const map = scoreAdvisor(advisorContext.procedureProtections ?? [], advisories, { generatedAt: options.generatedAt ?? STABLE_STAMP });
     const result: AdvisorCommandResult = { map };
 
-    if (options.noWrite !== true) {
-        const target = resolveIn(projectRoot, options.out ?? DEFAULT_MAP_PATH);
-
-        writeFileSync(target, `${JSON.stringify(map, undefined, 4)}\n`, "utf8");
-        result.written = target;
-    }
-
+    // Diff BEFORE writing. `--baseline` and `--out` default to the same path, so
+    // writing first would overwrite the committed baseline with the current map
+    // and then compare it against itself — the gate could never fire, and the
+    // artifact it was meant to protect would already be gone.
     if (options.baseline !== undefined) {
         const outcome = diffAgainstBaseline(map, projectRoot, options.baseline);
 
@@ -140,6 +171,23 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
         }
 
         result.comparison = outcome.comparison;
+
+        if (!outcome.comparison.comparable) {
+            options.logger.error(describeIncomparable(outcome.comparison.reason));
+        }
+    }
+
+    if (options.write !== false) {
+        const target = resolveIn(projectRoot, options.out ?? DEFAULT_MAP_PATH);
+
+        writeFileSync(target, `${JSON.stringify(map, undefined, 4)}\n`, "utf8");
+        result.written = target;
+    }
+
+    result.belowMinScore = minScore.value !== undefined && map.score < minScore.value;
+
+    if (result.belowMinScore) {
+        logger.error(`advisor score ${String(map.score)} is below the required ${String(minScore.value)}`);
     }
 
     if (json) {
@@ -158,21 +206,17 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
 };
 
 /** Whether the run should fail the process. */
-const failed = (result: AdvisorCommandResult, minScore: number | undefined): boolean => {
-    if (result.error !== undefined) {
+const failed = (result: AdvisorCommandResult): boolean => {
+    if (result.error !== undefined || result.belowMinScore === true) {
         return true;
     }
 
-    if (result.comparison !== undefined && (!result.comparison.comparable || result.comparison.regressed)) {
-        return true;
-    }
-
-    return minScore !== undefined && result.map !== undefined && result.map.score < minScore;
+    // An incomparable baseline is "cannot verify", which must fail like a regression.
+    return result.comparison !== undefined && (!result.comparison.comparable || result.comparison.regressed);
 };
 
 /** `lunora advisor` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({ cwd, logger, options }) => {
-    const minScore = options.minScore === undefined ? undefined : Number(options.minScore);
     const result = runAdvisorCommand({
         all: options.all,
         baseline: options.baseline,
@@ -180,12 +224,12 @@ const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({
         entry: options.entry,
         format: options.format,
         logger,
-        minScore,
-        noWrite: options.noWrite,
+        minScore: options.minScore,
         out: options.out,
+        write: options.write,
     });
 
-    return { code: failed(result, minScore) ? 1 : 0 };
+    return { code: failed(result) ? 1 : 0 };
 });
 
 export { execute, runAdvisorCommand };

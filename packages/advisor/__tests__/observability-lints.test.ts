@@ -12,6 +12,7 @@ const procedure = (overrides: Partial<AdvisorProcedureProtection> & Pick<Advisor
         handlesErrors: false,
         kind: "mutation",
         reachesOutbound: false,
+        runsAiGeneration: false,
         throwsBareError: false,
         unboundedAiGeneration: false,
         usesCaptcha: false,
@@ -120,21 +121,19 @@ describe("action_without_error_handling", () => {
 });
 
 describe("ai_run_without_logging", () => {
-    it("flags a raw AI run in a procedure that emits nothing", () => {
+    it("flags a bounded generation that emits nothing — the case the rule exists for", () => {
         expect.assertions(1);
 
-        const findings = aiRunWithoutLogging.run(
-            contextWith([procedure({ exportName: "ask", file: "ai", kind: "action" })], { aiRawRuns: [{ exportName: "ask", file: "ai", line: 3 }] }),
-        );
+        const findings = aiRunWithoutLogging.run(contextWith([procedure({ exportName: "ask", file: "ai", kind: "action", runsAiGeneration: true })]));
 
         expect(findings).toHaveLength(1);
     });
 
-    it("also flags an unbounded generation with no event, without a raw-run row", () => {
+    it("also flags an unbounded generation with no event", () => {
         expect.assertions(1);
 
         const findings = aiRunWithoutLogging.run(
-            contextWith([procedure({ exportName: "ask", file: "ai", kind: "action", unboundedAiGeneration: true })], { aiRawRuns: [] }),
+            contextWith([procedure({ exportName: "ask", file: "ai", kind: "action", runsAiGeneration: true, unboundedAiGeneration: true })]),
         );
 
         expect(findings).toHaveLength(1);
@@ -144,13 +143,13 @@ describe("ai_run_without_logging", () => {
         expect.assertions(1);
 
         const findings = aiRunWithoutLogging.run(
-            contextWith([procedure({ emitsEvent: true, exportName: "ask", file: "ai", kind: "action", unboundedAiGeneration: true })], { aiRawRuns: [] }),
+            contextWith([procedure({ emitsEvent: true, exportName: "ask", file: "ai", kind: "action", runsAiGeneration: true })]),
         );
 
         expect(findings).toHaveLength(0);
     });
 
-    it("finds nothing when no AI evidence was supplied", () => {
+    it("stays quiet on a procedure that runs no model", () => {
         expect.assertions(1);
 
         expect(aiRunWithoutLogging.run(contextWith([procedure({ exportName: "a", file: "f" })]))).toHaveLength(0);

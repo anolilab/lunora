@@ -15,8 +15,6 @@ const SIGNALS: ReadonlyArray<{ reason: string; test: (procedure: AdvisorProcedur
     { reason: "writes an identity table", test: (procedure) => procedure.writesUserTable },
     { reason: "sends mail", test: (procedure) => procedure.callsMail },
     { reason: "fans out to a privileged dispatch surface", test: (procedure) => procedure.fanOut },
-    { reason: "declares row-level security", test: (procedure) => procedure.usesRls },
-    { reason: "declares column masking", test: (procedure) => procedure.usesMask },
     { reason: "bypasses validators with insertManyUnsafe", test: (procedure) => procedure.usesInsertManyUnsafe },
     { reason: "runs an unbounded AI generation", test: (procedure) => procedure.unboundedAiGeneration },
 ];

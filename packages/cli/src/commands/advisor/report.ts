@@ -1,16 +1,8 @@
 import type { AdvisorMap, BaselineComparison, Coverage, ProcedureScore } from "@lunora/advisor";
+import { byCodepoint } from "@lunora/advisor";
 
 /** Single-character verdict marks, so a wide matrix stays readable. */
 const MARK: Readonly<Record<Coverage, string>> = { clean: "·", exempt: "–", failing: "✗", warned: "!" };
-
-/** Codepoint ordering, so output does not shift with the host locale. */
-const byText = (a: string, b: string): number => {
-    if (a === b) {
-        return 0;
-    }
-
-    return a < b ? -1 : 1;
-};
 
 /** Pad to a fixed width so columns line up without a table library. */
 const pad = (value: string, width: number): string => (value.length >= width ? value : value + " ".repeat(width - value.length));
@@ -111,10 +103,16 @@ const groupByFile = (entries: ReadonlyArray<ProcedureScore>): [string, Procedure
     const byFile = new Map<string, ProcedureScore[]>();
 
     for (const entry of entries) {
-        byFile.set(entry.file, [...(byFile.get(entry.file) ?? []), entry]);
+        const bucket = byFile.get(entry.file);
+
+        if (bucket === undefined) {
+            byFile.set(entry.file, [entry]);
+        } else {
+            bucket.push(entry);
+        }
     }
 
-    return [...byFile].toSorted(([a], [b]) => byText(a, b));
+    return [...byFile].toSorted(([a], [b]) => byCodepoint(a, b));
 };
 
 /** `--all`: every procedure, grouped by file. */

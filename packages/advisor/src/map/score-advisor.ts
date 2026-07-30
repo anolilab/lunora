@@ -1,5 +1,5 @@
 import type { AdvisorProcedureProtection } from "../procedure-protections";
-import type { Finding, Lint, LintContext } from "../types";
+import type { Finding } from "../types";
 import { coverageFromScore, gradeFromScore, procedureWeight, projectWeight, scoreGlobal, scoreProcedure, weightFor, worstLevel } from "./score";
 import classifySensitivity from "./sensitivity";
 import type { AdvisorMap, CheckResult, Coverage, MapSummary, ProcedureScore, ProjectScore } from "./types";
@@ -54,10 +54,8 @@ const foldCheck = (existing: CheckResult | undefined, level: Finding["level"], n
  *
  * A finding attaches only to a procedure the feeder actually declared; an
  * unknown `file`/`exportName` pair (or a schema-level finding, which carries
- * neither) is project-wide rather than silently dropped. Note that several
- * procedure-local lints — `filter_without_index` most importantly — emit `file`
- * without `exportName` today, so they land in the project bucket; closing that
- * gap needs an `exportName` on the codegen feeder's query evidence.
+ * neither) is project-wide rather than silently dropped. A lint that reports a
+ * file but no export name therefore lands project-wide by construction.
  */
 const attributeFindings = (
     procedures: ReadonlyArray<AdvisorProcedureProtection>,
@@ -109,9 +107,9 @@ const MAP_VERSION = 1;
 /** Options for {@link scoreAdvisor}. */
 interface ScoreAdvisorOptions {
     /**
-     * Procedure ids (`file#exportName`) to exclude from scoring — the escape
-     * hatch for a handler whose findings are knowingly accepted. Exempt rows
-     * still appear in the map, marked `exempt`, but pull no weight.
+     * Procedure ids (`file#exportName`) to exclude from scoring, for a caller
+     * that computes exemptions itself. Source-level `// lunora-advisor-exempt`
+     * directives are honoured independently; the two compose.
      */
     exempt?: ReadonlyArray<string>;
 
@@ -120,14 +118,6 @@ interface ScoreAdvisorOptions {
      * explicitly when the map must be byte-stable (tests, reproducible builds).
      */
     generatedAt?: string;
-
-    /**
-     * Lints whose explicit {@link Lint.weight} should override the severity
-     * ladder. Pass the **same set** `runAdvisor` ran: a lint missing here simply
-     * falls back to its severity default, so a mismatched set silently shifts
-     * scores rather than erroring.
-     */
-    lints?: ReadonlyArray<Lint>;
 }
 
 /**
@@ -140,19 +130,18 @@ interface ScoreAdvisorOptions {
  * `metadata.file` + `metadata.exportName`; everything else lands in the project
  * bucket, which is folded into the global mean at a weight proportional to the
  * procedure population so schema debt genuinely moves the grade.
+ *
+ * Takes the procedure list directly rather than a `LintContext`: it reads no
+ * other feeder, and asking for the whole context forced callers with only a
+ * procedure array to fabricate an empty schema.
  */
-const scoreAdvisor = (context: LintContext, findings: ReadonlyArray<Finding>, options: ScoreAdvisorOptions = {}): AdvisorMap => {
-    const declaredWeights = new Map<string, number>();
-
-    for (const lint of options.lints ?? []) {
-        if (lint.weight !== undefined) {
-            declaredWeights.set(lint.name, lint.weight);
-        }
-    }
-
+const scoreAdvisor = (
+    procedures: ReadonlyArray<AdvisorProcedureProtection>,
+    findings: ReadonlyArray<Finding>,
+    options: ScoreAdvisorOptions = {},
+): AdvisorMap => {
     const exempt = new Set(options.exempt);
-    const procedures = context.procedureProtections ?? [];
-    const attributed = attributeFindings(procedures, findings, (finding) => weightFor(declaredWeights.get(finding.name), finding.level));
+    const attributed = attributeFindings(procedures, findings, (finding) => weightFor(finding.level));
 
     const scored: ProcedureScore[] = procedures
         .map((procedure) => {

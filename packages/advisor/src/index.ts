@@ -240,7 +240,7 @@ export { compareToBaseline, parseAdvisorMap } from "./map/baseline";
 // `gradeFromScore` is public because a UI needs to band a score it did not compute.
 export { gradeFromScore } from "./map/score";
 export type { ScoreAdvisorOptions } from "./map/score-advisor";
-export { MAP_VERSION, scoreAdvisor } from "./map/score-advisor";
+export { byCodepoint, MAP_VERSION, scoreAdvisor } from "./map/score-advisor";
 export { default as classifySensitivity } from "./map/sensitivity";
 export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore, Sensitivity, SensitivityLevel } from "./map/types";
 export type { AdvisorMaskProcedure } from "./mask-procedures";

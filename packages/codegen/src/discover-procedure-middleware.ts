@@ -269,6 +269,13 @@ const isUnsafeInsert = (call: CallExpression): boolean => {
 /** AI SDK text/object generation helpers (re-exported from `@lunora/ai`) that accept a `maxOutputTokens` bound. */
 const AI_GENERATION_CALLEES = new Set(["generateObject", "generateText", "streamObject", "streamText"]);
 
+/** True when `call` is any AI generation helper, bounded or not. */
+const isAiGeneration = (call: CallExpression): boolean => {
+    const callee = calleeNameOf(call);
+
+    return callee !== undefined && AI_GENERATION_CALLEES.has(callee);
+};
+
 /**
  * True when `call` is an AI generation helper ({@link AI_GENERATION_CALLEES})
  * invoked with an object-literal config that declares no `maxOutputTokens` key —
@@ -300,27 +307,19 @@ const isUnboundedAiGeneration = (call: CallExpression): boolean => {
     return !argument.getProperty("maxOutputTokens");
 };
 
-/** True when a node anywhere in `declaration` references `ctx.mail` / `ctx.email` (a mail send). */
-const referencesMail = (declaration: TsNode): boolean =>
-    declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
-        const name = access.getName();
-
-        if (name !== "mail" && name !== "email") {
-            return false;
-        }
-
-        const receiver = access.getExpression();
-
-        return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
-    });
-
 /** `ctx.*` members that emit a structured observability event. */
 const EVENT_MEMBERS: ReadonlySet<string> = new Set(["log", "span", "trace"]);
+
+/** `ctx.*` members that reach a model. */
+const AI_MEMBERS: ReadonlySet<string> = new Set(["ai"]);
+
+/** `ctx.*` members that send mail. */
+const MAIL_MEMBERS: ReadonlySet<string> = new Set(["email", "mail"]);
 
 /** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
 const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
 
-/** True when any `ctx.&lt;member>` in `declaration` is one of `members`. */
+/** True when any `ctx.<member>` in `declaration` is one of `members`. */
 const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
     declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
         if (!members.has(access.getName())) {
@@ -364,9 +363,16 @@ const throwsBareError = (declaration: TsNode): boolean =>
  * A leading comment rather than a config list: it sits next to the code it
  * excuses, survives a file move, and shows up in the diff of whoever removes the
  * handler. The reason is captured into the artifact so an exemption has to be
- * argued in review rather than added silently.
+ * argued in review rather than added silently. The reason stops at `*` so a
+ * directive written inside a block comment cannot swallow its closing delimiter.
+ *
+ * Anchored to the start of a comment line, and `(?![\w-])` blocks a longer token:
+ * without both, prose *about* the directive opts a procedure out. "Do NOT add
+ * lunora-advisor-exempt here" and "lunora-advisor-exempt-later" both used to
+ * exempt the handler — silently, and `compareToBaseline` skips exempt rows, so
+ * every future regression on it (security lints included) went unseen.
  */
-const EXEMPT_DIRECTIVE = /lunora-advisor-exempt\b[^\S\n]*(?:--[^\S\n]*(?<reason>[^\n*]*))?/u;
+const EXEMPT_DIRECTIVE = /^[^\S\n]*(?:\/\/|\/\*+|\*)?[^\S\n]*lunora-advisor-exempt(?![\w-])[^\S\n]*(?:--[^\S\n]*(?<reason>[^\n*]*))?/mu;
 
 /** Read the exemption directive off a declaration's leading comments, if present. */
 const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemptReason: string } => {
@@ -390,12 +396,14 @@ const behaviourOf = (
     fanOut: boolean;
     handlesErrors: boolean;
     reachesOutbound: boolean;
+    runsAiGeneration: boolean;
     throwsBareError: boolean;
     unboundedAiGeneration: boolean;
     usesInsertManyUnsafe: boolean;
     writesUserTable: boolean;
 } => {
     let fanOut = false;
+    let runsAiGeneration = false;
     let unboundedAiGeneration = false;
     let usesInsertManyUnsafe = false;
     let writesUserTable = false;
@@ -413,6 +421,10 @@ const behaviourOf = (
             usesInsertManyUnsafe = true;
         }
 
+        if (isAiGeneration(call)) {
+            runsAiGeneration = true;
+        }
+
         if (isUnboundedAiGeneration(call)) {
             unboundedAiGeneration = true;
         }
@@ -423,11 +435,12 @@ const behaviourOf = (
     }
 
     return {
-        callsMail: referencesMail(declaration),
+        callsMail: referencesContextMember(declaration, MAIL_MEMBERS),
         emitsEvent: referencesContextMember(declaration, EVENT_MEMBERS),
         fanOut,
         handlesErrors: declaration.getDescendantsOfKind(SyntaxKind.TryStatement).length > 0,
         reachesOutbound: referencesContextMember(declaration, OUTBOUND_MEMBERS),
+        runsAiGeneration: runsAiGeneration || referencesContextMember(declaration, AI_MEMBERS),
         throwsBareError: throwsBareError(declaration),
         unboundedAiGeneration,
         usesInsertManyUnsafe,
@@ -452,32 +465,18 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
     const protections = classified.receiver
         ? protectionsInChain(classified.receiver)
         : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
-    const behaviour = behaviourOf(declaration);
-    const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviour;
-    const exemption = exemptionOf(declaration);
 
+    // Every key of both fact bags is an IR field, so spreading keeps this in step
+    // automatically when either gains one.
     return {
-        callsMail,
-        exempt: exemption.exempt,
-        exemptReason: exemption.exemptReason,
-        emitsEvent: behaviour.emitsEvent,
-        handlesErrors: behaviour.handlesErrors,
-        reachesOutbound: behaviour.reachesOutbound,
-        throwsBareError: behaviour.throwsBareError,
+        ...behaviourOf(declaration),
+        ...exemptionOf(declaration),
+        ...protections,
         exportName: declaration.getName(),
-        fanOut,
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
-        unboundedAiGeneration,
-        usesCaptcha: protections.usesCaptcha,
-        usesEmailGate: protections.usesEmailGate,
-        usesInsertManyUnsafe,
-        usesMask: protections.usesMask,
-        usesRateLimit: protections.usesRateLimit,
-        usesRls: protections.usesRls,
         visibility: classified.visibility,
-        writesUserTable,
     };
 };
 

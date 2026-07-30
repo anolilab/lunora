@@ -14,7 +14,7 @@ const recordingLogger = (): { lines: string[]; logger: Logger } => {
         lines.push(message);
     };
 
-    return { lines, logger: { debug: push, error: push, info: push, log: push, success: push, warn: push } as unknown as Logger };
+    return { lines, logger: { debug: push, error: push, info: push, success: push, warn: push } };
 };
 
 /** A schema whose `posts.authorId` FK has no index — one guaranteed project-level finding. */
@@ -23,6 +23,19 @@ export const schema = defineSchema({
     users: defineTable({ name: v.string() }),
     posts: defineTable({ authorId: v.id("users"), title: v.string() }).relations((r) => ({
         author: r.one("users", { field: "authorId" }),
+    })),
+});
+`;
+
+/** The same schema plus a second unindexed FK — one more project-level finding. */
+const REGRESSED_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    users: defineTable({ name: v.string() }),
+    posts: defineTable({ authorId: v.id("users"), title: v.string() }).relations((r) => ({
+        author: r.one("users", { field: "authorId" }),
+    })),
+    comments: defineTable({ postId: v.id("posts"), body: v.string() }).relations((r) => ({
+        post: r.one("posts", { field: "postId" }),
     })),
 });
 `;
@@ -56,11 +69,11 @@ describe("lunora advisor", () => {
         expect(onDisk.version).toBe(result.map?.version);
     });
 
-    it("honours --no-write", () => {
+    it("honours --write false", () => {
         expect.assertions(2);
 
         const { logger } = recordingLogger();
-        const result = runAdvisorCommand({ cwd: workdir, logger, noWrite: true });
+        const result = runAdvisorCommand({ cwd: workdir, logger, write: false });
 
         expect(result.written).toBeUndefined();
         expect(() => readFileSync(join(workdir, "lunora.advisor.map.json"), "utf8")).toThrow(/ENOENT/u);
@@ -71,7 +84,7 @@ describe("lunora advisor", () => {
 
         const { lines, logger } = recordingLogger();
 
-        runAdvisorCommand({ cwd: workdir, logger, noWrite: true });
+        runAdvisorCommand({ cwd: workdir, logger, write: false });
 
         const output = lines.join("\n");
 
@@ -84,14 +97,14 @@ describe("lunora advisor", () => {
 
         const { logger } = recordingLogger();
 
-        expect(runAdvisorCommand({ cwd: workdir, logger, minScore: 400, noWrite: true }).error).toContain("--min-score");
+        expect(runAdvisorCommand({ cwd: workdir, logger, minScore: 400, write: false }).error).toContain("--min-score");
     });
 
     it("errors when a baseline was asked for but does not exist", () => {
         expect.assertions(1);
 
         const { logger } = recordingLogger();
-        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger, noWrite: true });
+        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger, write: false });
 
         // A missing baseline must not read as "nothing regressed".
         expect(result.error).toContain("baseline not found");
@@ -104,7 +117,7 @@ describe("lunora advisor", () => {
 
         const { logger } = recordingLogger();
 
-        expect(runAdvisorCommand({ baseline: "", cwd: workdir, logger, noWrite: true }).error).toContain("unreadable");
+        expect(runAdvisorCommand({ baseline: "", cwd: workdir, logger, write: false }).error).toContain("malformed");
     });
 
     it("reports no regression when compared against its own output", () => {
@@ -114,10 +127,31 @@ describe("lunora advisor", () => {
 
         runAdvisorCommand({ cwd: workdir, logger });
 
-        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger, noWrite: true });
+        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger, write: false });
 
         expect(result.comparison?.comparable).toBe(true);
         expect(result.comparison?.comparable === true && result.comparison.regressed).toBe(false);
+    });
+
+    it("does not clobber the baseline it is gating against (writing is the default)", () => {
+        expect.assertions(2);
+
+        const { logger } = recordingLogger();
+
+        runAdvisorCommand({ cwd: workdir, logger });
+
+        const committed = readFileSync(join(workdir, "lunora.advisor.map.json"), "utf8");
+
+        // Regress, then run the gate exactly as documented: `--baseline`, no --no-write.
+        // `--baseline` and `--out` share a default path, so writing before reading
+        // would overwrite the baseline and diff the map against itself — the gate
+        // would report "no regression" forever.
+        writeFileSync(join(workdir, "lunora", "schema.ts"), REGRESSED_SCHEMA, "utf8");
+
+        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger });
+
+        expect(result.comparison?.comparable === true && result.comparison.regressed).toBe(true);
+        expect(readFileSync(join(workdir, "lunora.advisor.map.json"), "utf8")).not.toBe(committed);
     });
 
     it("detects a regression when new project debt lands after the baseline", () => {
@@ -144,9 +178,59 @@ export const schema = defineSchema({
             "utf8",
         );
 
-        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger, noWrite: true });
+        const result = runAdvisorCommand({ baseline: "", cwd: workdir, logger, write: false });
 
         expect(result.comparison?.comparable === true && result.comparison.regressed).toBe(true);
+    });
+
+    it.each([
+        ["a valueless flag (cerebro yields null)", null],
+        ["an unset CI variable", ""],
+    ])("refuses --min-score given %s rather than gating at zero", (_label, raw) => {
+        expect.assertions(1);
+
+        const { logger } = recordingLogger();
+
+        // `Number(null)` and `Number("")` are both 0, and `score < 0` is never true —
+        // so coercing first would silently disable the gate.
+        expect(runAdvisorCommand({ cwd: workdir, logger, minScore: raw, write: false }).error).toContain("--min-score");
+    });
+
+    it("treats a valueless --baseline as the default path instead of crashing", () => {
+        expect.assertions(1);
+
+        const { logger } = recordingLogger();
+
+        runAdvisorCommand({ cwd: workdir, logger });
+
+        // cerebro hands `--baseline` with no value through as `null`.
+        expect(runAdvisorCommand({ baseline: null, cwd: workdir, logger, write: false }).comparison?.comparable).toBe(true);
+    });
+
+    it("fails the run when the score is below --min-score", () => {
+        expect.assertions(2);
+
+        const { logger } = recordingLogger();
+        const pass = runAdvisorCommand({ cwd: workdir, logger, minScore: 0, write: false });
+        const fail = runAdvisorCommand({ cwd: workdir, logger, minScore: 100, write: false });
+
+        expect(pass.belowMinScore).toBe(false);
+        expect(fail.belowMinScore).toBe(true);
+    });
+
+    it("writes a byte-stable artifact so a committed baseline does not churn", () => {
+        expect.assertions(1);
+
+        const { logger } = recordingLogger();
+
+        runAdvisorCommand({ cwd: workdir, logger });
+
+        const first = readFileSync(join(workdir, "lunora.advisor.map.json"), "utf8");
+
+        runAdvisorCommand({ cwd: workdir, logger });
+
+        // A wall-clock stamp would leave the committed map dirty after every run.
+        expect(readFileSync(join(workdir, "lunora.advisor.map.json"), "utf8")).toBe(first);
     });
 
     it("inspects a single entry and explains an unknown one", () => {
@@ -154,7 +238,7 @@ export const schema = defineSchema({
 
         const { lines, logger } = recordingLogger();
 
-        runAdvisorCommand({ cwd: workdir, entry: "nope#missing", logger, noWrite: true });
+        runAdvisorCommand({ cwd: workdir, entry: "nope#missing", logger, write: false });
 
         expect(lines.join("\n")).toContain("no procedure nope#missing");
     });

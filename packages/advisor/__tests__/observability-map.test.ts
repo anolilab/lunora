@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorMap, AdvisorProcedureProtection, Finding, Lint, LintContext } from "../src";
+import type { AdvisorMap, AdvisorProcedureProtection, Finding } from "../src";
 import { compareToBaseline, gradeFromScore, MAP_VERSION, parseAdvisorMap, scoreAdvisor } from "../src";
 
 /** A procedure as the codegen feeder would supply it; only the scored fields matter here. */
@@ -38,28 +38,7 @@ const finding = (name: string, level: Finding["level"], metadata: Record<string,
     };
 };
 
-/** A real `Lint` shape (no cast) carrying only the fields scoring reads. */
-const weightedLint = (name: string, weight: number): Lint => {
-    return {
-        categories: ["SECURITY"],
-        description: "",
-        facing: "EXTERNAL",
-        level: "INFO",
-        name,
-        remediation: "",
-        run: () => [],
-        source: "static",
-        title: "",
-        weight,
-    };
-};
-
 const STAMP = "2026-07-30T00:00:00.000Z";
-
-/** Scoring reads only `procedureProtections`; the schema is present because `LintContext` requires it. */
-const contextWith = (procedures: AdvisorProcedureProtection[]): LintContext => {
-    return { procedureProtections: procedures, schema: { tables: [] } };
-};
 
 /** Builds n clean public mutations — a realistic denominator for the weighted mean. */
 const manyProcedures = (count: number): AdvisorProcedureProtection[] =>
@@ -69,7 +48,7 @@ describe("scoreAdvisor scoring", () => {
     it("subtracts a severity-derived penalty per rule and bands the result", () => {
         expect.assertions(3);
 
-        const map = scoreAdvisor(contextWith([procedure({ exportName: "a", file: "f" })]), [finding("warn_rule", "WARN", { exportName: "a", file: "f" })], {
+        const map = scoreAdvisor([procedure({ exportName: "a", file: "f" })], [finding("warn_rule", "WARN", { exportName: "a", file: "f" })], {
             generatedAt: STAMP,
         });
 
@@ -82,7 +61,7 @@ describe("scoreAdvisor scoring", () => {
         expect.assertions(2);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "ok", file: "f" }), procedure({ exportName: "bad", file: "f" })]),
+            [procedure({ exportName: "ok", file: "f" }), procedure({ exportName: "bad", file: "f" })],
             ["a", "b", "c"].map((rule) => finding(rule, "ERROR", { exportName: "bad", file: "f" })),
             { generatedAt: STAMP },
         );
@@ -96,7 +75,7 @@ describe("scoreAdvisor scoring", () => {
 
         const breakOne = (target: string): number =>
             scoreAdvisor(
-                contextWith([procedure({ exportName: "pub", file: "f" }), procedure({ exportName: "int", file: "f", visibility: "internal" })]),
+                [procedure({ exportName: "pub", file: "f" }), procedure({ exportName: "int", file: "f", visibility: "internal" })],
                 ["a", "b", "c", "d", "e"].map((rule) => finding(rule, "ERROR", { exportName: target, file: "f" })),
                 { generatedAt: STAMP },
             ).score;
@@ -108,7 +87,7 @@ describe("scoreAdvisor scoring", () => {
         expect.assertions(2);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "a", file: "f" })]),
+            [procedure({ exportName: "a", file: "f" })],
             [1, 2, 3, 4, 5].map((line) => finding("action_fetch_ssrf", "ERROR", { exportName: "a", file: "f", line })),
             { generatedAt: STAMP },
         );
@@ -117,38 +96,6 @@ describe("scoreAdvisor scoring", () => {
         expect(map.procedures[0]?.score).toBe(80);
         expect(map.procedures[0]?.checks).toStrictEqual([{ level: "ERROR", name: "action_fetch_ssrf", occurrences: 5, weight: 20 }]);
     });
-
-    it("lets an explicit lint weight override the severity ladder", () => {
-        expect.assertions(1);
-
-        const map = scoreAdvisor(contextWith([procedure({ exportName: "a", file: "f" })]), [finding("heavy", "INFO", { exportName: "a", file: "f" })], {
-            generatedAt: STAMP,
-            lints: [weightedLint("heavy", 45)],
-        });
-
-        expect(map.procedures[0]?.score).toBe(55);
-    });
-
-    it.each([
-        ["negative", -40],
-        ["NaN", Number.NaN],
-        ["Infinity", Number.POSITIVE_INFINITY],
-    ])("treats an unusable %s weight as zero rather than corrupting the artifact", (_label, weight) => {
-        expect.assertions(3);
-
-        const map = scoreAdvisor(contextWith([procedure({ exportName: "a", file: "f" })]), [finding("bad", "INFO", { exportName: "a", file: "f" })], {
-            generatedAt: STAMP,
-            lints: [weightedLint("bad", weight)],
-        });
-
-        expect(map.procedures[0]?.score).toBe(100);
-        expect(map.score).toBe(100);
-
-        // A NaN score would survive serialization as `null` and silently break the gate.
-        const onDisk = JSON.stringify(map);
-
-        expect(JSON.parse(onDisk).score).toBe(100);
-    });
 });
 
 describe("scoreAdvisor attribution", () => {
@@ -156,7 +103,7 @@ describe("scoreAdvisor attribution", () => {
         expect.assertions(2);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "sendMessage", file: "messages" })]),
+            [procedure({ exportName: "sendMessage", file: "messages" })],
             [finding("public_mutation_without_ratelimit", "WARN", { exportName: "sendMessage", file: "messages" })],
             { generatedAt: STAMP },
         );
@@ -168,7 +115,7 @@ describe("scoreAdvisor attribution", () => {
     it("routes a finding naming no procedure to the project bucket", () => {
         expect.assertions(1);
 
-        const map = scoreAdvisor(contextWith([]), [finding("circular_fk", "ERROR", { table: "invoices" })], { generatedAt: STAMP });
+        const map = scoreAdvisor([], [finding("circular_fk", "ERROR", { table: "invoices" })], { generatedAt: STAMP });
 
         expect(map.project.checks.map((check) => check.name)).toStrictEqual(["circular_fk"]);
     });
@@ -176,11 +123,9 @@ describe("scoreAdvisor attribution", () => {
     it("routes a finding whose file/export the feeder never declared to the project bucket rather than dropping it", () => {
         expect.assertions(2);
 
-        const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "known", file: "a" })]),
-            [finding("some_lint", "ERROR", { exportName: "ghost", file: "nowhere" })],
-            { generatedAt: STAMP },
-        );
+        const map = scoreAdvisor([procedure({ exportName: "known", file: "a" })], [finding("some_lint", "ERROR", { exportName: "ghost", file: "nowhere" })], {
+            generatedAt: STAMP,
+        });
 
         expect(map.procedures[0]?.checks).toStrictEqual([]);
         expect(map.project.checks).toHaveLength(1);
@@ -189,8 +134,8 @@ describe("scoreAdvisor attribution", () => {
     it("keeps project debt visible in the grade at a realistic procedure count", () => {
         expect.assertions(1);
 
-        const clean = scoreAdvisor(contextWith(manyProcedures(20)), [], { generatedAt: STAMP });
-        const withSecret = scoreAdvisor(contextWith(manyProcedures(20)), [finding("hardcoded_secret", "ERROR", { file: "wrangler" })], { generatedAt: STAMP });
+        const clean = scoreAdvisor(manyProcedures(20), [], { generatedAt: STAMP });
+        const withSecret = scoreAdvisor(manyProcedures(20), [finding("hardcoded_secret", "ERROR", { file: "wrangler" })], { generatedAt: STAMP });
 
         // A flat project weight of 1 would round this away to a 0-point delta.
         expect(withSecret.score).toBeLessThan(clean.score);
@@ -202,7 +147,7 @@ describe("scoreAdvisor artifact", () => {
         expect.assertions(3);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "legacy", file: "old" }), procedure({ exportName: "fine", file: "new" })]),
+            [procedure({ exportName: "legacy", file: "old" }), procedure({ exportName: "fine", file: "new" })],
             [finding("bad_lint", "ERROR", { exportName: "legacy", file: "old" })],
             { exempt: ["old#legacy"], generatedAt: STAMP },
         );
@@ -218,7 +163,7 @@ describe("scoreAdvisor artifact", () => {
         expect.assertions(3);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exempt: true, exemptReason: "legacy, replaced by v2", exportName: "legacy", file: "old" })]),
+            [procedure({ exempt: true, exemptReason: "legacy, replaced by v2", exportName: "legacy", file: "old" })],
             [finding("bad", "ERROR", { exportName: "legacy", file: "old" })],
             { generatedAt: STAMP },
         );
@@ -233,7 +178,7 @@ describe("scoreAdvisor artifact", () => {
 
         const build = (): AdvisorMap =>
             scoreAdvisor(
-                contextWith([procedure({ exportName: "b", file: "z" }), procedure({ exportName: "a", file: "a" })]),
+                [procedure({ exportName: "b", file: "z" }), procedure({ exportName: "a", file: "a" })],
                 [finding("l2", "WARN", { exportName: "b", file: "z" }), finding("l1", "INFO", { exportName: "b", file: "z" })],
                 { generatedAt: STAMP },
             );
@@ -247,15 +192,15 @@ describe("scoreAdvisor artifact", () => {
     it("stamps the clock only when the caller supplies no timestamp", () => {
         expect.assertions(2);
 
-        expect(scoreAdvisor(contextWith([]), [], { generatedAt: STAMP }).generatedAt).toBe(STAMP);
-        expect(Date.parse(scoreAdvisor(contextWith([]), []).generatedAt)).not.toBeNaN();
+        expect(scoreAdvisor([], [], { generatedAt: STAMP }).generatedAt).toBe(STAMP);
+        expect(Date.parse(scoreAdvisor([], []).generatedAt)).not.toBeNaN();
     });
 
     it("summarises coverage across the map", () => {
         expect.assertions(1);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "clean", file: "a" }), procedure({ exportName: "broken", file: "b" })]),
+            [procedure({ exportName: "clean", file: "a" }), procedure({ exportName: "broken", file: "b" })],
             ["e1", "e2", "e3"].map((rule) => finding(rule, "ERROR", { exportName: "broken", file: "b" })),
             { generatedAt: STAMP },
         );
@@ -268,8 +213,8 @@ describe("sensitivity", () => {
     it("marks a procedure high when it touches identity, mail, or tenant-scoped rows", () => {
         expect.assertions(3);
 
-        const sensitive = scoreAdvisor(contextWith([procedure({ exportName: "signUp", file: "auth", writesUserTable: true })]), [], { generatedAt: STAMP });
-        const plain = scoreAdvisor(contextWith([procedure({ exportName: "listPosts", file: "posts", kind: "query" })]), [], { generatedAt: STAMP });
+        const sensitive = scoreAdvisor([procedure({ exportName: "signUp", file: "auth", writesUserTable: true })], [], { generatedAt: STAMP });
+        const plain = scoreAdvisor([procedure({ exportName: "listPosts", file: "posts", kind: "query" })], [], { generatedAt: STAMP });
 
         expect(sensitive.procedures[0]?.sensitivity.level).toBe("high");
         expect(sensitive.procedures[0]?.sensitivity.reasons).toContain("writes an identity table");
@@ -280,7 +225,7 @@ describe("sensitivity", () => {
         expect.assertions(2);
 
         const map = scoreAdvisor(
-            contextWith([procedure({ exportName: "sensitive", file: "f", writesUserTable: true }), procedure({ exportName: "plain", file: "f" })]),
+            [procedure({ exportName: "sensitive", file: "f", writesUserTable: true }), procedure({ exportName: "plain", file: "f" })],
             [],
             { generatedAt: STAMP },
         );
@@ -295,10 +240,10 @@ describe("sensitivity", () => {
         expect.assertions(1);
 
         const map = scoreAdvisor(
-            contextWith([
+            [
                 procedure({ callsMail: true, exportName: "internalMailer", file: "f", visibility: "internal" }),
                 procedure({ exportName: "publicInert", file: "f" }),
-            ]),
+            ],
             [],
             { generatedAt: STAMP },
         );
@@ -320,8 +265,7 @@ describe("gradeFromScore", () => {
 });
 
 describe("compareToBaseline", () => {
-    const mapOf = (findings: Finding[], procedures: AdvisorProcedureProtection[]): AdvisorMap =>
-        scoreAdvisor(contextWith(procedures), findings, { generatedAt: STAMP });
+    const mapOf = (findings: Finding[], procedures: AdvisorProcedureProtection[]): AdvisorMap => scoreAdvisor(procedures, findings, { generatedAt: STAMP });
 
     const procedures = [procedure({ exportName: "a", file: "f" }), procedure({ exportName: "b", file: "f" })];
 
@@ -403,7 +347,7 @@ describe("compareToBaseline", () => {
 });
 
 describe("parseAdvisorMap", () => {
-    const valid = (): AdvisorMap => scoreAdvisor(contextWith([procedure({ exportName: "a", file: "f" })]), [], { generatedAt: STAMP });
+    const valid = (): AdvisorMap => scoreAdvisor([procedure({ exportName: "a", file: "f" })], [], { generatedAt: STAMP });
 
     it("accepts a map this build wrote, round-tripped through JSON", () => {
         expect.assertions(1);
@@ -419,7 +363,6 @@ describe("parseAdvisorMap", () => {
     it.each([
         ["a non-object", "nope"],
         ["null", null],
-        ["a future version", { ...valid(), version: MAP_VERSION + 1 }],
         ["a null procedure row", { ...valid(), procedures: [null] }],
         ["a shapeless procedure row", { ...valid(), procedures: [{}] }],
         ["an unknown coverage verdict", { ...valid(), procedures: [{ coverage: "dark", id: "f#a", score: 10 }] }],
@@ -429,6 +372,18 @@ describe("parseAdvisorMap", () => {
         expect.assertions(1);
 
         expect(parseAdvisorMap(candidate)).toBeUndefined();
+    });
+
+    it("accepts a future version — version policy belongs to compareToBaseline", () => {
+        expect.assertions(2);
+
+        const future = { ...valid(), version: MAP_VERSION + 1 };
+
+        // Rejecting here too would make compareToBaseline's `comparable: false`
+        // arm unreachable, and that arm is what stops a stale baseline reading
+        // as a clean run.
+        expect(parseAdvisorMap(future)).toBeDefined();
+        expect(compareToBaseline(valid(), future)).toStrictEqual({ comparable: false, reason: "version-mismatch" });
     });
 
     it("rejects a malformed baseline instead of letting compareToBaseline throw", () => {

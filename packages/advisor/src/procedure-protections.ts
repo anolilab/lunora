@@ -44,6 +44,8 @@ export interface AdvisorProcedureProtection {
     hasEmailArg?: boolean;
     /** Registration kind — `query` is read-only; `mutation`/`action` are write-shaped. */
     kind: "action" | "mutation" | "query";
+    /** `true` when the handler runs any AI generation, bounded or not. */
+    runsAiGeneration?: boolean;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound?: boolean;
     /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */

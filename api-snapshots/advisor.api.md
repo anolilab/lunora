@@ -502,6 +502,7 @@ interface AdvisorProcedureProtection {
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    runsAiGeneration?: boolean;
     reachesOutbound?: boolean;
     throwsBareError?: boolean;
     unboundedAiGeneration: boolean;
@@ -924,7 +925,6 @@ interface Lint {
     run: (context: LintContext) => Finding[];
     source: LintSource;
     title: string;
-    weight?: number;
 }
 ```
 
@@ -1082,7 +1082,6 @@ const STATIC_LINTS: ReadonlyArray<Lint>;
 interface ScoreAdvisorOptions {
     exempt?: ReadonlyArray<string>;
     generatedAt?: string;
-    lints?: ReadonlyArray<Lint>;
 }
 ```
 
@@ -1201,6 +1200,12 @@ const browserAllowPrivateTargets: Lint;
 
 ```ts
 const browserUserUrlWithoutAllowlist: Lint;
+```
+
+### `byCodepoint` (const)
+
+```ts
+const byCodepoint: (a: string, b: string) => number;
 ```
 
 ### `circularFk` (const)
@@ -1608,7 +1613,7 @@ const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding
 ### `scoreAdvisor` (const)
 
 ```ts
-const scoreAdvisor: (context: LintContext, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
+const scoreAdvisor: (procedures: ReadonlyArray<AdvisorProcedureProtection>, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
 ```
 
 ### `shapeTargetsGlobalTable` (const)

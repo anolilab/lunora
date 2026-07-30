@@ -1,14 +1,13 @@
-import type { AdvisorMap, Coverage, Finding, ProcedureScore } from "@lunora/advisor";
+import type { AdvisorMap, Coverage, Grade, ProcedureScore } from "@lunora/advisor";
 import { scoreAdvisor } from "@lunora/advisor";
 import type { ReactElement } from "react";
-import { useMemo } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
-import type { AdvisoriesResult, AdvisorProceduresResult, AdvisoryFinding } from "../../lib/admin";
+import type { AdvisoriesResult, AdvisorProceduresResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { cn } from "../../lib/utils";
 
@@ -21,25 +20,16 @@ const COVERAGE_STYLE: Readonly<Record<Coverage, string>> = {
 };
 
 /** Grade → accent, mirroring the verdict colours. */
-const GRADE_STYLE: Readonly<Record<string, string>> = {
+const GRADE_STYLE: Readonly<Record<Grade, string>> = {
     "at-risk": "text-red-600 dark:text-red-400",
     excellent: "text-emerald-600 dark:text-emerald-400",
     good: "text-emerald-600 dark:text-emerald-400",
     "needs-work": "text-amber-600 dark:text-amber-400",
 };
 
-/**
- * A DO advisory is structurally a `Finding` — the DO mirrors the shape rather
- * than depending on `@lunora/advisor`. Narrow it back so the scorer can read it.
- */
-const asFinding = (advisory: AdvisoryFinding): Finding => advisory as unknown as Finding;
-
 /** The reason an exempt row was opted out, or a nudge when none was given. */
-const exemptLabel = (entry: ProcedureScore): string => {
-    const reason = entry.exemptReason === undefined || entry.exemptReason === "" ? "no reason given" : entry.exemptReason;
-
-    return `exempt: ${reason}`;
-};
+const exemptLabel = (entry: ProcedureScore, fallback: string): string =>
+    `exempt: ${entry.exemptReason === undefined || entry.exemptReason === "" ? fallback : entry.exemptReason}`;
 
 /** Rows worth showing first: anything not clean, worst score first. */
 const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =>
@@ -55,13 +45,13 @@ const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =
         return a.score - b.score;
     });
 
-interface HealthPanelProps {
+interface AdvisorHealthPanelProps {
     /** Scopes the `data-testid`s. */
     readonly testId?: string;
 }
 
 /**
- * The **Health** panel: one score for the deployment, the coverage split, and
+ * The Advisors **Health** tab: one score for the deployment, the coverage split, and
  * every procedure ranked worst-first.
  *
  * Scoring runs client-side over the two admin reads rather than being baked into
@@ -73,7 +63,7 @@ interface HealthPanelProps {
  * denominator; without the latter there is no way to tell one failing handler
  * out of two from one out of two hundred.
  */
-const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
+const AdvisorHealthPanel = ({ testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
     const t = useT();
     const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true });
     const proceduresQuery = useAdminQuery<AdvisorProceduresResult>(ADMIN_FUNCTIONS.getAdvisorProcedures, {}, { live: true });
@@ -81,21 +71,14 @@ const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
     const advisories = advisoriesQuery.data?.advisories ?? null;
     const procedures = proceduresQuery.data?.procedures ?? null;
 
-    const map: AdvisorMap | null = useMemo(() => {
-        if (advisories === null || procedures === null) {
-            return null;
-        }
+    const map: AdvisorMap | null = advisories === null || procedures === null ? null : scoreAdvisor(procedures, advisories);
 
-        return scoreAdvisor(
-            { procedureProtections: procedures, schema: { tables: [] } },
-            advisories.map((advisory: AdvisoryFinding) => asFinding(advisory)),
-        );
-    }, [advisories, procedures]);
+    // Either read failing is a "cannot score" state, not a healthy one — say so
+    // rather than showing 100, or spinning forever waiting on a read that failed.
+    const error = proceduresQuery.error ?? advisoriesQuery.error;
 
-    // A worker predating `getAdvisorProcedures` returns an error for it; that is a
-    // "cannot score" state, not a healthy one, so say so rather than showing 100.
-    if (proceduresQuery.error !== null) {
-        return <ErrorAlert error={proceduresQuery.error} testId={`${testId}-error`} />;
+    if (error !== null) {
+        return <ErrorAlert error={error} testId={`${testId}-error`} />;
     }
 
     if (map === null) {
@@ -124,10 +107,18 @@ const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
                         {map.grade}
                     </span>
                     <div className="text-muted-foreground flex gap-4 text-sm tabular-nums" data-testid={`${testId}-summary`}>
-                        <span className={COVERAGE_STYLE.clean}>{map.summary.clean} clean</span>
-                        <span className={COVERAGE_STYLE.warned}>{map.summary.warned} warned</span>
-                        <span className={COVERAGE_STYLE.failing}>{map.summary.failing} failing</span>
-                        <span className={COVERAGE_STYLE.exempt}>{map.summary.exempt} exempt</span>
+                        <span className={COVERAGE_STYLE.clean}>
+                            {map.summary.clean} {t("clean")}
+                        </span>
+                        <span className={COVERAGE_STYLE.warned}>
+                            {map.summary.warned} {t("warned")}
+                        </span>
+                        <span className={COVERAGE_STYLE.failing}>
+                            {map.summary.failing} {t("failing")}
+                        </span>
+                        <span className={COVERAGE_STYLE.exempt}>
+                            {map.summary.exempt} {t("exempt")}
+                        </span>
                     </div>
                 </CardContent>
             </Card>
@@ -135,7 +126,9 @@ const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
             {map.project.checks.length > 0 && (
                 <Card>
                     <CardContent className="py-4 text-sm" data-testid={`${testId}-project`}>
-                        <span className="font-medium">Schema &amp; config {map.project.score}/100</span>
+                        <span className="font-medium">
+                            {t("Schema & config")} {map.project.score}/100
+                        </span>
                         <span className="text-muted-foreground"> — {map.project.checks.map((check) => check.name).join(", ")}</span>
                     </CardContent>
                 </Card>
@@ -146,10 +139,10 @@ const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="w-20">Score</TableHead>
-                                <TableHead>Procedure</TableHead>
-                                <TableHead className="w-32">Kind</TableHead>
-                                <TableHead>Rules fired</TableHead>
+                                <TableHead className="w-20">{t("Score")}</TableHead>
+                                <TableHead>{t("Procedure")}</TableHead>
+                                <TableHead className="w-32">{t("Kind")}</TableHead>
+                                <TableHead>{t("Rules fired")}</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -161,10 +154,14 @@ const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
                                     <TableCell className="font-mono text-xs">{entry.id}</TableCell>
                                     <TableCell className="text-muted-foreground text-xs">
                                         {entry.visibility} {entry.kind}
-                                        {entry.sensitivity.level === "high" && <span className="ml-1 text-amber-600 dark:text-amber-400">sensitive</span>}
+                                        {entry.sensitivity.level === "high" && (
+                                            <span className="ml-1 text-amber-600 dark:text-amber-400">{t("sensitive")}</span>
+                                        )}
                                     </TableCell>
                                     <TableCell className="text-muted-foreground text-xs">
-                                        {entry.coverage === "exempt" ? exemptLabel(entry) : entry.checks.map((check) => check.name).join(", ")}
+                                        {entry.coverage === "exempt"
+                                            ? exemptLabel(entry, t("no reason given"))
+                                            : entry.checks.map((check) => check.name).join(", ")}
                                     </TableCell>
                                 </TableRow>
                             ))}
@@ -176,4 +173,4 @@ const HealthPanel = ({ testId = "health" }: HealthPanelProps): ReactElement => {
     );
 };
 
-export { HealthPanel };
+export default AdvisorHealthPanel;

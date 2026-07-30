@@ -1036,7 +1036,6 @@ export interface ProcedureMiddlewareIR {
     callsMail: boolean;
     /** `true` when the handler emits a structured observability event (`ctx.log` / `ctx.span` / `ctx.trace`). */
     emitsEvent: boolean;
-    /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     /** `true` when a `// lunora-advisor-exempt` directive sits above the export. */
     exempt: boolean;
     /** The `-- reason` from that directive, or `""`. */
@@ -1063,6 +1062,8 @@ export interface ProcedureMiddlewareIR {
      */
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    /** `true` when the handler runs any AI generation, bounded or not. */
+    runsAiGeneration: boolean;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound: boolean;
     /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */

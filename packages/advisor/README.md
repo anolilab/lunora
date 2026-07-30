@@ -104,7 +104,7 @@ import schema from "./lunora/schema";
 
 const context = { schema: fromServerSchema(schema) };
 const findings = runAdvisor(context, { source: "static" });
-const map = scoreAdvisor(context, findings);
+const map = scoreAdvisor(context.procedureProtections ?? [], findings);
 
 console.log(map.score, map.grade); // e.g. 84 "good"
 console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
@@ -135,16 +135,16 @@ if (!diff.comparable) {
     throw new Error(`advisor baseline not comparable: ${diff.reason}`);
 }
 
-// Four independent signals: the global score fell, an existing procedure got
-// worse, one started failing, or the project bucket gained rules. The middle two
-// catch a refactor that guts one handler while leaving the mean flat; the last
-// catches new schema debt after the project score has saturated at 0.
+// Five independent signals: the global score fell, an existing procedure got
+// worse, one started failing, one's findings grew without its score moving, or
+// the project bucket gained findings. The growth signals matter because a rule is
+// charged once however many times it fires, and the project score saturates at 0.
 if (diff.regressed) {
     process.exitCode = 1;
 }
 ```
 
-`@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder. Full reference for the scoring, verdicts, and the baseline gate is in the [package docs](https://lunora.sh/docs/packages/advisor).
+`@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder, and `lunora advisor` wraps all of this as a command. Full reference for the scoring, verdicts, and the baseline gate is in the [package docs](https://lunora.sh/docs/packages/advisor).
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
 

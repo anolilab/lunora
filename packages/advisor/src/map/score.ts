@@ -57,19 +57,18 @@ const DEFAULT_WEIGHT_BY_LEVEL: Readonly<Record<Level, number>> = { ERROR: 20, IN
 const LEVEL_RANK: Readonly<Record<Level, number>> = { ERROR: 3, INFO: 1, WARN: 2 };
 
 /**
- * Coerce a declared weight into a usable penalty.
+ * Coerce a weight into a usable penalty.
  *
- * `Lint.weight` is a plain `number`, so a negative value would push a score
- * _above_ 100 (and a "better than perfect" procedure then fails the
- * `score === PERFECT_SCORE` clean test), while `NaN` poisons the global mean,
- * survives `JSON.stringify` as `null`, and makes `scoreDelta < 0` false — a
- * silent CI pass. An unusable weight contributes nothing rather than corrupting
- * the artifact.
+ * Guards the artifact against a hand-supplied `CheckResult`: a negative weight
+ * would push a score _above_ 100 (and a "better than perfect" procedure then
+ * fails the `score === PERFECT_SCORE` clean test), while `NaN` poisons the
+ * global mean, survives `JSON.stringify` as `null`, and makes `scoreDelta < 0`
+ * false — a silent CI pass.
  */
 const normalizeWeight = (weight: number): number => (Number.isFinite(weight) && weight >= 0 ? weight : 0);
 
-/** Penalty for one finding: the lint's declared weight if usable, else its severity default. */
-const weightFor = (declared: number | undefined, level: Level): number => (declared === undefined ? DEFAULT_WEIGHT_BY_LEVEL[level] : normalizeWeight(declared));
+/** Penalty for one finding, from its severity. */
+const weightFor = (level: Level): number => DEFAULT_WEIGHT_BY_LEVEL[level];
 
 /** Keep the worse of two severities when one rule fires more than once on a procedure. */
 const worstLevel = (a: Level, b: Level): Level => (LEVEL_RANK[a] >= LEVEL_RANK[b] ? a : b);

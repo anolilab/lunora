@@ -44,6 +44,7 @@ type StudioTab =
     | "rls"
     | "schedule"
     | "schema"
+    | "advisorHealth"
     | "security"
     | "settings"
     | "sql"
