@@ -42,6 +42,11 @@ const devCommand: Command = {
         { description: "Emit machine-readable JSON log lines (also LUNORA_LOG_JSON=1; auto-enabled for AI agents)", name: "json", type: Boolean },
         { description: "How many trailing lines `lunora dev logs` prints (default 100, 0 = all)", name: "lines", type: Number },
         { description: "Don't start the embedded studio server", name: "no-studio", type: Boolean },
+        {
+            description: "Don't spawn wrangler dev — an external task runner owns the worker; codegen watch + studio still run",
+            name: "no-worker",
+            type: Boolean,
+        },
         { description: "Don't watch + regenerate codegen", name: "no-codegen", type: Boolean },
         { description: "Proxy D1/KV/R2 bindings to the deployed worker (or set LUNORA_REMOTE=1)", name: "remote", type: Boolean },
     ],
@@ -52,7 +57,7 @@ export { devCommand };
 export type DevOptions = CreateOptions<{
     "api-spec": string | undefined;
     background: boolean | undefined;
-    // The `--no-codegen` / `--no-studio` flags are declared as `no-*` options but
+    // The `--no-codegen` / `--no-studio` / `--no-worker` flags are declared as `no-*` options but
     // cerebro exposes them under the negated positive key at runtime.
     codegen: boolean | undefined;
     json: boolean | undefined;
@@ -61,5 +66,6 @@ export type DevOptions = CreateOptions<{
     remote: boolean | undefined;
     studio: boolean | undefined;
     target: string | undefined;
+    worker: boolean | undefined;
     "worker-port": number | undefined;
 }>;

@@ -84,6 +84,7 @@
         "concepts/best-practices",
         "---Operations---",
         "deployment",
+        "concepts/monorepos-and-iac",
         "concepts/environments",
         "production-checklist",
         "concepts/observability",

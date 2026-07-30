@@ -42,6 +42,29 @@ describe("lunora dev", () => {
             expect(plan.studioEnabled).toBe(true);
         });
 
+        it("plans an attached run with --no-worker, keeping codegen + studio", () => {
+            expect.assertions(4);
+
+            // LUNORA_ISSUES #16: `lunora dev` assumed it owned the dev process,
+            // so a repo whose task runner already supervises seven workers had
+            // no way to run the Lunora one as a node in that graph. Attached
+            // mode keeps the parts only Lunora can provide and drops the spawn.
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger(), worker: false });
+
+            expect(plan.workerEnabled).toBe(false);
+            expect(plan.codegenEnabled).toBe(true);
+            expect(plan.studioEnabled).toBe(true);
+            // The plan still records where the externally-owned worker will be,
+            // so studio and the printed hints point at the right origin.
+            expect(plan.workerOrigin).toContain(String(plan.workerPort));
+        });
+
+        it("keeps the worker enabled by default", () => {
+            expect.assertions(1);
+
+            expect(planDevCommand({ cwd: workdir, logger: silentLogger() }).workerEnabled).toBe(true);
+        });
+
         it("adds a framework redirect hint (wrangler plan unchanged) in a Vite project", () => {
             expect.assertions(4);
 

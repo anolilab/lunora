@@ -121,6 +121,8 @@ interface DevCommandOptions {
     studio?: boolean;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
     target?: string;
+    /** Disable the `wrangler dev` spawn — an external task runner owns the worker. */
+    worker?: boolean;
     /** `wrangler dev` port. */
     workerPort?: number;
 }
@@ -176,7 +178,19 @@ interface DevCommandPlan {
      */
     sidecar?: SpawnDescriptor & { tag: string };
     studioEnabled: boolean;
+
     studioPort: number;
+
+    /**
+     * Whether this process spawns `wrangler dev`.
+     *
+     * `--no-worker` turns it off so an external task runner (Turbo, Nx, vis, a
+     * Procfile) can own worker supervision while `lunora dev` still provides
+     * codegen-watch and Studio. Without it, `lunora dev` insisted on being the
+     * process root, which is what blocked running the Lunora worker as one node
+     * in a larger dev graph (LUNORA_ISSUES #16).
+     */
+    workerEnabled: boolean;
     workerOrigin: string;
     workerPort: number;
     /** The primary child `lunora dev` spawns: `wrangler dev` (wrangler flavor) or the framework/`vite dev` server (vite / framework-worker). */
@@ -340,6 +354,10 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,
             studioPort: options.port ?? DEFAULT_STUDIO_PORT,
+            // The vite / framework-worker flavors still spawn a child (the
+            // framework dev server, plus a wrangler sidecar) — `--no-worker`
+            // only suppresses the standalone `wrangler dev` this command owns.
+            workerEnabled: options.worker !== false,
             workerOrigin: `http://localhost:${String(DEFAULT_VITE_PORT)}`,
             workerPort: DEFAULT_VITE_PORT,
             wrangler: {
@@ -384,6 +402,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         remote: remote.plan,
         studioEnabled: options.studio !== false,
         studioPort: options.port ?? DEFAULT_STUDIO_PORT,
+        workerEnabled: options.worker !== false,
         workerOrigin: `http://localhost:${String(workerPort)}`,
         workerPort,
         wrangler: { args: exec.args, command: exec.command, cwd, tag: "wrangler" },
@@ -750,6 +769,45 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
  * single-child supervision. Extracted from {@link runDevCommand} to keep its
  * orchestration legible (and under the cognitive-complexity budget).
  */
+
+/**
+ * Block until SIGINT/SIGTERM, then resolve 0.
+ *
+ * The `--no-worker` counterpart to {@link superviseWorkers}: with no child to
+ * await, the process would otherwise fall out of `runDevCommand` immediately
+ * and take codegen-watch and Studio down with it.
+ */
+const waitForInterrupt = async (logger: Logger): Promise<number> =>
+    await new Promise<number>((resolve) => {
+        // Held in a record so `stop` can detach both handlers without a forward
+        // reference to bindings declared after it.
+        const handlers: { sigint?: () => void; sigterm?: () => void } = {};
+
+        const stop = (signal: NodeJS.Signals): void => {
+            logger.info(`received ${signal} — shutting down`);
+
+            if (handlers.sigint) {
+                process.off("SIGINT", handlers.sigint);
+            }
+
+            if (handlers.sigterm) {
+                process.off("SIGTERM", handlers.sigterm);
+            }
+
+            resolve(0);
+        };
+
+        handlers.sigint = (): void => {
+            stop("SIGINT");
+        };
+        handlers.sigterm = (): void => {
+            stop("SIGTERM");
+        };
+
+        process.on("SIGINT", handlers.sigint);
+        process.on("SIGTERM", handlers.sigterm);
+    });
+
 const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | undefined, logger: Logger): Promise<number> => {
     let sigintCount = 0;
     let escalationTimer: NodeJS.Timeout | undefined;
@@ -959,6 +1017,17 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // dev script for the full app before wrangler starts (the worker still runs).
         if (plan.frameworkHint !== undefined) {
             logger.warn(plan.frameworkHint);
+        }
+
+        if (!plan.workerEnabled) {
+            // Attached mode: codegen-watch and Studio are running; an external
+            // runner owns the worker. Park until interrupted so the supervisor
+            // sees a normal long-lived process.
+            logger.info(
+                `--no-worker: not starting wrangler. Codegen watch${plan.studioEnabled ? " + studio" : ""} running; your task runner owns the worker on ${plan.workerOrigin}.`,
+            );
+
+            return { code: await waitForInterrupt(logger), plan };
         }
 
         ensureSidecarGenerated(plan, options, cwd, logger, target);

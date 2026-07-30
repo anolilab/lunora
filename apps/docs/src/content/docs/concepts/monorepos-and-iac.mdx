@@ -1,0 +1,109 @@
+---
+title: Monorepos and external IaC
+description: Running the Lunora worker as one node in a larger dev graph, deploying it from Terraform/Pulumi/Alchemy, and consuming its generated API from a sibling package.
+---
+
+`lunora dev` and `lunora deploy` default to owning the whole show, which is
+right for a standalone app and wrong for a repo that already has seven Workers
+and a task runner. Every piece is separable; this page is the map.
+
+## Running as one node in a dev graph
+
+`lunora dev` normally starts three things: `wrangler dev`, the Studio server,
+and the codegen watcher. Each can be turned off independently, so an external
+supervisor (Turbo, Nx, `vis run dev`, a Procfile) can own the parts it already
+manages while Lunora keeps the parts only it can do.
+
+| Flag           | Turns off                                              |
+| -------------- | ------------------------------------------------------ |
+| `--no-worker`  | the `wrangler dev` spawn — your runner owns the worker |
+| `--no-studio`  | the embedded Studio server                             |
+| `--no-codegen` | the codegen watcher                                    |
+
+The common monorepo shape is **attached mode** — your runner starts the worker,
+Lunora keeps regenerating types and serving Studio:
+
+```jsonc
+// package.json — one node in the graph, alongside your other workers
+{
+    "scripts": {
+        "dev": "run-p dev:worker dev:lunora",
+        "dev:worker": "wrangler dev --port 8788",
+        "dev:lunora": "lunora dev --no-worker --worker-port 8788",
+    },
+}
+```
+
+`--worker-port` still matters with `--no-worker`: Studio and the printed hints
+need to know where the externally-owned worker is listening.
+
+<Callout type="info">
+    Studio is single-app. With several Lunora-touching Workers, run it against one of them rather than expecting a combined view, and mind that `/__lunora` is
+    mounted on the worker's own routes.
+</Callout>
+
+## Deploying from external IaC
+
+`lunora deploy` is codegen + validate + `wrangler deploy`. Under Terraform,
+Pulumi, Alchemy or any other IaC that wants to be the source of truth for
+bindings, do **not** use it — run the pieces as steps in your graph instead.
+
+Every step is exported from `@lunora/cli` as a function, so `alchemy.run.ts`
+(or equivalent) can call them directly rather than shelling out:
+
+```ts
+import { runCodegenCommand, runImportCommand, runMigrateGenerateCommand } from "@lunora/cli";
+
+// Build step: generate + validate. Throws on a hard failure; the returned
+// `failedAdvisories` is non-zero when an ERROR-level advisory blocked it.
+const codegen = runCodegenCommand({ cwd: "./backend", logger });
+```
+
+`runDeployCommand`, `runResetCommand`, `runRpcCommand`, `runExportCommand` and
+`runAddCommand` are exported the same way — see the package's `index.ts` for the
+full set.
+
+Migrations belong **inside** the IaC graph as a post-deploy step, not as a
+separate CLI invocation that races it:
+
+```bash
+lunora migrate up --url https://my-worker.example.workers.dev
+```
+
+<Callout type="warn">
+    **`wrangler.jsonc` is declaration-only under external IaC.** Lunora's validator reads it to check that every binding a schema needs is declared, but it
+    never provisions anything. When your IaC owns the real ids, keep the binding *names* accurate and treat the id fields as placeholders — a real id there is a
+    footgun, because nothing keeps it in step with the IaC state and a stale one is indistinguishable from a correct one.
+</Callout>
+
+## Consuming the generated API from a sibling package
+
+`lunora/_generated/api.ts` is emitted inside the backend package. A sibling
+package (your web app, another Worker) reaches it through `exports` entries on
+the backend's `package.json`:
+
+```jsonc
+// backend/package.json
+{
+    "name": "@acme/backend",
+    "exports": {
+        "./api": "./lunora/_generated/api.ts",
+        "./dataModel": "./lunora/_generated/dataModel.ts",
+        "./server": "./lunora/_generated/server.ts",
+    },
+}
+```
+
+Consumers then import `@acme/backend/api` rather than reaching across the repo
+by path, which keeps the generated file an implementation detail.
+
+<Callout type="warn">
+    These entries point at **raw TypeScript**, not built output, so every consumer compiles it and therefore needs the `@lunora/*` types resolvable. That is
+    fine inside one workspace and awkward across published package boundaries — if you publish the backend, build the generated files into your `dist` and point
+    the `exports` there instead.
+</Callout>
+
+For a sibling **Worker** calling the backend, there is no typed service-binding
+client yet: `ctx.run*` covers intra-app calls only, so worker→worker traffic
+goes over HTTP with your own authentication. Importing `./api` at least keeps
+the argument and return types shared.
