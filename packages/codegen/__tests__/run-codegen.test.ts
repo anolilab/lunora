@@ -2639,6 +2639,22 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("ctx.browser = browser;");
         });
 
+        it("stubs every member of the Browser surface, including the session ones", () => {
+            expect.assertions(7);
+
+            // The stub is a template string here, and `@lunora/codegen` does not
+            // depend on `@lunora/browser`, so nothing typechecks it against the
+            // real `Browser` interface. A member added there and missed here
+            // means generated code stops satisfying its own declared type — the
+            // defect class LUNORA_ISSUES #1 was about. This pins the surface;
+            // widen it deliberately when `Browser` grows.
+            const output = emitShard({ hasBrowser: true, schema: { tables: [], vectorIndexes: [] } });
+
+            for (const member of ["connect", "content", "launch", "pdf", "scrape", "screenshot", "sessions"]) {
+                expect(output).toContain(`    ${member}: async () => {`);
+            }
+        });
+
         it("omits the new Cloudflare helpers entirely when none are used (no isAction gate, no stubs)", () => {
             expect.assertions(8);
 
