@@ -1,11 +1,11 @@
 import type { ReactElement } from "react";
 
+import { StatCard } from "../../components/stat-card";
 import { useT } from "../../i18n/i18n-context";
 import type { ShardMetrics } from "../../lib/admin";
 import { formatBytes } from "../../lib/internal";
 import { formatElapsed, formatLatency, hitRate } from "./metrics-format";
 import { Sparkline } from "./sparkline";
-import { StatCard } from "./stat-card";
 
 /**
  * The single-shard readout: requests with their sparkline, errors and error

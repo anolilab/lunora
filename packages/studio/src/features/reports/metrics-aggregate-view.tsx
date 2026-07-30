@@ -1,11 +1,11 @@
 import type { ReactElement } from "react";
 
+import { StatCard } from "../../components/stat-card";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
 import { formatBytes } from "../../lib/internal";
 import type { AggregateMetrics, ShardMetricsResult } from "./metrics-aggregate";
-import { StatCard } from "./stat-card";
 
 /**
  * The cross-shard rollup: totals over every reachable shard, then the per-shard

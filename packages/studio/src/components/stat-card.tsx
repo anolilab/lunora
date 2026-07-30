@@ -1,11 +1,15 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { Card } from "../../components/ui/card";
+import { Card } from "./ui/card";
 
 /**
  * One labelled metric as a KPI card: an uppercase label on top, the value (with
- * an optional sparkline beside it), and an optional tinted footer band — the
- * studio's shared stat-card anatomy.
+ * an optional sparkline beside it), and an optional tinted footer band.
+ *
+ * In `components/` rather than a feature folder because three features render this
+ * anatomy. Note that `home-panel` has a same-named component which is NOT this one —
+ * it carries a delta, a trend line, and a unit, so it is a different card that
+ * happens to share a noun.
  */
 const StatCard = ({
     chart,
@@ -14,11 +18,11 @@ const StatCard = ({
     testId,
     value,
 }: {
-    chart?: ReactNode;
-    footer?: ReactNode;
-    label: string;
-    testId?: string;
-    value: ReactNode;
+    readonly chart?: ReactNode;
+    readonly footer?: ReactNode;
+    readonly label: string;
+    readonly testId?: string;
+    readonly value: ReactNode;
 }): ReactElement => (
     <Card className="justify-between gap-0 py-0">
         <div className="flex flex-col gap-2.5 p-4">
