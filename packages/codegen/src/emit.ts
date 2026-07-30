@@ -3,6 +3,7 @@ import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
 // runtime + AI SDK into the codegen process just to enumerate function names).
 import { agentComponent } from "@lunora/agent/component";
 import type {
+    AdvisorProcedure,
     AdvisoryFinding,
     MaskPoliciesResult,
     QueuesResult,
@@ -3924,7 +3925,11 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
     // `@lunora/do` hand-mirrors `Finding` to avoid depending on `@lunora/advisor`.
     const advisoryData: ReadonlyArray<AdvisoryFinding> = advisories;
-    const advisorProcedureData: ReadonlyArray<AdvisorProcedureProtection> = advisorProcedures;
+    // Typed as the DO's shape on purpose: the generated file declares
+    // `LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[]`, so without this assignment
+    // a field added to the advisor's type and forgotten in `@lunora/do` compiles
+    // here and breaks in the *user's* tsc. Mirrors the `AdvisoryFinding` guard above.
+    const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorProcedures;
 
     // Same drift guard for the RLS inspector's metadata: codegen's `RlsMetadataIR`
     // must stay assignable to the DO's `RlsPoliciesResult` (the generated

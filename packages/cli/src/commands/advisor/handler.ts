@@ -14,13 +14,6 @@ import type { AdvisorOptions } from "./index";
 import { formatEntry, formatMatrix, formatSummary } from "./report";
 
 interface AdvisorCommandOptions {
-    /**
-     * Stamp for the artifact. Defaults to the epoch rather than "now": the map is
-     * meant to be committed, and a wall-clock stamp would leave it dirty in git
-     * after every run, training people to ignore the diff that is the gate's whole
-     * point. Pass a real timestamp when you want one.
-     */
-    generatedAt?: string;
     /** Render every procedure as a check matrix, not just the ones with findings. */
     all?: boolean;
     /** Committed map to diff against. A valueless flag arrives as `null`, an explicit one as a path; both mean "gate on it". */
@@ -30,24 +23,32 @@ interface AdvisorCommandOptions {
     entry?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
+
+    /**
+     * Stamp for the artifact. Defaults to the epoch rather than "now": the map is
+     * meant to be committed, and a wall-clock stamp would leave it dirty in git
+     * after every run, training people to ignore the diff that is the gate's whole
+     * point. Pass a real timestamp when you want one.
+     */
+    generatedAt?: string;
     logger: Logger;
     /** Fail when the global score is below this. Raw, so a valueless flag stays distinguishable from 0. */
     minScore?: null | number | string;
-    /** Write the artifact; defaults to true. */
-    write?: boolean;
     /** Where to write the artifact. */
     out?: string;
+    /** Write the artifact; defaults to true. */
+    write?: boolean;
 }
 
 interface AdvisorCommandResult {
+    /** `true` when `--min-score` was given and the score fell below it. */
+    belowMinScore?: boolean;
     /** Set when a baseline was requested and could be read. */
     comparison?: BaselineComparison;
     /** Set when the run aborted, or a gate could not be evaluated. */
     error?: string;
     /** The scored map; absent only when the run aborted before scoring. */
     map?: AdvisorMap;
-    /** `true` when `--min-score` was given and the score fell below it. */
-    belowMinScore?: boolean;
     /** Where the artifact was written, when it was. */
     written?: string;
 }

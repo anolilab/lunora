@@ -1062,10 +1062,10 @@ export interface ProcedureMiddlewareIR {
      */
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
-    /** `true` when the handler runs any AI generation, bounded or not. */
-    runsAiGeneration: boolean;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound: boolean;
+    /** `true` when the handler runs any AI generation, bounded or not. */
+    runsAiGeneration: boolean;
     /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */
     throwsBareError: boolean;
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */

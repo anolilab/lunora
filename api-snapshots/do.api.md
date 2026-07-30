@@ -137,8 +137,10 @@ interface AdvisorProcedure {
     fanOut: boolean;
     file: string;
     handlesErrors?: boolean;
+    hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
     reachesOutbound?: boolean;
+    runsAiGeneration?: boolean;
     throwsBareError?: boolean;
     unboundedAiGeneration: boolean;
     usesCaptcha: boolean;

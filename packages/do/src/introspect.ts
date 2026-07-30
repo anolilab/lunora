@@ -329,7 +329,9 @@ interface AdvisoriesResult {
  *
  * Structurally mirrors `@lunora/advisor`'s `AdvisorProcedureProtection`, for the
  * same reason `AdvisoryFinding` mirrors `Finding`: the DO serves it without
- * depending on the advisor package. This is the **denominator** the health map
+ * depending on the advisor package. `@lunora/codegen` asserts the two are
+ * assignable when it emits the list, so a field added there and forgotten here
+ * fails codegen's own typecheck rather than the user's. This is the **denominator** the health map
  * needs — findings alone say what is wrong, but only the full procedure list
  * says how much is right, so without it a score cannot be computed at all.
  */
@@ -342,8 +344,10 @@ interface AdvisorProcedure {
     fanOut: boolean;
     file: string;
     handlesErrors?: boolean;
+    hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
     reachesOutbound?: boolean;
+    runsAiGeneration?: boolean;
     throwsBareError?: boolean;
     unboundedAiGeneration: boolean;
     usesCaptcha: boolean;

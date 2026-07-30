@@ -319,7 +319,7 @@ const MAIL_MEMBERS: ReadonlySet<string> = new Set(["email", "mail"]);
 /** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
 const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
 
-/** True when any `ctx.<member>` in `declaration` is one of `members`. */
+/** True when any `ctx.&lt;member>` in `declaration` is one of `members`. */
 const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
     declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
         if (!members.has(access.getName())) {
@@ -357,34 +357,66 @@ const throwsBareError = (declaration: TsNode): boolean =>
  *
  * ```ts
  * // lunora-advisor-exempt -- legacy endpoint, replaced by v2 in Q3
- * export const legacy = mutation({ … });
+ * export const legacy = mutation({ ... });
  * ```
  *
  * A leading comment rather than a config list: it sits next to the code it
  * excuses, survives a file move, and shows up in the diff of whoever removes the
  * handler. The reason is captured into the artifact so an exemption has to be
- * argued in review rather than added silently. The reason stops at `*` so a
- * directive written inside a block comment cannot swallow its closing delimiter.
- *
- * Anchored to the start of a comment line, and `(?![\w-])` blocks a longer token:
- * without both, prose *about* the directive opts a procedure out. "Do NOT add
- * lunora-advisor-exempt here" and "lunora-advisor-exempt-later" both used to
- * exempt the handler — silently, and `compareToBaseline` skips exempt rows, so
- * every future regression on it (security lints included) went unseen.
+ * argued in review rather than added silently.
  */
-const EXEMPT_DIRECTIVE = /^[^\S\n]*(?:\/\/|\/\*+|\*)?[^\S\n]*lunora-advisor-exempt(?![\w-])[^\S\n]*(?:--[^\S\n]*(?<reason>[^\n*]*))?/mu;
+const EXEMPT_DIRECTIVE = "lunora-advisor-exempt";
 
-/** Read the exemption directive off a declaration's leading comments, if present. */
+/** Leading comment punctuation and indentation on one line of a comment block. */
+const COMMENT_PREFIX = /^[\s*/]+/u;
+
+/** A character that would make the directive part of a longer word. */
+const WORD_CHARACTER = /[\w-]/u;
+
+/**
+ * Read the exemption directive off a declaration's leading comments.
+ *
+ * Matched line-by-line with plain string operations rather than one regex: the
+ * pattern this replaced was flagged for super-linear backtracking (adjacent
+ * optional whitespace runs), which would have let a crafted comment stall
+ * codegen. Scanning is linear in the comment length.
+ *
+ * The directive must *start* a comment line and must not be a prefix of a longer
+ * token. Without both rules, prose about the directive opts a procedure out —
+ * "Do NOT add lunora-advisor-exempt here" and "lunora-advisor-exempt-later" both
+ * used to exempt the handler, silently, and `compareToBaseline` skips exempt
+ * rows, so every later regression on it (security lints included) went unseen.
+ */
 const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemptReason: string } => {
-    // The directive sits above `export const …`, i.e. on the statement, not the declarator.
+    // The directive sits above `export const ...`, i.e. on the statement, not the declarator.
     const statement = declaration.getFirstAncestorByKind(SyntaxKind.VariableStatement);
-    const text = (statement ?? declaration)
+    const comments = (statement ?? declaration)
         .getLeadingCommentRanges()
         .map((range) => range.getText())
         .join("\n");
-    const matched = EXEMPT_DIRECTIVE.exec(text);
 
-    return { exempt: matched !== null, exemptReason: matched?.groups?.reason?.trim() ?? "" };
+    for (const line of comments.split("\n")) {
+        const body = line.replace(COMMENT_PREFIX, "");
+
+        if (!body.startsWith(EXEMPT_DIRECTIVE)) {
+            continue;
+        }
+
+        const rest = body.slice(EXEMPT_DIRECTIVE.length);
+
+        if (WORD_CHARACTER.test(rest.charAt(0))) {
+            continue;
+        }
+
+        const separator = rest.indexOf("--");
+        // Stop at `*` so a directive inside a block comment cannot swallow its
+        // closing delimiter into the reason.
+        const reason = separator === -1 ? "" : (rest.slice(separator + 2).split("*")[0] ?? "");
+
+        return { exempt: true, exemptReason: reason.trim() };
+    }
+
+    return { exempt: false, exemptReason: "" };
 };
 
 /** Behavioural facts read from the procedure declaration body. */
