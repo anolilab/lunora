@@ -70,6 +70,16 @@ describe("matchingMail", () => {
         expect(matchingMail(entries, "carol").map((entry) => entry.id)).toStrictEqual(["m2"]);
         expect(matchingMail(entries, "nobody")).toStrictEqual([]);
     });
+
+    it("matches a cc-only recipient, which the detail pane shows as one", () => {
+        expect.assertions(2);
+
+        const copied = [mail({ cc: ["dana@example.com"], id: "m3", subject: "Receipt", to: "ada@example.com" })];
+
+        expect(matchingMail(copied, "dana").map((entry) => entry.id)).toStrictEqual(["m3"]);
+        // `bcc` stays out: it is never rendered, so a match on it would be unexplainable.
+        expect(matchingMail([mail({ bcc: ["eve@example.com"], id: "m4", to: "ada@example.com" })], "eve")).toStrictEqual([]);
+    });
 });
 
 describe("selectedMail", () => {

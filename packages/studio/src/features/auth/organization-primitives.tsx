@@ -69,8 +69,12 @@ const ManagedTable = ({
                 </TableRow>
             </TableHeader>
             <TableBody>
-                {rows.map((row) => {
-                    const id = formatCell(row["id"]);
+                {rows.map((row, index) => {
+                    // Every managed table is keyed on a better-auth `id`, but `formatCell`
+                    // renders a missing one as "" — which would collide across rows and
+                    // give two of them the same test id.
+                    const resolved = formatCell(row["id"]);
+                    const id = resolved === "" ? `index-${index.toString()}` : resolved;
 
                     return (
                         <TableRow data-testid={`${rowPrefix}-${id}`} key={id}>

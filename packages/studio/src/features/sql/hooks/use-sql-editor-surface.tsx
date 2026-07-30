@@ -72,6 +72,7 @@ const useSqlEditorSurface = ({
     const {
         close: closeAutocomplete,
         commit: commitAutocomplete,
+        commitAt: commitAutocompleteAt,
         move: moveAutocomplete,
         refresh: refreshAutocomplete,
         state: autocompleteState,
@@ -79,8 +80,7 @@ const useSqlEditorSurface = ({
 
     // Pick the suggestion at `index` from the mouse path (mirror the keyboard commit).
     const onPickSuggestion = (index: number): void => {
-        moveAutocomplete(index - (autocompleteState?.active ?? 0));
-        commitAutocomplete();
+        commitAutocompleteAt(index);
     };
 
     // Re-derive completions once a probe resolves new columns: a `tbl.` qualifier

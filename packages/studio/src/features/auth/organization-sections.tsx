@@ -12,7 +12,7 @@ import type { Row } from "./types";
  * The organization page's four sections.
  *
  * One module rather than four files: they share an identical shape (a
- * `SectionCard`, a toolbar button that opens a dialog, an `AdminTable`) and the
+ * `SectionCard`, a toolbar button that opens a dialog, a `ManagedTable`) and the
  * same props vocabulary, so splitting them further would mean four near-identical
  * import headers for no gain in navigability. The page above them is now a header
  * plus these four plus its dialogs.

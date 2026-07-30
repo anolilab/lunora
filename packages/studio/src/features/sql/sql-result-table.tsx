@@ -1,13 +1,18 @@
 import type { ReactElement } from "react";
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useT } from "../../i18n/i18n-context";
 import type { SqlConsoleResult } from "../../lib/admin";
 import { CellValue } from "../data/data-grid";
 
 /** The results table for a successful query — sticky header, monospace cells, NULL-aware. */
 const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): ReactElement => {
+    const t = useT();
+
     if (result.columns.length === 0) {
-        return <p className="p-4 text-sm text-muted-foreground">{result.rowCount === 0 ? "0 rows" : ""}</p>;
+        // A statement can report rows without column metadata; say how many rather
+        // than rendering an empty line.
+        return <p className="p-4 text-sm text-muted-foreground">{t("{count} rows", { count: result.rowCount })}</p>;
     }
 
     return (

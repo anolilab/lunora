@@ -46,7 +46,15 @@ const selectedLink = (mail: CapturedMail | undefined): string | undefined => {
     return firstLink(mail.html) ?? firstLink(mail.text);
 };
 
-/** Captured mail whose subject or recipients contain `filter` (case-insensitive); everything when it is blank. */
+/**
+ * Captured mail whose subject or recipients contain `filter` (case-insensitive);
+ * everything when it is blank.
+ *
+ * `cc` counts as a recipient because the detail pane shows it as one — filtering
+ * by a cc-only address otherwise hides a message the operator can see is there.
+ * `bcc` is deliberately excluded: it is not rendered, so matching on it would
+ * surface a message whose reason for matching is invisible.
+ */
 const matchingMail = (entries: ReadonlyArray<CapturedMail>, filter: string): ReadonlyArray<CapturedMail> => {
     const needle = filter.trim().toLowerCase();
 
@@ -54,7 +62,7 @@ const matchingMail = (entries: ReadonlyArray<CapturedMail>, filter: string): Rea
         return entries;
     }
 
-    return entries.filter((entry) => `${entry.subject} ${recipientText(entry.to)}`.toLowerCase().includes(needle));
+    return entries.filter((entry) => `${entry.subject} ${recipientText(entry.to)} ${recipientText(entry.cc)}`.toLowerCase().includes(needle));
 };
 
 /** The selected message, defaulting to the newest visible one so a refresh or a filter change never leaves the detail pane pointing at nothing. */

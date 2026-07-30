@@ -39,7 +39,9 @@ const SchemaEditorResult = ({
         return (
             <div className="mt-3 flex flex-col gap-2" data-testid="sc-editor-needs-migration">
                 <p className="text-sm text-warning" role="alert">
-                    {t("This edit changes stored data and must go through a migration. Review the migration before applying.")}
+                    {result.message === ""
+                        ? t("This edit changes stored data and must go through a migration. Review the migration before applying.")
+                        : result.message}
                 </p>
                 <Button className="self-start" data-testid="sc-editor-open-migrations" onClick={onOpenMigrations} size="xs" type="button" variant="outline">
                     {t("Open Migrations")}
