@@ -1,4 +1,4 @@
-import type { Finding } from "@lunora/advisor";
+import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
 // The /component subpath avoids the package barrel (which pulls the agent
 // runtime + AI SDK into the codegen process just to enumerate function names).
 import { agentComponent } from "@lunora/agent/component";
@@ -18,29 +18,7 @@ import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/sch
 import type { CapabilityKey } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
-import type {
-    AgentIR,
-    ContainerIR,
-    CronJobIR,
-    EnvIR,
-    FunctionIR,
-    HttpRouteIR,
-    IdentityIR,
-    IndexIR,
-    JurisdictionIR,
-    MaskMetadataIR,
-    MigrationIR,
-    MutatorIR,
-    QueueIR,
-    RlsMetadataIR,
-    SchemaIR,
-    ShapeIR,
-    StorageRulesMetadataIR,
-    TableIR,
-    ValidatorIR,
-    VectorIndexIR,
-    WorkflowIR,
-} from "./ir";
+import type { AgentIR, ContainerIR, CronJobIR, EnvIR, FunctionIR, HttpRouteIR, IdentityIR, IndexIR, JurisdictionIR, MaskMetadataIR, MigrationIR, MutatorIR, QueueIR, RlsMetadataIR, SchemaIR, ShapeIR, StorageRulesMetadataIR, TableIR, ValidatorIR, VectorIndexIR, WorkflowIR } from "./ir";
 import LITERAL_VALUE_RE from "./literal-value";
 import sanitizeNamespace from "./paths";
 
@@ -3735,6 +3713,7 @@ const x402Stub: X402Pay = {
  * workflow-/queue-/vector-free app's import line stays minimal.
  */
 const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean): string[] => [
+    "AdvisorProcedure",
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",
@@ -3764,6 +3743,8 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
+    /** Every declared procedure — the health map's denominator, served via `getAdvisorProcedures`. */
+    advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     /** Agents declared via `defineAgent` exports in `lunora/agents.ts` — wires the typed `ctx.agents` producers. */
     agents?: ReadonlyArray<AgentIR>;
     containers?: ReadonlyArray<ContainerIR>;
@@ -3823,6 +3804,7 @@ interface EmitShardOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
+    advisorProcedures = [],
     agents = [],
     containers = [],
     env,
@@ -3920,6 +3902,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
     // `@lunora/do` hand-mirrors `Finding` to avoid depending on `@lunora/advisor`.
     const advisoryData: ReadonlyArray<AdvisoryFinding> = advisories;
+    const advisorProcedureData: ReadonlyArray<AdvisorProcedureProtection> = advisorProcedures;
 
     // Same drift guard for the RLS inspector's metadata: codegen's `RlsMetadataIR`
     // must stay assignable to the DO's `RlsPoliciesResult` (the generated
@@ -4627,6 +4610,9 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via \`__lunora_admin__:getAdvisories\`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, undefined, 4)};
 
+/** Every declared procedure (discovered by @lunora/codegen) served via \`__lunora_admin__:getAdvisorProcedures\` — the health map's denominator. */
+const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = ${JSON.stringify(advisorProcedureData, undefined, 4)};
+
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__lunora_admin__:rlsPolicies\` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA: RlsPoliciesResult = ${JSON.stringify(rlsData, undefined, 4)};
 
@@ -4839,6 +4825,10 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
 ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workflowsMetadataOverride}${queuesMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
             return LUNORA_ADVISORIES;
+        }
+
+        protected override advisorProcedures(): AdvisorProcedure[] {
+            return LUNORA_ADVISOR_PROCEDURES;
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

@@ -67,6 +67,7 @@ const ADMIN_FUNCTIONS = {
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
+    getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
@@ -321,6 +322,43 @@ interface AdvisoryFinding {
 /** Payload of a `__lunora_admin__:getAdvisories` call: the static schema advisories for this deployment. */
 interface AdvisoriesResult {
     advisories: AdvisoryFinding[];
+}
+
+/**
+ * One declared procedure, surfaced by `__lunora_admin__:getAdvisorProcedures`.
+ *
+ * Structurally mirrors `@lunora/advisor`'s `AdvisorProcedureProtection`, for the
+ * same reason `AdvisoryFinding` mirrors `Finding`: the DO serves it without
+ * depending on the advisor package. This is the **denominator** the health map
+ * needs — findings alone say what is wrong, but only the full procedure list
+ * says how much is right, so without it a score cannot be computed at all.
+ */
+interface AdvisorProcedure {
+    callsMail: boolean;
+    emitsEvent?: boolean;
+    exempt?: boolean;
+    exemptReason?: string;
+    exportName: string;
+    fanOut: boolean;
+    file: string;
+    handlesErrors?: boolean;
+    kind: "action" | "mutation" | "query";
+    reachesOutbound?: boolean;
+    throwsBareError?: boolean;
+    unboundedAiGeneration: boolean;
+    usesCaptcha: boolean;
+    usesEmailGate: boolean;
+    usesInsertManyUnsafe: boolean;
+    usesMask: boolean;
+    usesRateLimit: boolean;
+    usesRls: boolean;
+    visibility: "internal" | "public";
+    writesUserTable: boolean;
+}
+
+/** Payload of a `__lunora_admin__:getAdvisorProcedures` call: every declared procedure. */
+interface AdvisorProceduresResult {
+    procedures: AdvisorProcedure[];
 }
 
 /**
@@ -1617,6 +1655,8 @@ export {
 };
 export type {
     AdvisoriesResult,
+    AdvisorProcedure,
+    AdvisorProceduresResult,
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,

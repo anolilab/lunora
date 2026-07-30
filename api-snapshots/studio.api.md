@@ -30,6 +30,7 @@ const ADMIN_FUNCTIONS: {
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
+    readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
     readonly getAuthAuditLog: "__lunora_admin__:getAuthAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";

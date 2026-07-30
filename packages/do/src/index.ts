@@ -126,6 +126,8 @@ export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export type {
     AdvisoriesResult,
+    AdvisorProcedure,
+    AdvisorProceduresResult,
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,

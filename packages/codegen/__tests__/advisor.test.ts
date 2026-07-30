@@ -305,7 +305,13 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
         const procedures = [
             {
                 callsMail: false,
+                emitsEvent: false,
+                exempt: false,
+                exemptReason: "",
                 exportName: "list",
+                handlesErrors: false,
+                reachesOutbound: false,
+                throwsBareError: false,
                 fanOut: false,
                 file: "posts",
                 kind: "query" as const,

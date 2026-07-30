@@ -646,6 +646,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // two can never describe different shapes.
     const shardContent = emitShard({
         advisories,
+        advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         containers,
         env,

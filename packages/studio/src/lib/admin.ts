@@ -49,6 +49,7 @@ export const ADMIN_FUNCTIONS = {
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
+    getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",
     getAuthAuditLog: "__lunora_admin__:getAuthAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
@@ -446,6 +447,39 @@ export interface AdvisoryFinding {
 /** Payload of a `__lunora_admin__:getAdvisories` call, mirroring `@lunora/do`'s `AdvisoriesResult`. */
 export interface AdvisoriesResult {
     advisories: AdvisoryFinding[];
+}
+
+/**
+ * One declared procedure, mirroring `@lunora/advisor`'s
+ * `AdvisorProcedureProtection` — the health map's denominator, served by
+ * `__lunora_admin__:getAdvisorProcedures`.
+ */
+export interface AdvisorProcedure {
+    callsMail: boolean;
+    emitsEvent?: boolean;
+    exempt?: boolean;
+    exemptReason?: string;
+    exportName: string;
+    fanOut: boolean;
+    file: string;
+    handlesErrors?: boolean;
+    kind: "action" | "mutation" | "query";
+    reachesOutbound?: boolean;
+    throwsBareError?: boolean;
+    unboundedAiGeneration: boolean;
+    usesCaptcha: boolean;
+    usesEmailGate: boolean;
+    usesInsertManyUnsafe: boolean;
+    usesMask: boolean;
+    usesRateLimit: boolean;
+    usesRls: boolean;
+    visibility: "internal" | "public";
+    writesUserTable: boolean;
+}
+
+/** Payload of a `__lunora_admin__:getAdvisorProcedures` call. */
+export interface AdvisorProceduresResult {
+    procedures: AdvisorProcedure[];
 }
 
 /** The operation an RLS policy gates, mirroring `@lunora/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
