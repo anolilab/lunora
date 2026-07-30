@@ -81,6 +81,18 @@ export interface BrowserContextLike {
 export interface BrowserLike {
     close: () => Promise<void>;
     newContext: () => Promise<BrowserContextLike>;
+
+    /**
+     * The Browser Rendering session this browser is attached to, when the
+     * runtime exposes it.
+     *
+     * Optional because this is a structural projection, not a re-declaration of
+     * the upstream Playwright type — but without it there is no way to learn
+     * the id of a session you just held open with `launch(fn, { keepAlive })`,
+     * which makes {@link Browser.connect} unreachable except by guessing from
+     * {@link Browser.sessions}.
+     */
+    sessionId?: () => string | undefined;
 }
 
 /* eslint-disable no-secrets/no-secrets -- the entropy scanner trips on the repeated `@cloudflare/playwright` package name in these doc comments, not a credential */
@@ -262,8 +274,13 @@ export interface LunoraBrowserOptions {
  */
 export interface Browser {
     /**
-     * Re-attach to a session left open by `launch(fn, { keepAlive })` and hand
-     * the browser to `fn`.
+     * Re-attach to an existing session and hand the browser to `fn`.
+     *
+     * Get the id either by reading it inside the call that opened the session
+     * (`launch(async (browser) => browser.sessionId?.(), { keepAlive: 600 })`)
+     * and persisting it, or by picking a free one out of
+     * {@link Browser.sessions} — an entry with a `connectionId` is already held
+     * by another worker.
      *
      * The session is deliberately **left open** afterwards — closing it is the
      * whole thing you are avoiding. Close it when the flow is done by passing

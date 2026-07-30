@@ -353,7 +353,12 @@ describe("session reuse (LUNORA_ISSUES #38)", () => {
      */
     const makeSessionHarness = () => {
         const closed = vi.fn<() => Promise<void>>(async () => {});
-        const browser = { close: closed, newContext: async () => {return { newPage: async () => ({}) as PageLike }} };
+        const browser = {
+            close: closed,
+            newContext: async () => {
+                return { newPage: async () => ({}) as PageLike };
+            },
+        };
         const launchOptions: (Record<string, unknown> | undefined)[] = [];
 
         return {
@@ -413,6 +418,42 @@ describe("session reuse (LUNORA_ISSUES #38)", () => {
         await browser.connect("sess-1", async () => "done", { close: true });
 
         expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the session id to the caller so connect() is reachable", async () => {
+        expect.assertions(2);
+
+        // Without this the documented flow is a dead end: `keepAlive` holds a
+        // session open but nothing tells you which one, and `sessions()` lists
+        // them all with no way to identify yours.
+        const harness = makeSessionHarness();
+        const withId = { ...harness.browser, sessionId: () => "sess-42" };
+        const browser = createBrowser({ binding, launch: async () => withId });
+
+        const captured = await browser.launch(async (b) => b.sessionId?.(), { keepAlive: 600 });
+
+        expect(captured).toBe("sess-42");
+        expect(harness.closed).not.toHaveBeenCalled();
+    });
+
+    it("throws when the handler throws with keepAlive set, leaving the session open", async () => {
+        expect.assertions(2);
+
+        // The `finally` close is deliberately skipped under keepAlive; make sure
+        // the error still propagates rather than being swallowed with it.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(
+            browser.launch(
+                async () => {
+                    throw new Error("boom");
+                },
+                { keepAlive: 60 },
+            ),
+        ).rejects.toThrow("boom");
+
+        expect(harness.closed).not.toHaveBeenCalled();
     });
 
     it("lists live sessions", async () => {

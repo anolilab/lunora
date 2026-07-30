@@ -45,6 +45,7 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runAction: RunAction;
@@ -1140,6 +1141,7 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runMutation: RunMutation;
@@ -1394,6 +1396,7 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runQuery: RunQuery;
@@ -4107,6 +4110,7 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runAction: RunAction;
@@ -4457,6 +4461,7 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runMutation: RunMutation;
@@ -4507,6 +4512,7 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runQuery: RunQuery;

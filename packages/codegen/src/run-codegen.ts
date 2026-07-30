@@ -50,7 +50,7 @@ import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
 import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
-import { readPackageDependencies } from "./discover-package-dependencies";
+import readPackageDependencies from "./discover-package-dependencies";
 import discoverPaymentWebhooks from "./discover-payment-webhooks";
 import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";

@@ -602,19 +602,29 @@ interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream"
  * existing, more precise behaviour.
  */
 
-/** `ctx.runQuery` — see the note above on why this is overloaded. */
+/**
+ * `ctx.runQuery` — overloaded, see the note above.
+ *
+ * A single generic signature over the reference would be nicer (TS will not
+ * contextually type a parameter against a multi-signature type, so a hand-built
+ * ctx object must annotate its `(reference, args)` explicitly — see
+ * `@lunora/testing`'s harness). It does not work: a concrete
+ * `RegisteredQuery&lt;{…}, number>` is not assignable to a
+ * `RegisteredFunction&lt;ArgsValidator, …>` constraint, because `handler`'s args
+ * are in a contravariant position. Two inference sites it is.
+ */
 interface RunQuery {
     <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args): Promise<R>;
 }
 
-/** `ctx.runMutation` — see the note above on why this is overloaded. */
+/** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
 interface RunMutation {
     <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
 }
 
-/** `ctx.runAction` — see the note above on why this is overloaded. */
+/** `ctx.runAction` — overloaded for the same reason as {@link RunQuery}. */
 interface RunAction {
     <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
@@ -1978,6 +1988,14 @@ interface QueryCtx {
     readonly log: LunoraLogger;
 
     /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls. Present so middleware can read the policy it is meant to
+     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
+     * `.use()` site; absent when the procedure never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2035,6 +2053,14 @@ interface MutationCtx {
     readonly log: LunoraLogger;
 
     /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls. Present so middleware can read the policy it is meant to
+     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
+     * `.use()` site; absent when the procedure never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2114,6 +2140,14 @@ interface ActionCtx {
     readonly log: LunoraLogger;
 
     /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls. Present so middleware can read the policy it is meant to
+     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
+     * `.use()` site; absent when the procedure never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
 
     /**

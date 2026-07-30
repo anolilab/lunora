@@ -239,8 +239,6 @@ const ALLOWED_BINDING_ROOTS = new Set([
     "workflows",
 ]);
 
-/** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */
-
 /**
  * The `binding` name a wrangler resource entry claims, when it has one. Every
  * array-shaped wrangler binding (`d1_databases`, `r2_buckets`, `kv_namespaces`,
@@ -367,6 +365,7 @@ const mergedBindingValue = (text: string, binding: RegistryBinding, logger: Logg
     return fresh.length === 0 ? SKIP_BINDING : [...existing, ...fresh];
 };
 
+/** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */
 const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: string, logger: Logger): ReadonlyArray<string> => {
     if (bindings.length === 0) {
         return [];

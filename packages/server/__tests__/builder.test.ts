@@ -74,7 +74,7 @@ describe(".meta()", () => {
         const guarded = c.query
             .meta({ rateLimit: "pins/create" })
             .use(async ({ ctx, next }) => {
-                seen = (ctx as { meta?: unknown }).meta;
+                seen = ctx.meta;
 
                 return await next({ ctx: ctx as unknown as Record<string, unknown> });
             })

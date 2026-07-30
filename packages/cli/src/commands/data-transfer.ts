@@ -356,12 +356,6 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
 };
 
 /**
- * Stream an NDJSON file in chunks, POSTing each batch to
- * `/_lunora/admin/import`. We keep the line buffer bounded by `batchSize` so a
- * multi-GiB file imports without buffering everything in memory.
- */
-
-/**
  * Convex's own file table. Its rows describe stored BLOBS, not application
  * data — the bytes sit next to the JSONL as separate files and belong in R2,
  * so importing the rows alone would create dangling references.
@@ -402,19 +396,6 @@ const convexExportTables = async (path: string): Promise<undefined | { file: str
     return found.length > 0 ? found.toSorted((a, b) => a.table.localeCompare(b.table)) : undefined;
 };
 
-/**
- * Stream a Convex export directory as the `{ table, doc }` NDJSON the admin
- * import endpoint accepts.
- *
- * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
- * rewritten to freshly-minted Lunora ids, which forces a two-pass import
- * (insert with FKs nulled, then patch them back through an id map) to survive
- * self-referential cycles. That is unnecessary here: the admin import path
- * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
- * validates only that the value is a string. So every Convex id — including
- * every `v.id()` foreign key already pointing at one — carries across
- * unchanged, and a plain single-pass import is correct (LUNORA_ISSUES #8).
- */
 /** Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines. */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<string> {
@@ -445,6 +426,19 @@ async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<stri
     }
 }
 
+/**
+ * Stream a Convex export directory as the `{ table, doc }` NDJSON the admin
+ * import endpoint accepts.
+ *
+ * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
+ * rewritten to freshly-minted Lunora ids, which forces a two-pass import
+ * (insert with FKs nulled, then patch them back through an id map) to survive
+ * self-referential cycles. That is unnecessary here: the admin import path
+ * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
+ * validates only that the value is a string. So every Convex id — including
+ * every `v.id()` foreign key already pointing at one — carries across
+ * unchanged, and a plain single-pass import is correct (LUNORA_ISSUES #8).
+ */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* readConvexExport(tables: ReadonlyArray<{ file: string; table: string }>, logger: Logger): AsyncGenerator<string> {
     for (const { file, table } of tables) {
@@ -485,6 +479,12 @@ const resolveImportSource = async (
     return { convexTables, error: false };
 };
 
+/**
+ * Stream an NDJSON file — or a `npx convex export --path &lt;dir>` directory — in
+ * chunks, POSTing each batch to `/_lunora/admin/import`. The line buffer stays
+ * bounded by `batchSize`, so a multi-GiB source imports without buffering
+ * everything in memory.
+ */
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const request = await resolveImportRequest(options);
 

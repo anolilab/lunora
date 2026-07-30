@@ -302,7 +302,15 @@ describe("lunora data-transfer", () => {
             mkdirSync(join(workDir, "not-an-export"), { recursive: true });
 
             const fetchImpl: StreamingFetchLike = async () => {
-                return { body: null, json: async () => {return {}}, ok: true, status: 200, text: async () => "" };
+                return {
+                    body: null,
+                    json: async () => {
+                        return {};
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
             };
 
             const result = await runImportCommand({ fetchImpl, file: join(workDir, "not-an-export"), logger: silentLogger(), token: "t" });
@@ -322,7 +330,15 @@ describe("lunora data-transfer", () => {
             const fetchImpl: StreamingFetchLike = async () => {
                 called = true;
 
-                return { body: null, json: async () => {return {}}, ok: true, status: 200, text: async () => "" };
+                return {
+                    body: null,
+                    json: async () => {
+                        return {};
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
             };
 
             const result = await runImportCommand({ fetchImpl, file: workDir, logger: silentLogger(), table: "other", token: "t" });

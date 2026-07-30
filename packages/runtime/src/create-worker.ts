@@ -2905,15 +2905,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * DO, mirroring what `@lunora/scheduler`'s `createScheduler` does from a
      * shard.
      *
-     * `originUrl` is derived from the inbound request rather than configured:
-     * the DO dispatches the job back to the worker, and the origin the webhook
-     * arrived on is by construction an origin that reaches it. That also keeps
-     * preview deployments working without per-environment config.
+     * The scheduler DO takes its callback origin from `env.LUNORA_ORIGIN_URL`
+     * at both schedule and fire time — deliberately, so a request cannot steer
+     * the dispatch — and answers `ORIGIN_NOT_CONFIGURED` when it is unset. So
+     * nothing origin-shaped is sent from here.
      */
-    const buildHttpScheduler = (namespace: ShardNamespaceLike, request: Request): SchedulerContext => {
+    const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
         const instanceName = options.schedulerInstanceName ?? "default";
         const stub = (): ReturnType<ShardNamespaceLike["get"]> => namespace.get(namespace.idFromName(instanceName));
-        const originUrl = new URL(request.url).origin;
 
         const call = async <R>(path: string, init: RequestInit): Promise<R> => {
             const response = await stub().fetch(new Request(`https://scheduler.internal${path}`, init));
@@ -2925,7 +2924,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 });
             }
 
-            return (await response.json());
+            return await response.json();
         };
 
         const post = async <R>(path: string, body: unknown): Promise<R> =>
@@ -2935,11 +2934,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `binding` and starts a durable instance per fire; a function reference
         // carries `__lunoraRef`; a bare string is already a `"ns:fn"` path.
         const targetFields = (target: unknown): Record<string, unknown> => {
-            if (typeof target === "string") {
-                return { functionPath: target };
-            }
+            // Deliberately NO bare-string branch, unlike the shard-side
+            // `createScheduler`. These endpoints are reachable unauthenticated
+            // (platform-signed webhooks), so accepting a caller-shaped
+            // `"ns:fn"` would be the "call any internal function" primitive
+            // this surface exists to avoid — and `run()` beside it rejects
+            // anything without `__lunoraRef` for the same reason. A reference
+            // from the generated `internal` / `workflows` / `agents` is a
+            // literal in the app's own source and cannot come off a request.
+            const candidate = target as { __lunoraRef?: unknown; binding?: unknown } | null | undefined;
 
-            const candidate = target as { __lunoraRef?: unknown; binding?: unknown };
+            if (candidate === null || candidate === undefined) {
+                throw new LunoraError("ctx.scheduler: target is required — pass a reference from the generated `internal` / `workflows` / `agents`", {
+                    code: "BAD_REQUEST",
+                    status: 400,
+                });
+            }
 
             if (typeof candidate.binding === "string" && candidate.binding.length > 0) {
                 return { workflow: candidate.binding };
@@ -2949,14 +2959,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return { functionPath: candidate.__lunoraRef };
             }
 
-            throw new LunoraError("ctx.scheduler: expected a function path, or a reference from the generated `internal` / `workflows` / `agents`", {
-                code: "BAD_REQUEST",
-                status: 400,
-            });
+            throw new LunoraError(
+                "ctx.scheduler: expected a reference from the generated `internal` / `workflows` / `agents` — a bare function-path string is refused here, because an HTTP action can be reached unauthenticated",
+                {
+                    code: "BAD_REQUEST",
+                    status: 400,
+                },
+            );
         };
 
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
-            const { id } = await post<{ id: string }>("/schedule", { args, originUrl, scheduledFor, ...targetFields(target) });
+            const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
 
             return id;
         };
@@ -3037,7 +3050,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runAction: run,
             runMutation: run,
             runQuery: run,
-            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO, request) }),
+            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
         };
     };
 

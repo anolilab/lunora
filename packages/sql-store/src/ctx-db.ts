@@ -2710,6 +2710,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const LEGACY_READER_ERROR = "the legacy query()/withIndex() reader is not available on the D1 (global) backend; use findMany";
 
+            // Matches the shard reader's page size so iteration costs the same
+            // per row on either backend.
+            const ITERATOR_PAGE_SIZE = 128;
+
             // The D1 backend doesn't expose the scan/index reader — `findMany`
             // is the public read surface there. Only `.withSearchIndex()` is
             // supported, so a staged search runs and every other terminal op
@@ -2750,6 +2754,32 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const buildReader = (stage: SearchStage | undefined): TableReaderLike => {
                 const reader: TableReaderLike = {
+                    /**
+                     * Lazy row iteration, paging through `paginate` exactly as the
+                     * shard reader does — so `for await` behaves the same on a
+                     * `.global()` table as on a sharded one, and hits the same
+                     * directed `LEGACY_READER_ERROR` when the chain is not a
+                     * search stage (via `paginate` below). Without this the
+                     * public `TableReader` type promised an iterator that only
+                     * one backend had.
+                     */
+                    // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+                    async *[Symbol.asyncIterator]() {
+                        let cursor: string | undefined;
+
+                        for (;;) {
+                            // eslint-disable-next-line no-await-in-loop, unicorn/no-null -- sequential by construction (each cursor comes from the previous page); `null` is PaginationOptions' documented first-page sentinel
+                            const page = await reader.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
+
+                            yield* page.page;
+
+                            if (page.isDone || page.continueCursor === null) {
+                                return;
+                            }
+
+                            cursor = page.continueCursor;
+                        }
+                    },
                     async collect() {
                         if (!stage) {
                             throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);

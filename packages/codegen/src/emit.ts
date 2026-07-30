@@ -647,7 +647,19 @@ const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =
  * Falls back to the handler when no `.output()` is declared, so a project that
  * never uses it emits byte-identical output.
  */
-const referenceReturnType = (definition: FunctionIR): string => (definition.output ? validatorToType(definition.output) : definition.returnType);
+const referenceReturnType = (definition: FunctionIR): string => {
+    // `parseValidator` yields `{ kind: "any" }` for anything that is not a call
+    // expression, which includes the perfectly ordinary
+    // `.output(sharedValidator)` where the validator lives in another binding.
+    // Preferring that over the handler would replace a precise inferred type
+    // with `unknown` — reintroducing, on every procedure with a hoisted output
+    // validator, exactly the leak this function exists to stop.
+    if (definition.output === undefined || definition.output.kind === "any") {
+        return definition.returnType;
+    }
+
+    return validatorToType(definition.output);
+};
 
 /**
  * Render the grouped-by-namespace body of an api interface for a subset of

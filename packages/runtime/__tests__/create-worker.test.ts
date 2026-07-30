@@ -1402,7 +1402,7 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.text()).resolves.toBe("pong");
     });
 
-    it("c.var.lunora.scheduler.runAfter reaches the scheduler DO with an origin derived from the request", async () => {
+    it("c.var.lunora.scheduler.runAfter reaches the scheduler DO", async () => {
         expect.assertions(5);
 
         // LUNORA_ISSUES #28: "receive webhook → enqueue the real work → return
@@ -1434,10 +1434,45 @@ describe("createWorker — HTTP actions", () => {
         const body = (await scheduler.calls[0]?.request.json()) as Record<string, unknown>;
 
         expect(body).toMatchObject({ args: { eventId: "evt_1" }, functionPath: "billing:sync" });
-        // Derived from the inbound request, not configured — the origin a webhook
-        // arrived on is by construction one that reaches this worker, so preview
-        // deployments need no per-environment setting.
-        expect(body["originUrl"]).toBe("https://app.example");
+        // No origin is sent. The DO takes its callback origin from
+        // `env.LUNORA_ORIGIN_URL` at both schedule and fire time, deliberately,
+        // so a request cannot steer where the job dispatches back to.
+        expect(body["originUrl"]).toBeUndefined();
+    });
+
+    it("refuses a bare function-path string as a scheduler target", async () => {
+        expect.assertions(2);
+
+        // An HTTP action can be reached unauthenticated, so accepting a
+        // caller-shaped `"ns:fn"` here would be a "call any internal function"
+        // primitive — the very thing this surface exists to avoid. `run()`
+        // beside it rejects anything without `__lunoraRef` for the same reason.
+        const scheduler = createShardSpy(Response.json({ id: "job-1" }, { status: 200 }));
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/evil", async (c) => {
+                    try {
+                        await c.var.lunora.scheduler?.runAfter(0, c.req.header("x-job") ?? "", {});
+
+                        return new Response("accepted", { status: 200 });
+                    } catch {
+                        return new Response("refused", { status: 400 });
+                    }
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/hooks/evil", { headers: { "x-job": "admin:deleteEverything" }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        await expect(res.text()).resolves.toBe("refused");
+        expect(scheduler.calls).toHaveLength(0);
     });
 
     it("leaves ctx.scheduler undefined when the worker declares no schedulerDO", async () => {

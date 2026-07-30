@@ -1672,6 +1672,34 @@ export const others = query.input({ id: v.string() }).query(async ({ ctx, args }
             expect(findings[0]?.detail).toContain("reads:");
         });
 
+        it("keeps the handler's type when .output() names a validator it cannot read", () => {
+            expect.assertions(2);
+
+            // `.output(sharedValidator)` — a hoisted validator, not an inline
+            // call — parses to `{ kind: "any" }`. Preferring that over the
+            // handler would emit `unknown`, which is the exact leak the
+            // .output() preference exists to prevent. Fall back instead.
+            writeFileSync(
+                join(workdir, "lunora", "shared.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+const todoOut = v.object({ title: v.string() });
+
+export const hoisted = query.input({}).output(todoOut).query(async () => ({ title: "x" }));
+export const inline = query.input({}).output(v.object({ title: v.string() })).query(async () => ({ title: "x" }));
+`,
+            );
+
+            const {api} = runCodegen({ projectRoot: workdir }).generated;
+
+            // Hoisted: unreadable validator, so the handler's inferred type wins.
+            // The trailing `;` is TS's own type renderer — which is exactly how
+            // you can tell which path produced it. `unknown` here is the bug.
+            expect(api).toContain('hoisted: FunctionReference<"query", {}, { title: string; }>');
+            // Inline: the declared validator wins, rendered by validatorToType.
+            expect(api).toContain('inline: FunctionReference<"query", {}, { title: string }>');
+        });
+
         it("renders a recovered v.from() type into the emitted api, end to end", () => {
             expect.assertions(2);
 

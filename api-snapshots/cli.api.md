@@ -173,6 +173,7 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    worker?: boolean;
     workerPort?: number;
 }
 ```
@@ -191,6 +192,7 @@ interface DevCommandPlan {
     };
     studioEnabled: boolean;
     studioPort: number;
+    workerEnabled: boolean;
     workerOrigin: string;
     workerPort: number;
     wrangler: SpawnDescriptor & {
