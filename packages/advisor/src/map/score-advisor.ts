@@ -1,6 +1,7 @@
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { Finding, Lint, LintContext } from "../types";
 import { coverageFromScore, gradeFromScore, procedureWeight, projectWeight, scoreGlobal, scoreProcedure, weightFor, worstLevel } from "./score";
+import classifySensitivity from "./sensitivity";
 import type { AdvisorMap, CheckResult, Coverage, MapSummary, ProcedureScore, ProjectScore } from "./types";
 
 /**
@@ -159,6 +160,9 @@ const scoreAdvisor = (context: LintContext, findings: ReadonlyArray<Finding>, op
             const checks = attributed.byProcedure.get(id) ?? [];
             const score = scoreProcedure(checks);
             const isExempt = exempt.has(id);
+            // Sensitivity is computed before the verdict so a rule can gate on it
+            // and so it can weight the row — see `classifySensitivity`.
+            const sensitivity = classifySensitivity(procedure);
 
             return {
                 checks,
@@ -168,8 +172,9 @@ const scoreAdvisor = (context: LintContext, findings: ReadonlyArray<Finding>, op
                 id,
                 kind: procedure.kind,
                 score,
+                sensitivity,
                 visibility: procedure.visibility,
-                weight: isExempt ? 0 : procedureWeight(procedure),
+                weight: isExempt ? 0 : procedureWeight(procedure, sensitivity.level),
             };
         })
         .toSorted((a, b) => byCodepoint(a.id, b.id));

@@ -35,6 +35,14 @@ type BaselineComparison =
           dropped: ProcedureDelta[];
           /** Procedures that are `failing` now and were not before — new rows included. */
           newFailing: string[];
+
+          /** `true` when the project bucket gained rules or occurrences, even if its saturated score did not move. */
+          projectRegressed: boolean;
+          /** `true` when any signal above fired. */
+          regressed: boolean;
+          /** Current global score less the baseline's; negative is a regression. */
+          scoreDelta: number;
+
           /**
            * Procedures whose score held but whose findings grew — a new rule fired,
            * or an existing one fired at more call sites. Scoring charges a rule once
@@ -42,12 +50,6 @@ type BaselineComparison =
            * violations" would look identical to the baseline.
            */
           worsened: string[];
-          /** `true` when the project bucket gained rules or occurrences, even if its saturated score did not move. */
-          projectRegressed: boolean;
-          /** `true` when any signal above fired. */
-          regressed: boolean;
-          /** Current global score less the baseline's; negative is a regression. */
-          scoreDelta: number;
       };
 
 /**

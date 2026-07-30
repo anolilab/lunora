@@ -1034,12 +1034,18 @@ export interface HttpRouteIR {
 export interface ProcedureMiddlewareIR {
     /** `true` when the handler (or a helper inside it) references `ctx.mail` / `ctx.email`. */
     callsMail: boolean;
+    /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
+    /** `true` when the handler emits a structured observability event (`ctx.log` / `ctx.span` / `ctx.trace`). */
+    emitsEvent: boolean;
     /** Export binding name of the procedure (e.g. `signUp`). */
     exportName: string;
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
     fanOut: boolean;
+
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
+    /** `true` when the handler wraps work in `try`/`catch`. */
+    handlesErrors: boolean;
 
     /**
      * `true` when the procedure declares an email-shaped argument (`email`,
@@ -1052,8 +1058,11 @@ export interface ProcedureMiddlewareIR {
      * registration that may well expose one.
      */
     hasEmailArg?: boolean;
-    /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     kind: "action" | "mutation" | "query";
+    /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
+    reachesOutbound: boolean;
+    /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */
+    throwsBareError: boolean;
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */
     unboundedAiGeneration: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */

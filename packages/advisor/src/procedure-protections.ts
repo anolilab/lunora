@@ -10,12 +10,17 @@
 export interface AdvisorProcedureProtection {
     /** `true` when the handler references `ctx.mail` / `ctx.email` (sends mail). */
     callsMail: boolean;
+    /** `true` when the handler emits a structured observability event (`ctx.log` / `ctx.span` / `ctx.trace`). */
+    emitsEvent?: boolean;
     /** The exported binding name of the procedure (e.g. `signUp`). */
     exportName: string;
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Read by the privileged-fanout lint, paired with public visibility and no rate limit. */
     fanOut: boolean;
+
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+    /** `true` when the handler wraps work in `try`/`catch`. */
+    handlesErrors?: boolean;
 
     /**
      * `true` when the procedure declares an email-shaped argument. Read by the
@@ -29,6 +34,10 @@ export interface AdvisorProcedureProtection {
     hasEmailArg?: boolean;
     /** Registration kind — `query` is read-only; `mutation`/`action` are write-shaped. */
     kind: "action" | "mutation" | "query";
+    /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
+    reachesOutbound?: boolean;
+    /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */
+    throwsBareError?: boolean;
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound. Read by the `ai_unbounded_generation_public` lint (paired with public visibility). */
     unboundedAiGeneration: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */

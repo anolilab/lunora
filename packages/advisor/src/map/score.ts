@@ -1,6 +1,6 @@
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { Level } from "../types";
-import type { CheckResult, Coverage, Grade, WeightedEntry } from "./types";
+import type { CheckResult, Coverage, Grade, SensitivityLevel, WeightedEntry } from "./types";
 
 /**
  * Global-mean weights. A public handler is the attack and traffic surface, so it
@@ -12,6 +12,14 @@ import type { CheckResult, Coverage, Grade, WeightedEntry } from "./types";
 const PUBLIC_WEIGHT = 2;
 const INTERNAL_WEIGHT = 0.5;
 const QUERY_WEIGHT = 0.5;
+
+/**
+ * Multiplier for a procedure `classifySensitivity` marked `high`. Visibility
+ * says who can reach a handler; sensitivity says what it touches — an internal
+ * mutation writing the users table deserves more of the grade than a public one
+ * that returns a static list, and only this factor can express that.
+ */
+const SENSITIVE_MULTIPLIER = 2;
 
 /** Grade band thresholds. */
 const EXCELLENT_FLOOR = 90;
@@ -70,12 +78,11 @@ const worstLevel = (a: Level, b: Level): Level => (LEVEL_RANK[a] >= LEVEL_RANK[b
  * This row's pull on the global mean. See the weight constants for the
  * rationale; `query` wins over `visibility` when both apply.
  */
-const procedureWeight = (procedure: Pick<AdvisorProcedureProtection, "kind" | "visibility">): number => {
-    if (procedure.kind === "query") {
-        return QUERY_WEIGHT;
-    }
+const procedureWeight = (procedure: Pick<AdvisorProcedureProtection, "kind" | "visibility">, sensitivity: SensitivityLevel = "none"): number => {
+    const byVisibility = procedure.visibility === "public" ? PUBLIC_WEIGHT : INTERNAL_WEIGHT;
+    const base = procedure.kind === "query" ? QUERY_WEIGHT : byVisibility;
 
-    return procedure.visibility === "public" ? PUBLIC_WEIGHT : INTERNAL_WEIGHT;
+    return sensitivity === "high" ? base * SENSITIVE_MULTIPLIER : base;
 };
 
 /** Weight of the project bucket, scaled against the procedures it competes with. */

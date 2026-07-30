@@ -180,6 +180,29 @@ export const ghost = defineShape({ table: "mesages", where: () => ({}) });
         expect(byName("shape_unknown_table")[0]?.metadata).toMatchObject({ exportName: "ghost", table: "mesages" });
     });
 
+    it("reads observability facts off real handler bodies", () => {
+        expect.assertions(4);
+
+        writeFileSync(
+            join(workdir, "lunora", "ops.ts"),
+            `import { action, mutation } from "@lunora/server";
+export const quiet = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+export const loud = mutation({ args: {}, handler: async (ctx) => { ctx.log.info("did it"); } });
+export const risky = action({ args: {}, handler: async (ctx) => { await ctx.fetch("https://example.com"); } });
+export const careful = action({ args: {}, handler: async (ctx) => { try { await ctx.fetch("https://example.com"); } catch { /* degraded */ } } });
+`,
+            "utf8",
+        );
+
+        const names = new Set(runCodegen({ projectRoot: workdir }).advisories.map((advisory) => `${advisory.name}:${String(advisory.metadata.exportName)}`));
+
+        expect(names).toContain("error_without_catalog:quiet");
+        expect(names).toContain("procedure_without_structured_event:quiet");
+        expect(names).not.toContain("procedure_without_structured_event:loud");
+        // `risky` has no catch; `careful` does.
+        expect([...names].filter((name) => name.startsWith("action_without_error_handling:"))).toStrictEqual(["action_without_error_handling:risky"]);
+    });
+
     it('flags a `.public()` table with a PII column under `.rls("required")` (full discover → lint path)', () => {
         expect.assertions(2);
 

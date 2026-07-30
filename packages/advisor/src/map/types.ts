@@ -33,6 +33,17 @@ interface CheckResult {
     weight: number;
 }
 
+/** How much a procedure's failures matter — see `classifySensitivity`. */
+type SensitivityLevel = "high" | "none";
+
+/** A procedure's sensitivity plus the declarations that produced it. */
+interface Sensitivity {
+    /** `high` when any signal fired; `none` means no signal, not "safe". */
+    level: SensitivityLevel;
+    /** Human-readable signals, e.g. "writes an identity table". Empty when `none`. */
+    reasons: string[];
+}
+
 /** Anything that contributes a score at a weight to the global mean. */
 interface WeightedEntry {
     score: number;
@@ -55,6 +66,8 @@ interface ProcedureScore {
     kind: "action" | "mutation" | "query";
     /** 0–100, starting at 100 less each fired rule's weight. */
     score: number;
+    /** How much this procedure's failures matter, and why. */
+    sensitivity: Sensitivity;
     /** Public (client-callable) or internal (server-called). */
     visibility: "internal" | "public";
     /** This row's weight in the global mean — see `procedureWeight`. */
@@ -121,4 +134,4 @@ interface AdvisorMap {
     version: number;
 }
 
-export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore, WeightedEntry };
+export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore, Sensitivity, SensitivityLevel, WeightedEntry };

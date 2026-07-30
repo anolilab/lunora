@@ -250,6 +250,50 @@ describe("scoreAdvisor artifact", () => {
     });
 });
 
+describe("sensitivity", () => {
+    it("marks a procedure high when it touches identity, mail, or tenant-scoped rows", () => {
+        expect.assertions(3);
+
+        const sensitive = scoreAdvisor(contextWith([procedure({ exportName: "signUp", file: "auth", writesUserTable: true })]), [], { generatedAt: STAMP });
+        const plain = scoreAdvisor(contextWith([procedure({ exportName: "listPosts", file: "posts", kind: "query" })]), [], { generatedAt: STAMP });
+
+        expect(sensitive.procedures[0]?.sensitivity.level).toBe("high");
+        expect(sensitive.procedures[0]?.sensitivity.reasons).toContain("writes an identity table");
+        expect(plain.procedures[0]?.sensitivity).toStrictEqual({ level: "none", reasons: [] });
+    });
+
+    it("weights a sensitive handler above an equally-visible plain one", () => {
+        expect.assertions(2);
+
+        const map = scoreAdvisor(
+            contextWith([procedure({ exportName: "sensitive", file: "f", writesUserTable: true }), procedure({ exportName: "plain", file: "f" })]),
+            [],
+            { generatedAt: STAMP },
+        );
+
+        const weightOf = (id: string) => map.procedures.find((entry) => entry.id === id)?.weight;
+
+        expect(weightOf("f#sensitive")).toBe(4);
+        expect(weightOf("f#plain")).toBe(2);
+    });
+
+    it("lets an internal sensitive handler outweigh a public inert one", () => {
+        expect.assertions(1);
+
+        const map = scoreAdvisor(
+            contextWith([
+                procedure({ callsMail: true, exportName: "internalMailer", file: "f", visibility: "internal" }),
+                procedure({ exportName: "publicInert", file: "f" }),
+            ]),
+            [],
+            { generatedAt: STAMP },
+        );
+
+        // internal 0.5 x 2 = 1 vs public 2 — still below, but the gap narrowed from 4x to 2x.
+        expect(map.procedures.find((entry) => entry.id === "f#internalMailer")?.weight).toBe(1);
+    });
+});
+
 describe("gradeFromScore", () => {
     it("bands scores on the documented thresholds", () => {
         expect.assertions(4);
@@ -324,10 +368,12 @@ describe("compareToBaseline", () => {
         const before = mapOf(sites(1), procedures);
         const after = mapOf(sites(6), procedures);
 
+        const comparison = compareToBaseline(after, before);
+
         // A rule is charged once however many times it fires, so neither score moves.
         expect(after.score).toBe(before.score);
-        expect(compareToBaseline(after, before)).toMatchObject({ comparable: true, worsened: ["f#a"] });
-        expect(compareToBaseline(after, before).comparable === true && compareToBaseline(after, before).regressed).toBe(true);
+        expect(comparison).toMatchObject({ comparable: true, worsened: ["f#a"] });
+        expect(comparison.comparable && comparison.regressed).toBe(true);
     });
 
     it("refuses to compare across artifact versions instead of reporting a clean run", () => {

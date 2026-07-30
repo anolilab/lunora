@@ -493,11 +493,15 @@ interface AdvisorPrivilegedDispatch {
 ```ts
 interface AdvisorProcedureProtection {
     callsMail: boolean;
+    emitsEvent?: boolean;
     exportName: string;
     fanOut: boolean;
     file: string;
+    handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    reachesOutbound?: boolean;
+    throwsBareError?: boolean;
     unboundedAiGeneration: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
@@ -840,10 +844,10 @@ type BaselineComparison = {
     comparable: true;
     dropped: ProcedureDelta[];
     newFailing: string[];
-    worsened: string[];
     projectRegressed: boolean;
     regressed: boolean;
     scoreDelta: number;
+    worsened: string[];
 };
 ```
 
@@ -1033,6 +1037,7 @@ interface ProcedureScore {
     id: string;
     kind: "action" | "mutation" | "query";
     score: number;
+    sensitivity: Sensitivity;
     visibility: "internal" | "public";
     weight: number;
 }
@@ -1078,10 +1083,31 @@ interface ScoreAdvisorOptions {
 }
 ```
 
+### `Sensitivity` (interface)
+
+```ts
+interface Sensitivity {
+    level: SensitivityLevel;
+    reasons: string[];
+}
+```
+
+### `SensitivityLevel` (type)
+
+```ts
+type SensitivityLevel = "high" | "none";
+```
+
 ### `actionFetchSsrf` (const)
 
 ```ts
 const actionFetchSsrf: Lint;
+```
+
+### `actionWithoutErrorHandling` (const)
+
+```ts
+const actionWithoutErrorHandling: Lint;
 ```
 
 ### `adminRouteWithoutGuard` (const)
@@ -1094,6 +1120,12 @@ const adminRouteWithoutGuard: Lint;
 
 ```ts
 const aiRawRunEscapeHatch: Lint;
+```
+
+### `aiRunWithoutLogging` (const)
+
+```ts
+const aiRunWithoutLogging: Lint;
 ```
 
 ### `aiToolSideEffectPromptInjection` (const)
@@ -1174,6 +1206,12 @@ const browserUserUrlWithoutAllowlist: Lint;
 const circularFk: Lint;
 ```
 
+### `classifySensitivity` (const)
+
+```ts
+const classifySensitivity: (procedure: AdvisorProcedureProtection) => Sensitivity;
+```
+
 ### `compareToBaseline` (const)
 
 ```ts
@@ -1232,6 +1270,12 @@ const duplicateIndex: Lint;
 
 ```ts
 const emptyIndex: Lint;
+```
+
+### `errorWithoutCatalog` (const)
+
+```ts
+const errorWithoutCatalog: Lint;
 ```
 
 ### `exportSinkMisconfigured` (const)
@@ -1478,6 +1522,12 @@ const privilegedDispatchUnvalidatedPayload: Lint;
 
 ```ts
 const privilegedFanoutFromPublicProcedure: Lint;
+```
+
+### `procedureWithoutStructuredEvent` (const)
+
+```ts
+const procedureWithoutStructuredEvent: Lint;
 ```
 
 ### `publicArgumentUsesAny` (const)

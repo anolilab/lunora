@@ -314,10 +314,59 @@ const referencesMail = (declaration: TsNode): boolean =>
         return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
     });
 
+/** `ctx.*` members that emit a structured observability event. */
+const EVENT_MEMBERS: ReadonlySet<string> = new Set(["log", "span", "trace"]);
+
+/** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
+const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
+
+/** True when any `ctx.&lt;member>` in `declaration` is one of `members`. */
+const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
+    declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
+        if (!members.has(access.getName())) {
+            return false;
+        }
+
+        const receiver = access.getExpression();
+
+        return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
+    });
+
+/**
+ * True when the body throws a bare `new Error(...)`.
+ *
+ * A bare `Error` crosses the RPC boundary as an opaque string: the client cannot
+ * branch on it and the Studio cannot group it. `LunoraError` (and anything else
+ * constructed from the error catalog) carries a stable code, so only the
+ * unqualified builtin counts here — a subclass or a catalog helper does not.
+ */
+const throwsBareError = (declaration: TsNode): boolean =>
+    declaration.getDescendantsOfKind(SyntaxKind.ThrowStatement).some((statement) => {
+        const thrown = statement.getExpression();
+
+        if (!Node.isNewExpression(thrown)) {
+            return false;
+        }
+
+        const callee = thrown.getExpression();
+
+        return Node.isIdentifier(callee) && callee.getText() === "Error";
+    });
+
 /** Behavioural facts read from the procedure declaration body. */
 const behaviourOf = (
     declaration: TsNode,
-): { callsMail: boolean; fanOut: boolean; unboundedAiGeneration: boolean; usesInsertManyUnsafe: boolean; writesUserTable: boolean } => {
+): {
+    callsMail: boolean;
+    emitsEvent: boolean;
+    fanOut: boolean;
+    handlesErrors: boolean;
+    reachesOutbound: boolean;
+    throwsBareError: boolean;
+    unboundedAiGeneration: boolean;
+    usesInsertManyUnsafe: boolean;
+    writesUserTable: boolean;
+} => {
     let fanOut = false;
     let unboundedAiGeneration = false;
     let usesInsertManyUnsafe = false;
@@ -345,7 +394,17 @@ const behaviourOf = (
         }
     }
 
-    return { callsMail: referencesMail(declaration), fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable };
+    return {
+        callsMail: referencesMail(declaration),
+        emitsEvent: referencesContextMember(declaration, EVENT_MEMBERS),
+        fanOut,
+        handlesErrors: declaration.getDescendantsOfKind(SyntaxKind.TryStatement).length > 0,
+        reachesOutbound: referencesContextMember(declaration, OUTBOUND_MEMBERS),
+        throwsBareError: throwsBareError(declaration),
+        unboundedAiGeneration,
+        usesInsertManyUnsafe,
+        writesUserTable,
+    };
 };
 
 /** Build the {@link ProcedureMiddlewareIR} for one exported declaration, or `undefined` when it isn't a procedure. */
@@ -365,10 +424,15 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
     const protections = classified.receiver
         ? protectionsInChain(classified.receiver)
         : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
-    const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviourOf(declaration);
+    const behaviour = behaviourOf(declaration);
+    const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviour;
 
     return {
         callsMail,
+        emitsEvent: behaviour.emitsEvent,
+        handlesErrors: behaviour.handlesErrors,
+        reachesOutbound: behaviour.reachesOutbound,
+        throwsBareError: behaviour.throwsBareError,
         exportName: declaration.getName(),
         fanOut,
         file: relativePath,
