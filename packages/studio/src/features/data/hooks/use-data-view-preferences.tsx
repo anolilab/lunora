@@ -4,7 +4,6 @@ import type { MaskStrategy } from "../../../lib/admin";
 import { usePersistedValue } from "../../../lib/browser-storage";
 import type { MaskView } from "../../../lib/mask-preview";
 import { maskColumnsForTable, mergeSensitiveColumns } from "../../../lib/mask-preview";
-import type { TableRow } from "../data-browser-grid";
 import useMaskPolicies from "./use-mask-policies";
 
 /**
@@ -16,35 +15,28 @@ const PINNED_COLUMNS_KEY = "lunora-studio-pinned-columns";
 
 /** Everything {@link useDataViewPreferences} hands back, so consumers can thread it as one prop. */
 interface DataViewPreferences {
-    closeExpandedCell: () => void;
-    closeInspect: () => void;
-    /** The cell whose full value the expand dialog is showing, if any. */
-    expandedCell: null | { column: string; value: unknown };
-    /** The row whose document the detail drawer is showing, if any. */
-    inspecting: TableRow | null;
     /** The active table's masked columns (column → strategy). */
-    maskColumns: ReadonlyMap<string, MaskStrategy>;
-    maskOn: boolean;
+    readonly maskColumns: ReadonlyMap<string, MaskStrategy>;
+    readonly maskOn: boolean;
     /** The threaded view the grid/JSON/transposed renderers read. */
-    maskView: MaskView;
-    onExpandCell: (column: string, value: unknown) => void;
-    onInspect: (row: TableRow | null) => void;
-    onToggleMask: () => void;
-    onTogglePin: (column: string) => void;
-    onToggleTranspose: () => void;
-    pinnedColumns: ReadonlySet<string>;
-    transposed: boolean;
+    readonly maskView: MaskView;
+    readonly onToggleMask: () => void;
+    readonly onTogglePin: (column: string) => void;
+    readonly onToggleTranspose: () => void;
+    readonly pinnedColumns: ReadonlySet<string>;
+    readonly transposed: boolean;
 }
 
 /**
  * How the operator is currently LOOKING at the loaded table: which columns are
- * pinned, whether masking is on, whether rows are transposed, and which row or
- * cell is open for inspection.
+ * pinned, whether masking is on, and whether rows are transposed.
  *
- * One hook because these are all view preferences over the same table and none of
- * them touches the fetch, the writes, or the pagination — they were four
- * independent `useState` clusters interleaved through the component, which is
- * what made it hard to see where the data flow ended and the UI state began.
+ * One hook because all three describe how the grid RENDERS the rows it has, and
+ * none of them touches the fetch, the writes, or the pagination — they were
+ * independent `useState` clusters interleaved through the component, which is what
+ * made it hard to see where the data flow ended and the UI state began. Which
+ * overlay is open lives in `useRowInspection`, whose consumers are disjoint from
+ * these.
  */
 const useDataViewPreferences = ({
     columns,
@@ -77,11 +69,6 @@ const useDataViewPreferences = ({
 
             return { ...current, [pinKey]: next };
         });
-    };
-
-    const [inspecting, setInspecting] = useState<TableRow | null>(null);
-    const closeInspect = (): void => {
-        setInspecting(null);
     };
 
     // Whether the table view is transposed (fields as rows, records as columns) —
@@ -119,32 +106,7 @@ const useDataViewPreferences = ({
     // is on.
     const maskView = { columns: maskColumns, enabled: maskOn };
 
-    // The cell whose full value the expand dialog is showing, if any. Opened from
-    // the per-cell expand affordance; pure view state like `inspecting`.
-    const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
-    const onExpandCell = (column: string, value: unknown): void => {
-        setExpandedCell({ column, value });
-    };
-    const closeExpandedCell = (): void => {
-        setExpandedCell(null);
-    };
-
-    return {
-        closeExpandedCell,
-        closeInspect,
-        expandedCell,
-        inspecting,
-        maskColumns,
-        maskOn,
-        maskView,
-        onExpandCell,
-        onInspect: setInspecting,
-        onToggleMask,
-        onTogglePin,
-        onToggleTranspose,
-        pinnedColumns,
-        transposed,
-    };
+    return { maskColumns, maskOn, maskView, onToggleMask, onTogglePin, onToggleTranspose, pinnedColumns, transposed };
 };
 
 export type { DataViewPreferences };

@@ -19,6 +19,7 @@ import { useBackRelations } from "./hooks/use-back-relations";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { useDataViewPreferences } from "./hooks/use-data-view-preferences";
 import { useGenerateRows } from "./hooks/use-generate-rows";
+import { useRowInspection } from "./hooks/use-row-inspection";
 import { RowDetailDrawer } from "./row-detail";
 import { ShardExplorer } from "./shard-explorer";
 import { TableListSidebar } from "./table-list-sidebar";
@@ -298,7 +299,10 @@ export const DataBrowser = ({
     // would make the feature not worth using.
     const preferences = useDataViewPreferences({ columns, initialPins, selectedTable });
 
-    const { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell } = preferences;
+    // Which overlay is open. Separate from the render preferences above: these five
+    // fields are read here and nowhere else, and `onInspect` is read only by the page.
+    const inspection = useRowInspection();
+    const { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell } = inspection;
 
     const client = useLunora();
 
@@ -420,6 +424,7 @@ export const DataBrowser = ({
                         edit={edit}
                         editable={editable}
                         onAskAiFilter={askAiFilter}
+                        onInspect={inspection.onInspect}
                         onOpenGenerateRows={onOpenGenerateRows}
                         onSaveQuery={saveCurrentQuery}
                         page={page}

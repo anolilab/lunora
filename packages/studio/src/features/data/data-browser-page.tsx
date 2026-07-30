@@ -7,7 +7,7 @@ import type { TablePage } from "../../lib/admin";
 import { maskRows } from "../../lib/mask-preview";
 import type { SavedQuery } from "../../lib/saved-queries";
 import type { SqlAssistant } from "../sql/hooks/use-sql-assistant";
-import type { GridEdit, GridReferences } from "./data-browser-grid";
+import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
@@ -150,6 +150,7 @@ const DataBrowserPage = ({
     edit,
     editable,
     onAskAiFilter,
+    onInspect,
     onOpenGenerateRows,
     onSaveQuery,
     page,
@@ -173,6 +174,8 @@ const DataBrowserPage = ({
     readonly editable: boolean;
     /** Turns a natural-language prompt into filter clauses. */
     readonly onAskAiFilter: (prompt: string) => void;
+    /** Open a row's detail drawer. From `useRowInspection`, whose other fields the page never reads. */
+    readonly onInspect: (row: TableRow | null) => void;
     readonly onOpenGenerateRows: () => void;
     readonly onSaveQuery: (name: string) => void;
     /** The loaded page. Non-null by construction — the parent renders this only once a page has arrived. */
@@ -296,7 +299,6 @@ const DataBrowserPage = ({
 
         {browser.viewMode === "table" && page.rows.length > 0 && !preferences.transposed && (
             <DataBrowserTableView
-                attachScroll={browser.table.attachScroll}
                 backRelationCounts={backRelations.counts}
                 edit={edit}
                 editable={editable}
@@ -304,17 +306,11 @@ const DataBrowserPage = ({
                 mask={preferences.maskView}
                 onDelete={browser.onRowDelete}
                 onEdit={browser.onRowEdit}
-                onInspect={preferences.onInspect}
+                onInspect={onInspect}
                 onTogglePin={preferences.onTogglePin}
                 pinnedColumns={preferences.pinnedColumns}
                 refs={references}
-                scrollLeft={browser.table.scrollLeft}
-                scrollToIndex={browser.table.scrollToIndex}
-                table={browser.table.table}
-                tableRows={browser.table.tableRows}
-                tbodyStyle={browser.table.tbodyStyle}
-                viewportWidth={browser.table.viewportWidth}
-                virtualRows={browser.table.virtualRows}
+                tableModel={browser.table}
             />
         )}
 
