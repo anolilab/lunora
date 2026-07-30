@@ -179,6 +179,15 @@ Prereqs: plan 114 phases 0–2 (contracts + TCK + engine extraction) for phase
 1 below; 114 phases 3–4 (deploy driver interface + codegen targets) for
 phases 3–5.
 
+One prereq is only half-done and phase 1 is where it bites: 114 §5.5 gates the
+emitted `ctx.*` surface on the target but **not the emitted host entry**, and
+`lunorash` depends on `@lunora/do` (hence `@lunora/platform-cloudflare`)
+unconditionally. So an `aws` target today would still emit a `ShardDO` subclass
+and still install the Cloudflare host. That is deliberate — with one host the
+switch would be a seam nothing exercises — but phase 1 must land it alongside the
+Node host, not assume it. See 114 §5.5 for why the fix is codegen (D1) rather
+than making `@lunora/platform-cloudflare` an optional dependency (D2).
+
 | Phase | Work                                                                                                                                                           | Gate                                                                                                      |
 | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | 0     | **Spikes (timeboxed):** (a) Rivet-as-ShardHost 2–3 days; (b) workerd-self-host sizing 1 day; (c) Litestream-style SQLite WAL→S3 restore drill 1–2 days         | Written verdict per spike; pick §2.3 hand-rolled vs. Rivet-backed                                         |

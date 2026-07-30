@@ -380,6 +380,30 @@ explicit)` is the single resolution point — flag, then config, then default.
 - Umbrella (`lunorash`) and granular imports both unaffected for the default
   target.
 
+**What target awareness does NOT yet cover — the other half of D1.** §5.5 gates
+the emitted `ctx.*` _surface_ on the target. It does not gate the emitted _host
+entry_, and two facts make that visible the moment a second target exists:
+
+1. `packages/codegen/src/emit.ts` emits the `ShardDO` subclass and the worker
+   entry **target-blind** — there is no target in that file. `--target aws` would
+   still generate a Durable Object.
+2. `lunorash` depends on `@lunora/do` unconditionally, and `@lunora/do` depends on
+   `@lunora/platform-cloudflare`. So every umbrella project installs the
+   Cloudflare host whatever its target says.
+
+Neither is a packaging bug to fix by making `@lunora/platform-cloudflare`
+optional: per D2 `@lunora/do` **is** the Cloudflare host, and a Cloudflare host
+that optionally depends on Cloudflare is incoherent. The switch belongs where D1
+put it — codegen emits the host entry for the selected target, so an AWS project
+gets the Node host and never pulls `@lunora/do` at all.
+
+Deliberately not built here. With one host it would be an abstraction nothing
+exercises, which is the failure mode this whole plan is organized against — the
+seam is only real once plan 115 phase 1 produces the Node host to switch to.
+Doing it then also answers the umbrella question with evidence rather than
+guesswork: either `lunorash` grows a host-free entry, or the target templates stop
+depending on the umbrella.
+
 ### 5.6 Docs + parity governance (S)
 
 - Document the platform contract + capability matrix in `packages/platform/docs/`
