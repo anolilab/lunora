@@ -202,13 +202,15 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         autocomplete={surface.autocompleteState}
                         diagnostics={diagnostics}
                         draft={draft}
+                        editorRef={surface.editorRef}
                         failed={failedRun}
+                        gutterRef={surface.gutterRef}
                         handlers={surface.handlers}
                         listboxId={surface.listboxId}
                         onGenerated={setDraft}
                         onPickSuggestion={surface.onPickSuggestion}
                         onRevealDiagnostic={surface.revealDiagnostic}
-                        refs={surface.refs}
+                        overlayRef={surface.overlayRef}
                     />
 
                     <SqlResultsPane

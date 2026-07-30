@@ -22,16 +22,19 @@ interface SqlEditorSurface {
     readonly autocompleteState: SqlAutocomplete["state"];
     /** Dismiss the popover — also called when the panel switches tabs. */
     readonly closeAutocomplete: () => void;
+
+    /**
+     * The textarea, plus the gutter and overlay that follow its scroll. Flat, not
+     * grouped: the React Compiler bails out of a component that reads a ref through a
+     * member access, which costs the editor pane its automatic memoization.
+     */
+    readonly editorRef: RefObject<HTMLTextAreaElement | null>;
+    readonly gutterRef: RefObject<HTMLDivElement | null>;
     readonly handlers: EditorHandlers;
     /** The listbox id the textarea owns through `aria-controls`. */
     readonly listboxId: string;
     readonly onPickSuggestion: (index: number) => void;
-    /** The gutter and overlay follow the textarea's scroll, so all three travel together. */
-    readonly refs: {
-        readonly editor: RefObject<HTMLTextAreaElement | null>;
-        readonly gutter: RefObject<HTMLDivElement | null>;
-        readonly overlay: RefObject<HTMLDivElement | null>;
-    };
+    readonly overlayRef: RefObject<HTMLDivElement | null>;
     /** Focus and select a diagnostic's span, so "unknown table `userz`" lands the caret on `userz`. */
     readonly revealDiagnostic: (diagnostic: SqlDiagnostic) => void;
 }
@@ -196,7 +199,9 @@ const useSqlEditorSurface = ({
         },
         listboxId,
         onPickSuggestion,
-        refs: { editor: editorRef, gutter: gutterRef, overlay: overlayRef },
+        editorRef,
+        gutterRef,
+        overlayRef,
         revealDiagnostic,
     };
 };

@@ -616,4 +616,4 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
 export { filterLogs, summarizeLogs };
 export type { LogFilterCriteria, LogsPanelProps, TimeRange };
 
-export {type LogSummary, type SummaryBucket} from "./logs-summary";
+export { type LogSummary, type SummaryBucket } from "./logs-summary";

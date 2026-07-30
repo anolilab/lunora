@@ -28,19 +28,29 @@ const SqlEditorPane = ({
     draft,
     failed,
     handlers,
+    editorRef,
+    gutterRef,
     listboxId,
     onGenerated,
     onPickSuggestion,
     onRevealDiagnostic,
-    refs,
+    overlayRef,
 }: {
     readonly assistant: SqlAssistant;
     /** The completion popover's state, or `null` when closed. */
     readonly autocomplete: SqlAutocomplete["state"];
     readonly diagnostics: ReadonlyArray<SqlDiagnostic>;
+
     readonly draft: string;
+
+    /**
+     * The three scroll-synced nodes. Separate props, not one object: the React Compiler
+     * bails out of the whole component when a ref reaches the JSX through a member access.
+     */
+    readonly editorRef: RefObject<HTMLTextAreaElement | null>;
     /** The active tab's last failed statement, which arms the assistant's "Fix this". */
     readonly failed?: { error: string; sql: string };
+    readonly gutterRef: RefObject<HTMLDivElement | null>;
     /** The textarea's event wiring — caret tracking, completion keys, and scroll sync. */
     readonly handlers: {
         onBlur: () => void;
@@ -53,12 +63,7 @@ const SqlEditorPane = ({
     readonly onGenerated: (sql: string) => void;
     readonly onPickSuggestion: (index: number) => void;
     readonly onRevealDiagnostic: (diagnostic: SqlDiagnostic) => void;
-    /** The gutter and overlay follow the textarea's scroll, so all three are needed together. */
-    readonly refs: {
-        editor: RefObject<HTMLTextAreaElement | null>;
-        gutter: RefObject<HTMLDivElement | null>;
-        overlay: RefObject<HTMLDivElement | null>;
-    };
+    readonly overlayRef: RefObject<HTMLDivElement | null>;
 }): ReactElement => {
     const t = useT();
     const lineCount = draft.split("\n").length;
@@ -70,7 +75,7 @@ const SqlEditorPane = ({
                 <div
                     aria-hidden="true"
                     className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
-                    ref={refs.gutter}
+                    ref={gutterRef}
                     style={GUTTER_STYLE}
                 >
                     {Array.from({ length: lineCount }, (_, index) => (
@@ -81,7 +86,7 @@ const SqlEditorPane = ({
                     overlay sits behind the (transparent) textarea, so an opaque
                     textarea would hide every squiggle. */}
                 <div className="relative min-w-0 flex-1 bg-background">
-                    <DiagnosticsOverlay diagnostics={diagnostics} draft={draft} scrollRef={refs.overlay} />
+                    <DiagnosticsOverlay diagnostics={diagnostics} draft={draft} scrollRef={overlayRef} />
                     <textarea
                         aria-activedescendant={autocomplete === null ? undefined : `${listboxId}-opt-${autocomplete.active.toString()}`}
                         aria-autocomplete="list"
@@ -96,7 +101,7 @@ const SqlEditorPane = ({
                         onScroll={handlers.onScroll}
                         onSelect={handlers.onSelect}
                         placeholder="SELECT * FROM …"
-                        ref={refs.editor}
+                        ref={editorRef}
                         role="combobox"
                         spellCheck={false}
                         value={draft}
