@@ -1,27 +1,26 @@
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent } from "../../components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricsSnapshot, ShardMetrics } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "../../lib/cf-links";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { loadRecentShards, recordShard } from "../../lib/shard-history";
 import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
+import { MetricsAggregateView } from "./metrics-aggregate-view";
+import { MetricsOverviewStats } from "./metrics-overview-stats";
 import { QueryInsightsRange } from "./query-insights-range";
-import { Sparkline } from "./sparkline";
 
 interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -33,24 +32,6 @@ const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
 /** Maximum number of samples retained in the rolling history window. */
 const MAX_HISTORY = 30;
 
-/** Render an elapsed-millisecond duration as `1h 2m`, `3m 4s`, or `5s`. */
-const formatDuration = (ms: number): string => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    if (hours > 0) {
-        return `${hours.toString()}h ${minutes.toString()}m`;
-    }
-
-    if (minutes > 0) {
-        return `${minutes.toString()}m ${seconds.toString()}s`;
-    }
-
-    return `${seconds.toString()}s`;
-};
-
 /**
  * The tab actually shown. The query-insights tab only exists while the active
  * shard/snapshot carries `queryStats`; if it vanishes while selected, fall back to
@@ -58,62 +39,6 @@ const formatDuration = (ms: number): string => {
  */
 const resolveTab = (hasQueryStats: boolean, activeTab: "overview" | "query-insights"): "overview" | "query-insights" =>
     hasQueryStats ? activeTab : "overview";
-
-/** Cache hit-rate as a percentage string, or `—` when there's been no traffic. */
-const hitRate = (hits: number, misses: number): string => {
-    const total = hits + misses;
-
-    return total === 0 ? "—" : `${((hits / total) * 100).toFixed(1)}%`;
-};
-
-/**
- * One labelled metric as a KPI card: an uppercase label on top, the value (with
- * an optional sparkline beside it), and an optional tinted footer band — the
- * studio's shared stat-card anatomy.
- */
-const StatCard = ({
-    chart,
-    footer,
-    label,
-    testId,
-    value,
-}: {
-    chart?: ReactNode;
-    footer?: ReactNode;
-    label: string;
-    testId?: string;
-    value: ReactNode;
-}): ReactElement => (
-    <Card className="justify-between gap-0 py-0">
-        <div className="flex flex-col gap-2.5 p-4">
-            <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{label}</span>
-            <div className="flex items-center justify-between gap-3">
-                <span className="truncate text-2xl font-semibold tabular-nums text-foreground" data-testid={testId}>
-                    {value}
-                </span>
-                {chart}
-            </div>
-        </div>
-        {footer != null && <div className="border-t border-border bg-muted/50 px-4 py-2.5 text-[11px] text-muted-foreground">{footer}</div>}
-    </Card>
-);
-
-/** A duration for display: `—` when there is none, microseconds under a millisecond. */
-const formatMs = (ms: number): string => {
-    if (ms <= 0) {
-        return "—";
-    }
-
-    if (ms < 1) {
-        return `${(ms * 1000).toFixed(0)}μs`;
-    }
-
-    if (ms < 1000) {
-        return `${ms.toFixed(1)}ms`;
-    }
-
-    return `${(ms / 1000).toFixed(2)}s`;
-};
 
 /**
  * Health snapshot for a single shard: request / error counts (since the DO last
@@ -131,7 +56,6 @@ const formatMs = (ms: number): string => {
  * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
  * remount.
  */
-// react-doctor-disable-next-line react-doctor/no-giant-component -- ~493 lines. Decomposing this is a real refactor with its own review, not a lint fix — deferred deliberately, and recorded under "Deferred" in plans/README.md's Wave 15 so it is not invisible
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -359,65 +283,13 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsightsRange shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && metrics !== null && (
-                <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">
-                    <StatCard
-                        chart={
-                            history.length >= 2 ? (
-                                <Sparkline
-                                    ariaLabel={t("Requests per interval over time")}
-                                    className="h-7 w-24 text-foreground"
-                                    series={history}
-                                    testId="mt-sparkline"
-                                />
-                            ) : undefined
-                        }
-                        footer={
-                            history.length >= 2 ? (
-                                <>
-                                    <span className="font-semibold text-foreground">{`+${currentDelta.toLocaleString()}`}</span> {t("last interval")}
-                                </>
-                            ) : (
-                                <span data-testid="mt-sparkline-empty">{t("collecting samples…")}</span>
-                            )
-                        }
-                        label={t("Requests")}
-                        testId="mt-requests"
-                        value={metrics.requests}
-                    />
-                    <StatCard
-                        footer={t("{rate} error rate", { rate: errorRate })}
-                        label={t("Errors")}
-                        testId="mt-errors"
-                        value={
-                            <>
-                                {metrics.errors} ({errorRate})
-                            </>
-                        }
-                    />
-                    <StatCard
-                        footer={latencyPercentiles.p90 > 0 ? `P90 ${formatMs(latencyPercentiles.p90)}` : undefined}
-                        label={t("P95 latency")}
-                        testId="mt-p95"
-                        value={latencyPercentiles.p95 > 0 ? formatMs(latencyPercentiles.p95) : "—"}
-                    />
-                    <StatCard
-                        footer={metrics.cache === null ? undefined : `${metrics.cache.entries.toLocaleString()} ${t("cache entries")}`}
-                        label={t("Database size")}
-                        testId="mt-db-size"
-                        value={formatBytes(metrics.databaseSize)}
-                    />
-                    <StatCard label={t("Shard")} testId="mt-shard" value={metrics.shard} />
-                    <StatCard label={t("Uptime")} testId="mt-uptime" value={formatDuration(metrics.uptimeMs)} />
-                    <StatCard
-                        label={t("Cache hit rate")}
-                        testId="mt-cache"
-                        value={
-                            metrics.cache === null
-                                ? t("no cache configured")
-                                : t("{rate} ({count} entries)", { count: metrics.cache.entries, rate: hitRate(metrics.cache.hits, metrics.cache.misses) })
-                        }
-                    />
-                </dl>
+                <MetricsOverviewStats
+                    currentDelta={currentDelta}
+                    errorRate={errorRate}
+                    history={history}
+                    latencyPercentiles={latencyPercentiles}
+                    metrics={metrics}
+                />
             )}
 
             {effectiveTab === "overview" && metrics === null && null}
@@ -430,60 +302,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             {effectiveTab === "overview" && <InstrumentsTable onOpenTrace={openTrace} shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
-                <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">
-                    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-aggregate-stats">
-                        <StatCard
-                            label={t("Shards")}
-                            testId="mt-agg-shards"
-                            value={
-                                aggregate.failed > 0
-                                    ? t("{reachable} reachable, {failed} unreachable", { failed: aggregate.failed, reachable: aggregate.reachable })
-                                    : t("{reachable} reachable", { reachable: aggregate.reachable })
-                            }
-                        />
-                        <StatCard label={t("Total requests")} testId="mt-agg-requests" value={aggregate.totalRequests} />
-                        <StatCard label={t("Total errors")} testId="mt-agg-errors" value={aggregate.totalErrors} />
-                        <StatCard label={t("Total database size")} testId="mt-agg-db-size" value={formatBytes(aggregate.totalDatabaseSize)} />
-                        <StatCard
-                            label={t("Combined cache hit rate")}
-                            testId="mt-agg-cache"
-                            value={aggregate.hitRate === null ? t("no cache configured") : `${(aggregate.hitRate * 100).toFixed(1)}%`}
-                        />
-                    </dl>
-
-                    <Card className="overflow-hidden py-0">
-                        <CardContent className="px-0">
-                            <Table data-testid="mt-agg-table">
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>{t("shard")}</TableHead>
-                                        <TableHead>{t("requests")}</TableHead>
-                                        <TableHead>{t("errors")}</TableHead>
-                                        <TableHead>{t("db size")}</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {shardResults.map((result) => (
-                                        <TableRow data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
-                                            <TableCell>{result.shard}</TableCell>
-                                            {result.metrics === null ? (
-                                                <TableCell className="text-destructive" colSpan={3}>
-                                                    {result.error ?? t("unreachable")}
-                                                </TableCell>
-                                            ) : (
-                                                <>
-                                                    <TableCell className="tabular-nums">{result.metrics.requests}</TableCell>
-                                                    <TableCell className="tabular-nums">{result.metrics.errors}</TableCell>
-                                                    <TableCell className="tabular-nums">{formatBytes(result.metrics.databaseSize)}</TableCell>
-                                                </>
-                                            )}
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                </div>
+                <MetricsAggregateView aggregate={aggregate} shardResults={shardResults} />
             )}
         </div>
     );
