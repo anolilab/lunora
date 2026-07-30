@@ -26,6 +26,7 @@ const MESSAGE_IDS = [
     "Usage",
     "Approval",
     "Score your app's advisor findings: a grade, the coverage split, and every procedure ranked worst-first.",
+    "Health score",
     "Rules fired",
     "Procedure",
     "Score",
