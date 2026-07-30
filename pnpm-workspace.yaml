@@ -500,6 +500,15 @@ catalogs:
     "@visulima/free-email-domains": 1.0.0
     "@visulima/email-verifier": 1.0.1
 
+# multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
+# to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
+# commits that. pnpm 10+ defaults `linkWorkspacePackages` to false, which makes
+# those pins resolve from the npm registry instead of the local package — so a
+# lockfile refresh would silently swap workspace sources for published tarballs
+# and `preferWorkspacePackages` below would be inert (it only applies once
+# linking is enabled). Keep this true so released pins still link locally.
+linkWorkspacePackages: true
+
 preferWorkspacePackages: true
 
 saveExact: true
