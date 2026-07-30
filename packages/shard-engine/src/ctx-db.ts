@@ -82,6 +82,8 @@ import { NotFoundError } from "./not-found-error";
 import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
+import type { IndexKeyEntry, KeyRange } from "./read-write-set";
+import { buildIndexRange, indexKeysForRow } from "./read-write-set";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
@@ -110,6 +112,7 @@ import type {
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
+import type { TransactionHeadroomTracker } from "./transaction-headroom";
 import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 import { runTriggers } from "./triggers";
 import type { WhereSqlStrategy } from "./where-sql";
@@ -245,6 +248,15 @@ interface CtxDbOptions {
      * global side leaves the local row gone — document at the call site.
      */
     globalDb?: DatabaseWriterLike;
+
+    /**
+     * Per-transaction resource meter. When supplied, reads and writes are
+     * charged against its ceilings and the transaction is stopped with
+     * `TRANSACTION_LIMIT_EXCEEDED` once one is crossed. Omit it for the legacy
+     * unmetered behaviour.
+     */
+    headroom?: TransactionHeadroomTracker;
+
     idGenerator?: IdGenerator;
 
     /**
@@ -259,6 +271,13 @@ interface CtxDbOptions {
     maxRelationKeys?: number;
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
+
+    /**
+     * Reports the contiguous index slice a fluent read was confined to.
+     * Omit it and every indexed read falls back to the whole-table dep — the
+     * pre-range behaviour, and still correct, just less selective.
+     */
+    onReadRange?: (range: KeyRange) => void;
     onWrite?: WriteHook;
 
     /**
@@ -1043,7 +1062,14 @@ const normalizeIdStructurally = (schema: SchemaLike, tableName: string, id: stri
     return id;
 };
 
-const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onIndexUse: IndexUseHook = () => undefined): TableReaderLike => {
+const buildReader = (
+    sql: SqlExec,
+    schema: SchemaLike,
+    tableName: string,
+    onIndexUse: IndexUseHook = () => undefined,
+    onTerminal: (range: KeyRange | undefined) => void = () => undefined,
+    meterRows: (count: number) => void = () => undefined,
+): TableReaderLike => {
     const tableDefinition = schema.tables[tableName];
 
     if (!tableDefinition) {
@@ -1135,16 +1161,51 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         );
     };
 
+    /**
+     * Report this read's dependency footprint, once per terminal.
+     *
+     * Deferred to the terminal on purpose: at `ctx.db.query(table)` time the
+     * chain has not yet revealed whether it will end in `.withIndex(...)`, so
+     * the old eager stamp had to assume the whole table. Here the staged plan
+     * is final, so an indexed read can report the exact slice it touched.
+     *
+     * Search and geo terminals read through their own companion structures
+     * rather than the index range, and a `limit` only ever narrows what was
+     * read WITHIN the slice — so the slice stays a correct upper bound on the
+     * read either way. Anything not provably confined reports `undefined`,
+     * which the caller turns back into the conservative whole-table dep.
+     */
+    const stampTerminal = (): void => {
+        if (stage.search || stage.geo || stage.indexName === undefined) {
+            onTerminal(undefined);
+
+            return;
+        }
+
+        onTerminal(buildIndexRange(tableName, stage.indexName, stage.indexFields, stage.sqlConditions, serializeSqlValue));
+    };
+
     const runFetch = (limit: number | undefined): Record<string, unknown>[] => {
-        if (stage.search) {
-            return runSearchFetch(limit);
-        }
+        stampTerminal();
 
-        if (stage.geo) {
-            return runGeoTerminal(sql, tableName, stage, scopeCondition, limit);
-        }
+        // The fluent reader stamps ONE range dep for the whole read rather than
+        // a dep per row, so the read-hook meter cannot see its size — charge
+        // the rows here instead.
+        const rows = ((): Record<string, unknown>[] => {
+            if (stage.search) {
+                return runSearchFetch(limit);
+            }
 
-        return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit);
+            if (stage.geo) {
+                return runGeoTerminal(sql, tableName, stage, scopeCondition, limit);
+            }
+
+            return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit);
+        })();
+
+        meterRows(rows.length);
+
+        return rows;
     };
 
     const reader: TableReaderLike = {
@@ -1223,15 +1284,27 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
+            // Neither pagination branch routes through `runFetch`, so stamp
+            // here rather than relying on it.
+            stampTerminal();
+
             if (stage.search) {
-                return paginateSearchStage(options);
+                const searchPage = paginateSearchStage(options);
+
+                meterRows(searchPage.page.length);
+
+                return searchPage;
             }
 
             if (stage.geo) {
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            return paginateStage(sql, tableName, stage, options, scopeCondition);
+            const page = paginateStage(sql, tableName, stage, options, scopeCondition);
+
+            meterRows(page.page.length);
+
+            return page;
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async take(limit) {
@@ -1522,9 +1595,76 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
-    const onRead = options.onRead ?? (() => undefined);
+
+    /**
+     * The index positions a written row occupies, unioned across the images
+     * supplied. Callers pass BOTH the before- and after-image of a patch: a
+     * row that moves between slices must wake subscribers on the slice it left
+     * as well as the one it entered, and only the outgoing image can prove the
+     * former.
+     *
+     * Returns `undefined` when no image is available (the position is then
+     * unknown), which makes the cache drop every range dependency on the table
+     * — the same conservative behaviour as before ranges existed.
+     */
+    const rowIndexKeys = (tableName: string, ...images: (Record<string, unknown> | undefined)[]): IndexKeyEntry[] | undefined => {
+        const indexes = schema.tables[tableName]?.indexes;
+
+        if (!indexes || indexes.length === 0) {
+            return undefined;
+        }
+
+        const entries: IndexKeyEntry[] = [];
+
+        for (const image of images) {
+            if (image) {
+                entries.push(...indexKeysForRow(indexes, image, serializeSqlValue));
+            }
+        }
+
+        return entries.length > 0 ? entries : undefined;
+    };
+
+    const { headroom } = options;
+    const reportRead = options.onRead ?? (() => undefined);
+    // An unwired host must degrade to the whole-table dep, NOT to silence: the
+    // terminal reports either a range or a scan, so dropping the range would
+    // leave an indexed read with no dependency at all — it would never
+    // invalidate, which is the one failure this whole design must not have.
+    const onReadRange =
+        options.onReadRange ??
+        ((range: KeyRange) => {
+            reportRead(range.table, SCAN_DEP);
+        });
+
+    /**
+     * Charge reads as they are stamped. The object-form readers (`get`,
+     * `findFirst`, `findMany`) stamp one dependency per row, so counting those
+     * IS the row count. Marker deps — `SCAN_DEP` and the `~r:` range suffix —
+     * describe a read's SHAPE, not its size, and would each otherwise be
+     * miscounted as a single row; the fluent reader meters its own terminals
+     * instead (see `meterRows` in `buildReader`).
+     */
+    const onRead: ReadHook = (table, idOrScan) => {
+        if (idOrScan !== undefined && idOrScan !== SCAN_DEP) {
+            headroom?.recordRead(1);
+        }
+
+        reportRead(table, idOrScan);
+    };
     const onIndexUse = options.onIndexUse ?? (() => undefined);
-    const onWrite = options.onWrite ?? (() => undefined);
+    const reportWrite = options.onWrite ?? (() => undefined);
+
+    /**
+     * Charge writes on the same hook every write path already awaits, so no
+     * mutation can bypass the meter. A delete carries no document: it still
+     * costs a row, just no bytes.
+     */
+    const onWrite: WriteHook = async (event) => {
+        headroom?.recordWrite(event.doc);
+
+        await reportWrite(event);
+    };
     const { cache } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
@@ -1837,7 +1977,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         syncSearch,
     } = createCompanionSync({
         broadcast,
-        invalidateCache: (table, id) => cache?.invalidate(table, id),
+        indexKeysFor: (table, document) => rowIndexKeys(table, document),
+        invalidateCache: (table, id, document) => cache?.invalidate(table, id, rowIndexKeys(table, document)),
         recordCdc,
         schema,
         sql,
@@ -2237,10 +2378,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 syncAggregates(tableName, existing, merged);
                 syncRanks(tableName, id, existing, undefined);
 
-                cache?.invalidate(tableName, id);
+                cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing, merged));
 
                 recordCdc(tableName, id, "update", merged);
-                broadcast({ key: id, op: "update", row: merged, table: tableName });
+                broadcast({ indexKeys: rowIndexKeys(tableName, existing, merged), key: id, op: "update", row: merged, table: tableName });
 
                 // `delete()` was called, so fire the DELETE triggers (the flag flip
                 // is an implementation detail of how the delete is recorded).
@@ -2274,10 +2415,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             syncAggregates(tableName, existing, undefined);
             syncRanks(tableName, id, existing, undefined);
 
-            cache?.invalidate(tableName, id);
+            cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing));
 
             recordCdc(tableName, id, "delete");
-            broadcast({ key: id, op: "delete", table: tableName });
+            broadcast({ indexKeys: rowIndexKeys(tableName, existing), key: id, op: "delete", table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
                 await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
@@ -2752,7 +2893,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // local path uses (the DO maps it to `recordChangedTable`). Without
                 // this, `ctx.db.insert("<global>", …)` would never push a delta to
                 // subscribers of that global table's query.
-                broadcast({ key: id, op: "insert", row: { ...document, _id: id }, table: tableName });
+                broadcast({
+                    indexKeys: rowIndexKeys(tableName, { ...document, _id: id }),
+                    key: id,
+                    op: "insert",
+                    row: { ...document, _id: id },
+                    table: tableName,
+                });
 
                 return id;
             }
@@ -2845,7 +2992,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // eslint-disable-next-line no-await-in-loop -- the D1 global writer has no batch primitive; sequential per row
                     const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
 
-                    broadcast({ key: globalId, op: "insert", row: { ...document, _id: globalId }, table: tableName });
+                    broadcast({
+                        indexKeys: rowIndexKeys(tableName, { ...document, _id: globalId }),
+                        key: globalId,
+                        op: "insert",
+                        row: { ...document, _id: globalId },
+                        table: tableName,
+                    });
                     globalIds.push(globalId);
                 }
 
@@ -2877,6 +3030,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 return { creationTime, document: { ...withDefaults, _creationTime: creationTime, _id: id }, id };
             });
+
+            // Charge the batch BEFORE it is written. `onWrite` fires per row
+            // only after the multi-row INSERT has already landed, so metering
+            // there would let one oversized batch materialize in full — which
+            // is exactly the isolate exhaustion the meter exists to prevent.
+            for (const row of rows) {
+                headroom?.recordWrite(row.document);
+            }
 
             // ONE multi-row INSERT — the throughput win over `insertMany`'s N
             // single-row statements (and the skipped per-row JS pipeline).
@@ -3005,11 +3166,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             // A patch can flip a row from matching to not-matching (or vice
             // versa) any scan-shaped predicate — `invalidate` blows both the
-            // row's per-id deps AND the `*scan` bucket on this table.
-            cache?.invalidate(tableName, id);
+            // row's per-id deps AND the `*scan` bucket on this table. Passing
+            // both images additionally covers a patch that MOVES the row
+            // between index slices: the slice it left is only derivable from
+            // the before-image.
+            cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing, merged));
 
             recordCdc(tableName, id, "update", merged);
-            broadcast({ key: id, op: "update", row: merged, table: tableName });
+            broadcast({ indexKeys: rowIndexKeys(tableName, existing, merged), key: id, op: "update", row: merged, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -3086,14 +3250,32 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return global.query(tableName);
             }
 
-            // Fluent reader chain: we can't tell up front whether the caller
-            // will end with `.withIndex(...)` or a bare scan, so we stamp the
-            // safe upper bound (`*scan`). Future refinement would push the
-            // hook into `buildReader`'s terminal `runFetch` so an indexed read
-            // can record per-id deps.
-            onRead(tableName, SCAN_DEP);
-
-            return buildReader(sql, schema, tableName, onIndexUse);
+            // The dependency is stamped by the reader's TERMINAL, not here:
+            // at this point the chain has not yet revealed whether it will end
+            // with `.withIndex(...)`, and stamping the safe upper bound
+            // (`*scan`) eagerly is what made every live query on this table
+            // re-run on every write to it. An indexed read now records the
+            // contiguous slice it actually touched; anything not provably
+            // confined falls back to the same `*scan` dep as before.
+            return buildReader(
+                sql,
+                schema,
+                tableName,
+                onIndexUse,
+                (range) => {
+                    // A provable slice goes to the dedicated range channel; an
+                    // unnarrowable read keeps the whole-table dep. Ranges are
+                    // NEVER encoded into `onRead`'s id slot — a document id is
+                    // arbitrary user data, so a range smuggled through the same
+                    // string space could be forged by an id shaped like one.
+                    if (range) {
+                        onReadRange(range);
+                    } else {
+                        onRead(tableName, SCAN_DEP);
+                    }
+                },
+                (count) => headroom?.recordRead(count),
+            );
         },
 
         async rank(tableName, indexName, rankOptions) {
@@ -3405,10 +3587,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             syncAggregates(tableName, previous, replaced);
             syncRanks(tableName, id, previous, replaced);
 
-            cache?.invalidate(tableName, id);
+            cache?.invalidate(tableName, id, rowIndexKeys(tableName, previous, replaced));
 
             recordCdc(tableName, id, "update", replaced);
-            broadcast({ key: id, op: "update", row: replaced, table: tableName });
+            broadcast({ indexKeys: rowIndexKeys(tableName, previous, replaced), key: id, op: "update", row: replaced, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });

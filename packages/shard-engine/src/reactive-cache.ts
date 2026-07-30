@@ -48,6 +48,9 @@
 
 import { stableWireKey } from "../../../shared/wire-key";
 import { depKey, SCAN_DEP } from "./dependency-tracker";
+import { estimateBytes } from "./estimate-bytes";
+import type { IndexKeyEntry, KeyRange } from "./read-write-set";
+import { keysTouchRanges } from "./read-write-set";
 
 /** A single memoized result, the deps it read, and any active subscribers. */
 interface CacheEntry {
@@ -57,6 +60,8 @@ interface CacheEntry {
     deps: Set<string>;
     /** Monotonic touch timestamp for LRU ordering. */
     lastUsed: number;
+    /** Index slices this entry was read through; a write inside one invalidates it. */
+    ranges: ReadonlyArray<KeyRange>;
     /** Whatever the handler resolved to. */
     result: unknown;
     /** Subscriber ids interested in re-runs when this entry invalidates. */
@@ -89,33 +94,21 @@ const DEFAULT_MAX_ENTRIES = 1000;
 
 const DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 
-/**
- * Conservative size estimate for a cached result. We don't need byte-accurate
- * accounting — the cap is a rough back-pressure mechanism, not a hard limit
- * the runtime enforces. `JSON.stringify` already runs on most results inside
- * the WS push path, so the overhead is amortized.
- */
-const estimateBytes = (value: unknown): number => {
-    if (value === undefined || value === null) {
-        return 0;
-    }
-
-    try {
-        return JSON.stringify(value).length;
-    } catch {
-        // Circular structure or unsupported value — assume worst case so it
-        // gets evicted promptly. The handler should never have produced a
-        // value the WS layer can't serialize anyway.
-        return DEFAULT_MAX_BYTES;
-    }
-};
-
 class ReactiveCache {
     /** key -> entry. Map insertion order doubles as LRU order. */
     private readonly entries: Map<string, CacheEntry> = new Map<string, CacheEntry>();
 
     /** `table:id` (or `table:*scan`) -> set of cache keys that depend on it. */
     private readonly tableIndex: Map<string, Set<string>> = new Map<string, Set<string>>();
+
+    /**
+     * table -> the index slices cached entries were read through, mapped to the
+     * cache keys depending on each. Held as STRUCTURED ranges, never re-parsed
+     * out of a dep string: a document id is arbitrary user data, so any scheme
+     * that encoded ranges into the same string space as row deps could be
+     * forged by an id shaped like a range.
+     */
+    private readonly rangeIndex: Map<string, Map<KeyRange, Set<string>>> = new Map<string, Map<KeyRange, Set<string>>>();
 
     /** Cumulative byte charge across `entries`. Tracked incrementally. */
     private totalBytes: number = 0;
@@ -160,7 +153,8 @@ class ReactiveCache {
      * responsible for collecting `deps` via a `DependencyTracker` during
      * the callback and handing the same set in here — the cache stores the
      * reference verbatim, so the caller MUST stop mutating it after this
-     * call returns.
+     * call returns. `ranges` is a thunk for the same reason `deps` is a live
+     * set: the footprint is only final once the callback has run.
      *
      * The callback is awaited inside the cache so concurrent callers for the
      * same key still race the underlying handler — a real Convex-style
@@ -169,7 +163,7 @@ class ReactiveCache {
      * two callers arrive on the same tick. The single-DO concurrency model
      * makes that race vanishingly rare in practice.
      */
-    public async run<R>(key: string, deps: Set<string>, run: () => Promise<R>): Promise<R> {
+    public async run<R>(key: string, deps: Set<string>, run: () => Promise<R>, ranges: () => ReadonlyArray<KeyRange> = () => []): Promise<R> {
         const existing = this.entries.get(key);
 
         if (existing) {
@@ -184,10 +178,14 @@ class ReactiveCache {
 
         this.misses += 1;
         const result = await run();
-        const bytes = estimateBytes(result);
+        // Evaluated AFTER the callback: like `deps`, the read's footprint is
+        // only complete once the handler has actually run.
+        const readRanges = ranges();
+        const bytes = estimateBytes(result, DEFAULT_MAX_BYTES);
         const entry: CacheEntry = {
             bytes,
             deps,
+            ranges: readRanges,
             lastUsed: this.now(),
             result,
             subscribers: new Set<string>(),
@@ -207,6 +205,24 @@ class ReactiveCache {
             bucket.add(key);
         }
 
+        for (const range of readRanges) {
+            let byRange = this.rangeIndex.get(range.table);
+
+            if (!byRange) {
+                byRange = new Map<KeyRange, Set<string>>();
+                this.rangeIndex.set(range.table, byRange);
+            }
+
+            let keys = byRange.get(range);
+
+            if (!keys) {
+                keys = new Set<string>();
+                byRange.set(range, keys);
+            }
+
+            keys.add(key);
+        }
+
         this.evict();
 
         return result;
@@ -218,20 +234,22 @@ class ReactiveCache {
      * caller can re-run their subscribers — see `ShardDO#flushChangedTables`
      * for the wired-up consumer.
      */
-    public invalidate(table: string, id: string): string[] {
+    public invalidate(table: string, id: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): string[] {
         const removed: string[] = [];
 
         this.collectAndDrop(depKey(table, id), removed);
         this.collectAndDrop(depKey(table, SCAN_DEP), removed);
+        this.dropRangeDeps(table, indexKeys, removed);
 
         return removed;
     }
 
     /**
-     * Nuke every entry that depends on `table` in any form (rows + `*scan`).
-     * Wired in by the writer for operations that can't pinpoint a row id
-     * (e.g. bulk truncate). For the common single-row write path, prefer
-     * {@link invalidate} so per-id entries on other rows survive.
+     * Nuke every entry that depends on `table` in any form — rows, `*scan`, and
+     * every index slice read on it. Wired in by the writer for operations that
+     * can't pinpoint a row id (e.g. bulk truncate). For the common single-row
+     * write path, prefer {@link invalidate} so per-id entries on other rows
+     * survive.
      */
     public invalidateTable(table: string): string[] {
         const removed: string[] = [];
@@ -242,6 +260,11 @@ class ReactiveCache {
                 this.collectAndDrop(dep, removed);
             }
         }
+
+        // Ranges live in their own index, so the prefix sweep above cannot see
+        // them. Passing no index keys means "position unknown", which drops
+        // every slice on the table — exactly the intent of a table-wide nuke.
+        this.dropRangeDeps(table, undefined, removed);
 
         return removed;
     }
@@ -283,6 +306,7 @@ class ReactiveCache {
     public clear(): void {
         this.entries.clear();
         this.tableIndex.clear();
+        this.rangeIndex.clear();
         this.totalBytes = 0;
     }
 
@@ -313,6 +337,41 @@ class ReactiveCache {
             hits: this.hits,
             misses: this.misses,
         };
+    }
+
+    /**
+     * Drop the range dependencies on `table` that the written row's positions
+     * fall inside. With `indexKeys` undefined the position is unknown, so every
+     * range on the table goes — never fewer, since a missed invalidation would
+     * serve stale data while a surplus one only costs a re-run.
+     */
+    private dropRangeDeps(table: string, indexKeys: ReadonlyArray<IndexKeyEntry> | undefined, removed: string[]): void {
+        const byRange = this.rangeIndex.get(table);
+
+        if (!byRange || byRange.size === 0) {
+            return;
+        }
+
+        // Snapshot the pairs: dropping an entry mutates `rangeIndex` underneath.
+        for (const [range, keys] of byRange) {
+            // `keysTouchRanges` carries the conservative rule: absent keys, or a
+            // range over an index the write produced no key for, count as
+            // touched. Testing containment directly would silently KEEP a range
+            // whose index had an unencodable component — a missed invalidation,
+            // i.e. stale data.
+            if (!keysTouchRanges([range], indexKeys)) {
+                continue;
+            }
+
+            for (const key of keys) {
+                const entry = this.entries.get(key);
+
+                if (entry) {
+                    this.dropEntry(key, entry);
+                    removed.push(key);
+                }
+            }
+        }
     }
 
     /** Pull `dep`'s bucket from the index and remove every entry in it. */
@@ -351,6 +410,23 @@ class ReactiveCache {
 
             if (bucket.size === 0) {
                 this.tableIndex.delete(dep);
+            }
+        }
+
+        for (const range of entry.ranges) {
+            const byRange = this.rangeIndex.get(range.table);
+            const keys = byRange?.get(range);
+
+            keys?.delete(key);
+
+            // A range is unregistered only once NO entry depends on it, so one
+            // shared by several cached queries survives until the last is gone.
+            if (byRange && keys?.size === 0) {
+                byRange.delete(range);
+
+                if (byRange.size === 0) {
+                    this.rangeIndex.delete(range.table);
+                }
             }
         }
     }

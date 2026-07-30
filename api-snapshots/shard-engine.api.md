@@ -305,6 +305,7 @@ interface CacheEntry {
     bytes: number;
     deps: Set<string>;
     lastUsed: number;
+    ranges: ReadonlyArray<KeyRange>;
     result: unknown;
     subscribers: Set<string>;
 }
@@ -339,6 +340,12 @@ interface CdcChange {
     table: string;
     ts: number;
 }
+```
+
+### `ChangedKeys` (type)
+
+```ts
+type ChangedKeys = Map<string, IndexKeyEntry[] | undefined>;
 ```
 
 ### `Clock` (type)
@@ -394,7 +401,11 @@ interface CompanionSync {
 ```ts
 interface CompanionSyncDeps {
     broadcast: (delta: MutationDelta) => void;
-    invalidateCache: (table: string, id: string) => void;
+    indexKeysFor: (table: string, document?: Record<string, unknown>) => ReadonlyArray<{
+        index: string;
+        key: string;
+    }> | undefined;
+    invalidateCache: (table: string, id: string, document?: Record<string, unknown>) => void;
     recordCdc: (table: string, id: string, op: "delete" | "insert" | "update", doc?: Record<string, unknown>) => void;
     schema: SchemaLike;
     sql: SqlExec;
@@ -450,10 +461,12 @@ interface CtxDbOptions {
     clock?: Clock;
     enforceRls?: boolean;
     globalDb?: DatabaseWriterLike;
+    headroom?: TransactionHeadroomTracker;
     idGenerator?: IdGenerator;
     maxRelationKeys?: number;
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
+    onReadRange?: (range: KeyRange) => void;
     onWrite?: WriteHook;
     relationExistsPushDown?: "always" | "auto" | "never";
     scheduler?: SchedulerLike;
@@ -491,6 +504,12 @@ const DEFAULT_MAX_RELAYS = 8;
 
 ```ts
 const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds;
+```
+
+### `DEFAULT_TRANSACTION_LIMITS` (const)
+
+```ts
+const DEFAULT_TRANSACTION_LIMITS: TransactionLimits;
 ```
 
 ### `DOC_COLUMN` (const)
@@ -1020,6 +1039,15 @@ interface IndexDefinitionLike {
 }
 ```
 
+### `IndexKeyEntry` (interface)
+
+```ts
+interface IndexKeyEntry {
+    index: string;
+    key: string;
+}
+```
+
 ### `IndexRangeBuilderLike` (interface)
 
 ```ts
@@ -1029,6 +1057,17 @@ interface IndexRangeBuilderLike {
     gte: (field: string, value: unknown) => IndexRangeBuilderLike;
     lt: (field: string, value: unknown) => IndexRangeBuilderLike;
     lte: (field: string, value: unknown) => IndexRangeBuilderLike;
+}
+```
+
+### `KeyRange` (interface)
+
+```ts
+interface KeyRange {
+    hi: string;
+    index: string;
+    lo: string;
+    table: string;
 }
 ```
 
@@ -1150,6 +1189,7 @@ interface MigrationStatusRow {
 
 ```ts
 interface MutationDelta {
+    indexKeys?: ReadonlyArray<IndexKeyEntry>;
     key: string;
     op: "insert" | "update" | "delete";
     row?: Record<string, unknown>;
@@ -1558,8 +1598,8 @@ interface RankSortKeyLike {
 ```ts
 class ReactiveCache {
     constructor(options?: ReactiveCacheOptions);
-    run<R>(key: string, deps: Set<string>, run: () => Promise<R>): Promise<R>;
-    invalidate(table: string, id: string): string[];
+    run<R>(key: string, deps: Set<string>, run: () => Promise<R>, ranges?: () => ReadonlyArray<KeyRange>): Promise<R>;
+    invalidate(table: string, id: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): string[];
     invalidateTable(table: string): string[];
     subscribe(key: string, subscriberId: string): void;
     unsubscribe(key: string, subscriberId: string): void;
@@ -1586,6 +1626,17 @@ interface ReactiveCacheOptions {
     maxBytes?: number;
     maxEntries?: number;
     now?: () => number;
+}
+```
+
+### `ReadFootprint` (interface)
+
+```ts
+interface ReadFootprint {
+    onRead: (table: string, idOrScan?: string) => void;
+    onReadRange: (range: KeyRange) => void;
+    ranges: () => Map<string, KeyRange[]> | undefined;
+    tables: Set<string>;
 }
 ```
 
@@ -2392,6 +2443,15 @@ interface SubscriptionQuery {
 }
 ```
 
+### `SubscriptionReadFootprint` (interface)
+
+```ts
+interface SubscriptionReadFootprint {
+    ranges?: Map<string, KeyRange[]>;
+    tables: Set<string>;
+}
+```
+
 ### `SubscriptionsResult` (interface)
 
 ```ts
@@ -2557,6 +2617,40 @@ interface TableReaderLike {
 ```ts
 interface TablesColumnsResult {
     columnsByTable: Record<string, ColumnMeta[]>;
+}
+```
+
+### `TransactionHeadroom` (interface)
+
+```ts
+interface TransactionHeadroom {
+    readRows: number;
+    remainingReadRows: number;
+    remainingWrittenBytes: number;
+    remainingWrittenRows: number;
+    writtenBytes: number;
+    writtenRows: number;
+}
+```
+
+### `TransactionHeadroomTracker` (class)
+
+```ts
+class TransactionHeadroomTracker {
+    constructor(limits?: Partial<TransactionLimits>);
+    recordRead(count: number): void;
+    recordWrite(row: unknown): void;
+    headroom(): TransactionHeadroom;
+}
+```
+
+### `TransactionLimits` (interface)
+
+```ts
+interface TransactionLimits {
+    maxReadRows: number;
+    maxWrittenBytes: number;
+    maxWrittenRows: number;
 }
 ```
 
@@ -2849,6 +2943,12 @@ const boundingBoxCenter: (box: GeoBoundingBox) => GeoPoint;
 const boundingBoxGeohashes: (box: GeoBoundingBox) => string[];
 ```
 
+### `buildIndexRange` (const)
+
+```ts
+const buildIndexRange: (table: string, index: string, fields: ReadonlyArray<string>, conditions: ReadonlyArray<StagedCondition>, serialize: (value: unknown) => unknown) => KeyRange | undefined;
+```
+
 ### `buildPokeFrames` (const)
 
 ```ts
@@ -2955,6 +3055,12 @@ const createFanoutCounters: () => FanoutPathCounters;
 
 ```ts
 const createIndexSql: (name: string, table: string, columns: SQL, unique: boolean) => SQL;
+```
+
+### `createReadFootprint` (const)
+
+```ts
+const createReadFootprint: () => ReadFootprint;
 ```
 
 ### `createRelayLink` (const)
@@ -3140,6 +3246,15 @@ const hydrateDocsById: (deps: RankPageDeps, tableName: string, ids: ReadonlyArra
 const importShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs) => Promise<ImportShardResult>;
 ```
 
+### `indexKeysForRow` (const)
+
+```ts
+const indexKeysForRow: (indexes: ReadonlyArray<{
+    fields: ReadonlyArray<string>;
+    name: string;
+}>, row: Record<string, unknown>, serialize: (value: unknown) => unknown) => IndexKeyEntry[];
+```
+
 ### `isDevEnvironment` (const)
 
 ```ts
@@ -3186,6 +3301,12 @@ const jsonPath: (field: string) => string;
 
 ```ts
 const jsonPathSql: (field: string) => SQL;
+```
+
+### `keysTouchRanges` (const)
+
+```ts
+const keysTouchRanges: (ranges: ReadonlyArray<KeyRange> | undefined, keys: ReadonlyArray<IndexKeyEntry> | undefined) => boolean;
 ```
 
 ### `liftSourceId` (const)
@@ -3238,6 +3359,12 @@ const materializeExternalRowsIncremental: (writer: DatabaseWriterLike, pulled: R
     deletedIds?: ReadonlySet<string>;
     table: string;
 }) => Promise<IncrementalMaterializeResult>;
+```
+
+### `mergeChangedKeys` (const)
+
+```ts
+const mergeChangedKeys: (pending: ChangedKeys | undefined, incoming: ChangedKeys | undefined, changed: Set<string>) => ChangedKeys;
 ```
 
 ### `mergeWhere` (const)
@@ -3547,6 +3674,12 @@ const readTablePage: (sql: SqlExec, options: ReadTablePageOptions) => TablePage;
 const recordCapturedMail: (sql: SqlExec, input: RecordMailInput, capturedAt: number) => {
     id: string;
 };
+```
+
+### `recordChangedKeys` (const)
+
+```ts
+const recordChangedKeys: (pending: ChangedKeys | undefined, table: string, indexKeys: ReadonlyArray<IndexKeyEntry> | undefined) => ChangedKeys;
 ```
 
 ### `recordFanoutPass` (const)
@@ -3864,6 +3997,12 @@ const writeIdempotent: (sql: SqlExec, identity: string, mutationId: string, resu
 
 ```ts
 const writeSearchBackfillState: (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string) => void;
+```
+
+### `writeTouchesMemo` (const)
+
+```ts
+const writeTouchesMemo: (memo: SubscriptionReadFootprint, changed: Set<string>, changedKeys: ChangedKeys | undefined) => boolean;
 ```
 
 ## `@lunora/shard-engine/conformance`

@@ -57,6 +57,7 @@ export type {
     MigrationStatusRow,
     RunDataMigrationOptions,
 } from "@lunora/shard-engine";
+export type { IndexKeyEntry, KeyRange } from "@lunora/shard-engine";
 export type { ExternalSourceDiffResult } from "@lunora/shard-engine";
 export type { IncrementalMaterializeResult, MaterializeResult } from "@lunora/shard-engine";
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "@lunora/shard-engine";
@@ -184,6 +185,7 @@ export type { CacheEntry, ReactiveCacheOptions } from "@lunora/shard-engine";
 export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
+export { createReadFootprint } from "@lunora/shard-engine";
 export {
     exportShardRows,
     exportShardTable,

@@ -2117,7 +2117,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `IndexKeyEntry` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `IndexRangeBuilderLike` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `KeyRange` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2766,6 +2774,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `createDependencyTracker` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `createReadFootprint` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
