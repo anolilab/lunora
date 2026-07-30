@@ -19,9 +19,9 @@ import { join } from "node:path";
 
 import { containerBuildTag } from "@lunora/container";
 
-import { DEV_VARS_FILE, parseDevVariableEntries } from "./dev-variables-format";
-import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "./infer-bindings";
-import { applyModify } from "./jsonc-edit";
+import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
+import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "../infer-bindings";
+import { applyModify } from "../jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 /**

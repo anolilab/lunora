@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "../src/wrangler-secret-variables";
+import { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "../src/cloudflare/wrangler-secret-variables";
 
 describe("scanWranglerVariablesForSecrets", () => {
     it("flags a value that matches a known secret shape", () => {

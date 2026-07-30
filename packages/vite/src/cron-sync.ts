@@ -8,5 +8,5 @@
  * so this module stays the Vite plugin's stable import path and public API
  * (`ReconcileResult`, `reconcileWranglerCrons`) is unchanged.
  */
-export type { ReconcileCronsResult as ReconcileResult } from "@lunora/config";
-export { reconcileWranglerCrons } from "@lunora/config";
+export type { ReconcileCronsResult as ReconcileResult } from "@lunora/config/cloudflare";
+export { reconcileWranglerCrons } from "@lunora/config/cloudflare";

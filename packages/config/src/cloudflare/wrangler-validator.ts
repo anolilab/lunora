@@ -14,9 +14,9 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-import join from "./path";
-import type { SchemaInfo } from "./schema-info";
-import { discoverSchemaInfo } from "./schema-info";
+import join from "../path";
+import type { SchemaInfo } from "../schema-info";
+import { discoverSchemaInfo } from "../schema-info";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 

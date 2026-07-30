@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ParseError } from "jsonc-parser";
 import { parse as parseJsonc } from "jsonc-parser";
 
-import join from "./path";
+import join from "../path";
 
 /** Candidate wrangler config filenames, in the order every consumer probes them. */
 const WRANGLER_FILES = ["wrangler.jsonc", "wrangler.json"] as const;

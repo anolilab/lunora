@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import CLOUDFLARE_DRIVER from "../src/cloudflare-driver";
+import CLOUDFLARE_DRIVER from "../src/cloudflare/cloudflare-driver";
 import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "../src/driver-registry";
 
 describe("resolveDeployDriver", () => {

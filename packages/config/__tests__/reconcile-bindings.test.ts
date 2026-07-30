@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { DurableObjectSpec, InferredBindings } from "../src/infer-bindings";
-import { reconcileWranglerBindings } from "../src/reconcile-bindings";
 
 const SHARD: DurableObjectSpec = { binding: "SHARD", className: "ShardDO" };
 const SCHEDULER: DurableObjectSpec = { binding: "SCHEDULER", className: "SchedulerDO" };

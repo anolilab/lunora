@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 
-import { findWranglerFile } from "@lunora/config";
+import { findWranglerFile } from "@lunora/config/cloudflare";
 import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";

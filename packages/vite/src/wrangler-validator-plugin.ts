@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 
-import type { WranglerConfig } from "@lunora/config";
-import { readWranglerJsonc, validateWranglerProject } from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
+import { readWranglerJsonc, validateWranglerProject } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 

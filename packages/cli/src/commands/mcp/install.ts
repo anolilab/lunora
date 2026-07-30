@@ -10,7 +10,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 
-import { findWranglerFile } from "@lunora/config";
+import { findWranglerFile } from "@lunora/config/cloudflare";
 import { join } from "@visulima/path";
 
 import type { PackageManager } from "../../util/detect-package-manager";

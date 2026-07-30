@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { WranglerConfigShape } from "../src/wrangler-to-alchemy";
-import { wranglerToAlchemy } from "../src/wrangler-to-alchemy";
+import type { WranglerConfigShape } from "../src/cloudflare/wrangler-to-alchemy";
+import { wranglerToAlchemy } from "../src/cloudflare/wrangler-to-alchemy";
 
 const BASE: WranglerConfigShape = { main: "src/server/index.ts", name: "my-app" };
 

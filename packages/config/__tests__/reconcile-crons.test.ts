@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerCrons } from "../src/reconcile-crons";
+import { reconcileWranglerCrons } from "../src/cloudflare/reconcile-crons";
 
 let workdir: string;
 

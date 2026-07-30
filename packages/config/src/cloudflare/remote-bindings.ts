@@ -28,8 +28,8 @@
  */
 import { rmSync, writeFileSync } from "node:fs";
 
-import { applyModify } from "./jsonc-edit";
-import join from "./path";
+import { applyModify } from "../jsonc-edit";
+import join from "../path";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 /**

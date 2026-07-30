@@ -17,9 +17,9 @@
  * encodings the neutral graph discards — see the note on `DeployDriver`.
  */
 
-import type { DeployDriver, DriverContext, DriverToolchain, NamedResource, ProvisionResult, ResourceGraph, ShardNamespaceResource } from "./deploy-driver";
-import type { InferredBindings } from "./infer-bindings";
-import { inferLunoraBindings } from "./infer-bindings";
+import type { DeployDriver, DriverContext, DriverToolchain, NamedResource, ProvisionResult, ResourceGraph, ShardNamespaceResource } from "../deploy-driver";
+import type { InferredBindings } from "../infer-bindings";
+import { inferLunoraBindings } from "../infer-bindings";
 import { reconcileWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 import { reconcileWranglerCrons } from "./reconcile-crons";

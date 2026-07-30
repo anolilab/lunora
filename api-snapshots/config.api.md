@@ -109,15 +109,6 @@ interface AgentRulesStatus {
 }
 ```
 
-### `AlchemyTranslation` (interface)
-
-```ts
-interface AlchemyTranslation {
-    source: string;
-    unsupported: ReadonlyArray<string>;
-}
-```
-
 ### `ApplyEditResult` (type)
 
 ```ts
@@ -172,12 +163,6 @@ interface BadgeSpec {
     fg: `#${string}`;
     text: string;
 }
-```
-
-### `CLOUDFLARE_DRIVER` (const)
-
-```ts
-const CLOUDFLARE_DRIVER: DeployDriver;
 ```
 
 ### `ClaimDevServerStateResult` (interface)
@@ -505,17 +490,6 @@ interface EnsureDevVariablesResult {
 type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
 ```
 
-### `ExportGap` (interface)
-
-```ts
-interface ExportGap {
-    className: string;
-    exportName: string;
-    kind: "agent" | "container" | "workflow";
-    module: "agents" | "containers" | "workflows";
-}
-```
-
 ### `FillDevSecretsResult` (interface)
 
 ```ts
@@ -713,27 +687,6 @@ class LunoraReporter {
 }
 ```
 
-### `MaterializeOptions` (interface)
-
-```ts
-interface MaterializeOptions {
-    enabled: boolean;
-    projectRoot: string;
-}
-```
-
-### `MaterializeResult` (interface)
-
-```ts
-interface MaterializeResult {
-    cleanup: () => void;
-    configPath?: string;
-    enabled: boolean;
-    reason?: string;
-    remoteBindings: RemoteBindingPlan[];
-}
-```
-
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -790,143 +743,16 @@ interface ProvisionResult {
 }
 ```
 
-### `REMOTE_ELIGIBLE_KEYS` (const)
-
-```ts
-const REMOTE_ELIGIBLE_KEYS: {
-    readonly ai: {
-        readonly label: "AI";
-        readonly shape: "object";
-    };
-    readonly d1_databases: {
-        readonly label: "D1";
-        readonly shape: "array";
-    };
-    readonly kv_namespaces: {
-        readonly label: "KV";
-        readonly shape: "array";
-    };
-    readonly queues: {
-        readonly label: "Queue";
-        readonly shape: "producers";
-    };
-    readonly r2_buckets: {
-        readonly label: "R2";
-        readonly shape: "array";
-    };
-    readonly services: {
-        readonly label: "Service";
-        readonly shape: "array";
-    };
-    readonly vectorize: {
-        readonly label: "Vectorize";
-        readonly shape: "array";
-    };
-};
-```
-
-### `REQUIRED_COMPATIBILITY_DATE` (const)
-
-```ts
-const REQUIRED_COMPATIBILITY_DATE: string;
-```
-
-### `REQUIRED_FLAG` (const)
-
-```ts
-const REQUIRED_FLAG: string;
-```
-
 ### `ROOT_SKILL_NAME` (const)
 
 ```ts
 const ROOT_SKILL_NAME = "lunora";
 ```
 
-### `ReadWranglerResult` (interface)
-
-```ts
-interface ReadWranglerResult<T> {
-    parsed: T | undefined;
-    text: string;
-}
-```
-
-### `ReconcileBindingsResult` (interface)
-
-```ts
-interface ReconcileBindingsResult {
-    added: string[];
-    changed: boolean;
-    exportGaps: ExportGap[];
-    reason?: string;
-    warnings: string[];
-    wranglerPath?: string;
-}
-```
-
-### `ReconcileCompatibilityDateResult` (interface)
-
-```ts
-interface ReconcileCompatibilityDateResult {
-    changed: boolean;
-    date: string | undefined;
-    reason?: string;
-    wranglerPath?: string;
-}
-```
-
-### `ReconcileCronsResult` (interface)
-
-```ts
-interface ReconcileResult {
-    changed: boolean;
-    reason?: string;
-    wranglerPath?: string;
-}
-```
-
-### `RemoteBindingPlan` (interface)
-
-```ts
-interface RemoteBindingPlan {
-    binding: string;
-    kind: string;
-    path: ReadonlyArray<number | string>;
-    section: RemoteEligibleKey;
-}
-```
-
-### `RemoteEnableInputs` (interface)
-
-```ts
-interface RemoteEnableInputs {
-    configPreference?: boolean;
-    envValue?: string;
-    flag?: boolean;
-}
-```
-
 ### `RemotePreference` (type)
 
 ```ts
 type RemotePreference = boolean | undefined;
-```
-
-### `RemoteWranglerShape` (interface)
-
-```ts
-interface RemoteWranglerShape {
-    ai?: BindingEntry | null;
-    d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
-    kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
-    queues?: {
-        producers?: ReadonlyArray<BindingEntry | null | undefined>;
-    } | null;
-    r2_buckets?: ReadonlyArray<BindingEntry | null | undefined>;
-    services?: ReadonlyArray<BindingEntry | null | undefined>;
-    vectorize?: ReadonlyArray<BindingEntry | null | undefined>;
-}
 ```
 
 ### `ResourceGraph` (interface)
@@ -1083,15 +909,6 @@ interface ShardNamespaceResource {
 type StepBadgeName = "add" | "deps" | "dir" | "git" | "lunora" | "next" | "tmpl";
 ```
 
-### `TailConsumer` (interface)
-
-```ts
-interface TailConsumer {
-    environment?: string;
-    service?: string;
-}
-```
-
 ### `TailRequest` (interface)
 
 ```ts
@@ -1112,21 +929,6 @@ interface ToolchainCommand {
     args: ReadonlyArray<string>;
     tool: string;
 }
-```
-
-### `WORKERS_CACHE_MIN_DATE` (const)
-
-```ts
-const WORKERS_CACHE_MIN_DATE = "2026-05-01";
-```
-
-### `WRANGLER_FILES` (const)
-
-```ts
-const WRANGLER_FILES: readonly [
-    "wrangler.jsonc",
-    "wrangler.json"
-];
 ```
 
 ### `WireResult` (type)
@@ -1154,6 +956,594 @@ interface WireRlsEdit {
 ### `WorkflowIR` (interface)
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
+
+### `applyAdditiveEdit` (const)
+
+```ts
+const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
+```
+
+### `badgeLead` (const)
+
+```ts
+const badgeLead: (text: string) => string;
+```
+
+### `badgeWidth` (const)
+
+```ts
+const badgeWidth: (_spec: BadgeSpec) => number;
+```
+
+### `buildPackageSecretsBlock` (const)
+
+```ts
+const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>) => string;
+```
+
+### `claimAgentRulesHint` (const)
+
+```ts
+const claimAgentRulesHint: () => boolean;
+```
+
+### `claimDevServerState` (const)
+
+```ts
+const claimDevServerState: (projectRoot: string, state: DevServerState, options?: {
+    supersedePid?: number;
+}) => ClaimDevServerStateResult;
+```
+
+### `classifyEdit` (const)
+
+```ts
+const classifyEdit: (edit: SchemaEdit) => "additive" | "destructive";
+```
+
+### `classifyPolicyEdit` (const)
+
+```ts
+const classifyPolicyEdit: (edit: PolicyEdit) => "additive" | "destructive";
+```
+
+### `clearDevServerState` (const)
+
+```ts
+const clearDevServerState: (projectRoot: string, expectedPid?: number) => void;
+```
+
+### `createConfirm` (const)
+
+```ts
+const createConfirm: (prefix?: string) => ((message: string) => Promise<boolean>);
+```
+
+### `deployTargetIds` (const)
+
+```ts
+const deployTargetIds: () => ReadonlyArray<string>;
+```
+
+### `detectAgentRules` (const)
+
+```ts
+const detectAgentRules: (projectRoot: string) => AgentRulesStatus;
+```
+
+### `detectAiAgent` (const)
+
+```ts
+const detectAiAgent: (env?: EnvLike) => AgentDetection | undefined;
+```
+
+### `detectFramework` (const)
+
+```ts
+const detectFramework: (root: string) => FrameworkDetection;
+```
+
+### `discoverAgentInfo` (const)
+
+```ts
+const discoverAgentInfo: (projectRoot: string, schemaDirectory: string) => DiscoverAgentInfoResult;
+```
+
+### `discoverContainerInfo` (const)
+
+```ts
+const discoverContainerInfo: (projectRoot: string, schemaDirectory: string) => DiscoverContainerInfoResult;
+```
+
+### `discoverSchemaInfo` (const)
+
+```ts
+const discoverSchemaInfo: (projectRoot: string, schemaDirectory: string) => DiscoverSchemaInfoResult;
+```
+
+### `discoverWorkflowInfo` (const)
+
+```ts
+const discoverWorkflowInfo: (projectRoot: string, schemaDirectory: string) => DiscoverWorkflowInfoResult;
+```
+
+### `ensureDevVariables` (const)
+
+```ts
+const ensureDevVariables: (deps: EnsureDevVariablesDeps) => Promise<EnsureDevVariablesResult>;
+```
+
+### `ensureDevVarsExample` (const)
+
+```ts
+const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<string>) => string[];
+```
+
+### `fillDevSecrets` (const)
+
+```ts
+const fillDevSecrets: (deps: {
+    cwd: string;
+    info?: (message: string) => void;
+    randomHex?: (bytes: number) => string;
+}) => FillDevSecretsResult;
+```
+
+### `formatLunoraEvent` (const)
+
+```ts
+const formatLunoraEvent: (line: string) => LunoraFormattedLine | undefined;
+```
+
+### `generateSecretValue` (const)
+
+```ts
+const generateSecretValue: (randomHex?: (bytes: number) => string) => string;
+```
+
+### `inferLunoraBindings` (const)
+
+```ts
+const inferLunoraBindings: (options: InferOptions) => Promise<InferredBindings>;
+```
+
+### `interpretRemote` (const)
+
+```ts
+const interpretRemote: (value: unknown) => RemotePreference;
+```
+
+### `isInteractive` (const)
+
+```ts
+const isInteractive: () => boolean;
+```
+
+### `isMintableSecretKey` (const)
+
+```ts
+const isMintableSecretKey: (key: string) => boolean;
+```
+
+### `isPlaceholderValue` (const)
+
+```ts
+const isPlaceholderValue: (value: string) => boolean;
+```
+
+### `isProcessAlive` (const)
+
+```ts
+const isProcessAlive: (pid: number) => boolean;
+```
+
+### `isRecordedProcessCurrent` (const)
+
+```ts
+const isRecordedProcessCurrent: (state: DevServerState) => boolean;
+```
+
+### `packageNamesFromBindings` (const)
+
+```ts
+const packageNamesFromBindings: (bindings: InferredBindings) => string[];
+```
+
+### `padBadge` (const)
+
+```ts
+const padBadge: (text: string) => string;
+```
+
+### `paintAnswer` (const)
+
+```ts
+const paintAnswer: (text: string) => string;
+```
+
+### `paintBadge` (const)
+
+```ts
+const paintBadge: (spec: BadgeSpec) => string;
+```
+
+### `parseDevVariableEntries` (const)
+
+```ts
+const parseDevVariableEntries: (content: string) => {
+    key: string;
+    value: string;
+}[];
+```
+
+### `parseSchema` (const)
+
+```ts
+const parseSchema: (source: string) => ParseSchemaResult;
+```
+
+### `planDevSecretsFill` (const)
+
+```ts
+const planDevSecretsFill: (input: {
+    existingContent: string;
+    randomHex?: (bytes: number) => string;
+}) => DevSecretsFillPlan;
+```
+
+### `planDevVariablesAugment` (const)
+
+```ts
+const planDevVariablesAugment: (input: {
+    exampleContent: string;
+    existingContent: string;
+    randomHex?: (bytes: number) => string;
+}) => AugmentPlan;
+```
+
+### `planDevVariablesScaffold` (const)
+
+```ts
+const planDevVariablesScaffold: (input: {
+    devVarsExists: boolean;
+    exampleContent: string | undefined;
+    randomHex?: (bytes: number) => string;
+}) => ScaffoldPlan;
+```
+
+### `promptMultiSelect` (const)
+
+```ts
+const promptMultiSelect: <T extends string>(message: string, options: ReadonlyArray<MultiSelectOption<T>>, settings?: {
+    defaults?: ReadonlyArray<T>;
+}) => Promise<T[]>;
+```
+
+### `promptSelect` (const)
+
+```ts
+const promptSelect: <T extends string>(message: string, options: ReadonlyArray<SelectOption<T>>, settings?: {
+    default?: T;
+}) => Promise<T | undefined>;
+```
+
+### `promptText` (const)
+
+```ts
+const promptText: (message: string, settings?: {
+    default?: string;
+}) => Promise<string | undefined>;
+```
+
+### `promptYesNo` (const)
+
+```ts
+const promptYesNo: (prompt: string, options?: {
+    defaultYes?: boolean;
+}) => Promise<boolean>;
+```
+
+### `readDevServerState` (const)
+
+```ts
+const readDevServerState: (projectRoot: string) => DevServerState | undefined;
+```
+
+### `readLinkedProject` (const)
+
+```ts
+const readLinkedProject: (projectRoot: string) => LinkedProject | undefined;
+```
+
+### `readLiveDevServerState` (const)
+
+```ts
+const readLiveDevServerState: (projectRoot: string) => DevServerState | undefined;
+```
+
+### `readProjectDependencyNames` (const)
+
+```ts
+const readProjectDependencyNames: (root: string) => ReadonlySet<string>;
+```
+
+### `readProjectRemotePreference` (const)
+
+```ts
+const readProjectRemotePreference: (projectRoot: string) => RemotePreference;
+```
+
+### `readProjectTarget` (const)
+
+```ts
+const readProjectTarget: (projectRoot: string) => string | undefined;
+```
+
+### `requiredSecrets` (const)
+
+```ts
+const requiredSecrets: (packageNames: ReadonlyArray<string>) => SecretEntry[];
+```
+
+### `resolveDeployDriver` (const)
+
+```ts
+const resolveDeployDriver: (target?: string) => DeployDriver;
+```
+
+### `resolveProjectTarget` (const)
+
+```ts
+const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
+```
+
+### `resolveTargetOrThrow` (const)
+
+```ts
+const resolveTargetOrThrow: (projectRoot: string, explicit?: string) => string;
+```
+
+### `scaffoldPolicyFile` (const)
+
+```ts
+const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit) => ScaffoldFileResult;
+```
+
+### `secretsForPackages` (const)
+
+```ts
+const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[];
+```
+
+### `streamContainerLogs` (const)
+
+```ts
+const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogStreamHandle;
+```
+
+### `updateDevServerState` (const)
+
+```ts
+const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>) => DevServerState | undefined;
+```
+
+### `wireRlsIntoProcedure` (const)
+
+```ts
+const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit) => WireResult;
+```
+
+### `writeDevServerState` (const)
+
+```ts
+const writeDevServerState: (projectRoot: string, state: DevServerState) => string | undefined;
+```
+
+### `writeLinkedProject` (const)
+
+```ts
+const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
+```
+
+## `@lunora/config/cloudflare`
+
+### `AlchemyTranslation` (interface)
+
+```ts
+interface AlchemyTranslation {
+    source: string;
+    unsupported: ReadonlyArray<string>;
+}
+```
+
+### `CLOUDFLARE_DRIVER` (const)
+
+```ts
+const CLOUDFLARE_DRIVER: DeployDriver;
+```
+
+### `ExportGap` (interface)
+
+```ts
+interface ExportGap {
+    className: string;
+    exportName: string;
+    kind: "agent" | "container" | "workflow";
+    module: "agents" | "containers" | "workflows";
+}
+```
+
+### `MaterializeOptions` (interface)
+
+```ts
+interface MaterializeOptions {
+    enabled: boolean;
+    projectRoot: string;
+}
+```
+
+### `MaterializeResult` (interface)
+
+```ts
+interface MaterializeResult {
+    cleanup: () => void;
+    configPath?: string;
+    enabled: boolean;
+    reason?: string;
+    remoteBindings: RemoteBindingPlan[];
+}
+```
+
+### `REMOTE_ELIGIBLE_KEYS` (const)
+
+```ts
+const REMOTE_ELIGIBLE_KEYS: {
+    readonly ai: {
+        readonly label: "AI";
+        readonly shape: "object";
+    };
+    readonly d1_databases: {
+        readonly label: "D1";
+        readonly shape: "array";
+    };
+    readonly kv_namespaces: {
+        readonly label: "KV";
+        readonly shape: "array";
+    };
+    readonly queues: {
+        readonly label: "Queue";
+        readonly shape: "producers";
+    };
+    readonly r2_buckets: {
+        readonly label: "R2";
+        readonly shape: "array";
+    };
+    readonly services: {
+        readonly label: "Service";
+        readonly shape: "array";
+    };
+    readonly vectorize: {
+        readonly label: "Vectorize";
+        readonly shape: "array";
+    };
+};
+```
+
+### `REQUIRED_COMPATIBILITY_DATE` (const)
+
+```ts
+const REQUIRED_COMPATIBILITY_DATE: string;
+```
+
+### `REQUIRED_FLAG` (const)
+
+```ts
+const REQUIRED_FLAG: string;
+```
+
+### `ReadWranglerResult` (interface)
+
+```ts
+interface ReadWranglerResult<T> {
+    parsed: T | undefined;
+    text: string;
+}
+```
+
+### `ReconcileBindingsResult` (interface)
+
+```ts
+interface ReconcileBindingsResult {
+    added: string[];
+    changed: boolean;
+    exportGaps: ExportGap[];
+    reason?: string;
+    warnings: string[];
+    wranglerPath?: string;
+}
+```
+
+### `ReconcileCompatibilityDateResult` (interface)
+
+```ts
+interface ReconcileCompatibilityDateResult {
+    changed: boolean;
+    date: string | undefined;
+    reason?: string;
+    wranglerPath?: string;
+}
+```
+
+### `ReconcileCronsResult` (interface)
+
+```ts
+interface ReconcileResult {
+    changed: boolean;
+    reason?: string;
+    wranglerPath?: string;
+}
+```
+
+### `RemoteBindingPlan` (interface)
+
+```ts
+interface RemoteBindingPlan {
+    binding: string;
+    kind: string;
+    path: ReadonlyArray<number | string>;
+    section: RemoteEligibleKey;
+}
+```
+
+### `RemoteEnableInputs` (interface)
+
+```ts
+interface RemoteEnableInputs {
+    configPreference?: boolean;
+    envValue?: string;
+    flag?: boolean;
+}
+```
+
+### `RemoteWranglerShape` (interface)
+
+```ts
+interface RemoteWranglerShape {
+    ai?: BindingEntry | null;
+    d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
+    kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
+    queues?: {
+        producers?: ReadonlyArray<BindingEntry | null | undefined>;
+    } | null;
+    r2_buckets?: ReadonlyArray<BindingEntry | null | undefined>;
+    services?: ReadonlyArray<BindingEntry | null | undefined>;
+    vectorize?: ReadonlyArray<BindingEntry | null | undefined>;
+}
+```
+
+### `TailConsumer` (interface)
+
+```ts
+interface TailConsumer {
+    environment?: string;
+    service?: string;
+}
+```
+
+### `WORKERS_CACHE_MIN_DATE` (const)
+
+```ts
+const WORKERS_CACHE_MIN_DATE = "2026-05-01";
+```
+
+### `WRANGLER_FILES` (const)
+
+```ts
+const WRANGLER_FILES: readonly [
+    "wrangler.jsonc",
+    "wrangler.json"
+];
+```
 
 ### `WranglerCacheShape` (interface)
 
@@ -1379,142 +1769,10 @@ interface WranglerWorkflowEntry {
 }
 ```
 
-### `applyAdditiveEdit` (const)
-
-```ts
-const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
-```
-
-### `badgeLead` (const)
-
-```ts
-const badgeLead: (text: string) => string;
-```
-
-### `badgeWidth` (const)
-
-```ts
-const badgeWidth: (_spec: BadgeSpec) => number;
-```
-
-### `buildPackageSecretsBlock` (const)
-
-```ts
-const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>) => string;
-```
-
-### `claimAgentRulesHint` (const)
-
-```ts
-const claimAgentRulesHint: () => boolean;
-```
-
-### `claimDevServerState` (const)
-
-```ts
-const claimDevServerState: (projectRoot: string, state: DevServerState, options?: {
-    supersedePid?: number;
-}) => ClaimDevServerStateResult;
-```
-
-### `classifyEdit` (const)
-
-```ts
-const classifyEdit: (edit: SchemaEdit) => "additive" | "destructive";
-```
-
-### `classifyPolicyEdit` (const)
-
-```ts
-const classifyPolicyEdit: (edit: PolicyEdit) => "additive" | "destructive";
-```
-
-### `clearDevServerState` (const)
-
-```ts
-const clearDevServerState: (projectRoot: string, expectedPid?: number) => void;
-```
-
 ### `collectWranglerSecretVariables` (const)
 
 ```ts
 const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
-```
-
-### `createConfirm` (const)
-
-```ts
-const createConfirm: (prefix?: string) => ((message: string) => Promise<boolean>);
-```
-
-### `deployTargetIds` (const)
-
-```ts
-const deployTargetIds: () => ReadonlyArray<string>;
-```
-
-### `detectAgentRules` (const)
-
-```ts
-const detectAgentRules: (projectRoot: string) => AgentRulesStatus;
-```
-
-### `detectAiAgent` (const)
-
-```ts
-const detectAiAgent: (env?: EnvLike) => AgentDetection | undefined;
-```
-
-### `detectFramework` (const)
-
-```ts
-const detectFramework: (root: string) => FrameworkDetection;
-```
-
-### `discoverAgentInfo` (const)
-
-```ts
-const discoverAgentInfo: (projectRoot: string, schemaDirectory: string) => DiscoverAgentInfoResult;
-```
-
-### `discoverContainerInfo` (const)
-
-```ts
-const discoverContainerInfo: (projectRoot: string, schemaDirectory: string) => DiscoverContainerInfoResult;
-```
-
-### `discoverSchemaInfo` (const)
-
-```ts
-const discoverSchemaInfo: (projectRoot: string, schemaDirectory: string) => DiscoverSchemaInfoResult;
-```
-
-### `discoverWorkflowInfo` (const)
-
-```ts
-const discoverWorkflowInfo: (projectRoot: string, schemaDirectory: string) => DiscoverWorkflowInfoResult;
-```
-
-### `ensureDevVariables` (const)
-
-```ts
-const ensureDevVariables: (deps: EnsureDevVariablesDeps) => Promise<EnsureDevVariablesResult>;
-```
-
-### `ensureDevVarsExample` (const)
-
-```ts
-const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<string>) => string[];
-```
-
-### `fillDevSecrets` (const)
-
-```ts
-const fillDevSecrets: (deps: {
-    cwd: string;
-    info?: (message: string) => void;
-    randomHex?: (bytes: number) => string;
-}) => FillDevSecretsResult;
 ```
 
 ### `findWranglerFile` (const)
@@ -1523,70 +1781,16 @@ const fillDevSecrets: (deps: {
 const findWranglerFile: (projectRoot: string) => string | undefined;
 ```
 
-### `formatLunoraEvent` (const)
-
-```ts
-const formatLunoraEvent: (line: string) => LunoraFormattedLine | undefined;
-```
-
-### `generateSecretValue` (const)
-
-```ts
-const generateSecretValue: (randomHex?: (bytes: number) => string) => string;
-```
-
-### `inferLunoraBindings` (const)
-
-```ts
-const inferLunoraBindings: (options: InferOptions) => Promise<InferredBindings>;
-```
-
 ### `injectRemoteFlags` (const)
 
 ```ts
 const injectRemoteFlags: (text: string, plans: ReadonlyArray<RemoteBindingPlan>) => string;
 ```
 
-### `interpretRemote` (const)
-
-```ts
-const interpretRemote: (value: unknown) => RemotePreference;
-```
-
 ### `isCacheEnabled` (const)
 
 ```ts
 const isCacheEnabled: (parsed: WranglerCacheShape | null | undefined) => boolean;
-```
-
-### `isInteractive` (const)
-
-```ts
-const isInteractive: () => boolean;
-```
-
-### `isMintableSecretKey` (const)
-
-```ts
-const isMintableSecretKey: (key: string) => boolean;
-```
-
-### `isPlaceholderValue` (const)
-
-```ts
-const isPlaceholderValue: (value: string) => boolean;
-```
-
-### `isProcessAlive` (const)
-
-```ts
-const isProcessAlive: (pid: number) => boolean;
-```
-
-### `isRecordedProcessCurrent` (const)
-
-```ts
-const isRecordedProcessCurrent: (state: DevServerState) => boolean;
 ```
 
 ### `isRemoteEnvEnabled` (const)
@@ -1601,146 +1805,10 @@ const isRemoteEnvEnabled: (value: string | undefined) => boolean;
 const materializeRemoteWranglerConfig: (options: MaterializeOptions) => MaterializeResult;
 ```
 
-### `packageNamesFromBindings` (const)
-
-```ts
-const packageNamesFromBindings: (bindings: InferredBindings) => string[];
-```
-
-### `padBadge` (const)
-
-```ts
-const padBadge: (text: string) => string;
-```
-
-### `paintAnswer` (const)
-
-```ts
-const paintAnswer: (text: string) => string;
-```
-
-### `paintBadge` (const)
-
-```ts
-const paintBadge: (spec: BadgeSpec) => string;
-```
-
-### `parseDevVariableEntries` (const)
-
-```ts
-const parseDevVariableEntries: (content: string) => {
-    key: string;
-    value: string;
-}[];
-```
-
-### `parseSchema` (const)
-
-```ts
-const parseSchema: (source: string) => ParseSchemaResult;
-```
-
-### `planDevSecretsFill` (const)
-
-```ts
-const planDevSecretsFill: (input: {
-    existingContent: string;
-    randomHex?: (bytes: number) => string;
-}) => DevSecretsFillPlan;
-```
-
-### `planDevVariablesAugment` (const)
-
-```ts
-const planDevVariablesAugment: (input: {
-    exampleContent: string;
-    existingContent: string;
-    randomHex?: (bytes: number) => string;
-}) => AugmentPlan;
-```
-
-### `planDevVariablesScaffold` (const)
-
-```ts
-const planDevVariablesScaffold: (input: {
-    devVarsExists: boolean;
-    exampleContent: string | undefined;
-    randomHex?: (bytes: number) => string;
-}) => ScaffoldPlan;
-```
-
 ### `planRemoteBindings` (const)
 
 ```ts
 const planRemoteBindings: (parsed: RemoteWranglerShape) => RemoteBindingPlan[];
-```
-
-### `promptMultiSelect` (const)
-
-```ts
-const promptMultiSelect: <T extends string>(message: string, options: ReadonlyArray<MultiSelectOption<T>>, settings?: {
-    defaults?: ReadonlyArray<T>;
-}) => Promise<T[]>;
-```
-
-### `promptSelect` (const)
-
-```ts
-const promptSelect: <T extends string>(message: string, options: ReadonlyArray<SelectOption<T>>, settings?: {
-    default?: T;
-}) => Promise<T | undefined>;
-```
-
-### `promptText` (const)
-
-```ts
-const promptText: (message: string, settings?: {
-    default?: string;
-}) => Promise<string | undefined>;
-```
-
-### `promptYesNo` (const)
-
-```ts
-const promptYesNo: (prompt: string, options?: {
-    defaultYes?: boolean;
-}) => Promise<boolean>;
-```
-
-### `readDevServerState` (const)
-
-```ts
-const readDevServerState: (projectRoot: string) => DevServerState | undefined;
-```
-
-### `readLinkedProject` (const)
-
-```ts
-const readLinkedProject: (projectRoot: string) => LinkedProject | undefined;
-```
-
-### `readLiveDevServerState` (const)
-
-```ts
-const readLiveDevServerState: (projectRoot: string) => DevServerState | undefined;
-```
-
-### `readProjectDependencyNames` (const)
-
-```ts
-const readProjectDependencyNames: (root: string) => ReadonlySet<string>;
-```
-
-### `readProjectRemotePreference` (const)
-
-```ts
-const readProjectRemotePreference: (projectRoot: string) => RemotePreference;
-```
-
-### `readProjectTarget` (const)
-
-```ts
-const readProjectTarget: (projectRoot: string) => string | undefined;
 ```
 
 ### `readWranglerJsonc` (const)
@@ -1767,64 +1835,16 @@ const reconcileWranglerCompatibilityDate: (projectRoot: string) => ReconcileComp
 const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<string>) => ReconcileResult;
 ```
 
-### `requiredSecrets` (const)
-
-```ts
-const requiredSecrets: (packageNames: ReadonlyArray<string>) => SecretEntry[];
-```
-
-### `resolveDeployDriver` (const)
-
-```ts
-const resolveDeployDriver: (target?: string) => DeployDriver;
-```
-
-### `resolveProjectTarget` (const)
-
-```ts
-const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
-```
-
 ### `resolveRemoteEnabled` (const)
 
 ```ts
 const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 ```
 
-### `resolveTargetOrThrow` (const)
-
-```ts
-const resolveTargetOrThrow: (projectRoot: string, explicit?: string) => string;
-```
-
-### `scaffoldPolicyFile` (const)
-
-```ts
-const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit) => ScaffoldFileResult;
-```
-
 ### `scanWranglerVariablesForSecrets` (const)
 
 ```ts
 const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string) => WranglerVariableIR[];
-```
-
-### `secretsForPackages` (const)
-
-```ts
-const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[];
-```
-
-### `streamContainerLogs` (const)
-
-```ts
-const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogStreamHandle;
-```
-
-### `updateDevServerState` (const)
-
-```ts
-const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>) => DevServerState | undefined;
 ```
 
 ### `validateWrangler` (const)
@@ -1845,12 +1865,6 @@ const validateWranglerConfig: (wrangler: WranglerConfig | undefined, schema?: Sc
 const validateWranglerProject: (options: WranglerProjectValidationOptions) => WranglerProjectValidationResult;
 ```
 
-### `wireRlsIntoProcedure` (const)
-
-```ts
-const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit) => WireResult;
-```
-
 ### `withTailConsumer` (const)
 
 ```ts
@@ -1861,18 +1875,6 @@ const withTailConsumer: (wrangler: WranglerConfig, consumer: TailConsumer) => Wr
 
 ```ts
 const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
-```
-
-### `writeDevServerState` (const)
-
-```ts
-const writeDevServerState: (projectRoot: string, state: DevServerState) => string | undefined;
-```
-
-### `writeLinkedProject` (const)
-
-```ts
-const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 ```
 
 ## `@lunora/config/studio-host`

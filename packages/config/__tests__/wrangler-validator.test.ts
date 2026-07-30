@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { WranglerConfig } from "../src/wrangler-validator";
+import type { WranglerConfig } from "../src/cloudflare/wrangler-validator";
 import {
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
@@ -12,7 +12,7 @@ import {
     validateWranglerConfig,
     validateWranglerProject,
     withTailConsumer,
-} from "../src/wrangler-validator";
+} from "../src/cloudflare/wrangler-validator";
 
 const SHARD_BINDING_ERROR_RE = /SHARD.+ShardDO/u;
 const WRANGLER_NOT_FOUND_RE = /wrangler\.jsonc not found/u;

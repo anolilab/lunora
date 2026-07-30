@@ -16,7 +16,7 @@ import { relative } from "node:path";
 import type { WranglerVariableIR } from "@lunora/codegen";
 import { redact, secretKindOf } from "@lunora/codegen";
 
-import { isPlaceholderValue } from "./scaffold-dev-variables";
+import { isPlaceholderValue } from "../scaffold-dev-variables";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 /** Only the slice of the wrangler config this scanner needs (`vars` mirrors wrangler's literal key). */

@@ -1,5 +1,5 @@
 import { runCodegen } from "@lunora/codegen";
-import { collectWranglerSecretVariables } from "@lunora/config";
+import { collectWranglerSecretVariables } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";

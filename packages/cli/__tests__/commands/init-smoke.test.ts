@@ -19,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "@lunora/codegen";
-import { validateWranglerProject } from "@lunora/config";
+import { validateWranglerProject } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init/handler";

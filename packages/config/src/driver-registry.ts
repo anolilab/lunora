@@ -15,7 +15,7 @@
  * the wrong provider — the one failure mode this resolution must never have.
  */
 
-import CLOUDFLARE_DRIVER from "./cloudflare-driver";
+import CLOUDFLARE_DRIVER from "./cloudflare/cloudflare-driver";
 import type { DeployDriver } from "./deploy-driver";
 
 /** The default deploy target — today's behavior for every project. */

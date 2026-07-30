@@ -2,15 +2,9 @@ import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import type { ExportGap } from "@lunora/config";
-import {
-    collectWranglerSecretVariables,
-    inferLunoraBindings,
-    LUNORA_CONFIG_FILE,
-    reconcileWranglerBindings,
-    reconcileWranglerCompatibilityDate,
-    WRANGLER_FILES,
-} from "@lunora/config";
+import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
+import type { ExportGap } from "@lunora/config/cloudflare";
+import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";

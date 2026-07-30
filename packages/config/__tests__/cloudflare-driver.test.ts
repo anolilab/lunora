@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import CLOUDFLARE_DRIVER from "../src/cloudflare-driver";
+import CLOUDFLARE_DRIVER from "../src/cloudflare/cloudflare-driver";
 
 const WRANGLER = `{
     "name": "app",

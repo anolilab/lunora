@@ -11,7 +11,7 @@ import { writeFileSync } from "node:fs";
 
 import { applyEdits, modify } from "jsonc-parser";
 
-import { FORMATTING } from "./jsonc-edit";
+import { FORMATTING } from "../jsonc-edit";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
