@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -230,6 +230,105 @@ describe("lunora data-transfer", () => {
             const firstLine = captured[0]!.body.split("\n").find((line) => line.length > 0);
 
             expect(JSON.parse(firstLine!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        });
+
+        it("imports a Convex export directory, preserving ids and every foreign key", async () => {
+            expect.assertions(4);
+
+            // LUNORA_ISSUES #8 asked for a two-pass import: insert with FKs
+            // nulled, record `convexId -> lunoraId`, then patch the FKs back —
+            // needed because Convex ids are opaque and a naive per-table import
+            // would break every `v.id()` column, with self-referential cycles
+            // (folders.parentId) defeating a topological sort.
+            //
+            // None of that is necessary. The admin import path inserts with
+            // `allowExplicitId`, so `_id` survives verbatim, and `v.id()`
+            // validates only "is a string". Ids carry across unchanged, so the
+            // FKs that already point at them stay correct — one pass, no map.
+            mkdirSync(join(workDir, "folders"), { recursive: true });
+            mkdirSync(join(workDir, "messages"), { recursive: true });
+
+            writeFileSync(
+                join(workDir, "folders", "documents.jsonl"),
+                // A self-referential FK — the shape that has no topological order.
+                `${JSON.stringify({ _creationTime: 1, _id: "fld_root", name: "root", parentId: null })}\n` +
+                    `${JSON.stringify({ _creationTime: 2, _id: "fld_child", name: "child", parentId: "fld_root" })}\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workDir, "messages", "documents.jsonl"),
+                `${JSON.stringify({ _creationTime: 3, _id: "msg_1", folderId: "fld_child" })}\n`,
+                "utf8",
+            );
+
+            const captured: string[] = [];
+
+            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+                captured.push(init?.body ?? "");
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: { folders: 2, messages: 1 } };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({ fetchImpl, file: workDir, logger: silentLogger(), token: "t" });
+            const rows = captured
+                .join("\n")
+                .split("\n")
+                .filter((line) => line.trim().length > 0)
+                .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
+
+            expect(result.inserted).toBe(3);
+            // Tables come from the directory names, sorted.
+            expect(rows.map((row) => row.table)).toStrictEqual(["folders", "folders", "messages"]);
+            // The self-reference still points at the parent's original id.
+            expect(rows[1]?.doc).toStrictEqual({ _creationTime: 2, _id: "fld_child", name: "child", parentId: "fld_root" });
+            // And so does the cross-table FK.
+            expect(rows[2]?.doc["folderId"]).toBe("fld_child");
+        });
+
+        it("reports an empty directory rather than silently importing nothing", async () => {
+            expect.assertions(1);
+
+            // A directory with no `<table>/documents.jsonl` is not a Convex
+            // export; falling through to the NDJSON reader would try to
+            // `createReadStream` a directory and fail obscurely.
+            mkdirSync(join(workDir, "not-an-export"), { recursive: true });
+
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: null, json: async () => {return {}}, ok: true, status: 200, text: async () => "" };
+            };
+
+            const result = await runImportCommand({ fetchImpl, file: join(workDir, "not-an-export"), logger: silentLogger(), token: "t" });
+
+            expect(result.code).toBe(1);
+        });
+
+        it("refuses --table alongside a Convex export directory", async () => {
+            expect.assertions(2);
+
+            // Each row's table comes from its source directory; a global
+            // `--table` would silently relabel all of them.
+            mkdirSync(join(workDir, "users"), { recursive: true });
+            writeFileSync(join(workDir, "users", "documents.jsonl"), `${JSON.stringify({ _id: "u1" })}\n`, "utf8");
+
+            let called = false;
+            const fetchImpl: StreamingFetchLike = async () => {
+                called = true;
+
+                return { body: null, json: async () => {return {}}, ok: true, status: 200, text: async () => "" };
+            };
+
+            const result = await runImportCommand({ fetchImpl, file: workDir, logger: silentLogger(), table: "other", token: "t" });
+
+            expect(result.code).toBe(1);
+            expect(called).toBe(false);
         });
 
         it("refuses --prod without --yes (no request is made)", async () => {

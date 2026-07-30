@@ -11,7 +11,8 @@
  * against accidentally targeting localhost in production scripts.
  */
 import { createReadStream, createWriteStream } from "node:fs";
-import { stat, unlink } from "node:fs/promises";
+import { readdir, stat, unlink } from "node:fs/promises";
+import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
@@ -329,8 +330,11 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
     try {
         const stats = await stat(options.file);
 
-        if (!stats.isFile()) {
-            options.logger.error(`not a file: ${options.file}`);
+        // A directory is allowed: it is how a `npx convex export --path <dir>`
+        // dump arrives, and `readConvexExport` streams it. Anything that is
+        // neither a file nor a directory (a socket, a device) is not.
+        if (!stats.isFile() && !stats.isDirectory()) {
+            options.logger.error(`not a file or directory: ${options.file}`);
 
             return undefined;
         }
@@ -356,6 +360,131 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
  * `/_lunora/admin/import`. We keep the line buffer bounded by `batchSize` so a
  * multi-GiB file imports without buffering everything in memory.
  */
+
+/**
+ * Convex's own file table. Its rows describe stored BLOBS, not application
+ * data — the bytes sit next to the JSONL as separate files and belong in R2,
+ * so importing the rows alone would create dangling references.
+ */
+const CONVEX_STORAGE_TABLE = "_storage";
+
+/**
+ * The `&lt;table>/documents.jsonl` files in a `npx convex export --path &lt;dir>`
+ * directory, sorted for deterministic output.
+ *
+ * Returns `undefined` when `path` is not such a directory, which is how the
+ * import command decides between the Convex layout and a plain NDJSON file.
+ */
+const convexExportTables = async (path: string): Promise<undefined | { file: string; table: string }[]> => {
+    const info = await stat(path).catch(() => undefined);
+
+    if (!info?.isDirectory()) {
+        return undefined;
+    }
+
+    const found: { file: string; table: string }[] = [];
+
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+
+        const file = join(path, entry.name, "documents.jsonl");
+
+        // eslint-disable-next-line no-await-in-loop -- one cheap stat per table directory; the set is small.
+        const documents = await stat(file).catch(() => undefined);
+
+        if (documents?.isFile()) {
+            found.push({ file, table: entry.name });
+        }
+    }
+
+    return found.length > 0 ? found.toSorted((a, b) => a.table.localeCompare(b.table)) : undefined;
+};
+
+/**
+ * Stream a Convex export directory as the `{ table, doc }` NDJSON the admin
+ * import endpoint accepts.
+ *
+ * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
+ * rewritten to freshly-minted Lunora ids, which forces a two-pass import
+ * (insert with FKs nulled, then patch them back through an id map) to survive
+ * self-referential cycles. That is unnecessary here: the admin import path
+ * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
+ * validates only that the value is a string. So every Convex id — including
+ * every `v.id()` foreign key already pointing at one — carries across
+ * unchanged, and a plain single-pass import is correct (LUNORA_ISSUES #8).
+ */
+/** Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines. */
+// eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
+async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<string> {
+    let pending = "";
+
+    for await (const chunk of createReadStream(file, { encoding: "utf8" })) {
+        pending += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+
+        let newline = pending.indexOf("\n");
+
+        while (newline !== -1) {
+            const line = pending.slice(0, newline).trim();
+
+            pending = pending.slice(newline + 1);
+
+            if (line.length > 0) {
+                yield `${JSON.stringify({ doc: JSON.parse(line) as unknown, table })}\n`;
+            }
+
+            newline = pending.indexOf("\n");
+        }
+    }
+
+    const tail = pending.trim();
+
+    if (tail.length > 0) {
+        yield `${JSON.stringify({ doc: JSON.parse(tail) as unknown, table })}\n`;
+    }
+}
+
+// eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
+async function* readConvexExport(tables: ReadonlyArray<{ file: string; table: string }>, logger: Logger): AsyncGenerator<string> {
+    for (const { file, table } of tables) {
+        if (table === CONVEX_STORAGE_TABLE) {
+            logger.warn(`skipping "${CONVEX_STORAGE_TABLE}" — those rows describe stored files. Upload the exported blobs to R2 and re-point the keys.`);
+
+            continue;
+        }
+
+        yield* wrapJsonlLines(file, table);
+    }
+}
+
+/**
+ * Decide whether the positional path is a Convex export directory or a plain
+ * NDJSON file, rejecting the shapes that cannot be either.
+ */
+const resolveImportSource = async (
+    options: ImportCommandOptions,
+): Promise<{ convexTables?: ReadonlyArray<{ file: string; table: string }>; error: boolean }> => {
+    const convexTables = await convexExportTables(options.file);
+    const stats = await stat(options.file);
+
+    if (convexTables === undefined && stats.isDirectory()) {
+        options.logger.error(
+            `${options.file} is a directory but holds no <table>/documents.jsonl — expected a \`npx convex export --path <dir>\` dump, or pass an NDJSON file.`,
+        );
+
+        return { error: true };
+    }
+
+    if (convexTables && options.table !== undefined) {
+        options.logger.error("--table cannot be combined with a Convex export directory — each row's table comes from its source directory.");
+
+        return { error: true };
+    }
+
+    return { convexTables, error: false };
+};
+
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const request = await resolveImportRequest(options);
 
@@ -366,12 +495,26 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const { fetchImpl, requestUrl, token } = request;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
 
-    options.logger.info(`POST ${requestUrl} -> import ${options.file}`);
+    const source = await resolveImportSource(options);
 
-    // Read the file as text and split into lines, then chunk + POST. For very
+    if (source.error) {
+        return { body: undefined, code: 1, inserted: 0 };
+    }
+
+    const { convexTables } = source;
+
+    options.logger.info(
+        convexTables
+            ? `POST ${requestUrl} -> import Convex export ${options.file} (${String(convexTables.length)} tables)`
+            : `POST ${requestUrl} -> import ${options.file}`,
+    );
+
+    // Read the source as text and split into lines, then chunk + POST. For very
     // large files we could swap this for createReadStream + line streaming —
-    // batching makes the in-memory cost bounded per request either way.
-    const stream = createReadStream(options.file, { encoding: "utf8" });
+    // batching makes the in-memory cost bounded per request either way. The
+    // Convex reader is already a line-at-a-time generator and slots straight in,
+    // since both are `for await`-able sources of text chunks.
+    const stream = convexTables ? readConvexExport(convexTables, options.logger) : createReadStream(options.file, { encoding: "utf8" });
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
