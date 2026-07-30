@@ -20,21 +20,11 @@ interface AnalyticsClient {
 
 ### `AnalyticsEngineDataPoint` (interface)
 
-```ts
-interface AnalyticsEngineDataPoint {
-    blobs?: (ArrayBuffer | null | string)[];
-    doubles?: number[];
-    indexes?: (ArrayBuffer | string)[];
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `AnalyticsEngineDatasetLike` (interface)
 
-```ts
-interface AnalyticsEngineDatasetLike {
-    writeDataPoint: (event: AnalyticsEngineDataPoint) => void;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `AnalyticsSqlClient` (interface)
 
@@ -362,22 +352,7 @@ interface CreateKvIntrospectorOptions {
 
 ### `KVNamespaceLike` (interface)
 
-```ts
-interface KVNamespaceLike {
-    delete: (key: string) => Promise<void>;
-    get: (key: string, options?: KvGetOptions | KvValueType) => Promise<unknown>;
-    getWithMetadata: (key: string, options?: KvGetOptions | KvValueType) => Promise<{
-        metadata: unknown;
-        value: unknown;
-    }>;
-    list: (options?: {
-        cursor?: string;
-        limit?: number;
-        prefix?: string;
-    }) => Promise<KvNamespaceListResult>;
-    put: (key: string, value: KvValue, options?: KvNamespacePutOptions) => Promise<void>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `Kv` (interface)
 
@@ -398,12 +373,7 @@ interface Kv {
 
 ### `KvGetOptions` (interface)
 
-```ts
-interface KvGetOptions {
-    cacheTtl?: number;
-    type?: KvValueType;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvIntrospectorLike` (interface)
 
@@ -437,13 +407,7 @@ interface KvIntrospectorLike {
 
 ### `KvListKey` (interface)
 
-```ts
-interface KvListKey<Metadata = unknown> {
-    expiration?: number;
-    metadata?: Metadata;
-    name: string;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvListOptions` (interface)
 
@@ -467,28 +431,11 @@ interface KvListResult<Metadata = unknown> {
 
 ### `KvNamespaceListResult` (type)
 
-```ts
-type KvNamespaceListResult<Metadata = unknown> = {
-    cacheStatus?: string | null;
-    cursor: string;
-    keys: KvListKey<Metadata>[];
-    list_complete: false;
-} | {
-    cacheStatus?: string | null;
-    keys: KvListKey<Metadata>[];
-    list_complete: true;
-};
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvNamespacePutOptions` (interface)
 
-```ts
-interface KvNamespacePutOptions {
-    expiration?: number;
-    expirationTtl?: number;
-    metadata?: unknown;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvPutOptions` (interface)
 
@@ -503,15 +450,11 @@ interface KvPutOptions {
 
 ### `KvValue` (type)
 
-```ts
-type KvValue = ReadableStream | ArrayBuffer | ArrayBufferView | string;
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvValueType` (type)
 
-```ts
-type KvValueType = "text" | "json" | "arrayBuffer" | "stream";
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvValueWithMetadata` (interface)
 
@@ -1033,9 +976,7 @@ interface VectorMatchesLike {
 
 ### `VectorMetric` (type)
 
-```ts
-type VectorMetric = "cosine" | "euclidean" | "dot-product";
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorQueryInputLike` (interface)
 
@@ -1087,88 +1028,35 @@ interface VectorUpsertInputLike {
 
 ### `VectorizeDeleteMutation` (interface)
 
-```ts
-interface VectorizeDeleteMutation {
-    count?: number;
-    mutationId: string;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeIndexDetails` (interface)
 
-```ts
-interface VectorizeIndexDetails {
-    dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeIndexLike` (interface)
 
-```ts
-interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeMatch` (interface)
 
-```ts
-interface VectorizeMatch {
-    id: string;
-    metadata?: Record<string, unknown>;
-    namespace?: string;
-    score: number;
-    values?: ReadonlyArray<number>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeMatches` (interface)
 
-```ts
-interface VectorizeMatches {
-    count: number;
-    matches: ReadonlyArray<VectorizeMatch>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeQueryOptions` (interface)
 
-```ts
-interface VectorizeQueryOptions {
-    filter?: Record<string, unknown>;
-    namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
-    returnValues?: boolean;
-    topK?: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeUpsertMutation` (interface)
 
-```ts
-interface VectorizeUpsertMutation {
-    mutationId: string;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeVector` (interface)
 
-```ts
-interface VectorizeVector {
-    id: string;
-    metadata?: Record<string, unknown>;
-    namespace?: string;
-    values: ReadonlyArray<number>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `WriteEvent` (interface)
 

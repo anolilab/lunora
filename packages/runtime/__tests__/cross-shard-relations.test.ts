@@ -1,4 +1,4 @@
-import { RELATION_FUNCTION_PREFIX } from "@lunora/do";
+import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";

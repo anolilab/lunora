@@ -1,9 +1,8 @@
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { AggregateIndexDefinitionLike } from "../src/aggregates";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * `aggregate({ op: "sum"|"max"|"min" })` and `groupBy({ by })` are §3.1's

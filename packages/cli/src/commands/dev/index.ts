@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const devCommand: Command = {
     argument: {
@@ -31,6 +32,7 @@ const devCommand: Command = {
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Studio server port (default 6173)", name: "port", type: Number },
+        TARGET_OPTION,
         { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
         {
             description: "Run the dev server as a managed background process (auto-enabled when an AI agent is detected; LUNORA_AGENT_MODE=0 disables)",
@@ -58,5 +60,6 @@ export type DevOptions = CreateOptions<{
     port: number | undefined;
     remote: boolean | undefined;
     studio: boolean | undefined;
+    target: string | undefined;
     "worker-port": number | undefined;
 }>;

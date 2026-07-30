@@ -11,11 +11,11 @@
  * these resolvers next to the storage helpers they wrap.
  */
 
+import { readQueryInsights } from "@lunora/observability";
+import type { SqlExec } from "@lunora/shard-engine";
+import { lintReadonlySql, readSchemaHistory, readSchemaVersion } from "@lunora/shard-engine";
+
 import { readBackRelationCounts } from "./back-relations";
-import type { SqlExec } from "./ctx-db";
-import { readQueryInsights } from "./query-metrics";
-import { readSchemaHistory, readSchemaVersion } from "./schema-history";
-import { lintReadonlySql } from "./sql-console";
 
 /** What a resolver hands back: the RPC payload plus the tables the read depends on. */
 interface AdminReadOutcome {

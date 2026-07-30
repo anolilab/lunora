@@ -23,6 +23,20 @@ export type {
     DockerLike,
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
+export type {
+    DeployDriver,
+    DeployRequest,
+    DevRequest,
+    DriverContext,
+    DriverToolchain,
+    NamedResource,
+    ProvisionResult,
+    ResourceGraph,
+    SecretRequest,
+    ShardNamespaceResource,
+    TailRequest,
+    ToolchainCommand,
+} from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -43,6 +57,7 @@ export {
     writeDevServerState,
 } from "./dev-server-state";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
+export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
@@ -53,24 +68,16 @@ export { default as LunoraReporter } from "./lunora-reporter";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
-export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "./project-config";
+export {
+    interpretRemote,
+    LUNORA_CONFIG_FILE,
+    readProjectRemotePreference,
+    readProjectTarget,
+    resolveProjectTarget,
+    resolveTargetOrThrow,
+} from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
-export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
-export { reconcileWranglerBindings } from "./reconcile-bindings";
-export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
-export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
-export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
-export { reconcileWranglerCrons } from "./reconcile-crons";
-export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
-export {
-    injectRemoteFlags,
-    isRemoteEnvEnabled,
-    materializeRemoteWranglerConfig,
-    planRemoteBindings,
-    REMOTE_ELIGIBLE_KEYS,
-    resolveRemoteEnabled,
-} from "./remote-bindings";
 export type {
     AugmentPlan,
     DevSecretsFillPlan,
@@ -135,27 +142,5 @@ export {
     paintBadge,
     STEP_BADGE_NAMES,
 } from "./tui-theme";
-export type { WranglerCacheShape } from "./workers-cache";
-export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";
-export type { ReadWranglerResult } from "./wrangler-path";
-export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
-export { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
-export type {
-    TailConsumer,
-    WranglerConfig,
-    WranglerContainerEntry,
-    WranglerProjectValidationOptions,
-    WranglerProjectValidationResult,
-    WranglerValidationReport,
-    WranglerWorkflowEntry,
-} from "./wrangler-validator";
-export {
-    REQUIRED_COMPATIBILITY_DATE,
-    REQUIRED_FLAG,
-    validateWrangler,
-    validateWranglerConfig,
-    validateWranglerProject,
-    withTailConsumer,
-} from "./wrangler-validator";

@@ -26,6 +26,7 @@ import { init as initLexer, parse as lexModule } from "es-module-lexer";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
+import { readWranglerJsonc, WRANGLER_FILES } from "./cloudflare/wrangler-path";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { discoverFlagsInfo } from "./flags-info";
@@ -35,7 +36,6 @@ import { discoverQueueInfo } from "./queue-info";
 import { discoverSchemaInfo } from "./schema-info";
 import type { WorkflowIR } from "./workflow-info";
 import { discoverWorkflowInfo } from "./workflow-info";
-import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 
 /** Source file extensions worth scanning for capability signals. */
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);

@@ -1,8 +1,8 @@
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable enough on the supported runtimes (Node ^22.15 || >=24.10) and is the deliberate in-memory engine for this Node-only harness
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlCursor, SqlExec } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the {@link SqlExec} surface

@@ -35,7 +35,7 @@
 
 // Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
-import type { DatabaseWriterLike } from "@lunora/do";
+import type { DatabaseWriterLike } from "@lunora/shard-engine";
 
 import { LunoraError } from "./errors";
 

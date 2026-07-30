@@ -127,6 +127,7 @@ interface DeployCommandOptions {
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
+    target?: string;
     temporary?: boolean;
     updateSchemaBaseline?: boolean;
 }
@@ -171,6 +172,7 @@ interface DevCommandOptions {
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
+    target?: string;
     workerPort?: number;
 }
 ```

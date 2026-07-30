@@ -1,0 +1,638 @@
+// eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable on Node ^22.15 || >=24.10 and is the deliberate in-memory engine for this Node-only reference host
+import { DatabaseSync } from "node:sqlite";
+
+import type {
+    ScheduledJobStatus,
+    ScheduleOptions,
+    SchedulerHost,
+    ShardAsyncSqlExec,
+    ShardDirectory,
+    ShardHost,
+    ShardJurisdiction,
+    ShardKvStore,
+    ShardSqlExec,
+    ShardStub,
+    SocketHandle,
+    SocketHost,
+} from "../index";
+
+/**
+ * A conformance host bundles all four platform contracts so a single factory
+ * can stand up a complete, isolated test environment.
+ */
+interface ConformanceHost {
+    /**
+     * Resolve once a pending alarm has actually fired. Optional: hosts whose
+     * alarm delivery is owned by the platform and can't be observed from inside
+     * a shard callback (Cloudflare wakes a separate `alarm()` invocation) omit
+     * it, and the suite then asserts only the set/read/delete half of the alarm
+     * contract — platform delivery is the platform's test, not the adapter's.
+     */
+    awaitAlarmFired?: (target: number) => Promise<void>;
+    /** Optional cleanup hook (close DBs, release timers). */
+    cleanup?: () => void;
+
+    /**
+     * Mint a raw socket for {@link SocketHost.accept}. Optional: what a socket
+     * actually _is_ differs per host (Cloudflare needs a live `WebSocketPair` end), and
+     * the provider-neutral suite can't know. Defaults to an opaque object for
+     * hosts that don't care.
+     */
+    createSocket?: () => unknown;
+    /** The shard directory under test. */
+    directory: ShardDirectory;
+
+    /**
+     * The durable key-value store under test. Optional: a host that implements
+     * only the reactive-engine half (`ShardHost`) has no KV surface to offer,
+     * and the suite reports the gap rather than asserting against a stub.
+     */
+    kv?: ShardKvStore;
+
+    /**
+     * Read back the frames a socket has been sent, oldest first.
+     *
+     * Optional, because not every host can observe its own outbound traffic —
+     * but a host that omits it cannot be asserted against for any *delivery*
+     * guarantee, only for "send did not throw". Since delivery is most of what
+     * the engine does (pokes, deltas, whispers), a host without this is only
+     * partially proven, and the suites say so rather than skipping quietly.
+     */
+    readFrames?: (socket: SocketHandle) => string[];
+
+    /**
+     * Re-create a runtime socket from its durable state. Optional: only hosts
+     * that can be driven through a recycle from inside a test implement it
+     * (see {@link ConformanceHost.simulateRecycle}).
+     */
+    restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
+
+    /**
+     * The scheduler host under test. Optional: a package that implements only
+     * the shard/socket half of the platform (`@lunora/do`) has no scheduler to
+     * offer, and the suite reports the gap instead of asserting against a stub.
+     * A full composition root must supply one.
+     */
+    scheduler?: SchedulerHost;
+    /** The shard execution slot under test. */
+    shard: ShardHost;
+
+    /**
+     * Drive a pending job to its dead-letter state — however this host gets
+     * there — so the suite can assert what a parked job looks like without
+     * waiting out a real retry budget.
+     *
+     * Optional, and the same shape as {@link ConformanceHost.simulateRecycle}:
+     * a host that cannot force the transition from inside a test omits it and
+     * the suite reports the gap. It exists because the observable *invariants*
+     * of dead-lettering — disjoint listings, requeue semantics — are
+     * contract-level, while how many failures it takes to get there is host
+     * policy the contract deliberately does not fix.
+     * @returns `true` if the job was pending and is now parked.
+     */
+    simulateDeadLetter?: (id: string) => Promise<boolean>;
+
+    /**
+     * Drop runtime socket state while keeping durable state, so the suite can
+     * assert attachments survive. Optional: a host whose recycle is owned by
+     * the platform (Cloudflare hibernation) cannot trigger one on demand, and
+     * the suite skips the recycle leg rather than faking it.
+     */
+    simulateRecycle?: () => void;
+    /** The socket subscription host under test. */
+    socket: SocketHost;
+}
+
+/**
+ * Factory signature consumed by `defineHostContractSuite`. Must return a
+ * fresh, isolated host for each test run.
+ */
+type ConformanceHostFactory = () => ConformanceHost | Promise<ConformanceHost>;
+
+/** Internal state of a reference socket. */
+type ReferenceSocket = {
+    attachment: unknown;
+    /** Bytes "queued" — the reference host flushes instantly, so always 0. */
+    bufferedAmount: number;
+    closed: boolean;
+    handle: SocketHandle;
+    id: string;
+    /** The raw socket object handed to `accept`, for `handleFor` lookups. */
+    raw: unknown;
+    received: (string | ArrayBuffer)[];
+    tags: Set<string>;
+};
+
+/** Internal state of a reference shard. */
+type ReferenceShardState = {
+    /** Serialized alarm timestamp, or null if none. */
+    alarmAt: number | null;
+    /** Pending alarm timeout handle. */
+    alarmTimeout: ReturnType<typeof setTimeout> | null;
+    /** Queue of serialized closures waiting for the single-writer gate. */
+    pending: {
+        function_: () => Promise<unknown>;
+        reject: (reason: unknown) => void;
+        resolve: (value: unknown) => void;
+    }[];
+    /** True while a serialized closure is running. */
+    running: boolean;
+};
+
+let socketCounter = 0;
+let jobCounter = 0;
+
+const nextSocketId = (): string => {
+    socketCounter += 1;
+
+    return `socket-${socketCounter}`;
+};
+
+const nextJobId = (): string => {
+    jobCounter += 1;
+
+    return `job-${jobCounter}`;
+};
+
+const normalizeBinding = (value: unknown): unknown => (value === undefined ? null : value);
+
+const extractArrayBuffer = (data: string | ArrayBufferLike | Blob | ArrayBufferView): ArrayBuffer => {
+    if (typeof data === "string") {
+        const encoder = new TextEncoder();
+
+        return encoder.encode(data).buffer;
+    }
+
+    if (data instanceof ArrayBuffer) {
+        return data;
+    }
+
+    if (ArrayBuffer.isView(data)) {
+        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    }
+
+    // Blob is not supported in this reference host.
+    return new ArrayBuffer(0);
+};
+
+/**
+ * Create a reference in-memory conformance host built on `node:sqlite`.
+ *
+ * This is the cheapest possible host that satisfies the `@lunora/platform`
+ * contracts. It is intentionally not production-ready — it exists so the TCK
+ * can assert the contract shape without wrangler/miniflare overhead.
+ */
+const createReferenceHost = (): ReferenceHost => {
+    // Each shard gets its own in-memory SQLite database. The TCK uses one shard
+    // key per host, so a single DB is sufficient.
+    const database = new DatabaseSync(":memory:");
+
+    const shardState: ReferenceShardState = {
+        alarmAt: null,
+        alarmTimeout: null,
+        pending: [],
+        running: false,
+    };
+
+    // Socket state is split into "runtime" (in-memory handles) and "durable"
+    // (serialized attachments plus fan-out tags). Tests call `simulateRecycle()`
+    // to clear runtime state, then `restoreSocket()` to rehydrate from the
+    // durable side — tags come back with the socket, exactly as they do on a
+    // host that persists them alongside the connection.
+    const runtimeSockets = new Map<string, ReferenceSocket>();
+    const durableAttachments = new Map<string, unknown>();
+    const durableTags = new Map<string, Set<string>>();
+
+    const sql: ShardSqlExec = {
+        exec: (query, ...bindings) => {
+            const statement = database.prepare(query);
+            const normalized = bindings.map(normalizeBinding) as import("node:sqlite").SQLInputValue[];
+            const trimmed = query.trim().toLowerCase();
+
+            // Reads buffer their rows; writes produce none. Either way the
+            // caller gets the same cursor shape — iterable, `toArray`, `one` —
+            // because the contract requires all three of every host.
+            const rows = trimmed.startsWith("select")
+                ? statement.all(...normalized)
+                : ((): unknown[] => {
+                      statement.run(...normalized);
+
+                      return [];
+                  })();
+
+            return {
+                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                one: () => {
+                    if (rows.length !== 1) {
+                        throw new Error(`expected exactly one row, got ${String(rows.length)}`);
+                    }
+
+                    return rows[0];
+                },
+                toArray: () => [...rows],
+            } as never;
+        },
+    };
+
+    const asyncSql: ShardAsyncSqlExec = {
+        all: async (query_, params) => {
+            const statement = database.prepare(query_);
+
+            return statement.all(...(params as import("node:sqlite").SQLInputValue[]));
+        },
+        run: async (query_, params) => {
+            const statement = database.prepare(query_);
+            const result = statement.run(...(params as import("node:sqlite").SQLInputValue[]));
+
+            return { rowsAffected: Number(result.changes) };
+        },
+    };
+
+    const drainQueue = (): void => {
+        if (shardState.running || shardState.pending.length === 0) {
+            return;
+        }
+
+        const next = shardState.pending.shift();
+
+        if (next === undefined) {
+            return;
+        }
+
+        shardState.running = true;
+        next.function_()
+            .then(next.resolve, next.reject)
+            .finally(() => {
+                shardState.running = false;
+                drainQueue();
+            });
+    };
+
+    const runSerialized: ShardHost["runSerialized"] = (function_) =>
+        new Promise((resolve, reject) => {
+            shardState.pending.push({
+                function_,
+                reject: (reason: unknown) => {
+                    reject(reason);
+                },
+                resolve: (value: unknown) => {
+                    resolve(value as never);
+                },
+            });
+            drainQueue();
+        });
+
+    const transaction: ShardHost["transaction"] = async (function_) => {
+        database.exec("BEGIN");
+        try {
+            const result = await function_();
+            database.exec("COMMIT");
+
+            return result;
+        } catch (error) {
+            database.exec("ROLLBACK");
+            throw error;
+        }
+    };
+
+    const setAlarm = (timestamp: number | Date): void => {
+        const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
+        shardState.alarmAt = ms;
+
+        if (shardState.alarmTimeout !== null) {
+            clearTimeout(shardState.alarmTimeout);
+        }
+
+        const delay = Math.max(0, ms - Date.now());
+        shardState.alarmTimeout = setTimeout(() => {
+            shardState.alarmAt = null;
+            shardState.alarmTimeout = null;
+        }, delay);
+    };
+
+    const alarms: ShardHost["alarms"] = {
+        delete: () => {
+            shardState.alarmAt = null;
+            if (shardState.alarmTimeout !== null) {
+                clearTimeout(shardState.alarmTimeout);
+                shardState.alarmTimeout = null;
+            }
+        },
+        get: () => shardState.alarmAt,
+        set: setAlarm,
+    };
+
+    const shard: ShardHost = {
+        alarms,
+        asyncSql,
+        runSerialized,
+        sql,
+        transaction,
+        waitUntil: () => {
+            // The reference host does not distinguish request/background
+            // lifetimes; fire-and-forget work is left to the caller.
+        },
+    };
+
+    /** `SocketHandle` -> stable id, the reference host's answer for `idFor`. */
+    const handleIds = new WeakMap<SocketHandle, string>();
+
+    const createHandle = (socket: ReferenceSocket): SocketHandle => {
+        const handle: SocketHandle = {
+            bufferedAmount: socket.bufferedAmount,
+            close: (_code, _reason) => {
+                socket.closed = true;
+            },
+            deserializeAttachment: () => socket.attachment,
+            send: (data) => {
+                // Keep text as text. `received` has always been typed
+                // `(string | ArrayBuffer)[]`, but encoding unconditionally made
+                // the string arm unreachable — which went unnoticed for as long
+                // as nothing read the buffer back. `readFrames` reads it now.
+                socket.received.push(typeof data === "string" ? data : extractArrayBuffer(data));
+            },
+            serializeAttachment: (value) => {
+                socket.attachment = value;
+                durableAttachments.set(socket.id, value);
+            },
+        };
+        socket.handle = handle;
+        // Identity out-of-band, exactly as `SocketHost.idFor` requires. The
+        // reference host could trivially keep an `id` property here, but then it
+        // would not be exercising the contract a real host has to satisfy.
+        handleIds.set(handle, socket.id);
+
+        return handle;
+    };
+
+    const socket: SocketHost = {
+        accept: (rawSocket, attachment, tags) => {
+            const id = nextSocketId();
+            const socketState: ReferenceSocket = {
+                attachment,
+                bufferedAmount: 0,
+                closed: false,
+                raw: rawSocket,
+                handle: null as unknown as SocketHandle,
+                id,
+                received: [],
+                tags: new Set(tags),
+            };
+            runtimeSockets.set(id, socketState);
+            durableTags.set(id, new Set(tags));
+
+            if (attachment !== undefined) {
+                durableAttachments.set(id, attachment);
+            }
+
+            return createHandle(socketState);
+        },
+        getSockets: (tag) => {
+            const sockets = [...runtimeSockets.values()];
+            const filtered = tag === undefined ? sockets : sockets.filter((s) => s.tags.has(tag));
+
+            return filtered.map((s) => s.handle);
+        },
+        handleFor: (rawSocket) => [...runtimeSockets.values()].find((s) => s.raw === rawSocket)?.handle,
+        idFor: (handle) => {
+            const id = handleIds.get(handle);
+
+            if (id === undefined) {
+                // Loudly, not `?? ""`: the suite now compares tag fan-out BY ID, so
+                // a host whose registration silently missed would return [""] vs
+                // [""] and pass a crossed-tag check it should fail.
+                throw new Error("reference host: idFor called with a handle this host never issued");
+            }
+
+            return id;
+        },
+        removeTag: (handle, tag) => {
+            const socketState = runtimeSockets.get(handleIds.get(handle) ?? "");
+
+            if (socketState === undefined) {
+                return;
+            }
+
+            if (tag === undefined) {
+                socketState.tags.clear();
+            } else {
+                socketState.tags.delete(tag);
+            }
+
+            durableTags.set(handleIds.get(handle) ?? "", new Set(socketState.tags));
+        },
+        setTag: (handle, tag) => {
+            const id = handleIds.get(handle) ?? "";
+            const socketState = runtimeSockets.get(id);
+
+            if (socketState !== undefined) {
+                socketState.tags.add(tag);
+                durableTags.set(id, new Set(socketState.tags));
+            }
+        },
+    };
+
+    const directory: ShardDirectory = {
+        get: (id) => {
+            const stub: ShardStub = {
+                fetch: async () => new Response(String(id)),
+            };
+
+            return stub;
+        },
+        getByName: (name) => {
+            const stub: ShardStub = {
+                fetch: async () => new Response(name),
+            };
+
+            return stub;
+        },
+        idForName: (name) => `shard:${name}`,
+        jurisdiction: (_jurisdiction: ShardJurisdiction) => directory,
+    };
+
+    // Durable key-value store, kept in a plain Map. Structured-clone the value
+    // on write so a caller mutating the object it stored cannot reach back into
+    // the "durable" copy — the same isolation a real serializing store gives.
+    const kvData = new Map<string, unknown>();
+    const kv: ShardKvStore = {
+        delete: async (key) => kvData.delete(key),
+        get: async (key) => kvData.get(key) as never,
+        list: async (options) => {
+            const prefix = options?.prefix ?? "";
+            const result = new Map<string, unknown>();
+
+            for (const [key, value] of kvData) {
+                if (key.startsWith(prefix)) {
+                    result.set(key, value);
+                }
+            }
+
+            return result as never;
+        },
+        put: async (key, value) => {
+            kvData.set(key, structuredClone(value));
+        },
+    };
+
+    type ReferenceJob = {
+        args: Record<string, unknown>;
+        attempts: number;
+        functionPath: string;
+        options: ScheduleOptions;
+        scheduledFor: number;
+        timer: ReturnType<typeof setTimeout> | undefined;
+    };
+
+    const scheduledJobs = new Map<string, ReferenceJob>();
+
+    /**
+     * Jobs that exhausted their retry budget. Held in a separate map, never in
+     * both — the contract requires the two listings to be disjoint, so modelling
+     * them as one map with a flag would make the invariant a convention rather
+     * than a fact.
+     */
+    const deadJobs = new Map<string, ReferenceJob>();
+
+    const toStatus = (id: string, job: ReferenceJob): ScheduledJobStatus => {
+        return {
+            attempts: job.attempts,
+            functionPath: job.functionPath,
+            id,
+            scheduledFor: job.scheduledFor,
+        };
+    };
+
+    const scheduler: SchedulerHost = {
+        cancel: async (id) => {
+            const job = scheduledJobs.get(id);
+
+            if (job === undefined) {
+                return false;
+            }
+
+            clearTimeout(job.timer);
+            scheduledJobs.delete(id);
+
+            return true;
+        },
+        cron: async () => {
+            // Reference host does not support cron execution; cron is tested by
+            // asserting the contract shape, not by running timers.
+        },
+        deadLetter: {
+            list: async () => [...deadJobs].map(([id, job]) => toStatus(id, job)),
+            requeue: async (id) => {
+                const job = deadJobs.get(id);
+
+                if (job === undefined) {
+                    return false;
+                }
+
+                deadJobs.delete(id);
+                // A fresh budget is the point of a requeue: returning it with
+                // its exhausted count parks it again on the next failure without
+                // ever retrying.
+                scheduledJobs.set(id, { ...job, attempts: 0, timer: undefined });
+
+                return true;
+            },
+        },
+        list: async () => [...scheduledJobs].map(([id, job]) => toStatus(id, job)),
+        schedule: async (functionPath, args, options) => {
+            const id = nextJobId();
+            let scheduledFor: number;
+
+            if (options?.at === undefined) {
+                scheduledFor = Date.now() + (options?.delayMs ?? 0);
+            } else {
+                scheduledFor = typeof options.at === "number" ? options.at : options.at.getTime();
+            }
+
+            const delay = Math.max(0, scheduledFor - Date.now());
+            const timer = setTimeout(() => {
+                scheduledJobs.delete(id);
+            }, delay);
+
+            scheduledJobs.set(id, { args, attempts: 0, functionPath, options: options ?? {}, scheduledFor, timer });
+
+            return { id, scheduledFor };
+        },
+    };
+
+    return {
+        awaitAlarmFired: async (target) => {
+            // The reference host clears `alarmAt` from a real timer, so waiting
+            // past the target (plus a small margin) is enough to observe it.
+            await new Promise((resolve) => {
+                setTimeout(resolve, Math.max(0, target - Date.now()) + 30);
+            });
+        },
+        cleanup: () => {
+            database.close();
+
+            if (shardState.alarmTimeout !== null) {
+                clearTimeout(shardState.alarmTimeout);
+            }
+
+            for (const job of scheduledJobs.values()) {
+                clearTimeout(job.timer);
+            }
+        },
+        directory,
+        kv,
+        // Text frames only: every Lunora wire frame is JSON, and returning
+        // binary as a lossy string would let a corrupted frame read as a
+        // delivered one.
+        readFrames: (handle: SocketHandle) =>
+            (runtimeSockets.get(handleIds.get(handle) ?? "")?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
+        restoreSocket: (id: string, attachment: unknown) => {
+            const socketState: ReferenceSocket = {
+                attachment,
+                bufferedAmount: 0,
+                closed: false,
+                handle: null as unknown as SocketHandle,
+                id,
+                raw: undefined,
+                received: [],
+                tags: new Set(durableTags.get(id)),
+            };
+            runtimeSockets.set(id, socketState);
+
+            return createHandle(socketState);
+        },
+        scheduler,
+        simulateDeadLetter: async (id: string) => {
+            const job = scheduledJobs.get(id);
+
+            if (job === undefined) {
+                return false;
+            }
+
+            clearTimeout(job.timer);
+            scheduledJobs.delete(id);
+            deadJobs.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, timer: undefined });
+
+            return true;
+        },
+        shard,
+        simulateRecycle: () => {
+            runtimeSockets.clear();
+        },
+        socket,
+    };
+};
+
+/**
+ * A reference host exposes the public `ConformanceHost` contracts plus
+ * reference-host-specific helpers for simulating recycle/rehydrate.
+ */
+interface ReferenceHost extends ConformanceHost {
+    /** Re-create a runtime socket from its durable attachment and tags. */
+    restoreSocket: (id: string, attachment: unknown) => SocketHandle;
+    /** Drop runtime socket state while keeping durable attachments and tags. */
+    simulateRecycle: () => void;
+}
+
+export { createReferenceHost };
+export type { ConformanceHost, ConformanceHostFactory, ReferenceHost };

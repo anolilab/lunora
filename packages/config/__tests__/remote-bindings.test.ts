@@ -12,7 +12,7 @@ import {
     planRemoteBindings,
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
-} from "../src/remote-bindings";
+} from "../src/cloudflare/remote-bindings";
 
 // A config covering every eligible kind (D1/KV/R2 arrays, Vectorize/Services
 // arrays, a queue *producer*, and the single AI object) plus the shapes that

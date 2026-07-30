@@ -1,7 +1,6 @@
+import type { AggregateIndexDefinitionLike, SchemaLike } from "@lunora/shard-engine";
 import { bench, describe } from "vitest";
 
-import type { AggregateIndexDefinitionLike } from "../src/aggregates";
-import type { SchemaLike } from "../src/ctx-db";
 import { makeWriter } from "./shared";
 
 /**

@@ -1,6 +1,6 @@
+import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";

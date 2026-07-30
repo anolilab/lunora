@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const codegenCommand: Command = {
     description: "Run codegen for lunora/ functions and schema",
@@ -14,9 +15,10 @@ const codegenCommand: Command = {
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
+        TARGET_OPTION,
     ],
 };
 
 export { codegenCommand };
 
-export type CodegenOptions = CreateOptions<{ "api-spec": string | undefined; format: string | undefined }>;
+export type CodegenOptions = CreateOptions<{ "api-spec": string | undefined; format: string | undefined; target: string | undefined }>;

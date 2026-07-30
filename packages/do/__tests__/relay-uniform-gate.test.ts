@@ -1,6 +1,6 @@
+import type { MaskPoliciesResult, RlsPoliciesResult } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import type { MaskPoliciesResult, RlsPoliciesResult } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 

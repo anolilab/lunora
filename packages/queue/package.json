@@ -58,7 +58,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.9"
+        "@lunora/errors": "1.0.0-alpha.9",
+        "@lunora/platform": "workspace:*"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",

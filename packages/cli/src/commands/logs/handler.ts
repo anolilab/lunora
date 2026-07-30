@@ -1,4 +1,4 @@
-import { readLinkedProject } from "@lunora/config";
+import { readLinkedProject, resolveDeployDriver } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -14,6 +14,7 @@ const LOG_FORMATS = new Set(["json", "pretty"]);
 
 interface LogsCommandOptions {
     cwd?: string;
+
     /** Cloudflare environment name (forwarded as `--env`). */
     env?: string;
     /** Output format: `pretty` (default) or `json`. */
@@ -24,6 +25,8 @@ interface LogsCommandOptions {
     spawner?: Spawner;
     /** Filter by invocation status: `ok`, `error`, or `canceled` (forwarded as `--status`). */
     status?: string;
+    /** Deploy target whose tail command to run. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    target?: string;
 
     /**
      * Tail a temporary-account deployment (`wrangler tail --temporary`). For
@@ -58,37 +61,27 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
         return { code: 1, descriptor: undefined, error: "invalid format" };
     }
 
-    const args = ["tail"];
-
-    if (options.worker !== undefined) {
-        args.push(options.worker);
-    }
-
     // Default the environment from the `.lunora/project.json` link when the
     // caller didn't pass `--env`, so a linked checkout tails the right env.
     const env = options.env ?? readLinkedProject(cwd)?.env;
+    const driver = resolveDeployDriver(options.target);
 
-    if (env !== undefined) {
-        args.push("--env", env);
+    if (driver.toolchain === undefined) {
+        options.logger.error(`logs: deploy target "${driver.id}" has no command-line toolchain`);
+
+        return { code: 1, descriptor: undefined, error: "no toolchain" };
     }
 
-    if (options.format !== undefined) {
-        args.push("--format", options.format);
-    }
+    const tailCommand = driver.toolchain.tail({
+        environment: env,
+        format: options.format,
+        search: options.search,
+        status: options.status,
+        temporary: options.temporary,
+        worker: options.worker,
+    });
 
-    if (options.status !== undefined) {
-        args.push("--status", options.status);
-    }
-
-    if (options.search !== undefined) {
-        args.push("--search", options.search);
-    }
-
-    if (options.temporary) {
-        args.push("--temporary");
-    }
-
-    const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
+    const exec = execArgsFor(detectPackageManager(cwd), tailCommand.tool, tailCommand.args);
     const descriptor: SpawnDescriptor = {
         args: exec.args,
         command: exec.command,
@@ -137,6 +130,7 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
         logger,
         search: options.search,
         status: options.status,
+        target: options.target,
         temporary: options.temporary === true,
         worker: argument[0],
     });

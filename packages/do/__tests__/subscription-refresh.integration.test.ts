@@ -23,11 +23,11 @@
  * exercisable through the existing protected `executeSubscription`, `recordChangedTable`,
  * `webSocketMessage`, and `fetch` seams exposed by ShardDO.
  */
+import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 // ---------------------------------------------------------------------------
 // Fake WebSocket — mirrors the shape in shard-do.test.ts.

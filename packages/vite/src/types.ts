@@ -49,6 +49,17 @@ export interface LunoraPluginOptions {
     schemaDir?: string;
     /** Serve the Lunora studio at `/__lunora` during dev. Pass `false` to opt out. Defaults to `true`. */
     studio?: boolean;
+
+    /**
+     * Deploy target the emitted `ctx.*` surface is tailored to. Defaults to
+     * `"target"` in `lunora.json`, then `"cloudflare"` — so an existing project
+     * emits byte-identical output.
+     *
+     * Set it here only to override the project config for one build — keeping
+     * this and `lunora deploy` on the same target is what the shared resolution
+     * in `@lunora/config` exists to guarantee.
+     */
+    target?: string;
     /** Validate that `wrangler.jsonc` declares the bindings the schema implies. Defaults to `true`. */
     validateWrangler?: boolean;
 }
@@ -63,6 +74,7 @@ export interface ResolvedLunoraPluginOptions {
     projectRoot: string;
     schemaDir: string;
     studio: boolean;
+    target: string;
     validateWrangler: boolean;
 }
 

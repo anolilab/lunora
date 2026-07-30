@@ -22,7 +22,7 @@
  * `createPool({ flags: ["FOUND_ROWS"] })`) so the affected-rows OCC guard sees
  * matched (not changed) rows — see {@link buildMysqlExec}.
  */
-import type { DatabaseWriterLike } from "@lunora/do";
+import type { DatabaseWriterLike } from "@lunora/shard-engine";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
 import { createSqlCtxDb } from "@lunora/sql-store";
 

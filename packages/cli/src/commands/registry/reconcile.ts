@@ -8,7 +8,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-import { findWranglerFile, readWranglerJsonc } from "@lunora/config";
+import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import { dirname, join, relative } from "@visulima/path";
 

@@ -1,0 +1,65 @@
+---
+title: "@lunora/shard-engine"
+description: The host-neutral reactive engine — everything a shard does that isn't provider-specific.
+---
+
+`@lunora/shard-engine` is the reactive engine extracted out of `@lunora/do`:
+`ctx.db`, dependency tracking, the reactive cache, the CDC op-log and poke
+protocol, relations, RLS, search, rank and aggregate indexes, the relay tier, and
+the admin/ops surfaces. None of it knows what a Durable Object is — it takes a
+`SqlExec` and the `@lunora/platform` host contracts and runs anywhere those can
+be implemented.
+
+You do not normally import it. `@lunora/do` re-exports everything an app or
+codegen touches, and that surface is frozen. Import from here when you are
+building a host, or writing something that runs beside the engine rather than on
+top of it.
+
+```ts
+import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+```
+
+## What lives here
+
+| Area               | Modules                                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| Reactive reads     | `ctx-db*`, `dependency-tracker`, `reactive-cache`, `query-args`                         |
+| Change propagation | `ctx-db-cdc` (the `__cdc_log` op-log), `subscription-delivery`, `shape-*`               |
+| Fan-out            | `relay`, `relay-hub`, `socket-pool`                                                     |
+| Indexes            | `aggregates`, `rank`, `geo`, search (via the bundled `@lunora/search-core`)             |
+| Access control     | `rls-guard`, relation predicates                                                        |
+| Admin & ops        | `admin-export-import`, `data-migration`, `pitr`, `sql-console`, `settings`, `ttl-sweep` |
+| External ingest    | `external-source-cursor` / `-diff` / `-materialize` / `-pull`                           |
+| Dev catchers       | `mail-catcher`, `queue-catcher`                                                         |
+
+The last three groups moved here from `@lunora/do` because they never touch a
+Durable Object — they take a `SqlExec` and a schema and nothing else. That is the
+test for whether something belongs in this package.
+
+## Conformance
+
+`@lunora/shard-engine/conformance` ships the engine half of the platform TCK:
+
+```ts
+import { defineEngineContractSuite } from "@lunora/shard-engine/conformance";
+
+defineEngineContractSuite("my host", createHost);
+```
+
+The split across two packages is forced rather than chosen. `@lunora/platform`
+asserts what a _host_ provides and is zero-dependency by contract; the
+engine-level legs need `createShardCtxDb` and the relay hub, which live here, so
+importing the engine from `@lunora/platform` would invert the dependency and
+cycle. A host is proven only when it passes both suites.
+
+The engine legs cover OCC snapshot-CAS conflicts (and the trigger-recursion
+ceiling, which is a _different_ `ConflictKind` and must stay distinct),
+shape-poke ordering with per-socket cursor resume, and RLS identity under a live
+subscription.
+
+## Why it is a package
+
+One adapter is a hypothetical seam; two is a real one. Splitting the engine out
+is what makes the Cloudflare host substitutable rather than merely
+well-abstracted — and the conformance suites, run against both the in-memory
+reference host and real workerd, are what caught the defects inspection missed.

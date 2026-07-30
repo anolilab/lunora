@@ -13,7 +13,8 @@
  * Cleanup runs when Vite's dev server closes (the `buildEnd`/`closeBundle`
  * hooks), so the temp config never leaks past the dev session.
  */
-import { materializeRemoteWranglerConfig, readProjectRemotePreference, resolveRemoteEnabled } from "@lunora/config";
+import { readProjectRemotePreference } from "@lunora/config";
+import { materializeRemoteWranglerConfig, resolveRemoteEnabled } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
 import { lunoraLine } from "./log";

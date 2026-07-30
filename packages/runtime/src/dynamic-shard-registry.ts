@@ -39,8 +39,8 @@
 
 import { LunoraError } from "./errors";
 import type { ShardRegistry } from "./query-coordinator";
-import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./resolve-shard";
-import { applyJurisdiction } from "./resolve-shard";
+import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
+import { applyJurisdiction, resolveShard } from "./resolve-shard";
 
 /**
  * Conventional DO instance name. Kept in sync with `SHARD_REGISTRY_DO_NAME`
@@ -125,10 +125,10 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
 
     // The stub is keyed by the fixed `instanceName` for the lifetime of this
     // registry, so resolve it once at construction. Avoids paying the
-    // `idFromName` + `namespace.get` cost on every `register`/`list`/`unregister`.
-    let cachedStub: ReturnType<ShardNamespaceLike["get"]> | undefined;
-    const stub = (): ReturnType<ShardNamespaceLike["get"]> => {
-        cachedStub ??= namespace.get(namespace.idFromName(instanceName));
+    // resolution cost on every `register`/`list`/`unregister`.
+    let cachedStub: ResolvedShard | undefined;
+    const stub = (): ResolvedShard => {
+        cachedStub ??= resolveShard(namespace, instanceName);
 
         return cachedStub;
     };

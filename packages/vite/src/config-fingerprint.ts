@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { findWranglerFile, LUNORA_CONFIG_FILE, readWranglerJsonc } from "@lunora/config";
+import { LUNORA_CONFIG_FILE } from "@lunora/config";
+import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 /**
  * Fingerprint one JSONC config file for drift detection. Parses first (so

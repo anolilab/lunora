@@ -65,8 +65,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/do": "1.0.0-alpha.57",
         "@lunora/errors": "1.0.0-alpha.9",
+        "@lunora/platform": "workspace:*",
+        "@lunora/shard-engine": "workspace:*",
         "@lunora/sql-store": "1.0.0-alpha.54",
         "drizzle-orm": "catalog:drizzle"
     },
@@ -74,6 +75,7 @@
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/do": "workspace:*",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

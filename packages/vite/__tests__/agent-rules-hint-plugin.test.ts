@@ -18,6 +18,7 @@ const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
         overlay: false,
         projectRoot,
         schemaDir: "lunora",
+        target: "cloudflare",
         studio: false,
         validateWrangler: false,
     };

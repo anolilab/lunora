@@ -5,8 +5,8 @@
  * an async `D1Exec` call (real columns instead of JSON blobs). The worker
  * stitches D1 globals and per-shard DO output into a single NDJSON stream.
  */
-import type { DatabaseWriterLike, SchemaLike } from "@lunora/do";
 import { toErrorBody } from "@lunora/errors";
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";

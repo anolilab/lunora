@@ -11,68 +11,7 @@
  * uses.
  */
 import type { DispatchLogger, DispatchRunFunction } from "@lunora/dispatch";
-
-/** How a queue message body is serialized on the wire (Cloudflare default `"json"`). */
-export type QueueContentType = "bytes" | "json" | "text" | "v8";
-
-/** Options for a single `producer.send(body, options?)`. */
-export interface QueueSendOptions {
-    /** Wire serialization for this message (defaults to the queue's content type). */
-    contentType?: QueueContentType;
-    /** Per-message delivery delay in seconds (0–43200, i.e. up to 12 hours). */
-    delaySeconds?: number;
-}
-
-/** Options for a `producer.sendBatch(messages, options?)`. */
-export interface QueueSendBatchOptions {
-    /** Delivery delay applied to the whole batch, in seconds. */
-    delaySeconds?: number;
-}
-
-/** One entry in a `sendBatch` call — a body plus optional per-message overrides. */
-export interface MessageSendRequestLike<Body = unknown> {
-    body: Body;
-    contentType?: QueueContentType;
-    delaySeconds?: number;
-}
-
-/**
- * Minimal structural projection of workers-types' `Queue&lt;Body>` (the producer
- * binding). The real binding's `send`/`sendBatch` resolve to a metadata object;
- * we widen the return to `Promise&lt;unknown>` so a plain-object fake satisfies it.
- */
-export interface QueueBindingLike<Body = unknown> {
-    send: (message: Body, options?: QueueSendOptions) => Promise<unknown>;
-    sendBatch: (messages: Iterable<MessageSendRequestLike<Body>>, options?: QueueSendBatchOptions) => Promise<unknown>;
-}
-
-/** Options for retrying a message / batch (`message.retry({ delaySeconds })`). */
-export interface QueueRetryOptions {
-    delaySeconds?: number;
-}
-
-/** Structural mirror of workers-types' `Message&lt;Body>` (one delivered message). */
-export interface MessageLike<Body = unknown> {
-    /** Acknowledge this message so it is not redelivered. */
-    ack: () => void;
-    readonly attempts: number;
-    readonly body: Body;
-    readonly id: string;
-    /** Explicitly retry this message (optionally after a delay). */
-    retry: (options?: QueueRetryOptions) => void;
-    readonly timestamp: Date;
-}
-
-/** Structural mirror of workers-types' `MessageBatch&lt;Body>` handed to a consumer. */
-export interface MessageBatchLike<Body = unknown> {
-    /** Acknowledge every message in the batch. */
-    ackAll: () => void;
-    readonly messages: ReadonlyArray<MessageLike<Body>>;
-    /** The queue name this batch was delivered from (`batch.queue`), used to route. */
-    readonly queue: string;
-    /** Retry every message in the batch (optionally after a delay). */
-    retryAll: (options?: QueueRetryOptions) => void;
-}
+import type { MessageBatchLike, MessageSendRequestLike, QueueBindingLike, QueueSendBatchOptions, QueueSendOptions } from "@lunora/platform";
 
 /**
  * The typed producer bound to `ctx.queues.&lt;name>`. Sending is a side effect, so
@@ -181,3 +120,14 @@ export interface QueueBindingSpec {
     /** The stable wrangler queue name, e.g. `email-queue`. */
     name: string;
 }
+
+export {
+    type MessageBatchLike,
+    type MessageLike,
+    type MessageSendRequestLike,
+    type QueueBindingLike,
+    type QueueContentType,
+    type QueueRetryOptions,
+    type QueueSendBatchOptions,
+    type QueueSendOptions,
+} from "@lunora/platform";

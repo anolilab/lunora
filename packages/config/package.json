@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./cloudflare": {
+            "types": "./dist/cloudflare/index.d.ts",
+            "import": "./dist/cloudflare/index.mjs"
+        },
         "./studio-host": {
             "types": "./dist/studio-host/index.d.ts",
             "import": "./dist/studio-host/index.mjs"

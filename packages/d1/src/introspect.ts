@@ -18,8 +18,8 @@
  * shape (re-exposing `_id`, folding booleans); any other table is shown with its
  * real physical columns.
  */
-import type { SchemaLike } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
+import type { SchemaLike } from "@lunora/shard-engine";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";

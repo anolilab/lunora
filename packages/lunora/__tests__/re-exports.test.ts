@@ -19,6 +19,8 @@ const reExports: ReadonlyArray<readonly [string, string]> = [
     ["lunorash/values", "@lunora/values"],
     ["lunorash/runtime", "@lunora/runtime"],
     ["lunorash/do", "@lunora/do"],
+    ["lunorash/platform", "@lunora/platform"],
+    ["lunorash/observability", "@lunora/observability"],
     ["lunorash/client", "@lunora/client"],
     ["lunorash/client/query", "@lunora/client/query"],
     ["lunorash/client/auth", "@lunora/client/auth"],

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "@lunora/codegen";
-import { validateWranglerProject } from "@lunora/config";
+import { validateWranglerProject } from "@lunora/config/cloudflare";
 import { describe, expect, it } from "vitest";
 
 const testDirectory = fileURLToPath(new URL(".", import.meta.url));

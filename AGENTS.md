@@ -75,6 +75,16 @@ The CLI binary is `lunora`. The npm scope is `@lunora/*`. The "main" server pack
 
 There is an unscoped **umbrella** package `lunorash` (directory `packages/lunora/`; npm name is `lunorash` because `lunora` is taken on npm, but the directory and CLI bin stay `lunora`). It re-exports the base packages (`@lunora/server` + subpaths, `@lunora/values`, `@lunora/runtime`, `@lunora/do`, `@lunora/client`) via subpaths (`lunorash/server`, …) and ships the `lunora` CLI bin. Codegen emits `lunorash/*` imports in `_generated/*` when a project declares a `lunorash` dependency (else `@lunora/*`) — opt-in and backward-compatible. Add-ons/adapters/Vite plugin stay separate installs.
 
+**Platform family (plan 114).** Multi-platform support ships as exactly **two** packages:
+
+- `@lunora/platform` — **contracts** (types + capability matrix, zero deps): `ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`, `SchedulerHost`, the canonical binding `*Like` projections, `PlatformCapabilities`. The behavioural TCK lives at the `@lunora/platform/conformance` subpath (`/conformance/suite` is the workerd-safe pure suite; the barrel adds the `node:sqlite` reference host) — the TCK versions in lockstep with the contracts it asserts, and a subpath keeps the root import types-only.
+- `@lunora/shard-engine` — the host-neutral reactive engine (extracted from `@lunora/do`).
+
+- `@lunora/platform-cloudflare` — the Cloudflare **host**: the contracts implemented over Durable Object primitives, plus the composition roots (`createShardPlatform` / `createWorkerPlatform`). `@lunora/do` depends on it and stays the Durable Object class itself; app code never imports it directly.
+- `@lunora/observability` — host-neutral telemetry (logs, metrics, traces, issues), also extracted from `@lunora/do`.
+
+Each host is its own `@lunora/platform-<target>` package — never a subpath of the contracts package, since each carries its own provider deps. `@lunora/platform` stays zero-dependency.
+
 ### Packages
 
 Concise roles below — read the package's `src/` and `docs/` for detail. Flags: **Internal** = supporting layer, depend on the CLI/Vite/runtime that uses it; **not published** = build-time only; **Experimental** = outside the 1.0 stability promise.
@@ -105,6 +115,7 @@ Concise roles below — read the package's `src/` and `docs/` for detail. Flags:
 | `@lunora/auth`              | Auth on **better-auth**, D1-backed; email/password + OAuth, session policies; curated plugins via `@lunora/auth/plugins`.                                                                      |
 | `@lunora/cloudflare-access` | Cloudflare Access (Zero Trust) identity → `ctx.auth` / RLS via a `resolveIdentity` adapter.                                                                                                    |
 | `@lunora/mail`              | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                             |
+| `@lunora/observability`     | Host-neutral telemetry storage + read models: request logs, traces, metrics, issue grouping, security audit. Backs the Studio's observability pages; extracted from `@lunora/do`.              |
 | `@lunora/notify`            | Multi-channel notifications: `ctx.notify`/`ctx.push` over `@visulima/notification`; Web Push + FCM, subscription stores + queue fan-out; `/web` browser subpath.                               |
 | `@lunora/storage`           | R2 typed buckets, signed URLs.                                                                                                                                                                 |
 | `@lunora/scheduler`         | `runAfter` / `runAt` + Cron Triggers via `SchedulerDO`.                                                                                                                                        |
@@ -160,6 +171,29 @@ When stripping extensions in bulk, use an AST-aware codemod (e.g. ts-morph, alre
 **Never mix a default export with named exports in the same file.** If a file has more than one export, use **named exports only**. A `default` export is allowed only when it is the file's _sole_ export — this keeps import sites uniform and avoids default-vs-named ambiguity.
 
 When a third-party API insists on a default export (e.g. `@visulima/cerebro`'s lazy `loader: () => import("./handler")`), do **not** add a `default` alongside named exports. Adapt at the call site instead — `loader: () => import("./handler").then((m) => ({ default: m.execute }))`.
+
+### Platform parity — state the mapping when you add a feature
+
+Every new `ctx.*` surface or binding states its mapping **per target**, or its
+explicit non-support, in the same change that adds it:
+
+- Add the feature to `PlatformCapabilities` in `@lunora/platform` and rate it
+  `"native" | "emulated" | "unsupported"` for each target in the matrix
+  (`CLOUDFLARE_CAPABILITIES`, and any sibling target that exists).
+- If it is host-backed, say which contract carries it — or add one. A feature
+  that reaches past `ShardHost`/`SocketHost`/`ShardDirectory`/`ShardKvStore`/
+  `SchedulerHost` into a provider API is a porting blocker, and the time to
+  notice is while writing it.
+- If a target cannot serve it, `"unsupported"` is a fine answer. Codegen omits
+  the surface and emits a `platform_unsupported_feature` diagnostic; silence is
+  what causes the second host to discover the gap at runtime.
+
+This is a process control, not paperwork. The matrix is what codegen trusts to
+decide whether an app can target a host, and it is only honest if it is updated
+by the person who already knows the answer. Two contracts have shipped wrong in
+exactly the way this prevents — `ShardSqlExec` promised a field nothing read and
+omitted three the engine used, and the canonical binding `*Like` types drifted
+from the real ones because nothing consumed them.
 
 ### Dependency Catalog
 

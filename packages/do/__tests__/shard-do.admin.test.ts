@@ -1,28 +1,36 @@
 import { LunoraError } from "@lunora/errors";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { AggregateIndexDefinitionLike } from "../src/aggregates";
-import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
-import { runDataMigration } from "../src/data-migration";
+import type { ExplainIssueResult, MetricHistoryPoint, MetricHistorySeries, MetricSeries, TraceSpan, TraceSummary } from "@lunora/observability";
 import type {
     AdvisoryFinding,
+    AggregateIndexDefinitionLike,
+    DatabaseWriterLike,
+    DataMigrationLike,
     FanoutMetricsResult,
     FanoutPathCounters,
     FanoutTopicStat,
     FlagEvaluation,
     FlagsResult,
+    MigrationRunResult,
+    QueueMessageRow,
     QueueMetadata,
+    RankIndexDefinitionLike,
+    RecordQueueMessageInput,
+    SchemaLike,
+    ShardRankPageResult,
+    SocketAttachment,
+    SqlExec,
     StudioFeaturesResult,
-} from "../src/introspect";
-import { ADMIN_FUNCTIONS } from "../src/introspect";
-import type { ExplainIssueResult } from "../src/issue-explainer";
-import type { MetricSeries } from "../src/metric-buffer";
-import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
-import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
-import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
-import { rankKeyFromDoc } from "../src/rank";
+} from "@lunora/shard-engine";
+import {
+    ADMIN_FUNCTIONS,
+    applyCdcChanges,
+    createShardCtxDb as createShardContextDatabase,
+    rankKeyFromDoc,
+    runDataMigration,
+    runShardMigrations,
+} from "@lunora/shard-engine";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
@@ -34,8 +42,6 @@ import type {
     ShardDOState,
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { TraceSpan, TraceSummary } from "../src/span-buffer";
-import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

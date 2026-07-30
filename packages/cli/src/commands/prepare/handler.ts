@@ -6,7 +6,7 @@
  */
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { inferLunoraBindings, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config";
+import { resolveDeployDriver, resolveTargetOrThrow } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -14,6 +14,7 @@ import { renderCodegenFailure } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { PrepareOptions } from "./index";
@@ -25,6 +26,13 @@ interface PrepareCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
+
+    /**
+     * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`.
+     * Resolved through the same registry they use so a second driver does not
+     * have to be found here separately.
+     */
+    target?: string;
     /** Re-bless the committed schema baseline with the current shape. */
     updateSchemaBaseline?: boolean;
 }
@@ -42,53 +50,51 @@ interface PrepareCommandResult {
 }
 
 /**
- * Auto-provision bindings implied by the project's code into `wrangler.jsonc`.
- * Best-effort: a failure here is logged as a warning and does not abort
- * `prepare`, because the subsequent `validateWrangler` call will catch any
- * truly-missing requirement.
+ * Auto-provision the resources implied by the project's code into the deploy
+ * target's configuration, through the `DeployDriver` seam.
+ *
+ * Best-effort: a driver folds a failed step into a warning rather than throwing,
+ * because the subsequent `validateWrangler` call is the real gate on a
+ * genuinely-missing requirement.
+ *
+ * Cloudflare is the only registered driver today, so this is behavior-identical
+ * to the inline `inferLunoraBindings` + `reconcileWrangler*` sequence it
+ * replaces — the driver delegates to exactly those functions.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = [], target?: string): Promise<void> => {
+    const context = { crons: cronTriggers, projectRoot: cwd };
+    const driver = resolveDeployDriver(target);
+
+    // The portable summary of what the app needs — target-independent, so it
+    // reads the same whichever driver is selected. Best-effort: a failed
+    // inference must not stop provisioning, which reports its own warnings.
     try {
-        const inferred = await inferLunoraBindings({ projectRoot: cwd });
-        const reconciled = reconcileWranglerBindings(cwd, inferred);
+        const graph = await driver.infer(context);
+        const requirements = [
+            graph.shardNamespaces.length > 0 ? `${String(graph.shardNamespaces.length)} shard namespace(s)` : undefined,
+            graph.queues.length > 0 ? `${String(graph.queues.length)} queue(s)` : undefined,
+            graph.workflows.length > 0 ? `${String(graph.workflows.length)} workflow(s)` : undefined,
+            graph.containers.length > 0 ? `${String(graph.containers.length)} container(s)` : undefined,
+            graph.globalDatabase ? "global database" : undefined,
+            graph.objectStorage ? "object storage" : undefined,
+            graph.keyValueStore ? "key-value store" : undefined,
+        ].filter((entry): entry is string => entry !== undefined);
 
-        if (reconciled.changed) {
-            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        if (requirements.length > 0) {
+            logger.info(`${driver.name} target requires: ${requirements.join(", ")}`);
         }
-
-        for (const warning of reconciled.warnings) {
-            logger.warn(warning);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`binding inference skipped: ${message}`);
+    } catch {
+        // Inference is reporting-only here; `provision` surfaces the real problem.
     }
 
-    try {
-        const reconciled = reconcileWranglerCompatibilityDate(cwd);
+    const provisioned = await driver.provision(context);
 
-        if (reconciled.changed) {
-            logger.success(
-                `bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
-            );
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`compatibility date sync skipped: ${message}`);
+    if (provisioned.changed) {
+        logger.success(`provisioned: ${provisioned.added.join(", ")} → ${provisioned.configPath ?? "wrangler.jsonc"}`);
     }
 
-    try {
-        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
-
-        if (reconciled.changed) {
-            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`cron trigger sync skipped: ${message}`);
+    for (const warning of provisioned.warnings) {
+        logger.warn(warning);
     }
 };
 
@@ -100,14 +106,21 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
  */
 const runPrepareCommand = async (options: PrepareCommandOptions): Promise<PrepareCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    // Resolved ONCE and reused for both codegen and binding provisioning, so
+    // the emitted surface and the provisioned bindings cannot disagree.
+    const target = resolveTargetOrThrow(cwd, options.target);
 
     options.logger.info("running codegen");
 
     let codegen: CodegenResult;
 
     try {
-        codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd });
+        codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd, target });
         options.logger.success("codegen complete");
+
+        // `prepare` is the CI entry point, so a gated surface has to be visible
+        // here rather than only in the deployed app.
+        reportPlatformDiagnostics(codegen.platformDiagnostics, options.logger);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
@@ -142,7 +155,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         };
     }
 
-    await provisionBindings(cwd, options.logger, codegen.cronTriggers);
+    await provisionBindings(cwd, options.logger, codegen.cronTriggers, target);
 
     const validation = validateWrangler({ projectRoot: cwd });
 
@@ -177,6 +190,7 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         logger,
+        target: options.target,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     }),
 );

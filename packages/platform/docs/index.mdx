@@ -1,0 +1,88 @@
+---
+title: "@lunora/platform"
+description: The host contracts every Lunora target implements — ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost — plus the capability matrix codegen reads.
+---
+
+`@lunora/platform` is types and a capability matrix, nothing else. It has no
+runtime dependencies and near-zero runtime code: it exists so a second target
+implements a **contract** rather than forking the engine.
+
+The Cloudflare host — the adapters plus the `createShardPlatform` /
+`createWorkerPlatform` composition root — lives in `@lunora/do`, where the
+Durable Object code it wraps lives. A future second target gets its own
+`@lunora/platform-<target>` package when it exists; hosts are never subpaths
+here, because each carries its own provider dependencies and this package must
+stay installable anywhere.
+
+```ts
+import type { ShardHost, SocketHost, PlatformCapabilities } from "@lunora/platform";
+```
+
+## The contracts
+
+| Contract         | What it owns                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `ShardHost`      | One shard's execution slot: `runSerialized`, `transaction`, `sql`, `alarms`, `waitUntil`, `shardKey` |
+| `SocketHost`     | Hibernatable sockets: `accept`, `getSockets(tag?)`, `handleFor`, `idFor`, optional retagging         |
+| `ShardDirectory` | Name → stub resolution, with optional jurisdiction pinning                                           |
+| `ShardKvStore`   | Ordered key-value with prefix scan — what `ShardHost` deliberately omits                             |
+| `SchedulerHost`  | `runAfter`/`runAt`, at-least-once, optional config-time `cron`                                       |
+
+Each is documented at its definition. Two contract notes are worth repeating
+here because they are behavioural, not type-level, and a host that ignores them
+compiles fine and fails in production:
+
+- **Attachment state must survive host recycling.** Hibernation on Cloudflare, a
+  process restart elsewhere. Everything a socket needs after a wake lives in its
+  attachment.
+- **`getSockets(tag)` must return _exactly_ the tagged sockets.** A superset fans
+  updates out to subscriptions that never asked for them, which across tenants is
+  a data leak — so a host without native tagging filters in userland.
+- **Return your transport socket as the `SocketHandle`.** Identity lives
+  out-of-band on `idFor` precisely so you can. Fan-out is O(subscribers) and
+  `SocketHandle` is on that loop, so wrapping costs two extra call frames per
+  socket — measured at +11% to +13% on whisper delivery at 128 and 1024
+  subscribers. A wrapper also gives one socket two identities, since the runtime's
+  own message and close callbacks hand back the transport object: per-socket
+  `WeakMap` memos can then key on either and diverge. Wrapping is permitted, but
+  the host that does it pays for it.
+
+## Capabilities
+
+`PlatformCapabilities` rates each feature `"native" | "emulated" | "unsupported"`.
+Codegen intersects it with the app's feature probe and omits `ctx.*` surfaces the
+target cannot serve, with a `platform_unsupported_feature` diagnostic. `emulated`
+emits as-is.
+
+```ts
+import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
+```
+
+## Conformance
+
+A host is only correct if it passes the conformance TCK — the executable form of
+these contracts, shipped as a subpath of this package so it can never version
+apart from what it asserts:
+
+```ts
+import { defineHostContractSuite } from "@lunora/platform/conformance/suite"; // pure — safe in workerd
+import { createReferenceHost } from "@lunora/platform/conformance"; // adds the node:sqlite reference host
+```
+
+Host variance is declared through presence-based optional hooks on
+`ConformanceHost` (`createSocket`, `simulateRecycle`, `awaitAlarmFired`,
+`scheduler`) rather than skipped blocks, so a gap shows up in the suite output
+instead of vanishing from it.
+
+The TCK covers host primitives. It does **not** yet cover the engine-level
+guarantees (OCC-409, poke ordering, RLS under a live subscription, scheduler
+at-least-once) — those are implemented by code still being extracted from
+`@lunora/do`, and they move into the suite as that completes. A passing host
+means "the primitives are right", not "the engine will behave".
+
+## Adding to the matrix
+
+Any new `ctx.*` or binding feature states its mapping per target — or its
+explicit non-support — in the same change that adds it. That rule lives in
+[AGENTS.md](https://github.com/anolilab/lunora/blob/alpha/AGENTS.md); the matrix
+is only honest if it is updated by the person who knows the answer.

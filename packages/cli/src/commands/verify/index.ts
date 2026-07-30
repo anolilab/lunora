@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const verifyCommand: Command = {
     description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
@@ -25,6 +26,7 @@ const verifyCommand: Command = {
             type: String,
         },
         { description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean },
+        TARGET_OPTION,
     ],
 };
 
@@ -37,5 +39,6 @@ export type VerifyOptions = CreateOptions<{
     "api-spec": string | undefined;
     format: string | undefined;
     "health-url": string | undefined;
+    target: string | undefined;
     typecheck: boolean | undefined;
 }>;

@@ -65,12 +65,14 @@
     },
     "dependencies": {
         "@lunora/agent": "1.0.0-alpha.31",
-        "@lunora/do": "1.0.0-alpha.56",
         "@lunora/errors": "1.0.0-alpha.9",
         "@lunora/mail": "1.0.0-alpha.36",
-        "@lunora/server": "1.0.0-alpha.52"
+        "@lunora/server": "1.0.0-alpha.52",
+        "@lunora/shard-engine": "workspace:*"
     },
     "devDependencies": {
+        "@lunora/do": "workspace:*",
+        "@lunora/observability": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

@@ -7,7 +7,7 @@
  * `messages` (sharded) with `by_channel`/`by_channel_creation` indexes and a
  * UNIQUE `by_text`, a `.global()` `profiles`, and `roomMembers`.
  */
-import type { SchemaLike } from "../../src/ctx-db";
+import type { SchemaLike } from "@lunora/shard-engine";
 
 const messagesSchema: SchemaLike = {
     tables: {

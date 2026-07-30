@@ -1,17 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { WranglerConfig } from "@lunora/config";
-import {
-    DEV_VARS_FILE,
-    discoverSchemaInfo,
-    findWranglerFile,
-    inferLunoraBindings,
-    isPlaceholderValue,
-    parseDevVariableEntries,
-    readWranglerJsonc,
-    validateWranglerConfig,
-} from "@lunora/config";
+import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
+import { findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";

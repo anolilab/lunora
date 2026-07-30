@@ -11,7 +11,7 @@
     },
     "ai": {
         "displayName": "AI",
-        "description": "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed.",
+        "description": "Workers AI helper on the Vercel AI SDK \u2014 ctx.ai with generateText / streamText / embed.",
         "features": ["Workers AI on the Vercel AI SDK", "generateText / streamText", "Embeddings & tools"]
     },
     "angular": {
@@ -36,7 +36,7 @@
     },
     "browser": {
         "displayName": "Browser",
-        "description": "Browser Rendering — Playwright on Cloudflare Workers.",
+        "description": "Browser Rendering \u2014 Playwright on Cloudflare Workers.",
         "features": ["Headless browser control", "Screenshots & PDFs", "HTML scraping"]
     },
     "cli": {
@@ -66,7 +66,7 @@
     },
     "container": {
         "displayName": "Containers",
-        "description": "Cloudflare Containers: defineContainer → generated container DOs + typed ctx.containers.",
+        "description": "Cloudflare Containers: defineContainer \u2192 generated container DOs + typed ctx.containers.",
         "features": ["defineContainer DO classes", "Typed ctx.containers", "Dockerfile / registry images"]
     },
     "d1": {
@@ -87,7 +87,7 @@
     "errors": {
         "displayName": "Errors",
         "description": "Unified error layer: one LunoraError + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client.",
-        "features": ["Central error catalog (code → status/hint/docsUrl)", "Structural isLunoraError guard + invariant helpers", "Hints surfaced in CLI, Studio, and the client SDK"]
+        "features": ["Central error catalog (code \u2192 status/hint/docsUrl)", "Structural isLunoraError guard + invariant helpers", "Hints surfaced in CLI, Studio, and the client SDK"]
     },
     "fingerprint": {
         "displayName": "Fingerprint",
@@ -106,8 +106,8 @@
     },
     "lunorash": {
         "displayName": "lunora",
-        "description": "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin.",
-        "features": ["One-install base bundle", "Subpath exports (lunorash/server, /client, …)", "Ships the lunora CLI bin"]
+        "description": "Unscoped umbrella \u2014 one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin.",
+        "features": ["One-install base bundle", "Subpath exports (lunorash/server, /client, \u2026)", "Ships the lunora CLI bin"]
     },
     "mail": {
         "displayName": "Mail",
@@ -119,15 +119,35 @@
         "description": "Model Context Protocol server exposing a Lunora deployment to AI agents.",
         "features": ["MCP server for AI agents", "List functions & tables", "Run query / mutation / action"]
     },
+    "notify": {
+        "description": "Multi-channel notifications: ctx.notify / ctx.push over @visulima/notification.",
+        "displayName": "Notifications",
+        "features": ["Web Push + FCM, edge-safe", "Chat, in-app inbox and webhook channels", "Subscription storage + queue fan-out"]
+    },
     "nuxt": {
         "displayName": "Nuxt",
         "description": "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers.",
         "features": ["Single-worker Nitro composition", "#lunora/app alias", "Reactive-loader server helpers"]
     },
+    "observability": {
+        "description": "Host-neutral telemetry: logs, metrics, traces, request logs and issue grouping.",
+        "displayName": "Observability",
+        "features": ["Trace folding & span buffers", "Durable function & query metrics", "Issue grouping + AI explainer"]
+    },
     "payment": {
         "displayName": "Payment",
         "description": "Payment provider integration (Stripe) with typed actions and webhooks.",
         "features": ["Stripe-first adapter", "Webhook sync & entitlements", "Subscription state machine"]
+    },
+    "platform": {
+        "description": "Provider-neutral host contracts every Lunora deployment target implements.",
+        "displayName": "Platform Contracts",
+        "features": ["ShardHost / SocketHost contracts", "Capability matrix", "Conformance TCK"]
+    },
+    "platform-cloudflare": {
+        "description": "The Cloudflare host: the platform contracts over Durable Object primitives.",
+        "displayName": "Cloudflare Host",
+        "features": ["Durable Object shard host", "Hibernated socket host", "Jurisdiction pinning"]
     },
     "queue": {
         "displayName": "Queue",
@@ -174,6 +194,11 @@
         "description": "Authoring API: defineSchema, defineTable, query, mutation, action.",
         "features": ["Typed query / mutation / action builders", "Schema & table definitions", "End-to-end type inference"]
     },
+    "shard-engine": {
+        "description": "The host-neutral reactive engine \u2014 ctx.db, CDC op-log, relay tier, indexes.",
+        "displayName": "Shard Engine",
+        "features": ["Reactive ctx.db + dependency tracking", "CDC op-log & shape pokes", "Engine conformance suite"]
+    },
     "solid": {
         "displayName": "Solid",
         "description": "Live queries, optimistic mutations, reactive loaders for SolidJS.",
@@ -181,8 +206,8 @@
     },
     "sql-store": {
         "displayName": "SQL Store",
-        "description": "Internal dialect-parameterized SQL store core behind the .global() backends — depend on @lunora/d1 or @lunora/hyperdrive instead.",
-        "features": ["Dialect-parameterized store core", "Shared by D1 & Hyperdrive", "Internal — use the adapters"]
+        "description": "Internal dialect-parameterized SQL store core behind the .global() backends \u2014 depend on @lunora/d1 or @lunora/hyperdrive instead.",
+        "features": ["Dialect-parameterized store core", "Shared by D1 & Hyperdrive", "Internal \u2014 use the adapters"]
     },
     "storage": {
         "displayName": "Storage",
@@ -211,7 +236,7 @@
     },
     "vite": {
         "displayName": "Vite Plugin",
-        "description": "Vite plugin over @cloudflare/vite-plugin — codegen, wrangler validator, error overlay.",
+        "description": "Vite plugin over @cloudflare/vite-plugin \u2014 codegen, wrangler validator, error overlay.",
         "features": ["Codegen on save", "Wrangler config validator", "Error overlay"]
     },
     "vue": {

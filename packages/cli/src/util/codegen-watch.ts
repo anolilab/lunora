@@ -13,18 +13,34 @@ import { runCodegen } from "@lunora/codegen";
 
 import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
+import reportPlatformDiagnostics from "./platform-diagnostics";
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
 /** Splits a watch filename into path segments to detect `_generated` writes. */
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
-/** Run codegen once, logging success or surfacing a parse/emit error without throwing. */
-const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
+/**
+ * Run codegen once, logging success or surfacing a parse/emit error without
+ * throwing.
+ *
+ * Takes an options object rather than positionals: four of its fields are
+ * already `CodegenWatcherOptions` fields, and the positional form existed only
+ * to feed `setTimeout`'s trailing-argument passing — which a closure does just
+ * as well, without leaving an argument order for the next parameter to get
+ * wrong.
+ */
+const runOnce = (options: Pick<CodegenWatcherOptions, "apiSpec" | "logger" | "projectRoot" | "target">, lunoraDirectory: string, reason: string): void => {
+    const { apiSpec, logger, projectRoot, target } = options;
+
     try {
-        runCodegen({ apiSpec, lunoraDirectory, projectRoot });
+        const result = runCodegen({ apiSpec, lunoraDirectory, projectRoot, target });
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
+
+        // The watcher is a codegen path like any other: without this the dev
+        // loop emits a gated surface and says nothing about it.
+        reportPlatformDiagnostics(result.platformDiagnostics, logger);
     } catch (error: unknown) {
         logger.error(renderCodegenFailure(error, reason));
     }
@@ -40,9 +56,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     const lunoraDirectory = options.lunoraDirectory ?? "lunora";
     const watchDirectory = join(options.projectRoot, lunoraDirectory);
     const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
-    const { apiSpec } = options;
 
-    runOnce(options.projectRoot, lunoraDirectory, apiSpec, options.logger, "startup");
+    runOnce(options, lunoraDirectory, "startup");
 
     let timer: NodeJS.Timeout | undefined;
     let watcher: FSWatcher | undefined;
@@ -74,7 +89,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 clearTimeout(timer);
             }
 
-            timer = setTimeout(runOnce, debounceMs, options.projectRoot, lunoraDirectory, apiSpec, options.logger, `change: ${filename ?? "?"}`);
+            timer = setTimeout(() => {
+                runOnce(options, lunoraDirectory, `change: ${filename ?? "?"}`);
+            }, debounceMs);
         });
     } catch (error: unknown) {
         options.logger.warn(
@@ -114,6 +131,8 @@ export interface CodegenWatcherOptions {
     lunoraDirectory?: string;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    target?: string;
 }
 
 export interface CodegenWatcherHandle {

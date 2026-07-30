@@ -1,6 +1,6 @@
+import { readClientWatermark, runShardMigrations } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import { readClientWatermark, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";

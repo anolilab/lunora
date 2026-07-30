@@ -769,6 +769,7 @@ overrides:
   '@lunora/notify': workspace:*
   '@lunora/nuxt': workspace:*
   '@lunora/payment': workspace:*
+  '@lunora/platform': workspace:*
   '@lunora/queue': workspace:*
   '@lunora/ratelimit': workspace:*
   '@lunora/react': workspace:*
@@ -776,6 +777,7 @@ overrides:
   '@lunora/replica': workspace:*
   '@lunora/runtime': workspace:*
   '@lunora/scheduler': workspace:*
+  '@lunora/shard-engine': workspace:*
   '@lunora/seed': workspace:*
   '@lunora/server': workspace:*
   '@lunora/solid': workspace:*
@@ -2207,6 +2209,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -2494,6 +2499,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue
@@ -2506,6 +2514,9 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
+      jsonc-parser:
+        specifier: catalog:vite
+        version: 3.3.1
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -2519,6 +2530,9 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -2650,12 +2664,15 @@ importers:
 
   packages/d1:
     dependencies:
-      '@lunora/do':
-        specifier: workspace:*
-        version: link:../do
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
@@ -2672,6 +2689,9 @@ importers:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core
@@ -2773,12 +2793,18 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
-      '@lunora/fingerprint':
+      '@lunora/observability':
         specifier: workspace:*
-        version: link:../fingerprint
-      '@visulima/redact':
-        specifier: catalog:redact
-        version: 3.0.0
+        version: link:../observability
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@lunora/platform-cloudflare':
+        specifier: workspace:*
+        version: link:../platform-cloudflare
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1)
@@ -2795,9 +2821,6 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
-      '@lunora/search-core':
-        specifier: workspace:*
-        version: link:../search-core
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -2919,12 +2942,12 @@ importers:
 
   packages/hyperdrive:
     dependencies:
-      '@lunora/do':
-        specifier: workspace:*
-        version: link:../do
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
@@ -2995,6 +3018,12 @@ importers:
       '@lunora/flags':
         specifier: workspace:*
         version: link:../flags
+      '@lunora/observability':
+        specifier: workspace:*
+        version: link:../observability
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
@@ -3193,6 +3222,46 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/observability:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/fingerprint':
+        specifier: workspace:*
+        version: link:../fingerprint
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
+      '@visulima/redact':
+        specifier: catalog:redact
+        version: 3.0.0
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(cc679e917598a73d1e27ff046616351e)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.9.1
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/payment:
     dependencies:
       '@lunora/errors':
@@ -3248,11 +3317,75 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/platform:
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(cc679e917598a73d1e27ff046616351e)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.9.1
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/platform-cloudflare:
+    dependencies:
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20260724.1
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(cc679e917598a73d1e27ff046616351e)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.9.1
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/queue:
     dependencies:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -3501,6 +3634,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -3514,6 +3650,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
@@ -3550,6 +3689,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       cron-parser:
         specifier: 5.6.2
         version: 5.6.2
@@ -3699,6 +3841,49 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/shard-engine:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+      drizzle-orm:
+        specifier: catalog:drizzle
+        version: 0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1)
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../bindings
+      '@lunora/search-core':
+        specifier: workspace:*
+        version: link:../search-core
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(cc679e917598a73d1e27ff046616351e)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.9.1
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/solid:
     dependencies:
       '@lunora/client':
@@ -3759,12 +3944,12 @@ importers:
 
   packages/sql-store:
     dependencies:
-      '@lunora/do':
-        specifier: workspace:*
-        version: link:../do
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1)
@@ -3775,6 +3960,9 @@ importers:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core
@@ -3805,6 +3993,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@visulima/storage':
         specifier: catalog:storage
         version: 1.0.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(@nuxt/kit@4.5.0(magic-string@1.1.0)(magicast@0.5.3)(oxc-parser@0.141.0)(rolldown@1.1.5))(@opentelemetry/api@1.9.1)(ai@7.0.37(zod@4.4.3))(aws4fetch@1.0.20)(hono@4.12.30)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(sharp@0.35.1)(supports-color@10.2.2)
@@ -4039,9 +4230,6 @@ importers:
       '@lunora/agent':
         specifier: workspace:*
         version: link:../agent
-      '@lunora/do':
-        specifier: workspace:*
-        version: link:../do
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
@@ -4051,10 +4239,19 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@playwright/test':
         specifier: catalog:e2e
         version: 1.61.1
     devDependencies:
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
+      '@lunora/observability':
+        specifier: workspace:*
+        version: link:../observability
       '@types/node':
         specifier: catalog:types
         version: 26.1.1

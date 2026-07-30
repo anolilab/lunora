@@ -1,8 +1,7 @@
+import type { DatabaseWriterLike, QueryPage, SchemaLike } from "@lunora/shard-engine";
+import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { RELATION_FUNCTION_PREFIX } from "../src/introspect";
-import type { QueryPage } from "../src/query-args";
 import { serveRelationFanout } from "../src/relation-fanout";
 
 /**

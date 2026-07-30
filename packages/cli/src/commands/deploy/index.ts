@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
+import { TARGET_OPTION } from "../../util/deploy-target";
 
 const deployCommand: Command = {
     description: "Codegen, validate wrangler, then wrangler deploy",
@@ -41,6 +42,7 @@ const deployCommand: Command = {
             name: "preview",
             type: Boolean,
         },
+        TARGET_OPTION,
         {
             description:
                 "Deploy to a temporary Cloudflare account when unauthenticated (wrangler deploy --temporary; live ~60min, then claim or it's deleted). Wrangler errors if you're already authenticated.",
@@ -69,6 +71,7 @@ export type DeployOptions = CreateOptions<{
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    target: string | undefined;
     temporary: boolean | undefined;
     "update-schema-baseline": boolean | undefined;
 }>;

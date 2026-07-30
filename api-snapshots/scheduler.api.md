@@ -336,6 +336,8 @@ interface Scheduler {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
+    dead: () => Promise<ScheduleRecord[]>;
+    deadRetry: (id: string) => Promise<boolean>;
     get: (id: string) => Promise<ScheduleRecord | null>;
     list: () => Promise<ScheduleRecord[]>;
     runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<{
@@ -392,6 +394,17 @@ interface SchedulerEnv {
     LUNORA_ADMIN_TOKEN?: string;
     LUNORA_ORIGIN_URL?: string;
     LUNORA_SCHEDULER_SECRET?: string;
+}
+```
+
+### `SchedulerHostOptions` (interface)
+
+```ts
+interface SchedulerHostOptions {
+    instanceName?: string;
+    jurisdiction?: "eu" | "fedramp" | "us";
+    namespace: Parameters<typeof createScheduler>[0]["namespace"];
+    originUrl: string;
 }
 ```
 
@@ -498,6 +511,12 @@ const createQueueWorkpool: (options: QueueWorkpoolOptions) => QueueWorkpool;
 
 ```ts
 const createScheduler: (options: LunoraSchedulerOptions) => Scheduler;
+```
+
+### `createSchedulerHost` (const)
+
+```ts
+const createSchedulerHost: (options: SchedulerHostOptions) => SchedulerHost;
 ```
 
 ### `createWorkpool` (const)

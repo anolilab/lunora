@@ -1,6 +1,6 @@
-import type { SchemaLike } from "@lunora/do";
-import { createShardCtxDb, runShardMigrations } from "@lunora/do";
 import { bindTableFacade } from "@lunora/server";
+import type { SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createSqlExec } from "../src/node-sqlite";

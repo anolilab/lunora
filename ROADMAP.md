@@ -89,8 +89,8 @@ deliberate, and mostly a set of go/no-go decisions:
     - Promise pipelining / batched round-trips ([`089`](./plans/089-promise-pipelining-batch.md)).
     - Custom scalar types ([`078`](./plans/078-custom-scalar-types.md)).
     - Live CDC and DO-consumes-DO composition ([`133`](./plans/133-live-cdc-and-do-consumes-do.md)).
-- **Run beyond Cloudflare.** A platform-abstraction layer ([`114`](./plans/114-platform-abstraction-layer.md))
-  and additional deploy targets such as AWS ([`115`](./plans/115-aws-deploy-target.md)) — so
+- **Run beyond Cloudflare.** A platform-abstraction layer and additional deploy
+  targets such as AWS ([`114`](./plans/114-multi-provider-platform.md)) — so
   "your own account" isn't limited to one provider.
 - **Open governance.** A public RFC process for surface-changing proposals, a
   contributor guide, and transparent stability-tier and deprecation decisions.

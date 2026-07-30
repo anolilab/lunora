@@ -1,7 +1,7 @@
+import type { SqlExec } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { MAX_BACK_RELATIONS, readBackRelationCounts } from "../src/back-relations";
-import type { SqlExec } from "../src/ctx-db";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /** A doc-stored child table, the shape lunora actually writes. */

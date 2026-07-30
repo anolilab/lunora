@@ -9,6 +9,8 @@
  */
 import { execFile } from "node:child_process";
 
+import { resolveDeployDriver, resolveProjectTarget } from "@lunora/config";
+
 import { detectPackageManager, execArgsFor } from "./detect-package-manager";
 
 /**
@@ -88,19 +90,17 @@ const parseSecretNames = (stdout: string): ReadonlyArray<string> | undefined => 
 };
 
 const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListRemoteSecretsResult> => {
-    const wranglerArgs = ["secret", "list", "--format", "json"];
+    // The toolchain is the target's, not always wrangler's — resolving from the
+    // project keeps a non-default target from shelling out to the wrong CLI.
+    const listCommand = resolveDeployDriver(resolveProjectTarget(inputs.cwd)).toolchain?.secretList({ environment: inputs.env, temporary: inputs.temporary });
 
-    if (inputs.env !== undefined) {
-        wranglerArgs.push("--env", inputs.env);
+    if (listCommand === undefined) {
+        return { error: "deploy target has no command-line toolchain", names: [], ok: false };
     }
 
-    if (inputs.temporary) {
-        wranglerArgs.push("--temporary");
-    }
-
-    // Run wrangler through the project's package manager (pnpm/npm/yarn/bun),
+    // Run the host tool through the project's package manager (pnpm/npm/yarn/bun),
     // detected from its lock file / `packageManager` field — never hardcoded.
-    const { args, command } = execArgsFor(detectPackageManager(inputs.cwd), "wrangler", wranglerArgs);
+    const { args, command } = execArgsFor(detectPackageManager(inputs.cwd), listCommand.tool, listCommand.args);
     const runner = inputs.runner ?? defaultRunner;
     const result = await runner(command, args, inputs.cwd);
 

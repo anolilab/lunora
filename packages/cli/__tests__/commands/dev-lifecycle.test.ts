@@ -296,6 +296,55 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("forwards --target to the daemon", async () => {
+            expect.assertions(2);
+
+            let args: ReadonlyArray<string> | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { target: "aws" } as DevOptions,
+                remote: false,
+                run: (options) => {
+                    args = options.command.args;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            // The daemon is a fresh process that re-parses argv, so a flag not
+            // forwarded here is silently dropped — and `--background` is the
+            // automatic path when an AI agent runs `lunora dev`, which made this
+            // the default way to lose the flag.
+            expect(args).toContain("--target");
+            expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("aws");
+        });
+
+        it("omits --target when none was given", async () => {
+            expect.assertions(1);
+
+            let args: ReadonlyArray<string> | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: (options) => {
+                    args = options.command.args;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            // Absent, not empty-string: the daemon re-reads `lunora.json`, so
+            // passing `--target ""` would override a project setting with junk.
+            expect(args).not.toContain("--target");
+        });
+
         it("loses the claim to a live incumbent and reports it without spawning", async () => {
             expect.assertions(4);
 

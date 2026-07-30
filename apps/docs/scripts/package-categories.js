@@ -20,6 +20,8 @@ import { join } from "node:path";
  */
 export const CATEGORY_TITLES = {
     runtime: "Core Runtime",
+    platform: "Platform Hosts",
+    observability: "Observability",
     client: "Client & UI",
     "vite-plugin": "Build & Tooling",
     codegen: "Codegen",
@@ -33,6 +35,8 @@ export const CATEGORY_TITLES = {
 /** Category display title → accent color for the packages index cards. */
 export const CATEGORY_COLORS = {
     "Core Runtime": "sky-sapphire",
+    "Platform Hosts": "sky-sapphire",
+    Observability: "crimson-energy",
     "Client & UI": "royal-amethyst",
     "Build & Tooling": "sky-sapphire",
     Codegen: "crimson-energy",
@@ -51,6 +55,7 @@ export const CATEGORY_COLORS = {
 export const CATEGORY_ORDER_HINTS = {
     "add-on": ["auth", "mail", "storage", "scheduler", "queue", "container", "agent", "ai"],
     client: ["client", "react", "react-native", "vue", "solid", "svelte", "angular", "nuxt", "db", "studio"],
+    platform: ["platform", "platform-cloudflare", "shard-engine"],
     runtime: ["lunorash", "server", "values", "runtime", "do", "d1"],
 };
 

@@ -15,11 +15,11 @@
  * 2. NEGATIVE — an identity-dependent query runs once PER socket, each under its own identity (no cross-identity leak).
  * 3. SANITY — forcing the predicate true on an identity-dependent query reintroduces the leak (1 run, the second socket served the first's identity), proving the predicate is load-bearing.
  */
+import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;

@@ -1,7 +1,6 @@
+import type { RankIndexDefinitionLike, SchemaLike } from "@lunora/shard-engine";
 import { bench, describe } from "vitest";
 
-import type { SchemaLike } from "../src/ctx-db";
-import type { RankIndexDefinitionLike } from "../src/rank";
 import { makeWriter } from "./shared";
 
 /**

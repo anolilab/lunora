@@ -1,0 +1,78 @@
+---
+title: "@lunora/notify"
+description: Multi-channel notifications — ctx.notify / ctx.push over @visulima/notification, with edge-safe Web Push and FCM.
+---
+
+`@lunora/notify` gives an app two context surfaces: `ctx.notify` for
+multi-channel messages (chat, in-app inbox, webhooks) and `ctx.push` for device
+push (Web Push and FCM). Both are built on
+[`@visulima/notification`](https://www.npmjs.com/package/@visulima/notification),
+with subscription storage and queue-backed fan-out on top.
+
+Declare the channels in `lunora/notify.ts` and codegen wires the rest, exactly
+the way `defineFlags` feeds `ctx.flags`:
+
+```ts
+// lunora/notify.ts
+import { d1SubscriptionStore, defineNotify, fcmFromEnv, webPushFromEnv } from "@lunora/notify";
+
+export default defineNotify({
+    fcm: (env) => fcmFromEnv(env),
+    store: (env) => d1SubscriptionStore(env.DB),
+    webPush: (env) => webPushFromEnv(env),
+});
+```
+
+`defineNotify` is pure validation plus branding — it throws a `TypeError` on a
+malformed channel rather than deferring the failure to the first send. Codegen
+discovers the default export, imports it into the generated worker, and builds
+the `ctx` facades from it.
+
+## Configuration from the environment
+
+`webPushFromEnv` and `fcmFromEnv` read the conventional variables, so a project
+sets them in `.dev.vars` (or as secrets) rather than in code:
+
+| Channel  | Variables                                                |
+| -------- | -------------------------------------------------------- |
+| Web Push | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` |
+| FCM      | `FCM_PROJECT_ID`, `FCM_ACCESS_TOKEN`                     |
+
+The key names are exported as `WEB_PUSH_ENV_KEYS` / `FCM_ENV_KEYS` so tooling can
+reference them without restating string literals.
+
+## Subscriptions
+
+`ctx.push.register(...)` accepts either a web-push subscription or an FCM token,
+optionally tied to a `userId`. Two stores ship:
+
+- `memorySubscriptionStore()` — tests and dev.
+- `d1SubscriptionStore(env.DB)` — durable and edge-safe.
+
+`SubscriptionStore` is a small interface (`get` / `list` / `delete` / …), so a
+custom backing store is a matter of implementing it. `list` filters apply
+server-side and take a `limit`, so a large audience never materializes wholesale
+inside the isolate. `broadcast` deliberately leaves the limit unset — it has to
+reach everyone matched.
+
+Dead subscriptions prune themselves: an endpoint the push service reports as gone
+(HTTP 404/410, or FCM `UNREGISTERED`) is detected by `isGoneError` and dropped
+rather than retried forever.
+
+## What is deliberately not on the edge
+
+Only channels that survive workerd are wired here — Web Push and FCM run on Web
+Crypto and `fetch`. APNs needs `node:http2`, and the SMS and Node-only queue
+adapters likewise have no edge implementation, so the edge facade does not expose
+them. Route heavy fan-out through `@lunora/queue` instead: `enqueuePushBroadcast`
+hands the audience to a queue and `runPushBroadcastJob` drains it, so one request
+never blocks on thousands of sends.
+
+## Browser side
+
+`@lunora/notify/web` is the client half — service-worker registration and
+permission flow, kept in its own subpath so none of it reaches the worker bundle:
+
+```ts
+import { isPushSupported, subscribeToPush, unsubscribeFromPush } from "@lunora/notify/web";
+```

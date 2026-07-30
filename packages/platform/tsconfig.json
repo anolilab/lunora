@@ -1,0 +1,11 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        // NOTE: outDir/rootDir intentionally omitted — this package imports
+        // ../../shared/* (bundler-inlined), and a set rootDir raises TS6059
+        // for the out-of-package file under `tsc --noEmit`.
+        "moduleResolution": "bundler",
+        "types": ["node"]
+    },
+    "include": ["src/**/*", "__tests__/**/*", "../../shared/**/*"]
+}

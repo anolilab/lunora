@@ -1,6 +1,6 @@
+import type { DatabaseWriterLike } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
-import type { DatabaseWriterLike } from "../src/ctx-db";
 import { makeSeededRelationWriter } from "./relation-predicates.shared";
 
 /**

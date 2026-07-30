@@ -15,12 +15,27 @@ export interface PackageInfo {
     slug: string;
 }
 
-export const categories = ["All", "Add-ons", "Advisor", "Build & Tooling", "CLI", "Client & UI", "Codegen", "Core Runtime", "Dev Tools", "Web3"] as const;
+export const categories = [
+    "All",
+    "Add-ons",
+    "Advisor",
+    "Build & Tooling",
+    "CLI",
+    "Client & UI",
+    "Codegen",
+    "Core Runtime",
+    "Dev Tools",
+    "Observability",
+    "Platform Hosts",
+    "Web3",
+] as const;
 
 export type Category = (typeof categories)[number];
 
 const categoryColors: Record<string, AccentColor> = {
     "Core Runtime": "sky-sapphire",
+    "Platform Hosts": "sky-sapphire",
+    Observability: "crimson-energy",
     "Client & UI": "royal-amethyst",
     "Build & Tooling": "sky-sapphire",
     Codegen: "crimson-energy",
@@ -126,6 +141,46 @@ export const packages: PackageInfo[] = [
         name: "Values",
         npmName: "@lunora/values",
         slug: "values",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
+        description: "The Cloudflare host: the platform contracts over Durable Object primitives.",
+        docsPath: "/docs/packages/platform-cloudflare",
+        features: ["Durable Object shard host", "Hibernated socket host", "Jurisdiction pinning"],
+        name: "Cloudflare Host",
+        npmName: "@lunora/platform-cloudflare",
+        slug: "platform-cloudflare",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
+        description: "Provider-neutral host contracts every Lunora deployment target implements.",
+        docsPath: "/docs/packages/platform",
+        features: ["ShardHost / SocketHost contracts", "Capability matrix", "Conformance TCK"],
+        name: "Platform Contracts",
+        npmName: "@lunora/platform",
+        slug: "platform",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
+        description: "The host-neutral reactive engine — ctx.db, CDC op-log, relay tier, indexes.",
+        docsPath: "/docs/packages/shard-engine",
+        features: ["Reactive ctx.db + dependency tracking", "CDC op-log & shape pokes", "Engine conformance suite"],
+        name: "Shard Engine",
+        npmName: "@lunora/shard-engine",
+        slug: "shard-engine",
+    },
+    {
+        accentColor: categoryColors["Observability"]!,
+        category: "Observability",
+        description: "Host-neutral telemetry: logs, metrics, traces, request logs and issue grouping.",
+        docsPath: "/docs/packages/observability",
+        features: ["Trace folding & span buffers", "Durable function & query metrics", "Issue grouping + AI explainer"],
+        name: "Observability",
+        npmName: "@lunora/observability",
+        slug: "observability",
     },
     {
         accentColor: categoryColors["Client & UI"]!,
@@ -406,6 +461,16 @@ export const packages: PackageInfo[] = [
         name: "MCP",
         npmName: "@lunora/mcp",
         slug: "mcp",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
+        description: "Multi-channel notifications: ctx.notify / ctx.push over @visulima/notification.",
+        docsPath: "/docs/packages/notify",
+        features: ["Web Push + FCM, edge-safe", "Chat, in-app inbox and webhook channels", "Subscription storage + queue fan-out"],
+        name: "Notifications",
+        npmName: "@lunora/notify",
+        slug: "notify",
     },
     {
         accentColor: categoryColors["Add-ons"]!,

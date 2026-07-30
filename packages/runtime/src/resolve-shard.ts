@@ -1,3 +1,66 @@
+import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
+import { resolveShard as resolveShardStub } from "@lunora/platform";
+
+/**
+ * Adapt a Cloudflare-shaped {@link ShardNamespaceLike} to the provider-neutral
+ * {@link ShardDirectory} contract.
+ *
+ * The two are near-identical — the only real skew is the method name
+ * (`idFromName` vs the contract's `idForName`). Mapping here rather than
+ * renaming the namespace keeps `ShardNamespaceLike` matching the runtime's
+ * `DurableObjectNamespace` binding, while routing every resolution through the
+ * one contract `@lunora/platform` defines. A namespace that exposes `getByName`
+ * lands on the direct branch; one that doesn't lands on the two-step
+ * `idForName` + `get` branch — the same preference the contract's own
+ * `resolveShard` encodes.
+ *
+ * Memoized per namespace: bindings are long-lived (one per worker, or one per
+ * jurisdiction view of one), while `resolveShard` runs on the per-request
+ * routing path. Building a fresh object and three closures on every resolution
+ * to describe an object that never changes is pure allocation churn. Keyed
+ * weakly so a discarded namespace — a one-off jurisdiction view — does not
+ * outlive its binding.
+ */
+const directoryCache = new WeakMap<ShardNamespaceLike, ShardDirectory>();
+
+const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
+    const cached = directoryCache.get(namespace);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const jurisdiction =
+        typeof namespace.jurisdiction === "function"
+            ? (hint: ShardJurisdiction) =>
+                  toDirectory((namespace.jurisdiction as NonNullable<ShardNamespaceLike["jurisdiction"]>)(hint as DurableObjectJurisdiction))
+            : undefined;
+
+    const directory: ShardDirectory =
+        typeof namespace.getByName === "function"
+            ? {
+                  get: (id) => namespace.get(id),
+                  // Wrapped, NOT passed by reference: `DurableObjectNamespace`'s
+                  // methods are native and require their own receiver, so handing
+                  // the bare function to the contract calls it with the directory
+                  // as `this` and workerd rejects it with "Illegal invocation".
+                  // Plain-object test doubles tolerate the detached reference,
+                  // which is why only the workerd suites caught this.
+                  getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceLike["getByName"]>)(name),
+                  idForName: (name) => namespace.idFromName(name),
+                  jurisdiction,
+              }
+            : {
+                  get: (id) => namespace.get(id),
+                  idForName: (name) => namespace.idFromName(name),
+                  jurisdiction,
+              };
+
+    directoryCache.set(namespace, directory);
+
+    return directory;
+};
+
 /**
  * Cloudflare Durable Object jurisdictions restrict where a DO runs and persists
  * data, for data-residency / compliance regimes (GDPR, FedRAMP, US data
@@ -61,13 +124,10 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
     return namespace.jurisdiction(jurisdiction);
 };
 
-/** Look up a shard stub by name, preferring `getByName` when present. */
-export const resolveShard = (namespace: ShardNamespaceLike, shardKey: string): ResolvedShard => {
-    if (typeof namespace.getByName === "function") {
-        return namespace.getByName(shardKey);
-    }
-
-    const id = namespace.idFromName(shardKey);
-
-    return namespace.get(id);
-};
+/**
+ * Look up a shard stub by name through the `@lunora/platform` `ShardDirectory`
+ * contract. Preserves the historical preference — `getByName` when present,
+ * else `idFromName` + `get` — but the preference now lives in one place (the
+ * contract's `resolveShard`) rather than being restated per resolution path.
+ */
+export const resolveShard = (namespace: ShardNamespaceLike, shardKey: string): ResolvedShard => resolveShardStub(toDirectory(namespace), shardKey);

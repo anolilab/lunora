@@ -2,6 +2,7 @@ import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
 // The /component subpath avoids the package barrel (which pulls the agent
 // runtime + AI SDK into the codegen process just to enumerate function names).
 import { agentComponent } from "@lunora/agent/component";
+import { LunoraError } from "@lunora/errors";
 import type {
     AdvisorProcedure,
     AdvisoryFinding,
@@ -11,8 +12,7 @@ import type {
     StorageRulesResult,
     StudioFeaturesResult,
     WorkflowsResult,
-} from "@lunora/do";
-import { LunoraError } from "@lunora/errors";
+} from "@lunora/shard-engine";
 
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";

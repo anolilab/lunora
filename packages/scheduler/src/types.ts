@@ -153,6 +153,21 @@ export interface ScheduleRecord {
 
 export interface Scheduler {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
+
+    /**
+     * Jobs that exhausted their retry budget and were parked under `dead:`
+     * (the DO's `/dead` view). Deliberately absent from {@link Scheduler.list} —
+     * the park deletes the `id:` header — so this is the only view of a job
+     * that failed permanently rather than being silently dropped.
+     */
+    dead: () => Promise<ScheduleRecord[]>;
+
+    /**
+     * Resurrect a parked job with a fresh attempt budget (the DO's
+     * `POST /dead/retry`). `false` when the id is not parked; a racing double
+     * recover is a no-op rather than an error.
+     */
+    deadRetry: (id: string) => Promise<boolean>;
     /** Resolve a single pending job by id, or `null` when absent (derived from {@link Scheduler.list}). */
     get: (id: string) => Promise<ScheduleRecord | null>;
     /** All pending scheduled jobs (the DO's `/list` view). */

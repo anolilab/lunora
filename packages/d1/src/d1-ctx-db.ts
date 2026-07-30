@@ -9,7 +9,7 @@
  * admin export/import, and the test suite).
  */
 /* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts, introspect/admin, and every test import it as "./d1-ctx-db". */
-import type { SchemaLike } from "@lunora/do";
+import type { SchemaLike } from "@lunora/shard-engine";
 import type { SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
 import {
     backfillSqlSearchIndexes,

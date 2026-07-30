@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlCursor, SqlExec } from "../../src/ctx-db";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the `SqlExec` surface the

@@ -70,6 +70,7 @@ interface CodegenOptions {
     lunoraDirectory?: string;
     project?: Project;
     projectRoot: string;
+    target?: string;
     updateSchemaBaseline?: boolean;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
@@ -107,6 +108,7 @@ interface CodegenResult {
         workflows: string;
     };
     outputDirectory: string;
+    platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
@@ -162,6 +164,12 @@ interface CronJobIR {
         exportName: string;
     };
 }
+```
+
+### `DEFAULT_TARGET` (const)
+
+```ts
+const DEFAULT_TARGET = "cloudflare";
 ```
 
 ### `DriftChange` (interface)
@@ -473,6 +481,19 @@ interface OpenApiEmitInput {
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     version?: string;
+}
+```
+
+### `PlatformDiagnostic` (interface)
+
+```ts
+interface PlatformDiagnostic {
+    feature?: CapabilityKey;
+    level: "error" | "warn";
+    message: string;
+    name: "platform_unknown_target" | "platform_unsupported_feature";
+    remediation: string;
+    target: string;
 }
 ```
 
@@ -1127,6 +1148,18 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | undefined;
 ```
 
+### `platformMatrixIds` (const)
+
+```ts
+const platformMatrixIds: () => ReadonlyArray<string>;
+```
+
+### `readProjectTarget` (const)
+
+```ts
+const readProjectTarget: (projectRoot: string) => string | undefined;
+```
+
 ### `redact` (const)
 
 ```ts
@@ -1137,6 +1170,12 @@ const redact: (value: string) => string;
 
 ```ts
 const refreshCodegenProject: (project: Project, lunoraDirectory: string) => void;
+```
+
+### `resolveCodegenTarget` (const)
+
+```ts
+const resolveCodegenTarget: (projectRoot: string, explicit?: string) => string;
 ```
 
 ### `runCodegen` (const)

@@ -1,38 +1,10 @@
 /* eslint-disable max-classes-per-file -- D1Session and D1Client are both public exports (re-exported by src/index.ts) and are intentionally co-located: the client mints sessions, so splitting them across files would break the cohesive Sessions-API surface consumers import together. */
-import type { D1Database } from "@cloudflare/workers-types";
+import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "@lunora/platform";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
-import type { DrizzleD1Database } from "drizzle-orm/d1";
+import type { AnyD1Database, DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-
-/**
- * Minimal structural projection of `D1Database` to keep the adapter
- * compatible with the real workers-types value as well as unit-test doubles.
- */
-interface D1DatabaseLike {
-    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    prepare: (sql: string) => D1PreparedStatementLike;
-    withSession: (bookmark?: string) => D1SessionLike;
-}
-
-interface D1SessionLike {
-    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    getBookmark: () => string | null;
-    prepare: (sql: string) => D1PreparedStatementLike;
-}
-
-interface D1PreparedStatementLike {
-    // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
-    // from the call site into the return, so it is intentionally caller-supplied.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
-    bind: (...values: unknown[]) => D1PreparedStatementLike;
-    first: <T = unknown>(column?: string) => Promise<T | null>;
-    raw: <T = unknown>() => Promise<T[][]>;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    run: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }>;
-}
 
 /**
  * D1 client wrapping the workers `env.DB` binding. The recommended path is
@@ -198,9 +170,14 @@ class D1Client {
 
         // Structural cast: `D1DatabaseLike` projects exactly the methods
         // `drizzle-orm/d1` introspects (`prepare`, `batch`). The runtime
-        // binding ships the full `D1Database` shape; tests pass doubles that
-        // match the projection.
-        this.drizzleHandle = drizzleD1(this.db as unknown as D1Database, { logger: false });
+        // binding ships the full D1 shape; tests pass doubles that match the
+        // projection.
+        //
+        // Cast to drizzle's own `AnyD1Database` rather than to
+        // `@cloudflare/workers-types`' `D1Database`: the cast only has to satisfy
+        // the driver's parameter, and naming the provider type here was this
+        // package's last Cloudflare import (plan 114 §5.1's ambient-types scrub).
+        this.drizzleHandle = drizzleD1(this.db as unknown as AnyD1Database, { logger: false });
 
         return this.drizzleHandle;
     }
@@ -211,13 +188,13 @@ class D1Client {
      * the same session.
      *
      * A `D1DatabaseSession` exposes the same `prepare` / `batch` surface
-     * drizzle calls into, so a single `unknown` cast lets us treat the session
-     * as a `D1Database` for driver-construction purposes.
+     * drizzle calls into, so a single `unknown` cast lets us hand the session to
+     * the driver.
      */
     public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
         const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
-        return drizzleD1(session as unknown as D1Database, { logger: false });
+        return drizzleD1(session as unknown as AnyD1Database, { logger: false });
     }
 
     /**
@@ -236,4 +213,5 @@ class D1Client {
 }
 
 export { D1Client, D1Session };
-export type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike };
+
+export { type D1DatabaseLike, type D1PreparedStatementLike, type D1SessionLike } from "@lunora/platform";

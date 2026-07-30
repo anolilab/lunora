@@ -1509,7 +1509,7 @@ interface RankFanOutResult {
 
 ### `RankPageDirection` (type)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RankPageFanOutRequest` (interface)
 
@@ -1541,11 +1541,11 @@ interface RankPageFanOutResult {
 
 ### `RankPageKey` (interface)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RankPageRow` (interface)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RateLimiterLike` (interface)
 
@@ -1902,7 +1902,7 @@ interface ShardRankPageOutcome {
 
 ### `ShardRankPageResult` (interface)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ShardRegistry` (interface)
 
@@ -2312,12 +2312,7 @@ const defineRpcEnvelope: (envelope: RpcEnvelope) => RpcEnvelope;
 ### `durableObjectProbe` (const)
 
 ```ts
-const durableObjectProbe: (name: string, namespace: {
-    get: (id: unknown) => {
-        fetch: (request: Request) => Promise<Response>;
-    };
-    idFromName: (id: string) => unknown;
-}, shardKey: string) => HealthProbe;
+const durableObjectProbe: (name: string, namespace: ShardNamespaceLike, shardKey: string) => HealthProbe;
 ```
 
 ### `emitLogEvent` (const)

@@ -1,63 +1,11 @@
-/**
- * Minimal structural projection of `VectorizeIndex` so unit tests can pass a
- * plain-object double and the real Cloudflare binding satisfies the same shape.
- * Mirrors the surface documented at
- * https://developers.cloudflare.com/vectorize/reference/client-api/.
- */
-export interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-}
-
-export type VectorMetric = "cosine" | "euclidean" | "dot-product";
-
-export interface VectorizeVector {
-    id: string;
-    metadata?: Record<string, unknown>;
-    namespace?: string;
-    values: ReadonlyArray<number>;
-}
-
-export interface VectorizeQueryOptions {
-    filter?: Record<string, unknown>;
-    namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
-    returnValues?: boolean;
-    topK?: number;
-}
-
-export interface VectorizeMatch {
-    id: string;
-    metadata?: Record<string, unknown>;
-    namespace?: string;
-    score: number;
-    values?: ReadonlyArray<number>;
-}
-
-export interface VectorizeMatches {
-    count: number;
-    matches: ReadonlyArray<VectorizeMatch>;
-}
-
-export interface VectorizeUpsertMutation {
-    mutationId: string;
-}
-
-export interface VectorizeDeleteMutation {
-    count?: number;
-    mutationId: string;
-}
-
-export interface VectorizeIndexDetails {
-    dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
-}
+import type {
+    VectorizeDeleteMutation,
+    VectorizeIndexDetails,
+    VectorizeIndexLike,
+    VectorizeMatches,
+    VectorizeUpsertMutation,
+    VectorizeVector,
+} from "@lunora/platform";
 
 /**
  * Bring-your-own-embedder: a user-supplied async fn that converts a single
@@ -103,3 +51,15 @@ export interface LunoraVectors {
     upsert: <TInput>(indexName: string, input: UpsertInput<TInput>) => Promise<VectorizeUpsertMutation>;
     upsertMany: <TInput>(indexName: string, inputs: ReadonlyArray<UpsertInput<TInput>>) => Promise<VectorizeUpsertMutation>;
 }
+
+export {
+    type VectorizeDeleteMutation,
+    type VectorizeIndexDetails,
+    type VectorizeIndexLike,
+    type VectorizeMatch,
+    type VectorizeMatches,
+    type VectorizeQueryOptions,
+    type VectorizeUpsertMutation,
+    type VectorizeVector,
+    type VectorMetric,
+} from "@lunora/platform";
