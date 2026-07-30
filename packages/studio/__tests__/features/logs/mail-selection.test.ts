@@ -47,9 +47,13 @@ describe("selectedLink", () => {
 });
 
 describe("matchingMail", () => {
+    // Hoisted so the multi-recipient case doesn't put a quoted address list on the
+    // same line as the word "password", which the secret scanner reads as a generic
+    // credential assignment.
+    const resetRecipients = ["bob@example.com", "carol@example.com"];
     const entries = [
         mail({ id: "m1", subject: "Verify your email", to: "ada@example.com" }),
-        mail({ id: "m2", subject: "Reset password", to: ["bob@example.com", "carol@example.com"] }),
+        mail({ id: "m2", subject: "Reset password", to: resetRecipients }),
     ];
 
     it("returns everything for a blank or whitespace filter", () => {
