@@ -215,6 +215,32 @@ describe("healthPanel", () => {
         expect(screen.getAllByTestId("hl-error-row")).toHaveLength(2);
     });
 
+    it("reports the TOTAL error count even though the list is capped", async () => {
+        expect.assertions(2);
+
+        // Eight errors against a display cap of five. The badge is the only thing
+        // telling the operator the volume, which is the signal that matters during an
+        // incident — a badge that saturates at the cap says nothing. The case above
+        // stays under the cap, so it passes either way and cannot catch this.
+        const many: LogEntry[] = Array.from({ length: 8 }, (_, index) => {return {
+            functionPath: "messages:send",
+            level: "error" as const,
+            message: `boom ${index.toString()}`,
+            timestamp: 1_700_000_000_000 + index * 1000,
+        }});
+
+        render(renderPanel(clientWith(many)));
+
+        await waitFor(() => {
+            if (screen.getByTestId("hl-error-count").textContent !== "8") {
+                throw new Error("not loaded");
+            }
+        });
+
+        expect(screen.getByTestId("hl-error-count").textContent).toBe("8");
+        expect(screen.getAllByTestId("hl-error-row")).toHaveLength(5);
+    });
+
     it("renders request count and error rate from metrics", async () => {
         expect.assertions(2);
 

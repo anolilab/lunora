@@ -519,7 +519,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
             </div>
 
             {/* Functions by error rate + recent errors, side by side. */}
-            <HealthDigest logsError={logsError} topErrors={topErrors} worstFunctions={worstFunctions} />
+            <HealthDigest errorCount={recentErrors.length} logsError={logsError} topErrors={topErrors} worstFunctions={worstFunctions} />
 
             {/* Shards seen. */}
             <Card className="gap-0 py-0">

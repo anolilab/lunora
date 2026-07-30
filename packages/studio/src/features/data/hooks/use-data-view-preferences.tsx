@@ -7,8 +7,12 @@ import { maskColumnsForTable, mergeSensitiveColumns } from "../../../lib/mask-pr
 import type { TableRow } from "../data-browser-grid";
 import useMaskPolicies from "./use-mask-policies";
 
-/** Where a browser remembers its per-table pins. */
-const PINNED_COLUMNS_KEY = "lunora-studio-data-pinned-columns";
+/**
+ * Where a browser remembers its per-table pins. The name is load-bearing — it is
+ * live in operators' localStorage, so renaming it silently discards every pin
+ * they have set. Pinned by a test.
+ */
+const PINNED_COLUMNS_KEY = "lunora-studio-pinned-columns";
 
 /** Everything {@link useDataViewPreferences} hands back, so consumers can thread it as one prop. */
 interface DataViewPreferences {

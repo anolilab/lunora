@@ -17,12 +17,21 @@ import { LEVEL_VARIANT, rateLevel, ratePercent, REQUEST_ERROR_CRIT, REQUEST_ERRO
  * longer than its logic.
  */
 const HealthDigest = ({
+    errorCount,
     logsError,
     topErrors,
     worstFunctions,
 }: {
+    /**
+     * How many error-level entries there are in TOTAL, which is what the badge
+     * reports. Separate from `topErrors.length` on purpose: the list is capped, and
+     * during an incident the volume is the signal — a badge that saturates at the
+     * cap tells the operator nothing.
+     */
+    readonly errorCount: number;
     /** Set when the log read failed; the errors card shows it instead of an empty state. */
     readonly logsError: null | string;
+    /** The most recent errors, already capped for display. */
     readonly topErrors: ReadonlyArray<LogEntry>;
     readonly worstFunctions: ReadonlyArray<FunctionCallStat>;
 }): ReactElement => {
@@ -58,8 +67,8 @@ const HealthDigest = ({
             <Card className="gap-0 py-0">
                 <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
                     <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Recent errors")}</span>
-                    <Badge data-testid="hl-error-count" variant={topErrors.length > 0 ? "destructive" : "outline"}>
-                        {topErrors.length}
+                    <Badge data-testid="hl-error-count" variant={errorCount > 0 ? "destructive" : "outline"}>
+                        {errorCount}
                     </Badge>
                 </header>
 
