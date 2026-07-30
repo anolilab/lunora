@@ -565,6 +565,54 @@ type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "que
 type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
 type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
 
+/**
+ * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
+ * generated `api` / `internal` objects hand you, carrying `&lt;file>:&lt;function>`
+ * in `__lunoraRef`. Redeclared here so `@lunora/server` needs no dependency on
+ * the client package, exactly as {@link Scheduler} avoids one on
+ * `@lunora/scheduler`. `RegisteredFunction` has no `__lunoraRef`, so the two
+ * shapes never overlap.
+ */
+interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream", Args, Return> {
+    /** Phantom marker carrying the type parameters; never present at runtime. */
+    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
+    readonly __lunoraRef: string;
+}
+
+/*
+ * `ctx.run*` accepts EITHER handle shape.
+ *
+ * `_generated/api.ts` types every entry as a `FunctionReference`, but these
+ * were declared to take `RegisteredQuery` — the server-side registration
+ * object — so the documented example (`ctx.runQuery(api.todos.list, args)`,
+ * straight out of this package's own JSDoc) did not typecheck. There was no
+ * user-side fix short of a cast at every call site; on the first large port it
+ * was ~370 errors and the single largest class remaining (LUNORA_ISSUES #23).
+ *
+ * Overloads rather than a union parameter: `Args` cannot be inferred backwards
+ * through `InferArgs<A>`, so the two shapes need separate inference sites. The
+ * registration overload comes first so importing a module directly keeps its
+ * existing, more precise behaviour.
+ */
+
+/** `ctx.runQuery` — see the note above on why this is overloaded. */
+interface RunQuery {
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args): Promise<R>;
+}
+
+/** `ctx.runMutation` — see the note above on why this is overloaded. */
+interface RunMutation {
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
+}
+
+/** `ctx.runAction` — see the note above on why this is overloaded. */
+interface RunAction {
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
+}
+
 /** Which side of the WebSocket lifecycle a hook fires on. */
 type LifecycleEventKind = "connect" | "disconnect";
 
@@ -1920,7 +1968,7 @@ interface QueryCtx {
      * `runMutation` on a `QueryCtx` (writes are not allowed from a query).
      * Mirrors Convex's `ctx.runQuery`.
      */
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
@@ -1977,7 +2025,7 @@ interface MutationCtx {
      * failure does not roll back earlier writes (the same as a top-level
      * mutation). Mirrors Convex's `ctx.runMutation`.
      */
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
 
     /**
      * Compose a read-only subquery in-process, reusing this mutation's `db`.
@@ -1985,7 +2033,7 @@ interface MutationCtx {
      * it observes this mutation's in-flight writes. Mirrors Convex's
      * `ctx.runQuery`.
      */
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
@@ -2045,9 +2093,9 @@ interface ActionCtx {
      * may also use ambient `Date.now()` freely.
      */
     readonly now: number;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;

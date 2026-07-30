@@ -46,9 +46,9 @@ interface ActionCtx {
     readonly log: LunoraLogger;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -1137,8 +1137,8 @@ interface MutationCtx {
     readonly log: LunoraLogger;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -1390,7 +1390,7 @@ interface QueryCtx {
     readonly log: LunoraLogger;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
@@ -4101,9 +4101,9 @@ interface ActionCtx {
     readonly log: LunoraLogger;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -4451,8 +4451,8 @@ interface MutationCtx {
     readonly log: LunoraLogger;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -4501,7 +4501,7 @@ interface QueryCtx {
     readonly log: LunoraLogger;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
