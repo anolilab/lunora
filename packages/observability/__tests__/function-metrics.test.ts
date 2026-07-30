@@ -119,6 +119,28 @@ describe("recordFunctionMetric", () => {
         expect(row?.["min_duration_ms"]).toBe(12);
     });
 
+    it("recovers the minimum for a row whose minimum is already null", () => {
+        expect.assertions(1);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        ensureFunctionMetricsTables(sql);
+
+        // `min_duration_ms` is nullable, so a row can exist with it unset — a
+        // legacy row, or one created by a path-only insert. This is the only case
+        // the COALESCE guards: SQLite's `min(NULL, x)` is NULL, so without it the
+        // minimum for that path would read NULL forever no matter how many calls
+        // land on it.
+        harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES ('posts:list')`);
+
+        recordFunctionMetric(sql, dispatch({ durationMs: 7 }));
+
+        const [row] = harness.raw(`SELECT min_duration_ms FROM "${FUNCTION_METRICS_TABLE}"`);
+
+        expect(row?.["min_duration_ms"]).toBe(7);
+    });
+
     it("records the failure message and timestamp when a dispatch throws", () => {
         expect.assertions(3);
 
