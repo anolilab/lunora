@@ -1953,6 +1953,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
 
 ```ts
 interface TableReader<Row = Record<string, unknown>> {
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
     filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
     first: () => Promise<Row | null>;
@@ -4885,6 +4886,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
 
 ```ts
 interface TableReader<Row = Record<string, unknown>> {
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
     filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
     first: () => Promise<Row | null>;

@@ -830,6 +830,28 @@ interface PaginationResult<T = Record<string, unknown>> {
  * (schema-agnostic) `@lunora/server` reader.
  */
 interface TableReader<Row = Record<string, unknown>> {
+    /**
+     * Iterate rows lazily: `for await (const row of ctx.db.query("t").withIndex(…))`.
+     *
+     * Pages through the result set behind the scenes and yields row by row, so
+     * a consumer that stops early stops the reads too. `.collect()` is still the
+     * right terminal when you want the whole set; this exists for the cases
+     * where you cannot know up front how far you need to read.
+     *
+     * That is what merged/ordered index streams need. Reimplementing Convex's
+     * `convex-helpers/server/stream` in userland previously meant materialising
+     * each branch with a bounded `.take(1024)` before merging, so asking a
+     * merged stream for ONE row read up to 1,024 rows per branch (LUNORA_GAPS
+     * #6). The k-way merge itself is application code and stays there — only
+     * the laziness had to come from the database layer.
+     *
+     * Iteration pages through `.paginate()`, so it follows the same order —
+     * which is `.collect()`'s order whenever the sort key is unique. Under a
+     * TIED sort key (an unindexed read whose rows share `_creationTime`) the
+     * two can disagree, because the tie-break is left to SQLite. Read through
+     * an index when order matters, exactly as you would for `.paginate()`.
+     */
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
     filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
     first: () => Promise<Row | null>;

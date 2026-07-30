@@ -324,6 +324,17 @@ type CountArgs = RestrictableQueryOptions;
 const DEFAULT_BATCH_LIMIT = 500;
 
 /**
+ * Rows pulled per page when a reader is iterated with `for await`.
+ *
+ * A batch, not one row at a time: the cost is dominated by the per-page keyset
+ * query, so single-row paging would make iteration far slower than `.collect()`
+ * for the common case of consuming most of a result set. 128 keeps a caller
+ * that stops after a handful cheap, while amortising the query over enough rows
+ * that a full walk stays close to a bulk read.
+ */
+const ITERATOR_PAGE_SIZE = 128;
+
+/**
  * Reject an over-cap batch write before any row is touched. Enforced by the
  * writer below; the RLS guard delegates its batch methods straight to this
  * writer, so the cap holds whether the guard or the raw writer is outermost.
@@ -1137,6 +1148,40 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
     };
 
     const reader: TableReaderLike = {
+        /**
+         * Lazy row iteration — `for await (const row of ctx.db.query(t)…)`.
+         *
+         * Pulls one page at a time through the existing keyset pagination and
+         * yields its rows, so a consumer that stops early (a `break`, a `.first()`
+         * -like scan, a k-way merge that only needs the head of each branch)
+         * stops the reads too.
+         *
+         * That laziness is the point: without it, userland reimplementations of
+         * Convex's merged-index streams had to materialise each branch with a
+         * bounded `take(1024)` and merge, so asking for one row read up to 1,024
+         * per branch (LUNORA_GAPS #6). Ordering, `.withIndex()` and `.filter()`
+         * all apply exactly as they do to the other terminals, because this IS
+         * the other terminal underneath.
+         */
+        // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+        async *[Symbol.asyncIterator]() {
+            let cursor: string | undefined;
+
+            for (;;) {
+                // Sequential by construction: each page's cursor comes from the
+                // previous page, so these reads cannot be parallelised.
+                // eslint-disable-next-line no-await-in-loop, unicorn/no-null -- see above; `null` is PaginationOptions' documented first-page sentinel
+                const page: QueryPage = await reader.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
+
+                yield* page.page;
+
+                if (page.isDone || page.continueCursor === null) {
+                    return;
+                }
+
+                cursor = page.continueCursor;
+            }
+        },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async collect() {
             return runFetch(undefined);
