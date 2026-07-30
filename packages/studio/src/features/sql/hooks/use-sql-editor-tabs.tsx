@@ -94,7 +94,8 @@ const useSqlEditorTabs = (seedTab: () => SqlTab): SqlEditorTabsModel => {
     const [pendingBulk, setPendingBulk] = useState<BulkClose | null>(null);
 
     // The active tab is the source of truth for the editor's draft + saved-query
-    // link; `result`/`error`/`tab` read out of the per-tab ephemeral maps.
+    // link. Never undefined: a persisted id that no longer exists falls back to the
+    // first open tab, and an empty set to a fresh one.
     const activeTab = tabs.find((each) => each.id === activeTabId) ?? tabs[0] ?? makeTab();
     const output = outputs[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
 
