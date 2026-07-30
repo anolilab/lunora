@@ -18,7 +18,29 @@ import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/sch
 import type { CapabilityKey } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
-import type { AgentIR, ContainerIR, CronJobIR, EnvIR, FunctionIR, HttpRouteIR, IdentityIR, IndexIR, JurisdictionIR, MaskMetadataIR, MigrationIR, MutatorIR, QueueIR, RlsMetadataIR, SchemaIR, ShapeIR, StorageRulesMetadataIR, TableIR, ValidatorIR, VectorIndexIR, WorkflowIR } from "./ir";
+import type {
+    AgentIR,
+    ContainerIR,
+    CronJobIR,
+    EnvIR,
+    FunctionIR,
+    HttpRouteIR,
+    IdentityIR,
+    IndexIR,
+    JurisdictionIR,
+    MaskMetadataIR,
+    MigrationIR,
+    MutatorIR,
+    QueueIR,
+    RlsMetadataIR,
+    SchemaIR,
+    ShapeIR,
+    StorageRulesMetadataIR,
+    TableIR,
+    ValidatorIR,
+    VectorIndexIR,
+    WorkflowIR,
+} from "./ir";
 import LITERAL_VALUE_RE from "./literal-value";
 import sanitizeNamespace from "./paths";
 
