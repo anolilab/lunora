@@ -160,5 +160,11 @@ const tabsClosedBy = (op: "all" | "others" | "right", tabs: ReadonlyArray<SqlTab
     return [...tabs];
 };
 
+/**
+ * Which results sub-pane a tab is showing. Declared with the tab model it belongs to,
+ * so the pane and the hook cannot drift into two compatible-by-accident unions.
+ */
+type ResultTab = "chart" | "explain" | "results";
+
 export { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, isDirty, makeTab, MAX_TABS, tabsClosedBy, usePersistedTabs };
-export type { SqlTab };
+export type { ResultTab, SqlTab };

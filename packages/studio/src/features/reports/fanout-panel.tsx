@@ -1,8 +1,9 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { ShardInput } from "../../components/shard-input";
+import { StatCard } from "../../components/stat-card";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -25,18 +26,6 @@ const formatMs = (ms: number): string => `${ms.toString()} ms`;
 
 /** True once a result has loaded and the shard has no connections and has run no fan-out passes yet. */
 const isFanoutIdle = (result: FanoutMetricsResult): boolean => result.totalConnections === 0 && result.shapePoke.passes === 0 && result.whisper.passes === 0;
-
-/** One labelled fan-out counter as a compact KPI card (the metrics panel's stat-card anatomy). */
-const StatCard = ({ label, testId, value }: { label: string; testId?: string; value: ReactNode }): ReactElement => (
-    <Card className="gap-0 py-0">
-        <div className="flex flex-col gap-2.5 p-4">
-            <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{label}</span>
-            <span className="truncate text-2xl font-semibold tabular-nums text-foreground" data-testid={testId}>
-                {value}
-            </span>
-        </div>
-    </Card>
-);
 
 /**
  * The running counters for one delivery path as a titled grid of stat cards.
