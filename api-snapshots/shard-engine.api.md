@@ -272,6 +272,24 @@ interface CacheEntry {
 }
 ```
 
+### `CapturedMailRow` (interface)
+
+```ts
+interface CapturedMailRow {
+    bcc?: string[];
+    capturedAt: number;
+    cc?: string[];
+    from?: string;
+    headers?: Record<string, string>;
+    html?: string;
+    id: string;
+    replyTo?: string;
+    subject: string;
+    text?: string;
+    to: string | string[];
+}
+```
+
 ### `CdcChange` (interface)
 
 ```ts
@@ -407,6 +425,12 @@ interface CtxDbOptions {
 }
 ```
 
+### `DATA_MIGRATION_STATE_TABLE` (const)
+
+```ts
+const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";
+```
+
 ### `DEFAULT_FANOUT_TOPIC_LIMIT` (const)
 
 ```ts
@@ -435,6 +459,30 @@ const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds;
 
 ```ts
 const DOC_COLUMN = "__doc__";
+```
+
+### `DataMigrationDocument` (type)
+
+```ts
+type DataMigrationDocument = Record<string, unknown>;
+```
+
+### `DataMigrationLike` (interface)
+
+```ts
+interface DataMigrationLike {
+    readonly batchSize?: number;
+    readonly down?: DataMigrationTransform;
+    readonly id: string;
+    readonly table: string;
+    readonly up: DataMigrationTransform;
+}
+```
+
+### `DataMigrationTransform` (type)
+
+```ts
+type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined;
 ```
 
 ### `DatabaseWriterLike` (interface)
@@ -540,6 +588,60 @@ interface DeployInfo {
     environment?: string;
     versionTag?: string;
     workerUrl?: string;
+}
+```
+
+### `ExportRow` (interface)
+
+```ts
+interface ExportRow {
+    doc: Record<string, unknown>;
+    table: string;
+}
+```
+
+### `ExportShardAdminArgs` (interface)
+
+```ts
+interface ExportShardAdminArgs {
+    batchSize?: number;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ExportShardArgs` (interface)
+
+```ts
+interface ExportShardArgs {
+    batchSize?: number;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ExternalSourceDiffResult` (interface)
+
+```ts
+interface ExternalSourceDiffResult {
+    changes: CdcChange[];
+    nextBaseline: Map<string, string>;
+}
+```
+
+### `ExternalSourceLike` (interface)
+
+```ts
+interface ExternalSourceLike {
+    binding: string;
+    columns?: ReadonlyArray<string>;
+    cursor?: SourceCursorLike;
+    idColumn?: string;
+    map?: (row: Record<string, unknown>) => Record<string, unknown>;
+    mode?: string;
+    query: string;
+    reconcileEveryMs?: number;
+    refresh?: SourceRefresh;
+    softDeleteColumn?: string;
+    tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
 }
 ```
 
@@ -823,6 +925,53 @@ interface IdempotentRecord {
 }
 ```
 
+### `ImportError` (interface)
+
+```ts
+interface ImportError {
+    code: string;
+    line: number;
+    message: string;
+    table: string;
+}
+```
+
+### `ImportShardAdminArgs` (interface)
+
+```ts
+interface ImportShardAdminArgs {
+    rows: ReadonlyArray<ExportRow>;
+    startLine?: number;
+}
+```
+
+### `ImportShardArgs` (interface)
+
+```ts
+interface ImportShardArgs {
+    rows: ReadonlyArray<ExportRow>;
+    startLine?: number;
+}
+```
+
+### `ImportShardResult` (interface)
+
+```ts
+interface ImportShardResult {
+    conflicts: number;
+    errors: ImportError[];
+    inserted: Record<string, number>;
+}
+```
+
+### `IncrementalMaterializeResult` (interface)
+
+```ts
+interface IncrementalMaterializeResult {
+    applied: number;
+}
+```
+
 ### `IndexDefinitionLike` (interface)
 
 ```ts
@@ -866,10 +1015,28 @@ interface LifecycleEvent {
 }
 ```
 
+### `MAIL_RETENTION` (const)
+
+```ts
+const MAIL_RETENTION = 500;
+```
+
+### `MAIL_TABLE` (const)
+
+```ts
+const MAIL_TABLE = "__lunora_mail";
+```
+
 ### `MAX_PAGE_SIZE` (const)
 
 ```ts
 const MAX_PAGE_SIZE = 500;
+```
+
+### `MAX_SQL_ROWS` (const)
+
+```ts
+const MAX_SQL_ROWS = 1000;
 ```
 
 ### `MaskColumnMetadata` (interface)
@@ -887,6 +1054,57 @@ interface MaskColumnMetadata {
 ```ts
 interface MaskPoliciesResult {
     columns: MaskColumnMetadata[];
+}
+```
+
+### `MaterializeResult` (interface)
+
+```ts
+interface MaterializeResult {
+    applied: number;
+    nextBaseline: Map<string, string>;
+}
+```
+
+### `MigrationDirection` (type)
+
+```ts
+type MigrationDirection = "down" | "up";
+```
+
+### `MigrationRunResult` (interface)
+
+```ts
+interface MigrationRunResult {
+    changed: number;
+    cursor: null | string;
+    direction: MigrationDirection;
+    dryRun: boolean;
+    id: string;
+    processed: number;
+    status: MigrationStatus;
+}
+```
+
+### `MigrationStatus` (type)
+
+```ts
+type MigrationStatus = "completed" | "failed" | "in_progress";
+```
+
+### `MigrationStatusRow` (interface)
+
+```ts
+interface MigrationStatusRow {
+    changed: number;
+    cursor: null | string;
+    direction: MigrationDirection;
+    error: null | string;
+    id: string;
+    processed: number;
+    startedAt: null | number;
+    status: MigrationStatus;
+    updatedAt: null | number;
 }
 ```
 
@@ -998,6 +1216,45 @@ interface PaginationOptions {
 }
 ```
 
+### `PitrBookmarkResult` (interface)
+
+```ts
+interface PitrBookmarkResult {
+    current: string;
+    forTime?: string;
+}
+```
+
+### `PitrRestoreArgs` (interface)
+
+```ts
+interface PitrRestoreArgs {
+    bookmark?: string;
+    restart?: boolean;
+    time?: number | string;
+}
+```
+
+### `PitrRestoreResult` (interface)
+
+```ts
+interface PitrRestoreResult {
+    restarted: boolean;
+    restoredTo: string;
+    undoBookmark: string;
+}
+```
+
+### `PitrStorage` (interface)
+
+```ts
+interface PitrStorage {
+    getBookmarkForTime?: (time: Date | number) => Promise<string>;
+    getCurrentBookmark?: () => Promise<string>;
+    onNextSessionRestoreBookmark?: (bookmark: string) => Promise<string>;
+}
+```
+
 ### `PokeFrameMeta` (interface)
 
 ```ts
@@ -1025,6 +1282,12 @@ interface PromotionThresholds {
 }
 ```
 
+### `QUEUE_TABLE` (const)
+
+```ts
+const QUEUE_TABLE = "__lunora_queue_messages";
+```
+
 ### `QueryArgs` (interface)
 
 ```ts
@@ -1050,6 +1313,30 @@ interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+}
+```
+
+### `QueueMessageOutcome` (type)
+
+```ts
+type QueueMessageOutcome = "ack" | "error" | "retry";
+```
+
+### `QueueMessageRow` (interface)
+
+```ts
+interface QueueMessageRow {
+    attempts: number;
+    body: unknown;
+    capturedAt: number;
+    deadLettered: boolean;
+    error?: string;
+    exportName?: string;
+    id: string;
+    messageId: string;
+    outcome: QueueMessageOutcome;
+    queue: string;
+    timestamp: number;
 }
 ```
 
@@ -1282,6 +1569,38 @@ interface ReadTablePageOptions {
     search?: string;
     skipCount?: boolean;
     table: string;
+}
+```
+
+### `RecordMailInput` (interface)
+
+```ts
+interface RecordMailInput {
+    bcc?: string[];
+    cc?: string[];
+    from?: string;
+    headers?: Record<string, string>;
+    html?: string;
+    replyTo?: string;
+    subject: string;
+    text?: string;
+    to: string | string[];
+}
+```
+
+### `RecordQueueMessageInput` (interface)
+
+```ts
+interface RecordQueueMessageInput {
+    attempts: number;
+    body: unknown;
+    deadLettered?: boolean;
+    error?: string;
+    exportName?: string;
+    messageId: string;
+    outcome: QueueMessageOutcome;
+    queue: string;
+    timestamp: number;
 }
 ```
 
@@ -1556,6 +1875,26 @@ interface RpcRequest {
 }
 ```
 
+### `RunDataMigrationOptions` (interface)
+
+```ts
+interface RunDataMigrationOptions {
+    batchSize?: number;
+    clock?: () => number;
+    direction?: MigrationDirection;
+    dryRun?: boolean;
+    maxBatches?: number;
+    migration: DataMigrationLike;
+    onBatch?: (progress: {
+        batches: number;
+        changed: number;
+        processed: number;
+    }) => Promise<void> | void;
+    sql: SqlExec;
+    writer: DatabaseWriterLike;
+}
+```
+
 ### `RunTriggersOptions` (interface)
 
 ```ts
@@ -1814,6 +2153,42 @@ interface SocketAttachment {
 type SortDirection = "asc" | "desc";
 ```
 
+### `SourceClientLike` (interface)
+
+```ts
+interface SourceClientLike {
+    query: <Row = Record<string, unknown>>(text: string, parameters?: ReadonlyArray<unknown>) => Promise<Row[]>;
+}
+```
+
+### `SourceCursorLike` (interface)
+
+```ts
+interface SourceCursorLike {
+    column: string;
+    query: string;
+}
+```
+
+### `SourceRefresh` (type)
+
+```ts
+type SourceRefresh = "manual" | {
+    everyMs: number;
+};
+```
+
+### `SqlConsoleResult` (interface)
+
+```ts
+interface SqlConsoleResult {
+    columns: string[];
+    rowCount: number;
+    rows: Record<string, unknown>[];
+    truncated: boolean;
+}
+```
+
 ### `SqlCursor` (interface)
 
 ```ts
@@ -1834,6 +2209,15 @@ type SqlEngine = "mysql" | "postgres" | "sqlite";
 ```ts
 interface SqlExec {
     exec: <Row = Record<string, unknown>>(sql: string, ...params: unknown[]) => SqlCursor<Row>;
+}
+```
+
+### `SqlLintResult` (interface)
+
+```ts
+interface SqlLintResult {
+    diagnostics: SqlDiagnostic[];
+    plan: string[];
 }
 ```
 
@@ -2188,6 +2572,17 @@ type TriggerOpLike = "delete" | "insert" | "update";
 type TriggerTimingLike = "after" | "before";
 ```
 
+### `TtlSweepSpec` (interface)
+
+```ts
+interface TtlSweepSpec {
+    after?: number;
+    field: string;
+    softDeleteField?: string;
+    table: string;
+}
+```
+
 ### `ValidatorLike` (interface)
 
 ```ts
@@ -2341,10 +2736,22 @@ const applyOnDelete: (options: ApplyOnDeleteOptions) => Promise<void>;
 const applySelect: (page: Record<string, unknown>[], select: ReadonlyArray<string> | undefined, withInput?: Record<string, unknown>) => Record<string, unknown>[];
 ```
 
+### `armRestore` (const)
+
+```ts
+const armRestore: (storage: PitrStorage, args: PitrRestoreArgs) => Promise<Omit<PitrRestoreResult, "restarted">>;
+```
+
 ### `assertFlatPredicate` (const)
 
 ```ts
 const assertFlatPredicate: (where: WhereInput | undefined, schema: ResolveContext["schema"], tableName: string, op: string) => void;
+```
+
+### `assertReadonly` (const)
+
+```ts
+const assertReadonly: (query: string) => void;
 ```
 
 ### `assertShapeShardable` (const)
@@ -2423,6 +2830,12 @@ const buildSeekBeforeWhere: (keys: OrderKey[], cursorValues: unknown[]) => Where
 const buildSeekWhere: (keys: OrderKey[], cursorValues: unknown[]) => WhereInput;
 ```
 
+### `buildSettings` (const)
+
+```ts
+const buildSettings: (rawEnv: unknown) => SettingsResult;
+```
+
 ### `bumpCdcEpoch` (const)
 
 ```ts
@@ -2433,6 +2846,22 @@ const bumpCdcEpoch: (sql: SqlExec) => string;
 
 ```ts
 const clampPromotionThresholds: (tUp: number, tDownRaw: number) => PromotionThresholds;
+```
+
+### `clearCapturedMail` (const)
+
+```ts
+const clearCapturedMail: (sql: SqlExec) => {
+    cleared: true;
+};
+```
+
+### `clearQueueMessages` (const)
+
+```ts
+const clearQueueMessages: (sql: SqlExec) => {
+    cleared: true;
+};
 ```
 
 ### `coerceAggregateNumber` (const)
@@ -2531,6 +2960,15 @@ const deleteGlobalShapeSnapshotsForConnection: (sql: SqlExec, connectionId: stri
 const depKey: (table: string, idOrScan: string) => string;
 ```
 
+### `diffExternalSource` (const)
+
+```ts
+const diffExternalSource: (pulled: ReadonlyArray<Record<string, unknown>>, baseline: ReadonlyMap<string, string>, options: {
+    columns?: ReadonlyArray<string>;
+    table: string;
+}) => ExternalSourceDiffResult;
+```
+
 ### `diffGlobalMembership` (const)
 
 ```ts
@@ -2583,6 +3021,24 @@ const encodeRowsPatch: (rowsPatch: ReadonlyArray<ShapeRowOp>) => ShapeRowOp[];
 
 ```ts
 const ensureAuditTable: (sql: SqlExec) => void;
+```
+
+### `ensureMailTable` (const)
+
+```ts
+const ensureMailTable: (sql: SqlExec) => void;
+```
+
+### `exportShardRows` (const)
+
+```ts
+const exportShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: ExportShardArgs) => AsyncGenerator<ExportRow, void, undefined>;
+```
+
+### `exportShardTable` (const)
+
+```ts
+const exportShardTable: (writer: DatabaseWriterLike, table: string, batchSize?: number) => AsyncGenerator<ExportRow, void, undefined>;
 ```
 
 ### `facetColumn` (const)
@@ -2639,16 +3095,46 @@ const haversineMeters: (a: GeoPoint, b: GeoPoint) => number;
 const hydrateDocsById: (deps: RankPageDeps, tableName: string, ids: ReadonlyArray<string>) => Map<string, Record<string, unknown>>;
 ```
 
+### `importShardRows` (const)
+
+```ts
+const importShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs) => Promise<ImportShardResult>;
+```
+
+### `isDevEnvironment` (const)
+
+```ts
+const isDevEnvironment: (rawEnv: unknown) => boolean;
+```
+
 ### `isFtsAvailable` (const)
 
 ```ts
 const isFtsAvailable: (sql: SqlExec) => boolean;
 ```
 
+### `isLossyBody` (const)
+
+```ts
+const isLossyBody: (body: unknown) => boolean;
+```
+
 ### `isRelationPredicate` (const)
 
 ```ts
 const isRelationPredicate: (value: unknown) => value is Record<string, WhereInput>;
+```
+
+### `isSoftDeleted` (const)
+
+```ts
+const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
+```
+
+### `isSourceDue` (const)
+
+```ts
+const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | undefined, nowMs: number) => boolean;
 ```
 
 ### `jsonPath` (const)
@@ -2672,6 +3158,12 @@ const liftSourceId: (row: Record<string, unknown>, options?: {
 }) => Record<string, unknown>;
 ```
 
+### `lintReadonlySql` (const)
+
+```ts
+const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
+```
+
 ### `listTables` (const)
 
 ```ts
@@ -2688,6 +3180,25 @@ const matchesRankStaticWhere: (document: Record<string, unknown>, predicate: Rec
 
 ```ts
 const matchesStaticWhere: (document: Record<string, unknown>, predicate: Record<string, unknown>) => boolean;
+```
+
+### `materializeExternalRows` (const)
+
+```ts
+const materializeExternalRows: (writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, baseline: ReadonlyMap<string, string>, options: {
+    columns?: ReadonlyArray<string>;
+    table: string;
+}) => Promise<MaterializeResult>;
+```
+
+### `materializeExternalRowsIncremental` (const)
+
+```ts
+const materializeExternalRowsIncremental: (writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, options: {
+    columns?: ReadonlyArray<string>;
+    deletedIds?: ReadonlySet<string>;
+    table: string;
+}) => Promise<IncrementalMaterializeResult>;
 ```
 
 ### `mergeWhere` (const)
@@ -2780,6 +3291,18 @@ const normalizeSourceValue: (value: unknown) => unknown;
 const param: (value: unknown) => SQL;
 ```
 
+### `parseExportShardArgs` (const)
+
+```ts
+const parseExportShardArgs: (args: Record<string, unknown>) => ExportShardAdminArgs;
+```
+
+### `parseImportShardArgs` (const)
+
+```ts
+const parseImportShardArgs: (args: Record<string, unknown>) => ImportShardAdminArgs;
+```
+
 ### `planAggregateLookup` (const)
 
 ```ts
@@ -2796,6 +3319,20 @@ const pointInBoundingBox: (point: GeoPoint, box: GeoBoundingBox) => boolean;
 
 ```ts
 const projectColumns: (document_: Record<string, unknown>, columns: ReadonlyArray<string> | undefined) => Record<string, unknown>;
+```
+
+### `pullExternalSourceIncrementalTick` (const)
+
+```ts
+const pullExternalSourceIncrementalTick: (sql: SqlExec, writer: DatabaseWriterLike, client: SourceClientLike, table: string, source: ExternalSourceLike, shardKey: string, nowMs: number) => Promise<{
+    applied: number;
+}>;
+```
+
+### `pullExternalSourceTick` (const)
+
+```ts
+const pullExternalSourceTick: (sql: SqlExec, writer: DatabaseWriterLike, client: SourceClientLike, table: string, source: ExternalSourceLike, shardKey: string) => Promise<MaterializeResult>;
 ```
 
 ### `qualifiedJsonPath` (const)
@@ -2856,6 +3393,22 @@ const readAuditLog: (sql: SqlExec, options?: {
 }) => AuditEntry[];
 ```
 
+### `readBookmark` (const)
+
+```ts
+const readBookmark: (storage: PitrStorage, time?: number | string) => Promise<PitrBookmarkResult>;
+```
+
+### `readCapturedMail` (const)
+
+```ts
+const readCapturedMail: (sql: SqlExec, options?: {
+    limit?: number;
+}) => {
+    entries: CapturedMailRow[];
+};
+```
+
 ### `readCdcChanges` (const)
 
 ```ts
@@ -2887,6 +3440,12 @@ const readCdcEpoch: (sql: SqlExec) => string;
 const readClientWatermark: (sql: SqlExec, identity: string, clientId: string) => number;
 ```
 
+### `readExternalSourceBaseline` (const)
+
+```ts
+const readExternalSourceBaseline: (sql: SqlExec, table: string, columns?: ReadonlyArray<string>) => Map<string, string>;
+```
+
 ### `readGlobalShapeSnapshot` (const)
 
 ```ts
@@ -2897,6 +3456,26 @@ const readGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: strin
 
 ```ts
 const readIdempotent: (sql: SqlExec, identity: string, mutationId: string) => IdempotentRecord | undefined;
+```
+
+### `readMigrationStatus` (const)
+
+```ts
+const readMigrationStatus: (sql: SqlExec, id?: string) => MigrationStatusRow[];
+```
+
+### `readQueueMessageById` (const)
+
+```ts
+const readQueueMessageById: (sql: SqlExec, id: string) => QueueMessageRow | undefined;
+```
+
+### `readQueueMessages` (const)
+
+```ts
+const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
+    entries: QueueMessageRow[];
+};
 ```
 
 ### `readSchemaHistory` (const)
@@ -2923,10 +3502,26 @@ const readSearchBackfillState: (sql: SqlExec, companion: string) => SearchBackfi
 const readTablePage: (sql: SqlExec, options: ReadTablePageOptions) => TablePage;
 ```
 
+### `recordCapturedMail` (const)
+
+```ts
+const recordCapturedMail: (sql: SqlExec, input: RecordMailInput, capturedAt: number) => {
+    id: string;
+};
+```
+
 ### `recordFanoutPass` (const)
 
 ```ts
 const recordFanoutPass: (counters: FanoutPathCounters, iterated: number, delivered: number, ms: number) => FanoutPathCounters;
+```
+
+### `recordQueueMessages` (const)
+
+```ts
+const recordQueueMessages: (sql: SqlExec, inputs: ReadonlyArray<RecordQueueMessageInput>, capturedAt: number) => {
+    recorded: number;
+};
 ```
 
 ### `recordSchemaVersion` (const)
@@ -2971,10 +3566,31 @@ const resolveWith: (options: ResolveWithOptions) => Promise<void>;
 const rowToDocument: (row: Record<string, unknown> | undefined) => Record<string, unknown> | undefined;
 ```
 
+### `runDataMigration` (const)
+
+```ts
+const runDataMigration: (options: RunDataMigrationOptions) => Promise<MigrationRunResult>;
+```
+
 ### `runDrizzle` (const)
 
 ```ts
 const runDrizzle: <Row = Record<string, unknown>>(exec: SqlExec, query: SQL) => SqlCursor<Row>;
+```
+
+### `runExternalSourceTick` (const)
+
+```ts
+const runExternalSourceTick: (sql: SqlExec, writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, options: {
+    columns?: ReadonlyArray<string>;
+    table: string;
+}) => Promise<MaterializeResult>;
+```
+
+### `runReadonlySql` (const)
+
+```ts
+const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ```
 
 ### `runRowValidators` (const)
@@ -3011,6 +3627,21 @@ const runSql: <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...pa
 
 ```ts
 const runTriggers: (options: RunTriggersOptions) => Promise<void>;
+```
+
+### `selectExpiredIds` (const)
+
+```ts
+const selectExpiredIds: (sql: SqlExec, spec: TtlSweepSpec, now: number, limit: number) => {
+    hasMore: boolean;
+    ids: string[];
+};
+```
+
+### `selectExportTables` (const)
+
+```ts
+const selectExportTables: (schema: SchemaLike, requested?: ReadonlyArray<string>) => string[];
 ```
 
 ### `selectIndexForAggregate` (const)
@@ -3170,6 +3801,12 @@ const tryRowToDocument: (row: Record<string, unknown> | undefined) => Record<str
 
 ```ts
 const trySendFrame: (ws: FrameSink, frame: string) => boolean;
+```
+
+### `validateImportRow` (const)
+
+```ts
+const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
 ```
 
 ### `writeGlobalShapeSnapshot` (const)

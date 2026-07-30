@@ -75,21 +75,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `CapturedMailRow` (interface)
 
-```ts
-interface CapturedMailRow {
-    bcc?: string[];
-    capturedAt: number;
-    cc?: string[];
-    from?: string;
-    headers?: Record<string, string>;
-    html?: string;
-    id: string;
-    replyTo?: string;
-    subject: string;
-    text?: string;
-    to: string | string[];
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `CdcChange` (interface)
 
@@ -125,9 +111,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DATA_MIGRATION_STATE_TABLE` (const)
 
-```ts
-const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DEFAULT_MAX_RELATION_KEYS` (const)
 
@@ -135,27 +119,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DataMigrationDocument` (type)
 
-```ts
-type DataMigrationDocument = Record<string, unknown>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DataMigrationLike` (interface)
 
-```ts
-interface DataMigrationLike {
-    readonly batchSize?: number;
-    readonly down?: DataMigrationTransform;
-    readonly id: string;
-    readonly table: string;
-    readonly up: DataMigrationTransform;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DataMigrationTransform` (type)
 
-```ts
-type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DatabaseWriterLike` (interface)
 
@@ -171,57 +143,23 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ExportRow` (interface)
 
-```ts
-interface ExportRow {
-    doc: Record<string, unknown>;
-    table: string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ExportShardAdminArgs` (interface)
 
-```ts
-interface ExportShardAdminArgs {
-    batchSize?: number;
-    tables?: ReadonlyArray<string>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ExportShardArgs` (interface)
 
-```ts
-interface ExportShardArgs {
-    batchSize?: number;
-    tables?: ReadonlyArray<string>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ExternalSourceDiffResult` (interface)
 
-```ts
-interface ExternalSourceDiffResult {
-    changes: CdcChange[];
-    nextBaseline: Map<string, string>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ExternalSourceLike` (interface)
 
-```ts
-interface ExternalSourceLike {
-    binding: string;
-    columns?: ReadonlyArray<string>;
-    cursor?: SourceCursorLike;
-    idColumn?: string;
-    map?: (row: Record<string, unknown>) => Record<string, unknown>;
-    mode?: string;
-    query: string;
-    reconcileEveryMs?: number;
-    refresh?: SourceRefresh;
-    softDeleteColumn?: string;
-    tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `FLAGS_FUNCTION_PREFIX` (const)
 
@@ -302,50 +240,23 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ImportError` (interface)
 
-```ts
-interface ImportError {
-    code: string;
-    line: number;
-    message: string;
-    table: string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ImportShardAdminArgs` (interface)
 
-```ts
-interface ImportShardAdminArgs {
-    rows: ReadonlyArray<ExportRow>;
-    startLine?: number;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ImportShardArgs` (interface)
 
-```ts
-interface ImportShardArgs {
-    rows: ReadonlyArray<ExportRow>;
-    startLine?: number;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ImportShardResult` (interface)
 
-```ts
-interface ImportShardResult {
-    conflicts: number;
-    errors: ImportError[];
-    inserted: Record<string, number>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `IncrementalMaterializeResult` (interface)
 
-```ts
-interface IncrementalMaterializeResult {
-    applied: number;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `IndexDefinitionLike` (interface)
 
@@ -363,21 +274,15 @@ type LogSink = TelemetrySink;
 
 ### `MAIL_RETENTION` (const)
 
-```ts
-const MAIL_RETENTION = 500;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MAIL_TABLE` (const)
 
-```ts
-const MAIL_TABLE = "__lunora_mail";
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MAX_SQL_ROWS` (const)
 
-```ts
-const MAX_SQL_ROWS = 1e3;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MaskColumnMetadata` (interface)
 
@@ -389,54 +294,23 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MaterializeResult` (interface)
 
-```ts
-interface MaterializeResult {
-    applied: number;
-    nextBaseline: Map<string, string>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MigrationDirection` (type)
 
-```ts
-type MigrationDirection = "down" | "up";
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MigrationRunResult` (interface)
 
-```ts
-interface MigrationRunResult {
-    changed: number;
-    cursor: null | string;
-    direction: MigrationDirection;
-    dryRun: boolean;
-    id: string;
-    processed: number;
-    status: MigrationStatus;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MigrationStatus` (type)
 
-```ts
-type MigrationStatus = "completed" | "failed" | "in_progress";
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MigrationStatusRow` (interface)
 
-```ts
-interface MigrationStatusRow {
-    changed: number;
-    cursor: null | string;
-    direction: MigrationDirection;
-    error: null | string;
-    id: string;
-    processed: number;
-    startedAt: null | number;
-    status: MigrationStatus;
-    updatedAt: null | number;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MutationDelta` (interface)
 
@@ -472,42 +346,19 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `PitrBookmarkResult` (interface)
 
-```ts
-interface PitrBookmarkResult {
-    current: string;
-    forTime?: string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `PitrRestoreArgs` (interface)
 
-```ts
-interface PitrRestoreArgs {
-    bookmark?: string;
-    restart?: boolean;
-    time?: number | string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `PitrRestoreResult` (interface)
 
-```ts
-interface PitrRestoreResult {
-    restarted: boolean;
-    restoredTo: string;
-    undoBookmark: string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `PitrStorage` (interface)
 
-```ts
-interface PitrStorage {
-    getBookmarkForTime?: (time: Date | number) => Promise<string>;
-    getCurrentBookmark?: () => Promise<string>;
-    onNextSessionRestoreBookmark?: (bookmark: string) => Promise<string>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `QueryArgs` (interface)
 
@@ -603,19 +454,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RecordMailInput` (interface)
 
-```ts
-interface RecordMailInput {
-    bcc?: string[];
-    cc?: string[];
-    from?: string;
-    headers?: Record<string, string>;
-    html?: string;
-    replyTo?: string;
-    subject: string;
-    text?: string;
-    to: string | string[];
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RelationDefinitionLike` (interface)
 
@@ -659,23 +498,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RunDataMigrationOptions` (interface)
 
-```ts
-interface RunDataMigrationOptions {
-    batchSize?: number;
-    clock?: () => number;
-    direction?: MigrationDirection;
-    dryRun?: boolean;
-    maxBatches?: number;
-    migration: DataMigrationLike;
-    onBatch?: (progress: {
-        batches: number;
-        changed: number;
-        processed: number;
-    }) => Promise<void> | void;
-    sql: SqlExec;
-    writer: DatabaseWriterLike;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RunShardApplyCdcArgs` (interface)
 
@@ -1086,39 +909,19 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `SourceClientLike` (interface)
 
-```ts
-interface SourceClientLike {
-    query: <Row = Record<string, unknown>>(text: string, parameters?: ReadonlyArray<unknown>) => Promise<Row[]>;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `SourceCursorLike` (interface)
 
-```ts
-interface SourceCursorLike {
-    column: string;
-    query: string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `SourceRefresh` (type)
 
-```ts
-type SourceRefresh = "manual" | {
-    everyMs: number;
-};
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `SqlConsoleResult` (interface)
 
-```ts
-interface SqlConsoleResult {
-    columns: string[];
-    rowCount: number;
-    rows: Record<string, unknown>[];
-    truncated: boolean;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `SqlCursor` (interface)
 
@@ -1264,14 +1067,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `TtlSweepSpec` (interface)
 
-```ts
-interface TtlSweepSpec {
-    after?: number;
-    field: string;
-    softDeleteField?: string;
-    table: string;
-}
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ValidatorLike` (interface)
 
@@ -1335,9 +1131,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `armRestore` (const)
 
-```ts
-const armRestore: (storage: PitrStorage, args: PitrRestoreArgs) => Promise<Omit<PitrRestoreResult, "restarted">>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertFlatPredicate` (const)
 
@@ -1345,9 +1139,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertReadonly` (const)
 
-```ts
-const assertReadonly: (query: string) => void;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertShapeShardable` (const)
 
@@ -1383,11 +1175,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `clearCapturedMail` (const)
 
-```ts
-const clearCapturedMail: (sql: SqlExec) => {
-    cleared: true;
-};
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `coerceAggregateNumber` (const)
 
@@ -1455,12 +1243,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `diffExternalSource` (const)
 
-```ts
-const diffExternalSource: (pulled: ReadonlyArray<Record<string, unknown>>, baseline: ReadonlyMap<string, string>, options: {
-    columns?: ReadonlyArray<string>;
-    table: string;
-}) => ExternalSourceDiffResult;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `encodeAggregateKey` (const)
 
@@ -1480,21 +1263,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ensureMailTable` (const)
 
-```ts
-const ensureMailTable: (sql: SqlExec) => void;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `exportShardRows` (const)
 
-```ts
-const exportShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: ExportShardArgs) => AsyncGenerator<ExportRow, void, undefined>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `exportShardTable` (const)
 
-```ts
-const exportShardTable: (writer: DatabaseWriterLike, table: string, batchSize?: number) => AsyncGenerator<ExportRow, void, undefined>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `facetColumn` (const)
 
@@ -1522,9 +1299,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `importShardRows` (const)
 
-```ts
-const importShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs) => Promise<ImportShardResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isRelationPredicate` (const)
 
@@ -1532,15 +1307,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isSoftDeleted` (const)
 
-```ts
-const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isSourceDue` (const)
 
-```ts
-const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | undefined, nowMs: number) => boolean;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `liftSourceId` (const)
 
@@ -1560,22 +1331,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `materializeExternalRows` (const)
 
-```ts
-const materializeExternalRows: (writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, baseline: ReadonlyMap<string, string>, options: {
-    columns?: ReadonlyArray<string>;
-    table: string;
-}) => Promise<MaterializeResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `materializeExternalRowsIncremental` (const)
 
-```ts
-const materializeExternalRowsIncremental: (writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, options: {
-    columns?: ReadonlyArray<string>;
-    deletedIds?: ReadonlySet<string>;
-    table: string;
-}) => Promise<IncrementalMaterializeResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `mergeWhere` (const)
 
@@ -1595,15 +1355,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `parseExportShardArgs` (const)
 
-```ts
-const parseExportShardArgs: (args: Record<string, unknown>) => ExportShardAdminArgs;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `parseImportShardArgs` (const)
 
-```ts
-const parseImportShardArgs: (args: Record<string, unknown>) => ImportShardAdminArgs;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `planAggregateLookup` (const)
 
@@ -1615,17 +1371,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `pullExternalSourceIncrementalTick` (const)
 
-```ts
-const pullExternalSourceIncrementalTick: (sql: SqlExec, writer: DatabaseWriterLike, client: SourceClientLike, table: string, source: ExternalSourceLike, shardKey: string, nowMs: number) => Promise<{
-    applied: number;
-}>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `pullExternalSourceTick` (const)
 
-```ts
-const pullExternalSourceTick: (sql: SqlExec, writer: DatabaseWriterLike, client: SourceClientLike, table: string, source: ExternalSourceLike, shardKey: string) => Promise<MaterializeResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `rankTableName` (const)
 
@@ -1641,19 +1391,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `readBookmark` (const)
 
-```ts
-const readBookmark: (storage: PitrStorage, time?: number | string) => Promise<PitrBookmarkResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `readCapturedMail` (const)
 
-```ts
-const readCapturedMail: (sql: SqlExec, options?: {
-    limit?: number;
-}) => {
-    entries: CapturedMailRow[];
-};
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `readCdcChanges` (const)
 
@@ -1661,15 +1403,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `readExternalSourceBaseline` (const)
 
-```ts
-const readExternalSourceBaseline: (sql: SqlExec, table: string, columns?: ReadonlyArray<string>) => Map<string, string>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `readMigrationStatus` (const)
 
-```ts
-const readMigrationStatus: (sql: SqlExec, id?: string) => MigrationStatusRow[];
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `readTablePage` (const)
 
@@ -1677,11 +1415,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `recordCapturedMail` (const)
 
-```ts
-const recordCapturedMail: (sql: SqlExec, input: RecordMailInput, capturedAt: number) => {
-    id: string;
-};
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `renderSql` (const)
 
@@ -1701,24 +1435,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `runDataMigration` (const)
 
-```ts
-const runDataMigration: (options: RunDataMigrationOptions) => Promise<MigrationRunResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `runExternalSourceTick` (const)
 
-```ts
-const runExternalSourceTick: (sql: SqlExec, writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, options: {
-    columns?: ReadonlyArray<string>;
-    table: string;
-}) => Promise<MaterializeResult>;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `runReadonlySql` (const)
 
-```ts
-const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `runRowValidators` (const)
 
@@ -1734,18 +1459,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `selectExpiredIds` (const)
 
-```ts
-const selectExpiredIds: (sql: SqlExec, spec: TtlSweepSpec, now: number, limit: number) => {
-    hasMore: boolean;
-    ids: string[];
-};
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `selectExportTables` (const)
 
-```ts
-const selectExportTables: (schema: SchemaLike, requested?: ReadonlyArray<string>) => string[];
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `selectIndexForAggregate` (const)
 
@@ -1799,6 +1517,4 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `validateImportRow` (const)
 
-```ts
-const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
-```
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
