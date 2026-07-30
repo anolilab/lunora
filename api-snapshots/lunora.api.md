@@ -3301,6 +3301,436 @@ Re-exported from `@cloudflare/flagship` — signature tracked at its source.
 
 Re-exported from `@cloudflare/flagship` — signature tracked at its source.
 
+## `lunorash/observability`
+
+### `AUTH_METRICS_BUCKETS_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AUTH_METRICS_BUCKET_MS` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AUTH_METRICS_BUCKET_RETENTION` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AUTH_METRICS_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AiRunBinding` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AppendRequestLogEntry` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AuthMetrics` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `AuthMetricsBucket` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ContextFetch` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ContextLogLevel` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ContextMetrics` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ContextTracer` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `DatabaseInstrumentation` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `DatabaseTally` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ExplainIssueArgs` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ExplainIssueDegradedReason` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ExplainIssueGrounding` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ExplainIssueResult` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_BUCKETS_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_BUCKET_MS` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_BUCKET_RETENTION` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_INDEX_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_MAX_PATHS` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_READ_LIMIT` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_SCANS_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FUNCTION_METRICS_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FunctionMetricBucket` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `FunctionMetricIndexHit` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `HostTracingLike` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ISSUE_SEVERITIES` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ISSUE_STATE_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ISSUE_STATUSES` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `IndexHit` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `IssueSeverity` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `IssueState` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `IssueStatePatch` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `IssueStatus` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `IssuesResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `LogBuffer` (class)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `LogEntry` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `LogEventInput` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `LogLevel` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MIN_ADMIN_TOKEN_LENGTH` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MIN_AUTH_SECRET_LENGTH` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricBuffer` (class)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricHistoryOptions` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricHistoryPoint` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricHistorySeries` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricSeries` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricsDeps` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `QueryStatEntry` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `REQUEST_LOG_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `RecordAuthEventInput` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `RecordFunctionMetricInput` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `RequestLogResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `RequestLogWriteOptions` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SecurityAuditResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SecurityFinding` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SecurityFindingKind` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SecurityFindingLevel` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanBuffer` (class)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanCollection` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanCollector` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanHandle` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `TraceAnchor` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `TraceSpan` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `TraceSummary` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `TracerDeps` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `appendRequestLogEntry` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `buildSecurityAudit` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `createDatabaseTally` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `createMetrics` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `createSpanCollector` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `createTracedFetch` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `createTracer` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `dispatchRootSpan` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `emitLogEvent` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `emitRequestLogEvent` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ensureAuthMetricsTables` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ensureFunctionMetricsTables` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ensureRequestLogTable` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `explainIssue` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `findDanglingReferences` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `foldTraces` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `formatTally` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `instrumentDatabase` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `mergeScanAttribution` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `parseExplainIssueArgs` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `parseLogArgs` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readAuthMetrics` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readErrorIssues` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readFunctionMetricBuckets` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readFunctionMetricIndexHits` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readFunctionMetricScans` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readFunctionMetrics` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readFunctionMetricsTotals` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readMetricHistory` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readQueryInsights` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readQueryMetrics` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `readRequestLog` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `recordAuthEvent` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `recordFunctionMetric` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `recordMetricHistory` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `recordQueryMetric` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `resolveTraceAnchor` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `upsertIssueState` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ## `lunorash/platform`
 
 ### `AnalyticsEngineDataPoint` (interface)
