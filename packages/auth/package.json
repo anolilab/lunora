@@ -143,9 +143,9 @@
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
-        "@better-auth/core": "^1.7.0-rc.2",
+        "@better-auth/core": "catalog:auth",
         "@better-auth/sso": "catalog:auth",
-        "better-auth": "^1.7.0-rc.2"
+        "better-auth": "catalog:auth"
     },
     "peerDependenciesMeta": {
         "@better-auth/sso": {
