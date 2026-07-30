@@ -67,12 +67,12 @@
     "dependencies": {
         "@lunora/do": "1.0.0-alpha.55",
         "@lunora/errors": "1.0.0-alpha.9",
-        "@lunora/search-core": "workspace:*",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
