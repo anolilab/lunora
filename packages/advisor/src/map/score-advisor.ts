@@ -130,8 +130,8 @@ interface ScoreAdvisorOptions {
 }
 
 /**
- * Roll a lint run up into a scored coverage map (see `docs/index.mdx`, and
- * `plans/171-advisor-health-map.md` for the design rationale).
+ * Roll a lint run up into a scored coverage map (see the package's
+ * `docs/index.mdx` for the scoring rules and the baseline gate).
  *
  * Pure: it re-reads the `findings` a caller already got from `runAdvisor` rather
  * than running lints itself, so scoring never double-runs a rule and the lint
