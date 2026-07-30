@@ -1641,6 +1641,53 @@ export default schema;
             expect(result.generated.drizzleShard).not.toContain("import { Id }");
         });
 
+        it("writes nothing when discovery fails, instead of emitting an empty api", () => {
+            expect.assertions(5);
+
+            // LUNORA_ISSUES #13, the costliest defect the first large port hit.
+            // A failing codegen that still wrote `api.ts` as an empty shell turned
+            // one invalid cron into ~600 "Property does not exist on
+            // InternalApiTypes" errors spread across every module — each pointing
+            // at a caller, none at the cron. Every write happens in one block
+            // after all discovery, so a discovery throw must leave the tree alone;
+            // this locks that ordering in.
+            const badCron = `import { cronJobs } from "@lunora/scheduler";
+
+import { internal } from "./_generated/api.js";
+
+const crons = cronJobs();
+
+// Valid in Convex, where { hours: 24 } is the ordinary "once a day" idiom.
+crons.interval("purgeDaily", { hours: 24 }, internal.messages.purge, {});
+
+export default crons;
+`;
+
+            // Cold: no prior output, so nothing may appear.
+            const outputDirectory = join(workdir, "lunora", "_generated");
+
+            writeFileSync(join(workdir, "lunora", "crons.ts"), badCron);
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/must be an integer in \[1, 23\]/u);
+            expect(existsSync(join(outputDirectory, "api.ts"))).toBe(false);
+
+            // Warm: a previous good run's output must survive the failure intact,
+            // so the build breaks at the cron rather than at 600 call sites.
+            rmSync(join(workdir, "lunora", "crons.ts"));
+            runCodegen({ projectRoot: workdir });
+
+            const goodApi = readFileSync(join(outputDirectory, "api.ts"), "utf8");
+
+            expect(goodApi).toContain("purge: FunctionReference<");
+
+            writeFileSync(join(workdir, "lunora", "crons.ts"), badCron);
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/must be an integer in \[1, 23\]/u);
+            // Deliberately re-read rather than trusting the throw: the failure mode
+            // being guarded is a write that happened anyway.
+            expect(readFileSync(join(outputDirectory, "api.ts"), "utf8")).toBe(goodApi);
+        });
+
         it("throws when schema.ts is missing", () => {
             expect.assertions(1);
 
