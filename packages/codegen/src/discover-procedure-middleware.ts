@@ -269,6 +269,13 @@ const isUnsafeInsert = (call: CallExpression): boolean => {
 /** AI SDK text/object generation helpers (re-exported from `@lunora/ai`) that accept a `maxOutputTokens` bound. */
 const AI_GENERATION_CALLEES = new Set(["generateObject", "generateText", "streamObject", "streamText"]);
 
+/** True when `call` is any AI generation helper, bounded or not. */
+const isAiGeneration = (call: CallExpression): boolean => {
+    const callee = calleeNameOf(call);
+
+    return callee !== undefined && AI_GENERATION_CALLEES.has(callee);
+};
+
 /**
  * True when `call` is an AI generation helper ({@link AI_GENERATION_CALLEES})
  * invoked with an object-literal config that declares no `maxOutputTokens` key —
@@ -300,12 +307,22 @@ const isUnboundedAiGeneration = (call: CallExpression): boolean => {
     return !argument.getProperty("maxOutputTokens");
 };
 
-/** True when a node anywhere in `declaration` references `ctx.mail` / `ctx.email` (a mail send). */
-const referencesMail = (declaration: TsNode): boolean =>
-    declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
-        const name = access.getName();
+/** `ctx.*` members that emit a structured observability event. */
+const EVENT_MEMBERS: ReadonlySet<string> = new Set(["log", "span", "trace"]);
 
-        if (name !== "mail" && name !== "email") {
+/** `ctx.*` members that reach a model. */
+const AI_MEMBERS: ReadonlySet<string> = new Set(["ai"]);
+
+/** `ctx.*` members that send mail. */
+const MAIL_MEMBERS: ReadonlySet<string> = new Set(["email", "mail"]);
+
+/** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
+const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
+
+/** True when any `ctx.&lt;member>` in `declaration` is one of `members`. */
+const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
+    declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
+        if (!members.has(access.getName())) {
             return false;
         }
 
@@ -314,11 +331,111 @@ const referencesMail = (declaration: TsNode): boolean =>
         return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
     });
 
+/**
+ * True when the body throws a bare `new Error(...)`.
+ *
+ * A bare `Error` crosses the RPC boundary as an opaque string: the client cannot
+ * branch on it and the Studio cannot group it. `LunoraError` (and anything else
+ * constructed from the error catalog) carries a stable code, so only the
+ * unqualified builtin counts here — a subclass or a catalog helper does not.
+ */
+const throwsBareError = (declaration: TsNode): boolean =>
+    declaration.getDescendantsOfKind(SyntaxKind.ThrowStatement).some((statement) => {
+        const thrown = statement.getExpression();
+
+        if (!Node.isNewExpression(thrown)) {
+            return false;
+        }
+
+        const callee = thrown.getExpression();
+
+        return Node.isIdentifier(callee) && callee.getText() === "Error";
+    });
+
+/**
+ * The opt-out directive, with an optional trailing reason:
+ *
+ * ```ts
+ * // lunora-advisor-exempt -- legacy endpoint, replaced by v2 in Q3
+ * export const legacy = mutation({ ... });
+ * ```
+ *
+ * A leading comment rather than a config list: it sits next to the code it
+ * excuses, survives a file move, and shows up in the diff of whoever removes the
+ * handler. The reason is captured into the artifact so an exemption has to be
+ * argued in review rather than added silently.
+ */
+const EXEMPT_DIRECTIVE = "lunora-advisor-exempt";
+
+/** Leading comment punctuation and indentation on one line of a comment block. */
+const COMMENT_PREFIX = /^[\s*/]+/u;
+
+/** A character that would make the directive part of a longer word. */
+const WORD_CHARACTER = /[\w-]/u;
+
+/**
+ * Read the exemption directive off a declaration's leading comments.
+ *
+ * Matched line-by-line with plain string operations rather than one regex: the
+ * pattern this replaced was flagged for super-linear backtracking (adjacent
+ * optional whitespace runs), which would have let a crafted comment stall
+ * codegen. Scanning is linear in the comment length.
+ *
+ * The directive must *start* a comment line and must not be a prefix of a longer
+ * token. Without both rules, prose about the directive opts a procedure out —
+ * "Do NOT add lunora-advisor-exempt here" and "lunora-advisor-exempt-later" both
+ * used to exempt the handler, silently, and `compareToBaseline` skips exempt
+ * rows, so every later regression on it (security lints included) went unseen.
+ */
+const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemptReason: string } => {
+    // The directive sits above `export const ...`, i.e. on the statement, not the declarator.
+    const statement = declaration.getFirstAncestorByKind(SyntaxKind.VariableStatement);
+    const comments = (statement ?? declaration)
+        .getLeadingCommentRanges()
+        .map((range) => range.getText())
+        .join("\n");
+
+    for (const line of comments.split("\n")) {
+        const body = line.replace(COMMENT_PREFIX, "");
+
+        if (!body.startsWith(EXEMPT_DIRECTIVE)) {
+            continue;
+        }
+
+        const rest = body.slice(EXEMPT_DIRECTIVE.length);
+
+        if (WORD_CHARACTER.test(rest.charAt(0))) {
+            continue;
+        }
+
+        const separator = rest.indexOf("--");
+        // Stop at `*` so a directive inside a block comment cannot swallow its
+        // closing delimiter into the reason.
+        const reason = separator === -1 ? "" : (rest.slice(separator + 2).split("*")[0] ?? "");
+
+        return { exempt: true, exemptReason: reason.trim() };
+    }
+
+    return { exempt: false, exemptReason: "" };
+};
+
 /** Behavioural facts read from the procedure declaration body. */
 const behaviourOf = (
     declaration: TsNode,
-): { callsMail: boolean; fanOut: boolean; unboundedAiGeneration: boolean; usesInsertManyUnsafe: boolean; writesUserTable: boolean } => {
+): {
+    callsMail: boolean;
+    emitsEvent: boolean;
+    fanOut: boolean;
+    handlesErrors: boolean;
+    reachesOutbound: boolean;
+    runsAiGeneration: boolean;
+    throwsBareError: boolean;
+    unboundedAiGeneration: boolean;
+    usesInsertManyUnsafe: boolean;
+    writesUserTable: boolean;
+} => {
     let fanOut = false;
+    let runsAiGeneration = false;
     let unboundedAiGeneration = false;
     let usesInsertManyUnsafe = false;
     let writesUserTable = false;
@@ -336,6 +453,10 @@ const behaviourOf = (
             usesInsertManyUnsafe = true;
         }
 
+        if (isAiGeneration(call)) {
+            runsAiGeneration = true;
+        }
+
         if (isUnboundedAiGeneration(call)) {
             unboundedAiGeneration = true;
         }
@@ -345,7 +466,18 @@ const behaviourOf = (
         }
     }
 
-    return { callsMail: referencesMail(declaration), fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable };
+    return {
+        callsMail: referencesContextMember(declaration, MAIL_MEMBERS),
+        emitsEvent: referencesContextMember(declaration, EVENT_MEMBERS),
+        fanOut,
+        handlesErrors: declaration.getDescendantsOfKind(SyntaxKind.TryStatement).length > 0,
+        reachesOutbound: referencesContextMember(declaration, OUTBOUND_MEMBERS),
+        runsAiGeneration: runsAiGeneration || referencesContextMember(declaration, AI_MEMBERS),
+        throwsBareError: throwsBareError(declaration),
+        unboundedAiGeneration,
+        usesInsertManyUnsafe,
+        writesUserTable,
+    };
 };
 
 /** Build the {@link ProcedureMiddlewareIR} for one exported declaration, or `undefined` when it isn't a procedure. */
@@ -365,24 +497,18 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
     const protections = classified.receiver
         ? protectionsInChain(classified.receiver)
         : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
-    const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviourOf(declaration);
 
+    // Every key of both fact bags is an IR field, so spreading keeps this in step
+    // automatically when either gains one.
     return {
-        callsMail,
+        ...behaviourOf(declaration),
+        ...exemptionOf(declaration),
+        ...protections,
         exportName: declaration.getName(),
-        fanOut,
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
-        unboundedAiGeneration,
-        usesCaptcha: protections.usesCaptcha,
-        usesEmailGate: protections.usesEmailGate,
-        usesInsertManyUnsafe,
-        usesMask: protections.usesMask,
-        usesRateLimit: protections.usesRateLimit,
-        usesRls: protections.usesRls,
         visibility: classified.visibility,
-        writesUserTable,
     };
 };
 

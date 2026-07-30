@@ -82,6 +82,7 @@ const lazyNamed = <P, K extends string>(load: () => Promise<Record<K, ComponentT
 
 const InsightsPanel = lazyNamed(() => import("../features/advisors/insights-panel"), "InsightsPanel");
 const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
+const AdvisorHealthPanel = lazy(() => import("../features/advisors/advisor-health-panel"));
 const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
 const AgentsPanel = lazyNamed(() => import("../features/agents/agents-panel"), "AgentsPanel");
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
@@ -318,6 +319,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
     sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
     storageRules: <path d="M7 10V7a5 5 0 0 1 10 0v3m-11 0h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Zm6 4v2" />,
+    advisorHealth: <path d="M3 12h4l2-5 3 10 2-5h5" />,
     security: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-2.5 8.5 2 2 4-4" />,
     traces: <path d="M3 6h9M6 12h12M10 18h7" />,
     settings: (
@@ -346,7 +348,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
         key: "observability",
         tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health", "deploymentHealth"],
     },
-    { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
+    { key: "advisors", tabs: ["advisorHealth", "security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
 ];
@@ -445,6 +447,7 @@ const TABS = exhaustiveRouteTabs([
     "analytics",
     "health",
     "deploymentHealth",
+    "advisorHealth",
     "security",
     "rls",
     "permissions",
@@ -1018,6 +1021,7 @@ const buildRouter = ({
         rls: <RlsPanel />,
         schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
+        advisorHealth: <AdvisorHealthPanel />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,

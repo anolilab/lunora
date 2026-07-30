@@ -2278,6 +2278,9 @@ importers:
       '@bomb.sh/tab':
         specifier: 0.0.21
         version: 0.0.21(cac@6.7.14)(citty@0.2.2)(commander@15.0.0)
+      '@lunora/advisor':
+        specifier: workspace:*
+        version: link:../advisor
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings

@@ -348,6 +348,20 @@ interface AdvisorMailRecipientAccess {
 }
 ```
 
+### `AdvisorMap` (interface)
+
+```ts
+interface AdvisorMap {
+    generatedAt: string;
+    grade: Grade;
+    procedures: ProcedureScore[];
+    project: ProjectScore;
+    score: number;
+    summary: MapSummary;
+    version: number;
+}
+```
+
 ### `AdvisorMaskProcedure` (interface)
 
 ```ts
@@ -479,11 +493,18 @@ interface AdvisorPrivilegedDispatch {
 ```ts
 interface AdvisorProcedureProtection {
     callsMail: boolean;
+    emitsEvent?: boolean;
+    exempt?: boolean;
+    exemptReason?: string;
     exportName: string;
     fanOut: boolean;
     file: string;
+    handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    runsAiGeneration?: boolean;
+    reachesOutbound?: boolean;
+    throwsBareError?: boolean;
     unboundedAiGeneration: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
@@ -500,6 +521,7 @@ interface AdvisorProcedureProtection {
 
 ```ts
 interface AdvisorQueryRead {
+    exportName?: string;
     file: string;
     hasFilter: boolean;
     hasIndex: boolean;
@@ -815,10 +837,44 @@ interface AnalyticsRuntimeMetrics {
 }
 ```
 
+### `BaselineComparison` (type)
+
+```ts
+type BaselineComparison = {
+    comparable: false;
+    reason: "version-mismatch";
+} | {
+    comparable: true;
+    dropped: ProcedureDelta[];
+    newFailing: string[];
+    projectRegressed: boolean;
+    regressed: boolean;
+    scoreDelta: number;
+    worsened: string[];
+};
+```
+
 ### `Category` (type)
 
 ```ts
 type Category = "PERFORMANCE" | "SCHEMA" | "SECURITY";
+```
+
+### `CheckResult` (interface)
+
+```ts
+interface CheckResult {
+    level: Level;
+    name: string;
+    occurrences: number;
+    weight: number;
+}
+```
+
+### `Coverage` (type)
+
+```ts
+type Coverage = "clean" | "exempt" | "failing" | "warned";
 ```
 
 ### `Facing` (type)
@@ -842,6 +898,12 @@ interface Finding {
     remediation: string;
     title: string;
 }
+```
+
+### `Grade` (type)
+
+```ts
+type Grade = "at-risk" | "excellent" | "good" | "needs-work";
 ```
 
 ### `Level` (type)
@@ -903,7 +965,6 @@ interface LintContext {
     notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
     notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
-    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
     privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
     procedureProtections?: ReadonlyArray<AdvisorProcedureProtection>;
@@ -924,6 +985,7 @@ interface LintContext {
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableSamples?: ReadonlyArray<AdvisorTableSample>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
     workflows?: ReadonlyArray<AdvisorWorkflow>;
@@ -935,6 +997,62 @@ interface LintContext {
 
 ```ts
 type LintSource = "runtime" | "static";
+```
+
+### `MAP_VERSION` (const)
+
+```ts
+const MAP_VERSION = 1;
+```
+
+### `MapSummary` (interface)
+
+```ts
+interface MapSummary {
+    clean: number;
+    exempt: number;
+    failing: number;
+    procedures: number;
+    rulesFired: number;
+    warned: number;
+}
+```
+
+### `ProcedureDelta` (interface)
+
+```ts
+interface ProcedureDelta {
+    after: number;
+    before: number;
+    id: string;
+}
+```
+
+### `ProcedureScore` (interface)
+
+```ts
+interface ProcedureScore {
+    checks: CheckResult[];
+    coverage: Coverage;
+    exemptReason?: string;
+    exportName: string;
+    file: string;
+    id: string;
+    kind: "action" | "mutation" | "query";
+    score: number;
+    sensitivity: Sensitivity;
+    visibility: "internal" | "public";
+    weight: number;
+}
+```
+
+### `ProjectScore` (interface)
+
+```ts
+interface ProjectScore {
+    checks: CheckResult[];
+    score: number;
+}
 ```
 
 ### `RUNTIME_LINTS` (const)
@@ -958,10 +1076,40 @@ interface RunAdvisorOptions {
 const STATIC_LINTS: ReadonlyArray<Lint>;
 ```
 
+### `ScoreAdvisorOptions` (interface)
+
+```ts
+interface ScoreAdvisorOptions {
+    exempt?: ReadonlyArray<string>;
+    generatedAt?: string;
+}
+```
+
+### `Sensitivity` (interface)
+
+```ts
+interface Sensitivity {
+    level: SensitivityLevel;
+    reasons: string[];
+}
+```
+
+### `SensitivityLevel` (type)
+
+```ts
+type SensitivityLevel = "high" | "none";
+```
+
 ### `actionFetchSsrf` (const)
 
 ```ts
 const actionFetchSsrf: Lint;
+```
+
+### `actionWithoutErrorHandling` (const)
+
+```ts
+const actionWithoutErrorHandling: Lint;
 ```
 
 ### `adminRouteWithoutGuard` (const)
@@ -974,6 +1122,12 @@ const adminRouteWithoutGuard: Lint;
 
 ```ts
 const aiRawRunEscapeHatch: Lint;
+```
+
+### `aiRunWithoutLogging` (const)
+
+```ts
+const aiRunWithoutLogging: Lint;
 ```
 
 ### `aiToolSideEffectPromptInjection` (const)
@@ -1048,10 +1202,28 @@ const browserAllowPrivateTargets: Lint;
 const browserUserUrlWithoutAllowlist: Lint;
 ```
 
+### `byCodepoint` (const)
+
+```ts
+const byCodepoint: (a: string, b: string) => number;
+```
+
 ### `circularFk` (const)
 
 ```ts
 const circularFk: Lint;
+```
+
+### `classifySensitivity` (const)
+
+```ts
+const classifySensitivity: (procedure: AdvisorProcedureProtection) => Sensitivity;
+```
+
+### `compareToBaseline` (const)
+
+```ts
+const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => BaselineComparison;
 ```
 
 ### `constraintValidator` (const)
@@ -1108,6 +1280,12 @@ const duplicateIndex: Lint;
 const emptyIndex: Lint;
 ```
 
+### `errorWithoutCatalog` (const)
+
+```ts
+const errorWithoutCatalog: Lint;
+```
+
 ### `exportSinkMisconfigured` (const)
 
 ```ts
@@ -1160,6 +1338,12 @@ const geoIndexFieldNotGeopoint: Lint;
 
 ```ts
 const geoIndexUnused: Lint;
+```
+
+### `gradeFromScore` (const)
+
+```ts
+const gradeFromScore: (score: number) => Grade;
 ```
 
 ### `hardcodedSecret` (const)
@@ -1306,6 +1490,12 @@ const outputProjectionMissingOnPublicRead: Lint;
 const ownerFieldFromArgsNotAuth: Lint;
 ```
 
+### `parseAdvisorMap` (const)
+
+```ts
+const parseAdvisorMap: (value: unknown) => AdvisorMap | undefined;
+```
+
 ### `paymentCreateWithoutAuthorize` (const)
 
 ```ts
@@ -1340,6 +1530,12 @@ const privilegedDispatchUnvalidatedPayload: Lint;
 
 ```ts
 const privilegedFanoutFromPublicProcedure: Lint;
+```
+
+### `procedureWithoutStructuredEvent` (const)
+
+```ts
+const procedureWithoutStructuredEvent: Lint;
 ```
 
 ### `publicArgumentUsesAny` (const)
@@ -1412,6 +1608,12 @@ const rlsUncoveredTable: Lint;
 
 ```ts
 const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding[];
+```
+
+### `scoreAdvisor` (const)
+
+```ts
+const scoreAdvisor: (procedures: ReadonlyArray<AdvisorProcedureProtection>, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
 ```
 
 ### `shapeTargetsGlobalTable` (const)

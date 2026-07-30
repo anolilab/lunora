@@ -227,6 +227,118 @@ const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { 
 A missing metric degrades to an empty array rather than throwing, so a partially
 configured read path still returns what it can.
 
+## Health map — score, verdicts, baseline
+
+The lints above answer _"what is wrong?"_. `scoreAdvisor()` answers _"how are we
+doing, and did it get worse?"_ — it rolls a lint run up into a weighted score, a
+grade, and a per-procedure verdict you can commit and diff in CI.
+
+It is a pure function over findings you already have, so it never re-runs a lint:
+
+```ts
+import { fromServerSchema, runAdvisor, scoreAdvisor } from "@lunora/advisor";
+
+import schema from "./lunora/schema";
+
+const context = { schema: fromServerSchema(schema) };
+const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }));
+
+console.log(map.score, map.grade); // e.g. 84 "good"
+```
+
+### How a score is built
+
+Every procedure starts at 100 and loses each fired **rule's** weight — charged
+once however many times that rule fires, so one lint hitting five call sites
+costs the same as one hitting a single call site.
+
+| Level   | Default weight |
+| ------- | -------------- |
+| `ERROR` | 20             |
+| `WARN`  | 10             |
+| `INFO`  | 5              |
+
+A lint may override its own penalty with `Lint.weight`. Those per-procedure
+scores roll into a weighted mean: **public** handlers count double, **internal**
+ones and **queries** count half. Findings that name no procedure — schema shape,
+`wrangler.jsonc` config — land in a **project** bucket weighted against the
+procedure population, so schema debt still moves the grade.
+
+| Verdict   | Meaning                                         |
+| --------- | ----------------------------------------------- |
+| `clean`   | No lint fired                                   |
+| `warned`  | Scored at or above 50                           |
+| `failing` | Scored below 50                                 |
+| `exempt`  | Opted out — appears in the map, pulls no weight |
+
+Grades band the global score: `excellent` (≥ 90), `good` (≥ 70), `needs-work`
+(≥ 50), `at-risk` below that.
+
+<Callout type="info">
+    The verdicts are named for severity, not instrumentation, because every lint family feeds this score. A handler with a security finding is `failing` — it is
+    not a statement about telemetry.
+</Callout>
+
+### From the command line
+
+`lunora advisor` does all of this for you — scores the app, writes
+`lunora.advisor.map.json`, and gates on it:
+
+```sh
+lunora advisor                    # score, print a summary, write the artifact
+lunora advisor --all              # every procedure, grouped by file
+lunora advisor --entry m#send     # one procedure and the rules that fired
+lunora advisor --min-score 80     # exit 1 below 80
+lunora advisor --baseline         # exit 1 on any regression vs the committed map
+lunora advisor --no-write         # score without touching the artifact
+```
+
+The artifact is stamped deterministically, so committing it and re-running leaves
+no diff unless something actually changed.
+
+### Gate CI on a committed baseline
+
+Write the map to `lunora.advisor.map.json`, commit it, and compare against it on
+each run. `compareToBaseline` reports five independent regression signals: the
+global score fell, an existing procedure got worse, a procedure started failing,
+a procedure's findings grew without its score moving, or the project bucket
+gained findings.
+
+```ts
+import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
+
+const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
+
+if (baseline === undefined) {
+    // Missing, hand-edited, or written by an older MAP_VERSION.
+    throw new Error("advisor baseline is unreadable; regenerate it");
+}
+
+const diff = compareToBaseline(map, baseline);
+
+if (!diff.comparable) {
+    throw new Error(`baseline not comparable: ${diff.reason}`);
+}
+
+if (diff.regressed) {
+    process.exitCode = 1;
+}
+```
+
+<Callout type="warn">
+    `parseAdvisorMap` returns `undefined` for a missing, malformed, or older-version baseline, and `compareToBaseline` returns `comparable: false` on a version
+    mismatch. Treat both as **"cannot verify"** and fail — reading them as "no regression" silently disables the gate.
+</Callout>
+
+The artifact is deterministic apart from its timestamp: pass `generatedAt` to
+make it byte-stable. `@lunora/codegen` exposes `toAdvisorContext()` to build the
+context straight from the feeder.
+
+<Callout type="info">
+    Some procedure-local lints — `filter_without_index` among them — currently report a file without an export name, so they land in the project bucket rather
+    than their procedure's row. Closing that gap is tracked work on the codegen feeder.
+</Callout>
+
 ## See also
 
 - [@lunora/server](/docs/packages/server) — the `defineSchema` / `defineTable` these lints analyze

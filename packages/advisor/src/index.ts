@@ -12,17 +12,19 @@ import constraintValidator from "./lints/runtime/constraint-validator";
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
 import actionFetchSsrf from "./lints/static/action-fetch-ssrf";
+import actionWithoutErrorHandling from "./lints/static/action-without-error-handling";
 import adminRouteWithoutGuard from "./lints/static/admin-route-without-guard";
 import aiRawRunEscapeHatch from "./lints/static/ai-raw-run-escape-hatch";
+import aiRunWithoutLogging from "./lints/static/ai-run-without-logging";
 import aiToolSideEffectPromptInjection from "./lints/static/ai-tool-side-effect-prompt-injection";
 import aiUnboundedGenerationPublic from "./lints/static/ai-unbounded-generation-public";
 import allowUnauthenticatedShardAccessEnabled from "./lints/static/allow-unauthenticated-shard-access-enabled";
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
 import authCsrfCheckDisabled from "./lints/static/auth-csrf-check-disabled";
 import authEmailVerificationDisabled from "./lints/static/auth-email-verification-disabled";
+import authScimWithoutTransactions from "./lints/static/auth-scim-without-transactions";
 import authSecureCookiesDisabled from "./lints/static/auth-secure-cookies-disabled";
 import authSessionFreshageZero from "./lints/static/auth-session-freshage-zero";
-import authScimWithoutTransactions from "./lints/static/auth-scim-without-transactions";
 import authTrustedOriginsWildcard from "./lints/static/auth-trusted-origins-wildcard";
 import browserAllowPrivateTargets from "./lints/static/browser-allow-private-targets";
 import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-without-allowlist";
@@ -34,6 +36,7 @@ import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-e
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
+import errorWithoutCatalog from "./lints/static/error-without-catalog";
 import exportSinkMisconfigured from "./lints/static/export-sink-misconfigured";
 import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
@@ -69,6 +72,7 @@ import plaintextSecretInWranglerVariables from "./lints/static/plaintext-secret-
 import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
 import privilegedDispatchUnvalidatedPayload from "./lints/static/privileged-dispatch-unvalidated-payload";
 import privilegedFanoutFromPublicProcedure from "./lints/static/privileged-fanout-from-public-procedure";
+import procedureWithoutStructuredEvent from "./lints/static/procedure-without-structured-event";
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
 import publicTableRlsOptoutConfusion from "./lints/static/public-table-rls-optout-confusion";
@@ -134,17 +138,19 @@ export { default as constraintValidator } from "./lints/runtime/constraint-valid
 export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as actionFetchSsrf } from "./lints/static/action-fetch-ssrf";
+export { default as actionWithoutErrorHandling } from "./lints/static/action-without-error-handling";
 export { default as adminRouteWithoutGuard } from "./lints/static/admin-route-without-guard";
 export { default as aiRawRunEscapeHatch } from "./lints/static/ai-raw-run-escape-hatch";
+export { default as aiRunWithoutLogging } from "./lints/static/ai-run-without-logging";
 export { default as aiToolSideEffectPromptInjection } from "./lints/static/ai-tool-side-effect-prompt-injection";
 export { default as aiUnboundedGenerationPublic } from "./lints/static/ai-unbounded-generation-public";
 export { default as allowUnauthenticatedShardAccessEnabled } from "./lints/static/allow-unauthenticated-shard-access-enabled";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
 export { default as authCsrfCheckDisabled } from "./lints/static/auth-csrf-check-disabled";
 export { default as authEmailVerificationDisabled } from "./lints/static/auth-email-verification-disabled";
+export { default as authScimWithoutTransactions } from "./lints/static/auth-scim-without-transactions";
 export { default as authSecureCookiesDisabled } from "./lints/static/auth-secure-cookies-disabled";
 export { default as authSessionFreshageZero } from "./lints/static/auth-session-freshage-zero";
-export { default as authScimWithoutTransactions } from "./lints/static/auth-scim-without-transactions";
 export { default as authTrustedOriginsWildcard } from "./lints/static/auth-trusted-origins-wildcard";
 export { default as browserAllowPrivateTargets } from "./lints/static/browser-allow-private-targets";
 export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browser-user-url-without-allowlist";
@@ -156,6 +162,7 @@ export { default as containerRuntimeEgressRelaxation } from "./lints/static/cont
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
+export { default as errorWithoutCatalog } from "./lints/static/error-without-catalog";
 export { default as exportSinkMisconfigured } from "./lints/static/export-sink-misconfigured";
 export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
@@ -191,6 +198,7 @@ export { default as plaintextSecretInWranglerVariables } from "./lints/static/pl
 export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
 export { default as privilegedDispatchUnvalidatedPayload } from "./lints/static/privileged-dispatch-unvalidated-payload";
 export { default as privilegedFanoutFromPublicProcedure } from "./lints/static/privileged-fanout-from-public-procedure";
+export { default as procedureWithoutStructuredEvent } from "./lints/static/procedure-without-structured-event";
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
 export { default as publicTableRlsOptoutConfusion } from "./lints/static/public-table-rls-optout-confusion";
@@ -224,6 +232,17 @@ export { default as workflowDuplicateStepName } from "./lints/static/workflow-du
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
 export type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
+export type { BaselineComparison, ProcedureDelta } from "./map/baseline";
+export { compareToBaseline, parseAdvisorMap } from "./map/baseline";
+// The scoring primitives (`scoreProcedure`, `scoreGlobal`, the weight tables) stay
+// module-internal: they are implementation of `scoreAdvisor`, and exporting them so
+// tests could reach them would freeze arithmetic into the public API snapshot.
+// `gradeFromScore` is public because a UI needs to band a score it did not compute.
+export { gradeFromScore } from "./map/score";
+export type { ScoreAdvisorOptions } from "./map/score-advisor";
+export { byCodepoint, MAP_VERSION, scoreAdvisor } from "./map/score-advisor";
+export { default as classifySensitivity } from "./map/sensitivity";
+export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore, Sensitivity, SensitivityLevel } from "./map/types";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorMaskStrategy } from "./mask-strategies";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
@@ -273,6 +292,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     externalSourceOnGlobal,
     externalSourceUnscoped,
     emptyIndex,
+    errorWithoutCatalog,
     geoIndexFieldNotGeopoint,
     geoIndexUnused,
     exportSinkMisconfigured,
@@ -311,14 +331,17 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ratelimitDefaultMemoryStore,
     browserAllowPrivateTargets,
     privilegedFanoutFromPublicProcedure,
+    procedureWithoutStructuredEvent,
     insertManyUnsafeUserData,
     aiUnboundedGenerationPublic,
     actionFetchSsrf,
+    actionWithoutErrorHandling,
     ownerFieldFromArgsNotAuth,
     storageKeyFromUserArgs,
     kvUnscopedUserKeyIdor,
     containerInstanceKeyFromUserInput,
     aiRawRunEscapeHatch,
+    aiRunWithoutLogging,
     vectorsNamespaceFromUserInput,
     mailRecipientFromRequestInput,
     browserUserUrlWithoutAllowlist,

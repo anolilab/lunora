@@ -2,13 +2,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
-import type { Finding } from "@lunora/advisor";
+import type { Finding, LintContext } from "@lunora/advisor";
+import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
 import { Project } from "ts-morph";
 
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
-import { lintSchema } from "./advisor";
+import { toAdvisorContext } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
 import { discoverAgents } from "./discover-agents";
 import discoverAiRawRuns from "./discover-ai-raw-runs";
@@ -433,10 +434,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // wrangler reconciliation of the `workflows[]` array) are discovered above,
     // ahead of crons, so a cron may target one.
 
-    const advisories =
+    // One context feeds both the findings and the scored health map, so the two can
+    // never describe different evidence. Built lazily — the ternary keeps every
+    // discover* call out of a `lint: false` run.
+    const advisorContext =
         options.lint === false
-            ? []
-            : lintSchema({
+            ? undefined
+            : toAdvisorContext({
                   adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
                   aiRawRuns: discoverAiRawRuns(project, lunoraDirectory),
                   aiToolSideEffects: discoverAiToolSideEffects(project, lunoraDirectory),
@@ -491,6 +495,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   workflows,
                   wranglerVariables: options.wranglerVariables,
               });
+
+    const advisories = advisorContext === undefined ? [] : runAdvisor(advisorContext, { source: "static" });
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -640,6 +646,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // two can never describe different shapes.
     const shardContent = emitShard({
         advisories,
+        advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         containers,
         env,
@@ -841,6 +848,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     return {
         advisories,
+        advisorContext,
         agents,
         containers,
         cronTriggers: emitWranglerCronTriggers(crons),
@@ -940,6 +948,16 @@ export interface CodegenOptions {
 }
 
 export interface CodegenResult {
+    /**
+     * The normalized advisor evidence the findings were produced from, so a
+     * caller can score it into a health map (`scoreAdvisor`) without re-running
+     * discovery. `undefined` under `lint: false`.
+     *
+     * Deliberately not scored here: the map carries a `generatedAt` stamp, and
+     * codegen's result stays a pure function of the sources.
+     */
+    advisorContext?: LintContext;
+
     /**
      * Static schema advisor findings (e.g. unindexed foreign keys) produced
      * this run. Empty when `lint` is `false` or the schema is clean. Codegen

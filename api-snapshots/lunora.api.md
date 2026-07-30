@@ -1889,6 +1889,14 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `AdvisorProcedure` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `AdvisorProceduresResult` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `AdvisoriesResult` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
