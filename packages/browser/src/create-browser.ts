@@ -5,6 +5,7 @@ import type {
     Browser,
     BrowserLaunchLike,
     BrowserLike,
+    BrowserSession,
     LunoraBrowserOptions,
     NavigateOptions,
     PageLike,
@@ -282,14 +283,34 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         return options.launch;
     };
 
+    /** Same injection contract as {@link getLaunch}, for the session surface. */
+    const requirePeer = <F>(function_: F | undefined, name: string): F => {
+        if (!function_) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/browser: \`${name}\` is not available — install the \`@cloudflare/playwright\` peer dependency. The generated worker wires it for you; outside codegen pass it via createBrowser({ binding, ${name} }).`,
+            );
+        }
+
+        return function_;
+    };
+
     /**
      * Launch a browser, run `use`, and **always** close the browser in a
      * `finally` — a leaked Browser Rendering session is billed and rate-limited,
      * so this is the one real footgun. The close error is swallowed (we never
      * mask the caller's original error with a close failure).
      */
-    const withBrowser = async <T>(use: (browser: BrowserLike) => Promise<T>): Promise<T> => {
-        const browser = await getLaunch()(options.binding);
+    const withBrowser = async <T>(use: (browser: BrowserLike) => Promise<T>, keepAlive?: number): Promise<T> => {
+        // `keep_alive` (seconds) holds the Browser Rendering session open after
+        // this worker detaches so a later `connect(sessionId)` can re-attach.
+        // Closing it here would defeat that, so the close is skipped — the
+        // session then expires on Cloudflare's clock rather than ours.
+        const browser = await getLaunch()(options.binding, keepAlive === undefined ? undefined : { keep_alive: keepAlive * 1000 });
+
+        if (keepAlive !== undefined) {
+            return await use(browser);
+        }
 
         try {
             return await use(browser);
@@ -473,13 +494,42 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     const scrape = async <T>(url: string, function_: (...args: never[]) => T, navigateOptions: NavigateOptions = {}): Promise<T> =>
         withPage(url, navigateOptions, async (page) => page.evaluate(function_));
 
-    const launch = async <T>(function_: (browser: BrowserLike) => Promise<T>): Promise<T> => withBrowser(function_);
+    const launch = async <T>(function_: (browser: BrowserLike) => Promise<T>, launchOptions: { keepAlive?: number } = {}): Promise<T> =>
+        withBrowser(function_, launchOptions.keepAlive);
+
+    /**
+     * Re-attach to an existing session. The browser is NOT closed on the way
+     * out unless the caller asks — keeping the page alive across separate
+     * action invocations is the entire point (LUNORA_ISSUES #38).
+     */
+    const connect = async <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, connectOptions: { close?: boolean } = {}): Promise<T> => {
+        const browser = await requirePeer(options.connect, "connect")(options.binding, sessionId);
+
+        if (connectOptions.close !== true) {
+            return await function_(browser);
+        }
+
+        try {
+            return await function_(browser);
+        } finally {
+            try {
+                await browser.close();
+            } catch {
+                // Swallow: the session is being torn down anyway, and a close
+                // failure must not mask the caller's result/error.
+            }
+        }
+    };
+
+    const sessions = async (): Promise<ReadonlyArray<BrowserSession>> => await requirePeer(options.sessions, "sessions")(options.binding);
 
     return {
+        connect,
         content,
         launch,
         pdf,
         scrape,
         screenshot,
+        sessions,
     };
 };

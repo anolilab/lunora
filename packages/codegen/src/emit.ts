@@ -3051,7 +3051,7 @@ const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
         return EMPTY_HELPER_FRAGMENTS;
     }
 
-    const browserMissing = `throw new Error("ctx.browser: provide a \\\`browser\\\` config thunk, e.g. \\\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\\` with \\\`import { launch } from '@cloudflare/playwright'\\\`.");`;
+    const browserMissing = `throw new Error("ctx.browser: provide a \\\`browser\\\` config thunk, e.g. \\\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\\` with \\\`import { launch } from '@cloudflare/playwright'\\\`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.");`;
 
     return {
         build: `
@@ -3067,6 +3067,9 @@ const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
         importLines: [`import type { Browser } from "@lunora/browser";`],
         stub: `
 const browserStub: Browser = {
+    connect: async () => {
+        ${browserMissing}
+    },
     content: async () => {
         ${browserMissing}
     },
@@ -3080,6 +3083,9 @@ const browserStub: Browser = {
         ${browserMissing}
     },
     screenshot: async () => {
+        ${browserMissing}
+    },
+    sessions: async () => {
         ${browserMissing}
     },
 };
