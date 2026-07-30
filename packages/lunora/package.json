@@ -78,6 +78,10 @@
             "types": "./dist/do.d.ts",
             "import": "./dist/do.mjs"
         },
+        "./platform": {
+            "types": "./dist/platform.d.ts",
+            "import": "./dist/platform.mjs"
+        },
         "./client": {
             "types": "./dist/client.d.ts",
             "import": "./dist/client.mjs"
@@ -147,6 +151,7 @@
         "@lunora/do": "1.0.0-alpha.55",
         "@lunora/errors": "1.0.0-alpha.9",
         "@lunora/flags": "1.0.0-alpha.17",
+        "@lunora/platform": "workspace:*",
         "@lunora/ratelimit": "1.0.0-alpha.12",
         "@lunora/runtime": "1.0.0-alpha.45",
         "@lunora/server": "1.0.0-alpha.51",

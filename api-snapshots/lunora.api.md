@@ -3301,6 +3301,276 @@ Re-exported from `@cloudflare/flagship` — signature tracked at its source.
 
 Re-exported from `@cloudflare/flagship` — signature tracked at its source.
 
+## `lunorash/platform`
+
+### `AnalyticsEngineDataPoint` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `AnalyticsEngineDataPointLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `AnalyticsEngineDatasetLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `CLOUDFLARE_CAPABILITIES` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `Capability` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `CapabilityLevel` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `D1DatabaseLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `D1PreparedStatementLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `D1SessionLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `DirectShardDirectory` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ExecutionContextLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KVNamespaceLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KvGetOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KvListKey` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KvNamespaceListResult` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KvNamespacePutOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KvValue` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `KvValueType` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `MessageBatchLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `MessageLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `MessageSendRequestLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `NOOP_EXECUTION_CONTEXT` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `PlatformCapabilities` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueBindingLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueContentType` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueMessageLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueRetryOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueSendBatchOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueSendOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueSendOptionsLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `QueueSendRequestLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2BucketLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2MultipartUploadLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2ObjectBodyLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2ObjectLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2RangeLike` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2UploadedPartLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduleOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduledJobStatus` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SchedulerHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardAlarms` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardAsyncSqlExec` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardDirectory` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardJurisdiction` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardKvListOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardKvStore` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardSqlCursor` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardSqlExec` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ShardStub` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SocketHandle` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SocketHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SqlRow` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `TwoStepShardDirectory` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorMatchLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorMetric` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorRecordLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeDeleteMutation` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeIndexDetails` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeIndexLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeMatch` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeMatches` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeQueryOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeUpsertMutation` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `VectorizeVector` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `resolveShard` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ## `lunorash/ratelimit`
 
 ### `DbStoreOptions` (interface)

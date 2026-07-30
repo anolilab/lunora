@@ -1,8 +1,7 @@
 /* eslint-disable max-classes-per-file -- D1Session and D1Client are both public exports (re-exported by src/index.ts) and are intentionally co-located: the client mints sessions, so splitting them across files would break the cohesive Sessions-API surface consumers import together. */
-import type { D1Database } from "@cloudflare/workers-types";
 import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "@lunora/platform";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
-import type { DrizzleD1Database } from "drizzle-orm/d1";
+import type { AnyD1Database, DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
@@ -171,9 +170,14 @@ class D1Client {
 
         // Structural cast: `D1DatabaseLike` projects exactly the methods
         // `drizzle-orm/d1` introspects (`prepare`, `batch`). The runtime
-        // binding ships the full `D1Database` shape; tests pass doubles that
-        // match the projection.
-        this.drizzleHandle = drizzleD1(this.db as unknown as D1Database, { logger: false });
+        // binding ships the full D1 shape; tests pass doubles that match the
+        // projection.
+        //
+        // Cast to drizzle's own `AnyD1Database` rather than to
+        // `@cloudflare/workers-types`' `D1Database`: the cast only has to satisfy
+        // the driver's parameter, and naming the provider type here was this
+        // package's last Cloudflare import (plan 114 §5.1's ambient-types scrub).
+        this.drizzleHandle = drizzleD1(this.db as unknown as AnyD1Database, { logger: false });
 
         return this.drizzleHandle;
     }
@@ -184,13 +188,13 @@ class D1Client {
      * the same session.
      *
      * A `D1DatabaseSession` exposes the same `prepare` / `batch` surface
-     * drizzle calls into, so a single `unknown` cast lets us treat the session
-     * as a `D1Database` for driver-construction purposes.
+     * drizzle calls into, so a single `unknown` cast lets us hand the session to
+     * the driver.
      */
     public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
         const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
-        return drizzleD1(session as unknown as D1Database, { logger: false });
+        return drizzleD1(session as unknown as AnyD1Database, { logger: false });
     }
 
     /**

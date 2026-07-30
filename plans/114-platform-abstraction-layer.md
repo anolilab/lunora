@@ -193,6 +193,24 @@ runtime:
 **Non-goal:** no runtime registry/plugin loader. Hosts are ordinary
 constructor arguments, as today.
 
+- **Done.** All five contracts ship, plus `PlatformCapabilities`. The binding
+  `*Like` promotion is complete and the per-package copies really are
+  re-exports — `@lunora/bindings/kv`, `@lunora/storage` and `@lunora/d1` import
+  their `*Like` types from `@lunora/platform` rather than redeclaring them, and
+  `ExecutionContextLike` is re-exported from `shared/`. `SchedulerHost` grew
+  `list` + `deadLetter` during §5.4, because at-least-once was otherwise
+  unassertable (see there).
+- **Ambient-types scrub: done for the **none** tier and `@lunora/runtime`.**
+  `@lunora/d1` keeps `@cloudflare/workers-types` in its tsconfig `"types"` for
+  the **test tier only** — its workerd suite calls Cloudflare's typed
+  `Response.json<T>()` overload, which is not in lib.dom and which
+  `@cloudflare/vitest-pool-workers/types` does not supply. Its `src/` no longer
+  imports the provider types at all: the two drizzle-driver casts now target
+  drizzle's own `AnyD1Database`. A breadcrumb in `packages/d1/tsconfig.json`
+  records this, since a CF import reappearing under `src/` is the regression it
+  guards. The remaining 15 packages holding the ambient types are rated
+  DEEP or light–moderate (per §1) and keep them by design.
+
 ### 5.2 Extract the reactive engine from `@lunora/do` (L, the core workstream)
 
 Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
@@ -218,6 +236,42 @@ Move the host-neutral engine into `@lunora/shard-engine` (name bikesheddable):
   move-only refactor first (no logic edits), then the host-interface cut.
 - Watch the workerd suites: hibernation/eviction tests
   (`evictDurableObject` body-drain gotcha per memory) are the regression net.
+
+**Status — done, with the god-file split taken to its floor rather than to zero.**
+
+- The engine lives in `@lunora/shard-engine` (answering §8.1); the Cloudflare host
+  moved to `@lunora/platform-cloudflare`. `shard-do.ts` is down to the **two**
+  type-only `@cloudflare/workers-types` references this section targeted.
+- The frozen surface held throughout: **305 names**, diffed name-for-name against
+  the pre-move build, `api:check` reporting declaration-site relocations and zero
+  removals. Codegen goldens byte-identical.
+- Host-neutral code that was still in `@lunora/do` afterwards is out: twelve
+  modules (~2,800 lines — admin export/import, data migrations, PITR, SQL console,
+  settings, TTL sweep, four external-source ingest modules, mail + queue catchers)
+  moved to the engine, git recording each as a 95–99% rename. Test count conserved
+  exactly: `602 + 653` became `501 + 754`.
+- `shard-do.ts` went 9,703 → 8,562 lines by lifting ~1,100 lines of admin-RPC
+  argument parsing into `admin-rpc-args.ts`, move-only as prescribed. **It stops
+  there deliberately.** What remains is one class of 273 members averaging 18
+  lines (largest 319) — no oversized method to break up. Two further cuts were
+  measured and rejected: extract-class on telemetry (43 members, 798 lines) would
+  have to publish all 11 of its fields because `handleFetchCloudflare`,
+  `readAdminWildcardOp`, `dispatchLifecycle`, `recordShapeError` and
+  `handleRecordContainerEvent` touch them — a struct behind an indirection, not
+  encapsulation; and free-functioning the low-coupling methods nets ~200 real
+  lines once the 37 three-line abstract hooks a codegen subclass overrides are
+  excluded. `handleFetchCloudflare`/`handleAlarmCloudflare`/`webSocketClose`/
+  `webSocketError` cannot leave either — the platform invokes them on the
+  instance. The residue is a request entry point legitimately reaching telemetry,
+  admin and subscription state, which is the host-interface cut's business rather
+  than more moving. Do not re-attempt a mechanical split without redoing those
+  two measurements.
+- `SessionDO` / `SchedulerDO` splits not done — explicitly "don't force in
+  phase 1", and still deferred.
+- Observability came out too, as `@lunora/observability`. Its two largest modules
+  (`function-metrics`, `issue-explainer`) had arrived without suites of their own
+  and now have them, both at 100% on all four metrics; the package's coverage
+  ratchet went from a 70/65/68/70 placeholder to 76/84/89/89.
 
 ### 5.3 Split `@lunora/config`: inference vs. emission (M)
 
@@ -333,6 +387,15 @@ explicit)` is the single resolution point — flag, then config, then default.
 - Add a **"platform parity" section to the plan template**: every new
   `ctx.*`/binding feature states its mapping (or explicit non-support) per
   target. This is the process control that keeps the matrix honest.
+
+- **Done.** `packages/platform/docs/index.mdx` documents the contracts, the
+  capability matrix, the conformance split, and how to add to the matrix.
+- The parity section landed in a plan template that **did not previously exist** —
+  `plans/` had an index (`README.md`) and no template, so there was nothing to add
+  the section to. `plans/TEMPLATE.md` now exists and `plans/README.md` points new
+  plans at it, with the parity section marked mandatory for anything touching a
+  `ctx.*` surface, a provider binding, or a deploy/runtime capability, and an
+  explicit "not applicable" required otherwise so silence is never the answer.
 
 ## 6. Phasing & ordering
 

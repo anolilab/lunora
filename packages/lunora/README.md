@@ -85,13 +85,14 @@ pnpm exec lunora deploy
 
 ### Subpaths
 
-| Import                         | Re-exports        | Use                                                |
-| ------------------------------ | ----------------- | -------------------------------------------------- |
-| `lunorash` / `lunorash/server` | `@lunora/server`  | `query` / `mutation` / `action`, `defineSchema`, … |
-| `lunorash/values`              | `@lunora/values`  | the `v.*` validator suite                          |
-| `lunorash/runtime`             | `@lunora/runtime` | `createWorker` and the query coordinator           |
-| `lunorash/do`                  | `@lunora/do`      | `ShardDO` / `SessionDO`                            |
-| `lunorash/client`              | `@lunora/client`  | the browser SDK (`LunoraClient`, `Preloaded`, …)   |
+| Import                         | Re-exports         | Use                                                |
+| ------------------------------ | ------------------ | -------------------------------------------------- |
+| `lunorash` / `lunorash/server` | `@lunora/server`   | `query` / `mutation` / `action`, `defineSchema`, … |
+| `lunorash/values`              | `@lunora/values`   | the `v.*` validator suite                          |
+| `lunorash/runtime`             | `@lunora/runtime`  | `createWorker` and the query coordinator           |
+| `lunorash/do`                  | `@lunora/do`       | `ShardDO` / `SessionDO`                            |
+| `lunorash/platform`            | `@lunora/platform` | Host contracts (`ShardHost`, `SocketHost`, …)      |
+| `lunorash/client`              | `@lunora/client`   | the browser SDK (`LunoraClient`, `Preloaded`, …)   |
 
 Granular subpaths are forwarded too: `lunorash/server/types`, `lunorash/server/data-model`, `lunorash/server/drizzle`, and `lunorash/server/rls/testing` mirror `@lunora/server/*`; `lunorash/client/query`, `lunorash/client/auth`, `lunorash/client/pagination`, and `lunorash/client/ssr` mirror `@lunora/client/*`.
 

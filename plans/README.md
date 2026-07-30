@@ -6,6 +6,13 @@ only deferred, blocked, or reference plans remain as files.
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED.
 
+New plans start from [`TEMPLATE.md`](./TEMPLATE.md). Its **Platform parity**
+section is mandatory for anything that adds or changes a `ctx.*` surface, a
+provider binding, or a deploy/runtime capability: state the mapping per target
+(`native` | `emulated` | `unsupported`) or the explicit non-support. Codegen reads
+that matrix, so a row left unstated ships a surface that silently does nothing on
+the target it was never mapped for.
+
 ## Wave 1 — Cloudflare platform coverage (baseline `058071c8`, 2026-06-15)
 
 Does lunora support a given Cloudflare product/binding? The 14 completed plans
