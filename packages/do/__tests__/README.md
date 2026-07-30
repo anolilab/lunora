@@ -66,3 +66,15 @@ catch logic regressions cheaply; workerd catches integration regressions the
 mocks structurally cannot model. New tests should default to **workerd**
 unless they're verifying purely structural logic (envelope parsing, error
 shape, etc.) where a mock is materially faster.
+
+## Telemetry suites need `@lunora/observability` built
+
+`function-metrics`, `settings`, `tracing`, `traced-fetch`, `shard-do.admin`,
+`shard-do.sampling` and the workerd cf-bridge test import from
+`@lunora/observability` rather than from `../src/*` — those modules live in that
+package now. So a bare `pnpm --filter "@lunora/do" run test` fails on a stale or
+absent `packages/observability/dist` with a missing-export error, which reads
+like a broken test rather than a missing build.
+
+Build first (`pnpm run build:packages`, or `pnpm --filter "@lunora/do..." run
+build`), or use `pnpm run test:affected`, which builds dependencies for you.

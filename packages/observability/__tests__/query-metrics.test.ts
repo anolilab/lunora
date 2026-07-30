@@ -1,6 +1,6 @@
+import type { SqlExec } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import type { SqlExec } from "@lunora/shard-engine";
 import {
     normalizeSql,
     pruneQueryBuckets,

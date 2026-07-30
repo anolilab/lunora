@@ -1,7 +1,7 @@
+import type { ContextTracer } from "@lunora/observability";
 import { describe, expect, it } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
-import type { ContextTracer } from "../src/context-telemetry";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";

@@ -1,5 +1,3 @@
-import { isDevEnvironment } from "./settings";
-
 /**
  * Ordering/visual weight of a security finding — mirrors the studio's insight
  * severities so the Security Advisor and the Performance Advisor (Insights) share
@@ -156,7 +154,7 @@ const auditSecurityLayers = (env: Record<string, unknown>, dev: boolean): Securi
  * RPC, so it only runs once a `LUNORA_ADMIN_TOKEN` is configured — which is why
  * a *missing* token is never itself a finding here (introspection is simply off).
  */
-const buildSecurityAudit = (rawEnv: unknown): SecurityAuditResult => {
+const buildSecurityAudit = (rawEnv: unknown, options: { dev: boolean }): SecurityAuditResult => {
     const env = (rawEnv ?? {}) as Record<string, unknown>;
     const findings: SecurityFinding[] = [];
 
@@ -167,7 +165,7 @@ const buildSecurityAudit = (rawEnv: unknown): SecurityAuditResult => {
     }
 
     const wsBearer = env["LUNORA_WS_BEARER"];
-    const dev = isDevEnvironment(env);
+    const { dev } = options;
 
     if (typeof wsBearer !== "string" || wsBearer === "") {
         // Open live-subscription gate: a real exposure in production, expected

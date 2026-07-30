@@ -1,5 +1,75 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
+import type {
+    AppendRequestLogEntry,
+    AuthMetrics,
+    ContextFetch,
+    ContextLogLevel,
+    ContextMetrics,
+    ContextTracer,
+    DatabaseInstrumentation,
+    DatabaseTally,
+    FunctionMetricBucket,
+    FunctionMetricIndexHit,
+    HostTracingLike,
+    IndexHit,
+    IssueSeverity,
+    IssuesResult,
+    IssueState,
+    IssueStatePatch,
+    IssueStatus,
+    LogEntry,
+    LogEventInput,
+    MetricHistoryOptions,
+    QueryStatEntry,
+    RequestLogResult,
+    RequestLogWriteOptions,
+    SpanCollection,
+    SpanCollector,
+    TraceAnchor,
+} from "@lunora/observability";
+import {
+    appendRequestLogEntry,
+    buildSecurityAudit,
+    createDatabaseTally,
+    createMetrics,
+    createSpanCollector,
+    createTracedFetch,
+    createTracer,
+    dispatchRootSpan,
+    emitLogEvent,
+    emitRequestLogEvent,
+    ensureRequestLogTable,
+    explainIssue,
+    findDanglingReferences,
+    foldTraces,
+    formatTally,
+    instrumentDatabase,
+    ISSUE_SEVERITIES,
+    ISSUE_STATE_TABLE,
+    ISSUE_STATUSES,
+    LogBuffer,
+    mergeScanAttribution,
+    MetricBuffer,
+    parseLogArgs,
+    readAuthMetrics,
+    readErrorIssues,
+    readFunctionMetricBuckets,
+    readFunctionMetricIndexHits,
+    readFunctionMetrics,
+    readFunctionMetricsTotals,
+    readMetricHistory,
+    readQueryMetrics,
+    readRequestLog,
+    recordAuthEvent,
+    recordFunctionMetric,
+    recordMetricHistory,
+    recordQueryMetric,
+    REQUEST_LOG_TABLE,
+    resolveTraceAnchor,
+    SpanBuffer,
+    upsertIssueState,
+} from "@lunora/observability";
 import type { ShardHost, SocketHost } from "@lunora/platform";
 import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
@@ -120,58 +190,18 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
-import type { AuthMetrics } from "./auth-metrics";
-import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
-import type { CloudflareTracingLike, ContextFetch, ContextMetrics, ContextTracer, SpanCollection, SpanCollector, TraceAnchor } from "./context-telemetry";
-import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
-import type { DatabaseInstrumentation, DatabaseTally } from "./database-telemetry";
-import { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
-import type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit } from "./function-metrics";
-import {
-    mergeScanAttribution,
-    readFunctionMetricBuckets,
-    readFunctionMetricIndexHits,
-    readFunctionMetrics,
-    readFunctionMetricsTotals,
-    recordFunctionMetric,
-} from "./function-metrics";
-import { explainIssue } from "./issue-explainer";
-import type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./issue-state";
-import { ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, upsertIssueState } from "./issue-state";
-import type { LogEntry } from "./log-buffer";
-import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
-import { MetricBuffer } from "./metric-buffer";
-import type { MetricHistoryOptions } from "./metric-history";
-import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
-import type { QueryStatEntry } from "./query-metrics";
-import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catcher";
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
-import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
-import {
-    appendRequestLogEntry,
-    emitLogEvent,
-    emitRequestLogEvent,
-    ensureRequestLogTable,
-    parseLogArgs,
-    readErrorIssues,
-    readRequestLog,
-    REQUEST_LOG_TABLE,
-} from "./request-log";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
-import { foldTraces, SpanBuffer } from "./span-buffer";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 import { runReadonlySql } from "./sql-console";
-import { findDanglingReferences } from "./storage-correlation";
-import { resolveTraceAnchor } from "./trace-context";
 import type { TtlSweepSpec } from "./ttl-sweep";
 import { selectExpiredIds } from "./ttl-sweep";
 
@@ -285,9 +315,9 @@ interface TelemetrySink {
  */
 let cloudflareTracingResolved = false;
 
-let cloudflareTracing: CloudflareTracingLike | undefined;
+let cloudflareTracing: HostTracingLike | undefined;
 
-const resolveCloudflareTracing = async (): Promise<CloudflareTracingLike | undefined> => {
+const resolveHostTracing = async (): Promise<HostTracingLike | undefined> => {
     if (!cloudflareTracingResolved) {
         cloudflareTracingResolved = true;
 
@@ -296,8 +326,8 @@ const resolveCloudflareTracing = async (): Promise<CloudflareTracingLike | undef
             const candidate = cloudflareModule.tracing;
 
             cloudflareTracing =
-                candidate !== null && typeof candidate === "object" && typeof (candidate as CloudflareTracingLike).enterSpan === "function"
-                    ? (candidate as CloudflareTracingLike)
+                candidate !== null && typeof candidate === "object" && typeof (candidate as HostTracingLike).enterSpan === "function"
+                    ? (candidate as HostTracingLike)
                     : undefined;
         } catch {
             // Off-Cloudflare (e.g. the Node test harness) or a runtime without the
@@ -4415,7 +4445,7 @@ abstract class ShardDO {
      * `ctx.trace` still yields a coherent self-contained trace there.
      *
      * The Cloudflare custom-spans bridge is threaded here but stays off unless the
-     * resolved sink sets `fuseCloudflareTraces` (see {@link resolveCloudflareTracing}).
+     * resolved sink sets `fuseCloudflareTraces` (see {@link resolveHostTracing}).
      */
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
         // Resolve the anchor once so its `sampled` verdict is snapshotted for every
@@ -4426,12 +4456,12 @@ abstract class ShardDO {
 
         return createTracer({
             anchor: resolvedAnchor,
-            fuseCloudflareSpans: sink?.fuseCloudflareTraces === true,
+            fuseHostSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
                 this.recordSpan(span, sink, resolvedAnchor.sampled);
             },
-            resolveCloudflareTracing,
+            resolveHostTracing,
             shardKey: this.runner.shardKey,
             userId: () => this.getCurrentUserId(),
         });
@@ -7422,7 +7452,7 @@ abstract class ShardDO {
             // Deployment-level security findings derived from the Worker `env`
             // (admin-token strength, WS gate, request-log redaction) — the
             // Security Advisor's signal. No raw secret crosses the wire.
-            return buildSecurityAudit(this.env);
+            return buildSecurityAudit(this.env, { dev: isDevEnvironment(this.env) });
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getAdvisories) {

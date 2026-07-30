@@ -22,9 +22,10 @@
  * one and the JSON path is bound, never interpolated.
  */
 
-import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { SqlExec } from "@lunora/shard-engine";
 import { DOC_COLUMN } from "@lunora/shard-engine";
+
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 
 /** One reverse edge to count: `table.column` points back at the browsed table. */
 interface BackRelationRequest {

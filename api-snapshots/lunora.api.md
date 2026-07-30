@@ -1873,22 +1873,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `AUTH_METRICS_BUCKETS_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `AUTH_METRICS_BUCKET_MS` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `AUTH_METRICS_BUCKET_RETENTION` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `AUTH_METRICS_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `AdvisoriesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1917,10 +1901,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `AiRunBinding` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `ApplyOnDeleteOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1932,14 +1912,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `AuditLogResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AuthMetrics` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `AuthMetricsBucket` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `BroadcastDelta` (type)
 
@@ -1977,14 +1949,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `ContextMetrics` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ContextTracer` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `CountArgs` (type)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1998,10 +1962,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `DATA_MIGRATION_STATE_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2033,22 +1993,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `ExplainIssueArgs` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ExplainIssueDegradedReason` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ExplainIssueGrounding` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ExplainIssueResult` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2072,26 +2016,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 ### `FLAGS_FUNCTION_PREFIX` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FUNCTION_METRICS_BUCKETS_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FUNCTION_METRICS_BUCKET_MS` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FUNCTION_METRICS_BUCKET_RETENTION` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FUNCTION_METRICS_INDEX_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FUNCTION_METRICS_TABLE` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `FacetColumnOptions` (interface)
 
@@ -2120,14 +2044,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `FunctionCallStat` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FunctionMetricBucket` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `FunctionMetricIndexHit` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `FunctionStatsResult` (interface)
 
@@ -2197,22 +2113,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `LogBuffer` (class)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `LogEntry` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `LogEventInput` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `LogLevel` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `LogSink` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2229,14 +2129,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `MIN_ADMIN_TOKEN_LENGTH` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `MIN_AUTH_SECRET_LENGTH` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `MaskColumnMetadata` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2246,10 +2138,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `MaterializeResult` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `MetricsDeps` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2405,14 +2293,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `RecordAuthEventInput` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `RecordFunctionMetricInput` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `RecordMailInput` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2545,22 +2425,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `SecurityAuditResult` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SecurityFinding` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SecurityFindingKind` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SecurityFindingLevel` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `SelectMatchingIdsOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2634,10 +2498,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `SourceRefresh` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SpanHandle` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2742,14 +2602,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `TelemetrySink` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `TraceAnchor` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `TracerDeps` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2881,10 +2733,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `buildSecurityAudit` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `buildSeekWhere` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2912,10 +2760,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `createDependencyTracker` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `createMetrics` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `createShardAlarms` (const)
 
@@ -2949,10 +2793,6 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `createTracer` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
@@ -2966,10 +2806,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `diffExternalSource` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `dispatchRootSpan` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2989,19 +2825,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `ensureAuthMetricsTables` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ensureFunctionMetricsTables` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `ensureMailTable` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `explainIssue` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3093,10 +2917,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `parseExplainIssueArgs` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `parseExportShardArgs` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3133,10 +2953,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `readAuthMetrics` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `readBookmark` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3153,22 +2969,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `readFunctionMetricBuckets` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `readFunctionMetricIndexHits` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `readFunctionMetrics` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `readFunctionMetricsTotals` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `readMigrationStatus` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3177,15 +2977,7 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `recordAuthEvent` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `recordCapturedMail` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `recordFunctionMetric` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 

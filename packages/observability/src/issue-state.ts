@@ -19,8 +19,15 @@ import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 /** Reserved table holding one triage-state row per Issue fingerprint. Auto-hidden by the `__lunora` prefix. */
 const ISSUE_STATE_TABLE = "__lunora_issue_state__";
 
-/** Max hashes per `WHERE hash IN (...)` read — Durable Objects SQLite caps bound parameters at 100 per query. */
-const HASH_QUERY_BATCH = 100;
+/**
+ * Default max hashes per `WHERE hash IN (...)` read.
+ *
+ * 100 is the Durable Object SQLite bound-parameter cap, so this is the *host's*
+ * limit rather than a property of issue triage — `readIssueStates` takes it as
+ * an option, and a host with a different cap passes its own. Exported so that
+ * host names it instead of repeating the number.
+ */
+const DEFAULT_HASH_QUERY_BATCH = 100;
 
 /**
  * Triage status of an Issue. `open` is the implicit default (no state row); a
@@ -125,10 +132,11 @@ const hydrate = (row: IssueStateRow): IssueState => {
  *
  * Cloudflare Durable Objects SQLite caps bound parameters at 100 per query
  * (https://developers.cloudflare.com/durable-objects/platform/limits/), so a
- * shard with many distinct fingerprints is read in {@link HASH_QUERY_BATCH}-sized
+ * shard with many distinct fingerprints is read in {@link `hashQueryBatch`-sized
  * chunks — one `WHERE hash IN (...)` per chunk — and the rows merged.
  */
-const readIssueStates = (sql: SqlExec, hashes: ReadonlyArray<string>): Map<string, IssueState> => {
+const readIssueStates = (sql: SqlExec, hashes: ReadonlyArray<string>, options: { hashQueryBatch?: number } = {}): Map<string, IssueState> => {
+    const batch = options.hashQueryBatch ?? DEFAULT_HASH_QUERY_BATCH;
     const states = new Map<string, IssueState>();
 
     if (hashes.length === 0) {
@@ -137,13 +145,13 @@ const readIssueStates = (sql: SqlExec, hashes: ReadonlyArray<string>): Map<strin
 
     ensureIssueStateTable(sql);
 
-    for (let start = 0; start < hashes.length; start += HASH_QUERY_BATCH) {
-        const batch = hashes.slice(start, start + HASH_QUERY_BATCH);
-        const placeholders = batch.map(() => "?").join(", ");
+    for (let start = 0; start < hashes.length; start += batch) {
+        const slice = hashes.slice(start, start + batch);
+        const placeholders = slice.map(() => "?").join(", ");
         const rows = runSql<IssueStateRow>(
             sql,
             `SELECT hash, status, assignee, severity, updated_at, updated_by FROM "${ISSUE_STATE_TABLE}" WHERE hash IN (${placeholders})`,
-            ...batch,
+            ...slice,
         ).toArray();
 
         for (const row of rows) {
@@ -212,5 +220,5 @@ const upsertIssueState = (sql: SqlExec, hash: string, patch: IssueStatePatch, up
     return row === undefined ? { hash, status: status ?? "open", updatedAt, ...(updatedBy === undefined ? {} : { updatedBy }) } : hydrate(row);
 };
 
-export { ensureIssueStateTable, ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, readIssueStates, upsertIssueState };
+export { DEFAULT_HASH_QUERY_BATCH, ensureIssueStateTable, ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, readIssueStates, upsertIssueState };
 export type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus };

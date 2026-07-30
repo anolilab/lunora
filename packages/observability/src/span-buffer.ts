@@ -236,7 +236,7 @@ export interface FoldedTraces {
  * @param spans Buffered spans, in arrival order.
  * @param limit Maximum number of traces to return, newest first.
  */
-export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit = DEFAULT_TRACE_LIMIT): FoldedTraces => {
+export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFAULT_TRACE_LIMIT): FoldedTraces => {
     const byTrace = groupByTrace(spans);
 
     // Newest-first and truncated to `limit` BEFORE folding, so a full ring only

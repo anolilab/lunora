@@ -7,7 +7,7 @@
  * `import { tracing } from "cloudflare:workers"` / `tracing.enterSpan` actually
  * exist and run inside a real `workerd` Durable Object. That is exactly the #174
  * caveat this file closes: it drives `createTracer` with the REAL
- * `resolveCloudflareTracing` (a guarded dynamic `import("cloudflare:workers")`,
+ * `resolveHostTracing` (a guarded dynamic `import("cloudflare:workers")`,
  * mirroring `shard-do.ts`) both at worker top-level and INSIDE a live DO via
  * `runInDurableObject`, and asserts the bridge is additive — our recorded
  * `SpanEvent`s stay intact whether the CF bridge fires or not.
@@ -20,28 +20,28 @@
  * custom span under the DO's ambient span is not directly introspectable here.
  * Those assertions are called out inline.
  */
+import type { HostTracingLike, TracerDeps } from "@lunora/observability";
+import { createTracer } from "@lunora/observability";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SpanEvent } from "../../../../shared/span-event";
-import type { CloudflareTracingLike, TracerDeps } from "../../src/context-telemetry";
-import { createTracer } from "../../src/context-telemetry";
 import type { TestShardDO } from "./test-worker";
 
 /**
  * The REAL resolver — a byte-for-byte behavioural mirror of
- * `shard-do.ts`'s `resolveCloudflareTracing`: a guarded dynamic import of
+ * `shard-do.ts`'s `resolveHostTracing`: a guarded dynamic import of
  * `cloudflare:workers`, returning `tracing` only when `enterSpan` is callable,
  * and `undefined` on any absence/throw. Not memoized here so each test observes
  * a fresh resolution.
  */
-const realResolveCloudflareTracing = async (): Promise<CloudflareTracingLike | undefined> => {
+const realResolveCloudflareTracing = async (): Promise<HostTracingLike | undefined> => {
     try {
         const cloudflareModule = (await import("cloudflare:workers")) as { tracing?: unknown };
         const candidate = cloudflareModule.tracing;
 
-        return candidate !== null && typeof candidate === "object" && typeof (candidate as CloudflareTracingLike).enterSpan === "function"
-            ? (candidate as CloudflareTracingLike)
+        return candidate !== null && typeof candidate === "object" && typeof (candidate as HostTracingLike).enterSpan === "function"
+            ? (candidate as HostTracingLike)
             : undefined;
     } catch {
         return undefined;
@@ -97,12 +97,12 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
 
             const trace = createTracer({
                 anchor,
-                fuseCloudflareSpans: true,
+                fuseHostSpans: true,
                 functionPath: "messages:list",
                 record: (span) => {
                     recorded.push(span);
                 },
-                resolveCloudflareTracing: realResolveCloudflareTracing,
+                resolveHostTracing: realResolveCloudflareTracing,
                 shardKey: "room-1",
                 userId: () => "user-42",
             });
@@ -132,8 +132,8 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
             // we assert on the concrete platform Span shape, not a fake.
             const tracing = await realResolveCloudflareTracing();
 
-            tracing?.enterSpan("probe.isTraced", (cfSpan) => {
-                isTracedSeen.push(cfSpan.isTraced);
+            tracing?.enterSpan("probe.isTraced", (hostSpan) => {
+                isTracedSeen.push(hostSpan.isTraced);
             });
 
             return { isTracedSeen, recorded, result };
@@ -174,9 +174,9 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
 
         const outcome = await runInDurableObject(stub, async () => {
             const recorded: SpanEvent[] = [];
-            const resolveSpy = vi.fn<() => Promise<CloudflareTracingLike | undefined>>(realResolveCloudflareTracing);
+            const resolveSpy = vi.fn<() => Promise<HostTracingLike | undefined>>(realResolveCloudflareTracing);
 
-            // No `fuseCloudflareSpans` — the default path. The resolver is wired in
+            // No `fuseHostSpans` — the default path. The resolver is wired in
             // but must never be called.
             const trace = createTracer({
                 anchor,
@@ -184,7 +184,7 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
                 record: (span) => {
                     recorded.push(span);
                 },
-                resolveCloudflareTracing: resolveSpy,
+                resolveHostTracing: resolveSpy,
                 shardKey: "room-1",
                 userId: () => "user-42",
             });
@@ -222,7 +222,7 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
 
             await offBuild.trace("span", body, { start: 1 });
 
-            const onBuild = setup({ fuseCloudflareSpans: true, resolveCloudflareTracing: realResolveCloudflareTracing });
+            const onBuild = setup({ fuseHostSpans: true, resolveHostTracing: realResolveCloudflareTracing });
 
             await onBuild.trace("span", body, { start: 1 });
 

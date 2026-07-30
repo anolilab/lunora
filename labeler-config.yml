@@ -82,6 +82,9 @@
 "package: nuxt":
     - changed-files:
           - any-glob-to-any-file: "packages/nuxt/**/*"
+"package: observability":
+    - changed-files:
+          - any-glob-to-any-file: "packages/observability/**/*"
 "package: payment":
     - changed-files:
           - any-glob-to-any-file: "packages/payment/**/*"

@@ -76,6 +76,9 @@ const TIER_1 = [
     "platform",
     "platform-cloudflare",
     "shard-engine",
+    // Host-neutral observability: a second host consumes this surface directly,
+    // so drifting it silently is exactly what this guard exists to catch.
+    "observability",
 ];
 
 const TIER_2 = [

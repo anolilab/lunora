@@ -1,8 +1,8 @@
+import { createTracedFetch } from "@lunora/observability";
 import { describe, expect, it, vi } from "vitest";
 
 import { parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
-import { createTracedFetch } from "../src/context-telemetry";
 
 /**
  * The instrumented `ctx.fetch`.

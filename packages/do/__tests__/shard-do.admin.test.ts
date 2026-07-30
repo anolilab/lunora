@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import type { ExplainIssueResult, MetricHistoryPoint, MetricHistorySeries, MetricSeries, TraceSpan, TraceSummary } from "@lunora/observability";
 import type {
     AdvisoryFinding,
     AggregateIndexDefinitionLike,
@@ -21,9 +22,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
 import { runDataMigration } from "../src/data-migration";
-import type { ExplainIssueResult } from "../src/issue-explainer";
-import type { MetricSeries } from "../src/metric-buffer";
-import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
 import type {
     RunShardApplyCdcArgs,
@@ -36,7 +34,6 @@ import type {
     ShardDOState,
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { TraceSpan, TraceSummary } from "../src/span-buffer";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
