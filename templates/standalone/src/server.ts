@@ -201,8 +201,8 @@ const WELCOME_HTML = `<!doctype html>
 
 /**
  * Wrap the composed app so `GET /` serves the branded welcome page and every
- * other request (RPC, WebSocket subscriptions, `/_lunora` Studio) delegates to
- * the Lunora worker unchanged.
+ * other request (the `/_lunora` RPC + WebSocket plane, the `/__lunora` Studio)
+ * delegates to the Lunora worker unchanged.
  */
 export default {
     fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> | Response {
