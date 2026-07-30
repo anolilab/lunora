@@ -10,6 +10,31 @@ all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 <Callout type="warn">
     Lunora is in **alpha**. Install from the `@alpha` dist-tag (the commands below already do) and expect breaking changes until the first stable release. The
     npm package is `lunorash` — the unscoped `lunora` name is taken on npm — but the CLI binary it installs is still `lunora`.
+
+    Note `npm view <pkg> version` reports `0.0.0` for every `@lunora/*` package: that is the placeholder on `latest`. The real version lives on the `alpha`
+    dist-tag (`npm view <pkg> dist-tags`). Reading `latest` makes a released package look unpublished.
+
+</Callout>
+
+<Callout type="info">
+    **Using pnpm's `minimumReleaseAge`?** The packages release independently and often, so a maturation window will hold back some of them and leave you with a
+    set that no longer resolves together:
+
+    ```
+    ERR_PNPM_NO_MATURE_MATCHING_VERSION  Version 1.0.0-alpha.39 (released 2 hours ago)
+    of @lunora/seed does not meet the minimumReleaseAge constraint
+    ```
+
+    Exclude the scope rather than turning the window off everywhere:
+
+    ```yaml
+    # pnpm-workspace.yaml
+    minimumReleaseAge: 1440
+    minimumReleaseAgeExclude:
+        - "@lunora/*"
+        - lunorash
+    ```
+
 </Callout>
 
 ## Requirements

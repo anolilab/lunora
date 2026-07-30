@@ -69,6 +69,7 @@
         "tutorial/scaling",
         "---Migrating---",
         "migrating/from-convex",
+        "migrating/from-a-convex-toolkit",
         "migrating/from-supabase",
         "migrating/from-firebase",
         "migrating/from-alpha",

@@ -25,6 +25,7 @@ when porting an existing Convex app.
 | Per-tenant data     | tables                   | `.shardBy("field")` tables in DOs         |
 | Schema file         | `convex/schema.ts`       | `lunora/schema.ts`                        |
 | Generated API       | `convex/_generated/api`  | `lunora/_generated/api`                   |
+| Nested function dir | `internal.a.b.fn`        | `internal.a_b.fn` (flattened, see below)  |
 | Function dir        | `convex/*.ts`            | `lunora/*.ts`                             |
 | Codegen trigger     | `convex dev`             | `lunora codegen` (or the Vite plugin)     |
 | React hooks         | `convex/react`           | `@lunora/react`                           |
@@ -35,6 +36,16 @@ when porting an existing Convex app.
 | File storage        | `ctx.storage`            | `ctx.storage` (backed by R2)              |
 | Subscriptions       | WebSocket                | WebSocket (Durable Object hibernated)     |
 | Deploy              | `npx convex deploy`      | `lunora deploy` (wraps `wrangler deploy`) |
+
+<Callout type="warn">
+    **Nested function directories flatten into one underscore-joined key.** Convex namespaces the generated API by directory nesting
+    (`internal.agent.threads.listThreads`); Lunora joins the path (`internal.agent_threads.listThreads`), because the namespace is also the runtime dispatch key
+    and has to be a single JS identifier.
+
+    The failure mode is misleading, so it is worth knowing before you start: a missed lookup reads `Property 'agent' does not exist on type 'InternalApiTypes'`,
+    which looks like the function was never registered rather than registered under a different key. On one 92-table port this was 608 call sites.
+
+</Callout>
 
 ## Schema
 
@@ -142,6 +153,52 @@ ships [`@lunora/auth`](/docs/packages/auth), an opt-in add-on that handles
 sessions, password and OAuth flows, and rotating refresh tokens inside a
 `SessionDO`. The `ctx.auth` shape is the same.
 
+<Callout type="warn">
+    **Consuming auth is the same; SETTING IT UP is a rewrite.** `ctx.auth` reads identically, so your `authQuery`/`authMutation` call sites port unchanged — but
+    the two setups share no surface. Anyone arriving from a better-auth-on-Convex toolkit will find that `defineAuth`, `getAuthUserId`, `getAuthUserIdentity`,
+    `getSession` and `getHeaders` have no counterpart.
+
+    Lunora builds better-auth with `createAuth` + `lunoraD1Adapter`, mounted through `.auth(...)` on the generated app builder, with `ensureMigrated` handling
+    schema sync. Where a Convex toolkit persisted better-auth into *Convex tables* via generated CRUD, Lunora persists into **D1**. The options block —
+    providers, plugins, callbacks — ports across verbatim, because both stacks run better-auth underneath; everything around it does not. Start from
+    [`lunora-setup-auth`](/docs/packages/auth).
+
+    Better-auth owns its own tables in D1, so **drop them from the ported schema** — leaving them produces confusing duplicate-table errors.
+
+</Callout>
+
+### Triggers were transactional; `databaseHooks` are not
+
+If your Convex auth layer used inline triggers, each one ran with a
+`MutationCtx` **inside the same transaction as the auth write**, so a failing
+trigger rolled the write back. Lunora exposes better-auth's own
+`databaseHooks`, which receive the row and better-auth's context — and nothing
+that can reach `ctx.db`.
+
+The workaround is a shard client calling internal mutations:
+
+```ts
+databaseHooks: {
+    user: {
+        create: {
+            after: async (user) => {
+                await createShardClient(env.SHARD).forShard(user.id).mutation("users:seedDefaults", { userId: user.id });
+            },
+        },
+    },
+},
+```
+
+That works, but **the transactional guarantee is gone and cannot be
+recovered** — the auth row is committed by the time `after` runs. Every hook
+body has to become idempotent and independently safe, because a half-created
+user is invisible until production.
+
+Two smaller traps: there is **no `user.delete` databaseHook**, so a cascade has
+to be called explicitly from your account-deletion flow (nothing fails if you
+forget), and a Convex toolkit's JWT-minting plugin has no successor —
+better-auth's own `jwt()` covers the JWKS endpoint a web client reads.
+
 ## Scheduler
 
 `ctx.scheduler.runAfter(ms, fn, args)` works identically. Under the hood
@@ -153,6 +210,19 @@ queue.
 `ctx.storage.generateUploadUrl()` / `ctx.storage.getUrl(id)` mirror the
 Convex shape. Lunora backs them with **R2**: uploads go straight to R2 via
 a presigned URL, and downloads stream from the Worker.
+
+<Callout type="warn">
+    **`ctx.storage` is read-only in queries AND mutations.** Convex allowed `ctx.storage.delete(id)` inside a mutation; Lunora types it as `ReadOnlyStorage`
+    there and puts `delete` / `store` / `generateUploadUrl` on actions only.
+
+    This is deliberate. A mutation runs in a Durable Object transaction that can roll back, and an R2 delete cannot — a mutation that deleted an object and then
+    aborted would leave the row intact and the bytes gone. **Schedule the delete instead**, which is strictly better than the Convex original: the row deletion
+    commits transactionally and the object cleanup runs only if it did.
+
+    `Property 'delete' does not exist on type 'ReadOnlyStorage<"default">'` is the error to expect. Note the same rule makes `generateUploadUrl` an action, which
+    changes the browser-facing contract — a client calling it as a mutation fails at runtime, not at compile time.
+
+</Callout>
 
 ## Subscriptions
 
@@ -194,7 +264,10 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
 
 - **No transactions across shards**. A mutation runs inside one Durable
   Object; cross-shard writes need a saga or an action that fans out. Convex
-  gives you cross-document transactions inside its DB; Lunora doesn't.
+  gives you cross-document transactions inside its DB; Lunora doesn't. See
+  [the worked example below](#writing-across-a-tier-boundary) — this is the
+  highest-risk item on most ports, because the generator prints the crossing
+  relations but the compensation is yours to write.
 - **D1 eventual consistency on replicas**. Reads from `.global()` tables
   use the D1 Sessions API. Pass the `x-d1-bookmark` header to get
   read-your-writes; otherwise you may read a slightly stale replica.
@@ -204,6 +277,73 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
   migrations, scheduled jobs, and more), gated by your own `LUNORA_ADMIN_TOKEN`.
   Cloudflare's DO browser, the D1 console, and `lunora run` remain available for
   ad-hoc work. See [@lunora/studio](/docs/packages/studio).
+
+## Writing across a tier boundary
+
+Assigning storage tiers is where the cross-shard caveat becomes concrete.
+A relation whose two tables land in different tiers — `userConnectors`
+(`.shardBy("userId")`) referencing `connectorDefinitions` (`.global()`), or a
+`.shardBy` parent with a `root` child — was one atomic Convex write and is now
+two. The schema generator prints every crossing relation on each run; treat
+that list as the work-list.
+
+**Prefer removing the crossing.** Denormalising the shard key onto the child
+(`persistentChunks` gaining a `userId`) moves both rows into the same Durable
+Object and makes the write atomic again. Do this wherever the child is only
+ever reached through the parent — it is cheaper than any compensation.
+
+When the crossing is real, the sanctioned vehicle is a **durable workflow**,
+not a hand-rolled action fan-out:
+
+```ts
+// lunora/workflows.ts
+export const linkConnector = defineWorkflow({
+    handler: async (ctx) => {
+        // Each step is checkpointed: a crash after step 1 resumes at step 2
+        // rather than re-running step 1.
+        const definition = await ctx.step.do("read-definition", async () => ctx.runQuery(internal.connectors.getDefinition, { key: ctx.params.key }));
+
+        await ctx.step.do("write-user-link", async () => ctx.runMutation(internal.connectors.linkForUser, { definition, userId: ctx.params.userId }));
+    },
+});
+```
+
+`@lunora/workflow` gives you the checkpoint log for free, which is the part
+that makes partial failure recoverable. An action fan-out can work too, but
+only if every step is **idempotent and keyed** — pass an idempotency key and
+have each mutation no-op on a repeat, because the retry that a crash forces
+will replay steps that already succeeded.
+
+<Callout type="warn">
+    Watch for tables that shard on an **optional** column. A row with no value for the shard key has no owning shard, so backfill those columns before cutover.
+    The generator prints these too.
+</Callout>
+
+## If you are porting a Convex _toolkit_
+
+This guide maps raw Convex to Lunora. A codebase built on a Convex toolkit — a
+Drizzle-style schema DSL, a tRPC-style procedure builder — has a **second
+translation step** this mapping does not cover. Two differences are worth
+knowing up front, because both are mechanical but touch every file:
+
+- **Relations may be schema-level in a toolkit, and are per-table in Lunora.**
+  A single `defineSchema(...).relations(...)` graph has to be transposed onto
+  the owning table's `.relations((r) => …)`.
+- **The handler argument name differs.** A tRPC-shaped toolkit hands the
+  handler `{ ctx, input }`; Lunora hands it `{ ctx, args }`. Trivial per site,
+  and hundreds of sites.
+
+Budget for the schema DSL separately from the function bodies: the DSL
+translation is a codemod, the function bodies are not.
+[Migrating from a Convex toolkit](/docs/migrating/from-a-convex-toolkit) walks
+the whole second step.
+
+<Callout type="info">
+    A toolkit's `json&lt;T>()`-style opaque column erases `T` at runtime. If you generate your Lunora schema by introspecting the toolkit's *runtime* validator
+    tree, every such column lands as `v.any()` and its `Doc_*` field as `unknown`, which then errors at every read in files that look unrelated to the schema.
+    Recover `T` by parsing the schema **source**, which is the only place it still exists. This is a data-correctness issue too, not only a typing one — the
+    importer writes what the schema declares, and `v.any()` is not `v.array(v.string())`.
+</Callout>
 
 ## See also
 
