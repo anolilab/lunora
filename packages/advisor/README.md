@@ -95,19 +95,24 @@ A missing metric degrades to an empty array rather than throwing, so a partially
 
 ### Observability map (score, coverage, baseline)
 
-`runAdvisor` answers "what is wrong?". `scoreAdvisor` answers "how are we doing, and did it get worse?" — a scored coverage map over your procedures, modeled on [`evlog map`](https://www.evlog.dev/cli/map). It is a pure function over findings you already have, so it never re-runs a lint:
+`runAdvisor` answers "what is wrong?". `scoreAdvisor` answers "how are we doing, and did it get worse?" — a scored coverage map over your procedures. It is a pure function over findings you already have, so it never re-runs a lint:
 
 ```ts
-import { runAdvisor, scoreAdvisor } from "@lunora/advisor";
+import { fromServerSchema, runAdvisor, scoreAdvisor } from "@lunora/advisor";
 
+import schema from "./lunora/schema";
+
+const context = { schema: fromServerSchema(schema) };
 const findings = runAdvisor(context, { source: "static" });
 const map = scoreAdvisor(context, findings);
 
-console.log(map.score, map.grade); // 84 "good"
-console.log(map.summary); // { dark: 1, exempt: 0, findings: 6, instrumented: 9, partial: 2, procedures: 12 }
+console.log(map.score, map.grade); // e.g. 84 "good"
+console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
 ```
 
-Each procedure starts at 100 and loses each fired lint's weight (`Lint.weight`, else a severity ladder: `ERROR` 20 / `WARN` 10 / `INFO` 5), then rolls up into a weighted global mean — public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket that also counts toward the grade.
+Each procedure starts at 100 and loses each fired **rule's** weight (`Lint.weight`, else a severity ladder: `ERROR` 20 / `WARN` 10 / `INFO` 5) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
+
+The verdicts are `clean` / `warned` / `failing` / `exempt` — named for severity, because the score is driven by every lint family rather than an observability family.
 
 Commit the map and gate CI on it:
 
@@ -115,17 +120,31 @@ Commit the map and gate CI on it:
 import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
 
 const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
-const diff = baseline && compareToBaseline(map, baseline);
 
-// Three independent signals: the global score fell, an existing procedure got
-// worse, or one went dark. The middle one catches a refactor that guts a single
-// handler while leaving the mean flat.
-if (diff?.regressed) {
+if (baseline === undefined) {
+    // Missing, hand-edited, or written by an older MAP_VERSION. Fail loudly —
+    // treating it as "no regression" would silently disable the gate forever.
+    throw new Error("advisor baseline is unreadable; regenerate lunora.advisor.map.json");
+}
+
+const diff = compareToBaseline(map, baseline);
+
+// `comparable` must be narrowed before `regressed` is reachable, so a stale
+// baseline cannot read as a clean run.
+if (!diff.comparable) {
+    throw new Error(`advisor baseline not comparable: ${diff.reason}`);
+}
+
+// Four independent signals: the global score fell, an existing procedure got
+// worse, one started failing, or the project bucket gained rules. The middle two
+// catch a refactor that guts one handler while leaving the mean flat; the last
+// catches new schema debt after the project score has saturated at 0.
+if (diff.regressed) {
     process.exitCode = 1;
 }
 ```
 
-`@lunora/codegen` exposes `mapSchema()` to build the map straight from the feeder. Full design, weights, and the divergences from `evlog map` are in [`docs/observability-map.md`](./docs/observability-map.md).
+`@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder. Full design and weights are in [`docs/observability-map.md`](./docs/observability-map.md).
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
 

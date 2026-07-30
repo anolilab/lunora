@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runAdvisor, scoreAdvisor } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { formatAdvisories, lintSchema, mapSchema } from "../src/advisor";
+import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
 import discoverSchema from "../src/discover-schema";
 import { runCodegen } from "../src/index";
 
@@ -219,14 +220,21 @@ export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: 
     });
 });
 
-describe("mapSchema (codegen → advisor coverage map)", () => {
+describe("toAdvisorContext (codegen → advisor coverage map)", () => {
     const STAMP = "2026-07-30T00:00:00.000Z";
+
+    /** The documented two-line call site: one context, feeding both the lint run and the score. */
+    const mapOf = (source: string) => {
+        const context = toAdvisorContext({ schema: irFrom(source) });
+
+        return scoreAdvisor(context, runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+    };
 
     it("scores the same evidence lintSchema lints, penalising the unindexed schema", () => {
         expect.assertions(3);
 
-        const unindexed = mapSchema({ schema: irFrom(UNINDEXED) }, { generatedAt: STAMP });
-        const indexed = mapSchema({ schema: irFrom(INDEXED) }, { generatedAt: STAMP });
+        const unindexed = mapOf(UNINDEXED);
+        const indexed = mapOf(INDEXED);
 
         // The FK finding names no procedure, so it lands in the project bucket.
         expect(unindexed.project.checks.some((check) => check.name === "unindexed_foreign_key")).toBe(true);
@@ -234,12 +242,11 @@ describe("mapSchema (codegen → advisor coverage map)", () => {
         expect(indexed.grade).toBe("excellent");
     });
 
-    it("reuses findings a caller already has rather than linting twice", () => {
+    it("builds a context equivalent to the one lintSchema lints", () => {
         expect.assertions(1);
 
         const options = { schema: irFrom(UNINDEXED) };
-        const findings = lintSchema(options);
 
-        expect(mapSchema(options, { findings, generatedAt: STAMP })).toStrictEqual(mapSchema(options, { generatedAt: STAMP }));
+        expect(runAdvisor(toAdvisorContext(options), { source: "static" })).toStrictEqual(lintSchema(options));
     });
 });

@@ -2,16 +2,14 @@ import type {
     AdvisorExportSink,
     AdvisorGeoIndexUsage,
     AdvisorIndex,
-    AdvisorMap,
     AdvisorNotifyCall,
     AdvisorNotifyConfig,
     AdvisorSchema,
     AdvisorShape,
     Finding,
     LintContext,
-    ScoreAdvisorOptions,
 } from "@lunora/advisor";
-import { runAdvisor, scoreAdvisor } from "@lunora/advisor";
+import { runAdvisor } from "@lunora/advisor";
 
 import type {
     AdminRouteIR,
@@ -162,23 +160,6 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
     });
 
 /**
- * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
- * found in function bodies: query reads feed `filter_without_index`, insert writes
- * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
- * rls procedure snapshots feed `rls_uncovered_table`, mask procedure
- * snapshots feed `mask_uncovered_pii_column`, and per-column mask strategies
- * feed `mask_weak_hash_strategy_on_pii`; declared containers
- * feed the `container_*` lints; declared workflows (with their durable step labels)
- * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
- * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
- * calls inside query/mutation handlers feed the `nondeterministic_query_mutation` lint
- * (all default empty for callers that don't analyze functions/containers/workflows).
- * The IR types are structurally identical to the advisor's evidence types so they
- * pass straight through without conversion. Returns the findings; surfacing them
- * (console, error overlay, studio Advisors table) is the caller's choice.
- */
-
-/**
  * Named inputs for {@link lintSchema}. Every feeder is a discrete key rather than
  * a positional argument: the feeder list grows every few releases and many IR
  * types are structurally similar (`{file, exportName, line}`-shaped evidence),
@@ -245,7 +226,7 @@ interface LintSchemaOptions {
 
 /**
  * Normalize the feeder options into the advisor's {@link LintContext}. Shared by
- * {@link lintSchema} and {@link mapSchema} so the lint run and the scored map
+ * {@link lintSchema} and {@link toAdvisorContext} so the lint run and the scored map
  * always see byte-identical evidence.
  */
 const toLintContext = (options: LintSchemaOptions): LintContext =>
@@ -281,7 +262,6 @@ const toLintContext = (options: LintSchemaOptions): LintContext =>
         notifyCalls: options.notifyCalls,
         notifyConfig: options.notifyConfig,
         ownerFieldWrites: options.ownerFieldWrites,
-        unrestrictedWhereBranches: options.unrestrictedWhereBranches,
         paymentWebhooks: options.paymentWebhooks,
         privilegedDispatches: options.privilegedDispatches,
         procedureProtections: options.procedureProtections,
@@ -299,29 +279,50 @@ const toLintContext = (options: LintSchemaOptions): LintContext =>
         sqlInterpolations: options.sqlInterpolations,
         storageKeyAccesses: options.storageKeyAccesses,
         storageUploads: options.storageUploads,
+        unrestrictedWhereBranches: options.unrestrictedWhereBranches,
         vectorNamespaceAccesses: options.vectorNamespaceAccesses,
         workflowCalls: options.workflowCalls,
         workflows: options.workflows,
         wranglerVariables: options.wranglerVariables,
     }) satisfies LintContext;
 
+/**
+ * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
+ * found in function bodies: query reads feed `filter_without_index`, insert writes
+ * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
+ * rls procedure snapshots feed `rls_uncovered_table`, mask procedure
+ * snapshots feed `mask_uncovered_pii_column`, and per-column mask strategies
+ * feed `mask_weak_hash_strategy_on_pii`; declared containers
+ * feed the `container_*` lints; declared workflows (with their durable step labels)
+ * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
+ * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
+ * calls inside query/mutation handlers feed the `nondeterministic_query_mutation` lint
+ * (all default empty for callers that don't analyze functions/containers/workflows).
+ * The IR types are structurally identical to the advisor's evidence types so they
+ * pass straight through without conversion. Returns the findings; surfacing them
+ * (console, error overlay, studio Advisors table) is the caller's choice.
+ */
 export const lintSchema = (options: LintSchemaOptions): Finding[] => runAdvisor(toLintContext(options), { source: "static" });
 
 /**
- * Score a feeder run into the `lunora.advisor.map.json` coverage map — the
- * grade, per-procedure scores, and coverage tallies the Studio health panel and
- * the CI baseline gate read. See `@lunora/advisor`'s `docs/observability-map.md`.
+ * Normalize feeder options into the advisor's `LintContext` — the input both
+ * `runAdvisor` and `scoreAdvisor` take.
  *
- * Runs the same static lints {@link lintSchema} does and scores their findings,
- * so a caller that needs both should pass `findings` from an existing run rather
- * than calling both and linting twice.
+ * Exported instead of a `mapSchema(options)` convenience so the map stays a pure
+ * function of findings the caller already has. A wrapper that lints *and* scores
+ * would either re-run every rule or need a `findings` escape hatch that nothing
+ * can check against `options` — pass mismatched findings and you get a silently
+ * wrong map. Two lines at the call site buys that away:
+ *
+ * ```ts
+ * const context = toAdvisorContext(options);
+ * const map = scoreAdvisor(context, runAdvisor(context, { source: "static" }), { lints: STATIC_LINTS });
+ * ```
+ *
+ * Pass `STATIC_LINTS` as `lints` so any `Lint.weight` is honoured; omit it and
+ * every finding falls back to the severity ladder.
  */
-export const mapSchema = (options: LintSchemaOptions, mapOptions: ScoreAdvisorOptions & { findings?: ReadonlyArray<Finding> } = {}): AdvisorMap => {
-    const { findings, ...scoreOptions } = mapOptions;
-    const context = toLintContext(options);
-
-    return scoreAdvisor(context, findings ?? runAdvisor(context, { source: "static" }), scoreOptions);
-};
+export const toAdvisorContext = (options: LintSchemaOptions): LintContext => toLintContext(options);
 
 /**
  * Render advisor findings as a single multi-line string for console surfacing:

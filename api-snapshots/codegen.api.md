@@ -1119,14 +1119,6 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 const lintSchema: (options: LintSchemaOptions) => Finding[];
 ```
 
-### `mapSchema` (const)
-
-```ts
-const mapSchema: (options: LintSchemaOptions, mapOptions?: ScoreAdvisorOptions & {
-    findings?: ReadonlyArray<Finding>;
-}) => AdvisorMap;
-```
-
 ### `parseSchemaSnapshot` (const)
 
 ```ts
@@ -1167,6 +1159,12 @@ const secretKindOf: (value: string) => string | undefined;
 
 ```ts
 const serializeSchemaSnapshot: (snapshot: SchemaSnapshot) => string;
+```
+
+### `toAdvisorContext` (const)
+
+```ts
+const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
 ```
 
 ### `validatorIrToJsonSchema` (const)

@@ -518,8 +518,6 @@ export interface LintContext {
      */
     ratelimitKeySelectors?: ReadonlyArray<AdvisorRatelimitKeySelector>;
 
-    rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
-
     /* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
 
     /**
@@ -531,6 +529,7 @@ export interface LintContext {
      * the schema's PII-named columns before nudging. Supplied by the codegen
      * feeder; absent for runtime callers, where the lint finds nothing.
      */
+    rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
     /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
 
     /**
@@ -718,14 +717,20 @@ export interface Lint {
     title: string;
 
     /**
-     * Penalty this lint subtracts from a procedure's 100-point observability
-     * score when it fires — see `scoreProcedure`. Omit to fall back to the
-     * severity ladder in `DEFAULT_WEIGHT_BY_LEVEL`, which is what almost every
-     * lint wants; set it only to over- or under-weight a rule relative to its
-     * `level` (e.g. a WARN that matters more than its severity suggests).
+     * Penalty this lint subtracts from a procedure's 100-point score in the
+     * advisor map when it fires — charged once however many times the rule
+     * fires on that procedure. Omit to fall back to the severity ladder, which
+     * is what almost every lint wants; set it only to over- or under-weight a
+     * rule relative to its `level` (e.g. a WARN that matters more than its
+     * severity suggests).
+     *
+     * Must be finite and non-negative — a negative weight would push a score
+     * above 100 and `NaN` would poison the artifact, so an unusable value is
+     * treated as 0 rather than propagated.
      *
      * Purely advisory: `runAdvisor` ignores it, so a lint's findings are
-     * unaffected whether or not it is set.
+     * unaffected whether or not it is set. Only `scoreAdvisor` reads it, and
+     * only when the lint is passed in `ScoreAdvisorOptions.lints`.
      */
     weight?: number;
 }

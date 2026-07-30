@@ -226,16 +226,11 @@ export { default as workflowUnused } from "./lints/static/workflow-unused";
 export type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 export type { BaselineComparison, ProcedureDelta } from "./map/baseline";
 export { compareToBaseline, parseAdvisorMap } from "./map/baseline";
-export {
-    coverageFromScore,
-    DEFAULT_WEIGHT_BY_LEVEL,
-    gradeFromScore,
-    PARTIAL_FLOOR,
-    procedureWeight,
-    PROJECT_WEIGHT,
-    scoreGlobal,
-    scoreProcedure,
-} from "./map/score";
+// The scoring primitives (`scoreProcedure`, `scoreGlobal`, the weight tables) stay
+// module-internal: they are implementation of `scoreAdvisor`, and exporting them so
+// tests could reach them would freeze arithmetic into the public API snapshot.
+// `gradeFromScore` is public because a UI needs to band a score it did not compute.
+export { gradeFromScore } from "./map/score";
 export type { ScoreAdvisorOptions } from "./map/score-advisor";
 export { MAP_VERSION, scoreAdvisor } from "./map/score-advisor";
 export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore } from "./map/types";

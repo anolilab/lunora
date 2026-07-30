@@ -829,16 +829,20 @@ interface AnalyticsRuntimeMetrics {
 }
 ```
 
-### `BaselineComparison` (interface)
+### `BaselineComparison` (type)
 
 ```ts
-interface BaselineComparison {
-    comparable: boolean;
+type BaselineComparison = {
+    comparable: false;
+    reason: "version-mismatch";
+} | {
+    comparable: true;
     dropped: ProcedureDelta[];
-    newDark: string[];
+    newFailing: string[];
+    projectRegressed: boolean;
     regressed: boolean;
     scoreDelta: number;
-}
+};
 ```
 
 ### `Category` (type)
@@ -853,6 +857,7 @@ type Category = "PERFORMANCE" | "SCHEMA" | "SECURITY";
 interface CheckResult {
     level: Level;
     name: string;
+    occurrences: number;
     weight: number;
 }
 ```
@@ -860,13 +865,7 @@ interface CheckResult {
 ### `Coverage` (type)
 
 ```ts
-type Coverage = "dark" | "exempt" | "instrumented" | "partial";
-```
-
-### `DEFAULT_WEIGHT_BY_LEVEL` (const)
-
-```ts
-const DEFAULT_WEIGHT_BY_LEVEL: Readonly<Record<Level, number>>;
+type Coverage = "clean" | "exempt" | "failing" | "warned";
 ```
 
 ### `Facing` (type)
@@ -1002,25 +1001,13 @@ const MAP_VERSION = 1;
 
 ```ts
 interface MapSummary {
-    dark: number;
+    clean: number;
     exempt: number;
-    findings: number;
-    instrumented: number;
-    partial: number;
+    failing: number;
     procedures: number;
+    rulesFired: number;
+    warned: number;
 }
-```
-
-### `PARTIAL_FLOOR` (const)
-
-```ts
-const PARTIAL_FLOOR = 50;
-```
-
-### `PROJECT_WEIGHT` (const)
-
-```ts
-const PROJECT_WEIGHT = 1;
 ```
 
 ### `ProcedureDelta` (interface)
@@ -1225,12 +1212,6 @@ const containerRuntimeEgressRelaxation: Lint;
 
 ```ts
 const containerStartEnableInternetOverride: Lint;
-```
-
-### `coverageFromScore` (const)
-
-```ts
-const coverageFromScore: (score: number) => Exclude<Coverage, "exempt">;
 ```
 
 ### `dedupeCacheKeys` (const)
@@ -1497,12 +1478,6 @@ const privilegedDispatchUnvalidatedPayload: Lint;
 const privilegedFanoutFromPublicProcedure: Lint;
 ```
 
-### `procedureWeight` (const)
-
-```ts
-const procedureWeight: (procedure: Pick<AdvisorProcedureProtection, "kind" | "visibility">) => number;
-```
-
 ### `publicArgumentUsesAny` (const)
 
 ```ts
@@ -1579,21 +1554,6 @@ const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding
 
 ```ts
 const scoreAdvisor: (context: LintContext, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
-```
-
-### `scoreGlobal` (const)
-
-```ts
-const scoreGlobal: (entries: ReadonlyArray<{
-    score: number;
-    weight: number;
-}>) => number;
-```
-
-### `scoreProcedure` (const)
-
-```ts
-const scoreProcedure: (checks: ReadonlyArray<CheckResult>) => number;
 ```
 
 ### `shapeTargetsGlobalTable` (const)
