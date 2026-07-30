@@ -107,7 +107,7 @@
                         ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg></span
                     ></a
                 >
-                <a class="card mini" href="/_lunora"
+                <a class="card mini" href="/__lunora"
                     ><div class="mc">
                         <span class="ic"
                             ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"

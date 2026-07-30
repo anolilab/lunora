@@ -1,3 +1,4 @@
+import { resolveBaseURL } from "better-auth";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
@@ -294,6 +295,69 @@ describe("createAuth — secure-by-default hardening", () => {
         createAuth({ secret: "s".repeat(32) });
 
         expect(warn).not.toHaveBeenCalled();
+    });
+});
+
+describe("createAuth — port-agnostic local baseURL", () => {
+    const secret = "s".repeat(32);
+
+    it("resolves the origin from the request when the dev server moved to another port", () => {
+        expect.assertions(1);
+
+        // The regression this guards: `.dev.vars` pins :5173, Vite falls back to
+        // :5174 because something else holds :5173, and every callback/cookie is
+        // minted against an origin the browser is never on.
+        const { baseURL } = resolveAuthOptions({ baseURL: "http://localhost:5173", secret });
+
+        expect(resolveBaseURL(baseURL, "/api/auth", new Request("http://localhost:5174/api/auth/ok"))).toBe("http://localhost:5174/api/auth");
+    });
+
+    it("falls back to the configured origin when the request carries no host", () => {
+        expect.assertions(1);
+
+        const { baseURL } = resolveAuthOptions({ baseURL: "http://localhost:5173", secret });
+
+        expect(resolveBaseURL(baseURL, "/api/auth")).toBe("http://localhost:5173/api/auth");
+    });
+
+    it("refuses a foreign host, so a spoofed Host header cannot become the base URL", () => {
+        expect.assertions(1);
+
+        const { baseURL } = resolveAuthOptions({ baseURL: "http://localhost:5173", secret });
+
+        // Not in `allowedHosts` → falls back to the configured origin rather than
+        // minting reset/callback links pointing at the attacker.
+        expect(resolveBaseURL(baseURL, "/api/auth", new Request("http://evil.example.com/api/auth/ok"))).toBe("http://localhost:5173/api/auth");
+    });
+
+    it("leaves a deployed https baseURL as an untouched string", () => {
+        expect.assertions(1);
+
+        expect(resolveAuthOptions({ baseURL: "https://app.example.com", secret }).baseURL).toBe("https://app.example.com");
+    });
+
+    it("leaves a non-loopback http baseURL alone", () => {
+        expect.assertions(1);
+
+        expect(resolveAuthOptions({ baseURL: "http://staging.example.com", secret }).baseURL).toBe("http://staging.example.com");
+    });
+
+    it("keeps useSecureCookies off for the rewritten local origin", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({ baseURL: "http://localhost:5173", secret });
+
+        expect(auth.options.advanced?.useSecureCookies).toBe(false);
+    });
+
+    it("trusts the derived origin so better-auth's own CSRF check accepts it", async () => {
+        expect.assertions(1);
+
+        const auth = createAuth({ baseURL: "http://localhost:5173", secret });
+        const context = await auth.$context;
+
+        // eslint-disable-next-line sonarjs/no-clear-text-protocols -- asserting the exact loopback dev origin better-auth derives; there is no https equivalent to assert here
+        expect(context.trustedOrigins).toContain("http://localhost:*");
     });
 });
 

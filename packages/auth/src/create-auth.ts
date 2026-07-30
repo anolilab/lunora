@@ -54,6 +54,69 @@ const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean =
 };
 
 /**
+ * Hostnames that can only ever address the developer's own machine, so a
+ * `baseURL` on one of them is a local dev origin rather than a deployment.
+ */
+const LOCAL_DEV_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
+
+/**
+ * better-auth's dynamic `baseURL` form, narrowed to the shape we build. Declared
+ * as its own type so {@link portAgnosticLocalBaseUrl} has a single return type
+ * (`sonarjs/function-return-type`) instead of a string-or-object union.
+ */
+interface PortAgnosticLocalBaseUrl {
+    allowedHosts: string[];
+    fallback: string;
+    protocol: "http";
+}
+
+/**
+ * Let a hardcoded local `baseURL` follow the port the dev server actually bound,
+ * or `undefined` when the caller's value should be used as-is.
+ *
+ * `.dev.vars` pins a concrete origin (`AUTH_URL="http://localhost:5173"`), but
+ * Vite falls back to the next free port when that one is taken — so a second app,
+ * or a leaked server from an earlier session, silently moves the dev server to
+ * `:5174` while better-auth keeps resolving callbacks against `:5173`. The
+ * session cookie is then set on an origin the browser is never on, so nothing
+ * that needs an identity works: sign-in appears to succeed and every subsequent
+ * request is anonymous — including the WebSocket upgrade, whose `authorizeShard`
+ * rejects it (a `403` that `@cloudflare/vite-plugin` turns into a bare socket
+ * close, hiding the cause).
+ *
+ * Rewriting the string into better-auth's dynamic form makes it derive the origin
+ * from the request, which carries the port actually in use. `allowedHosts` is what
+ * keeps the attacker-controllable `Host` header from becoming the base URL: only
+ * the same loopback hostname, on any port, is accepted, and anything else falls
+ * back to the configured value. Scoped to explicit `http://` loopback origins, so
+ * a deployed HTTPS `baseURL` passes through untouched.
+ */
+const portAgnosticLocalBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): PortAgnosticLocalBaseUrl | undefined => {
+    if (typeof baseURL !== "string") {
+        return undefined;
+    }
+
+    let parsed: URL;
+
+    try {
+        parsed = new URL(baseURL);
+    } catch {
+        // Not a parseable absolute URL — leave it exactly as the caller wrote it
+        // and let better-auth surface its own error.
+        return undefined;
+    }
+
+    if (parsed.protocol !== "http:" || !LOCAL_DEV_HOSTNAMES.has(parsed.hostname)) {
+        return undefined;
+    }
+
+    // The bare hostname covers the default-port case (`http://localhost`), which
+    // the `:*` pattern does not match — better-auth compares against the `Host`
+    // header verbatim, and that omits the port on 80.
+    return { allowedHosts: [parsed.hostname, `${parsed.hostname}:*`], fallback: baseURL, protocol: "http" };
+};
+
+/**
  * Apply Lunora's secure-by-default auth posture on top of the caller's options
  * without ever overriding an explicit choice.
  *
@@ -84,8 +147,19 @@ const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean =
  * Do **not** add a `trustedOrigins` default here on the assumption that the
  * context-time list is empty — it is, and it doesn't matter. The mechanism and the
  * pin live in `__tests__/trusted-origins.behaviour.test.ts`.
+ *
+ * Base URL: an explicit local `http://` origin is made port-agnostic via
+ * {@link portAgnosticLocalBaseUrl} so dev survives Vite picking a different port.
+ * That is the *set*-`baseURL` counterpart to the unset case above, and it reaches
+ * the same place — an origin derived per request from `Host`, just with
+ * `allowedHosts` bounding it. The rewrite keeps `protocol: "http"`, so it stays
+ * "explicitly http" for both checks below and the hardening decisions are
+ * unchanged. It adds no `trustedOrigins` default either: the `http://localhost:*`
+ * entry comes from better-auth's own dynamic-config handling.
  */
 const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
+    const baseURL = portAgnosticLocalBaseUrl(options.baseURL) ?? options.baseURL;
+
     if (isWeakSecret(options.secret)) {
         const message =
             `@lunora/auth: AUTH_SECRET is only ${String(options.secret?.trim().length)} characters. Use at least ${String(MIN_SECRET_LENGTH)} ` +
@@ -98,7 +172,7 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
         // better-auth infers the origin per-request over HTTPS) both count as
         // production. Only an explicit `http://` local origin keeps the soft
         // warning so a quick prototype isn't blocked.
-        if (!isExplicitHttpBaseUrl(options.baseURL)) {
+        if (!isExplicitHttpBaseUrl(baseURL)) {
             throw new LunoraError("INTERNAL", message);
         }
 
@@ -113,8 +187,9 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
         advanced: {
             ...advanced,
             defaultCookieAttributes: advanced.defaultCookieAttributes ?? { httpOnly: true, path: "/", sameSite: "lax" },
-            ...(advanced.useSecureCookies === undefined ? { useSecureCookies: !isExplicitHttpBaseUrl(options.baseURL) } : {}),
+            ...(advanced.useSecureCookies === undefined ? { useSecureCookies: !isExplicitHttpBaseUrl(baseURL) } : {}),
         },
+        baseURL,
     };
 };
 
