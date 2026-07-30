@@ -94,6 +94,8 @@ interface SqlAutocomplete {
     readonly close: () => void;
     /** Apply the highlighted suggestion into the editor text; returns whether one was applied. */
     readonly commit: () => boolean;
+    /** Apply the suggestion at `index` (the mouse path) — see the implementation for why this can't go through `move`. */
+    readonly commitAt: (index: number) => boolean;
     /** Re-derive suggestions from the current caret/value (call on change + caret moves). */
     readonly refresh: (value: string, caret: number) => void;
     /** The popover's listbox state, or `null` when closed. */
@@ -172,14 +174,22 @@ const useSqlAutocomplete = (
         });
     };
 
-    const commit = (): boolean => {
+    /**
+     * Accept a suggestion by index, defaulting to the highlighted one.
+     *
+     * The index is a parameter because the mouse path cannot get there via
+     * {@link move}: `move` schedules a state update, so a `commit()` called straight
+     * after it still reads the pre-move `active` and inserts whatever was highlighted
+     * rather than what was clicked.
+     */
+    const commitAt = (index?: number): boolean => {
         const textarea = textareaRef.current;
 
         if (state === null || textarea === null) {
             return false;
         }
 
-        const chosen = state.suggestions[state.active];
+        const chosen = state.suggestions[index ?? state.active];
 
         if (chosen === undefined) {
             return false;
@@ -203,7 +213,9 @@ const useSqlAutocomplete = (
         return true;
     };
 
-    return { close, commit, move, refresh, state };
+    const commit = (): boolean => commitAt();
+
+    return { close, commit, commitAt, move, refresh, state };
 };
 
 interface AutocompletePopoverProps {

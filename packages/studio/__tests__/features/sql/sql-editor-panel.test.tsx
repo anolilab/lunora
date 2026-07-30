@@ -255,6 +255,39 @@ describe("sqlEditorPanel", () => {
         expect(within(popover).getAllByTestId("sql-autocomplete-item")[0]?.textContent).toContain("messages");
     });
 
+    it("inserts the suggestion the operator CLICKED, not the highlighted one", async () => {
+        expect.assertions(2);
+
+        const mock = schemaMock();
+
+        render(renderPanel(mock));
+
+        await waitForSchema(mock);
+
+        // A qualifier offering several columns, so the clicked row is not the
+        // highlighted one — the case where committing through a scheduled `move` reads
+        // the stale index and silently inserts the wrong suggestion.
+        typeInEditor("SELECT messages.");
+
+        const popover = await screen.findByTestId("sql-autocomplete");
+        const items = within(popover).getAllByTestId("sql-autocomplete-item");
+        const clicked = items.find((item) => item.textContent?.includes("body"));
+
+        expect(items.indexOf(clicked as HTMLElement)).toBeGreaterThan(0);
+
+        fireEvent.mouseDown(clicked as HTMLElement);
+
+        const input = screen.getByTestId<HTMLTextAreaElement>("sql-input");
+
+        await waitFor(() => {
+            if (input.value === "SELECT messages.") {
+                throw new Error(`not yet: ${input.value}`);
+            }
+        });
+
+        expect(input.value).toBe("SELECT messages.body");
+    });
+
     it("completes a column behind a `tbl.` qualifier into the editor", async () => {
         expect.assertions(1);
 
