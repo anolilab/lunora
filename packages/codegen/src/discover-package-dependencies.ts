@@ -14,12 +14,18 @@ import { join } from "node:path";
  *
  * Returns an empty set when the manifest is absent or unparseable — gating then
  * falls back to the usage/schema signals alone, never throwing codegen.
+ *
+ * Use {@link readPackageDependencies} instead when "no readable manifest" must
+ * be distinguished from "a manifest that declares nothing": conflating the two
+ * is fine for *gating* (both mean "no positive signal") but wrong for any check
+ * that treats absence as an error, which would then fire on every project
+ * without a root `package.json`.
  */
-const discoverPackageDependencies = (projectRoot: string): Set<string> => {
+const readPackageDependencies = (projectRoot: string): Set<string> | undefined => {
     const manifestPath = join(projectRoot, "package.json");
 
     if (!existsSync(manifestPath)) {
-        return new Set();
+        return undefined;
     }
 
     try {
@@ -38,10 +44,13 @@ const discoverPackageDependencies = (projectRoot: string): Set<string> => {
 
         return names;
     } catch {
-        // A malformed manifest must never break codegen — treat it as "no
-        // declared deps" so gating leans on the usage/schema signals instead.
-        return new Set();
+        // A malformed manifest must never break codegen — indistinguishable from
+        // an absent one for our purposes, so callers fall back the same way.
+        return undefined;
     }
 };
 
+const discoverPackageDependencies = (projectRoot: string): Set<string> => readPackageDependencies(projectRoot) ?? new Set();
+
 export default discoverPackageDependencies;
+export { readPackageDependencies };

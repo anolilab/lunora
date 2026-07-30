@@ -10,6 +10,7 @@ import { Project } from "ts-morph";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
+import assertRequiredPackages from "./assert-required-packages";
 import discoverAdminRoutes from "./discover-admin-routes";
 import { discoverAgents } from "./discover-agents";
 import discoverAiRawRuns from "./discover-ai-raw-runs";
@@ -49,7 +50,7 @@ import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
 import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
-import discoverPackageDependencies from "./discover-package-dependencies";
+import { readPackageDependencies } from "./discover-package-dependencies";
 import discoverPaymentWebhooks from "./discover-payment-webhooks";
 import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
@@ -586,7 +587,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
     // Emitted into the generated ShardDO's `studioFeatures()` override so the
     // studio hides only pages whose backing package the app genuinely never wires.
-    const dependencies = discoverPackageDependencies(options.projectRoot);
+    const declaredDependencies = readPackageDependencies(options.projectRoot);
+    const dependencies = declaredDependencies ?? new Set<string>();
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,
@@ -609,6 +611,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // through the umbrella's subpaths (`lunorash/server`, `lunorash/do`, …) so the
     // app needs only the single `lunorash` dependency installed.
     const useUmbrella = dependencies.has("lunorash");
+
+    // Fail before emit when the schema needs an add-on that is not installed.
+    // Emitting first would push the failure into `tsc`, reported inside a
+    // generated file the user did not write (LUNORA_ISSUES #9).
+    assertRequiredPackages(schema, declaredDependencies);
 
     // Boundary between the discovery phase (all `discover*` passes + the inline
     // discovers `lintSchema` drives + the metadata discovers above) and the emit

@@ -206,6 +206,33 @@ const parseRelations = (argument: Node): RelationIR[] => {
 const indexNameOf = (nameArgument: Node | undefined): string =>
     nameArgument && Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralText() : "_unnamed_";
 
+/**
+ * Reject a dotted index field, naming the constraint and the workaround.
+ *
+ * Convex supports `.index("by_state", ["threadId", "state.kind", "order"])`, and
+ * a discriminated-union state column with an indexed `kind` is a common idiom
+ * there — so ports hit this. Lunora indexes only top-level columns: SQLite would
+ * need a generated column, which the schema has no way to declare.
+ *
+ * Without this the failure surfaced from the drizzle renderer as `drizzle index
+ * field is not a valid JS identifier: "state.kind"`, which names neither the
+ * real constraint nor what to do instead (LUNORA_ISSUES #5).
+ */
+const assertTopLevelIndexField = (element: TsNode, field: string, indexName: string): void => {
+    if (!field.includes(".")) {
+        return;
+    }
+
+    const [head = "", ...rest] = field.split(".");
+    const denormalised = `${head}${rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("")}`;
+
+    throw diagnosticAt(
+        element,
+        `index "${indexName}" indexes the nested path ${JSON.stringify(field)} — Lunora indexes only top-level columns. ` +
+            `Denormalise the value into its own column (e.g. \`${denormalised}\`), index that instead, and keep it in sync with a table \`.triggers()\` beforeInsert/beforeUpdate.`,
+    );
+};
+
 /** Parse a `.index(name, [fields], { unique? })` call into an {@link IndexIR}. */
 const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
     const [indexName, fieldsExpression, optionsExpression] = args;
@@ -229,15 +256,18 @@ const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
         }
     }
 
-    const fields =
+    const fieldElements =
         fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
-            ? fieldsExpression
-                  .getElements()
-                  .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
-                  .map((element) => element.getLiteralText())
+            ? fieldsExpression.getElements().filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
             : [];
 
-    return { fields, name: indexNameOf(indexName), unique };
+    const name = indexNameOf(indexName);
+
+    for (const element of fieldElements) {
+        assertTopLevelIndexField(element, element.getLiteralText(), name);
+    }
+
+    return { fields: fieldElements.map((element) => element.getLiteralText()), name, unique };
 };
 
 /** Parse a `.searchIndex(name, { field, filterFields? })` call into a {@link SearchIndexIR}. */

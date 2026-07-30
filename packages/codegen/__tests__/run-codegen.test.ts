@@ -201,7 +201,7 @@ export default defineSchema({
         it("imports base packages through the lunorash umbrella subpaths when the project depends on `lunorash`", () => {
             expect.assertions(9);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "*" }, name: "umbrella-app" }));
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-app" }));
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -313,7 +313,7 @@ export const sendMessage = defineMutator({
                 expect.assertions(9);
 
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*" }, name: "db-app" }));
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*" }, name: "db-app" }));
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -339,7 +339,10 @@ export const sendMessage = defineMutator({
                 expect.assertions(3);
 
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }));
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }),
+                );
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -368,7 +371,7 @@ export const sendMessage = defineMutator({
 
                 // Feature present: shapes + @lunora/db → collections.ts is written to disk.
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*" }, name: "db-app" }));
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*" }, name: "db-app" }));
                 runCodegen({ lint: false, projectRoot: workdir });
 
                 expect(existsSync(collectionsPath)).toBe(true);
@@ -376,7 +379,7 @@ export const sendMessage = defineMutator({
                 // Feature removed: drop the @lunora/db dependency. The emitter now
                 // returns "" and the prior file must be deleted, not left dangling
                 // (it imports @lunora/db, which the app no longer installs).
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "db-app" }));
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*" }, name: "db-app" }));
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -718,7 +721,7 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
         it("routes ctx.flags imports through the lunorash umbrella when the project depends on `lunorash`", () => {
             expect.assertions(4);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "*" }, name: "umbrella-flags-app" }));
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-flags-app" }));
             writeFileSync(
                 join(workdir, "lunora", "flags.ts"),
                 `import { defineFlags } from "lunorash/flags";
@@ -782,7 +785,7 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
         it("wires ctx.notify (every ctx) even under the lunorash umbrella — @lunora/notify is an add-on, never remapped", () => {
             expect.assertions(3);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "*" }, name: "umbrella-notify-app" }));
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-notify-app" }));
             writeFileSync(
                 join(workdir, "lunora", "notify.ts"),
                 `import { defineNotify, webPushFromEnv } from "@lunora/notify";
@@ -889,7 +892,11 @@ export default crons;
         it("emits a project-bound seed client when @lunora/seed is a declared dependency", () => {
             expect.assertions(5);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/seed": "workspace:*" }, name: "demo" }), "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*" }, devDependencies: { "@lunora/seed": "workspace:*" }, name: "demo" }),
+                "utf8",
+            );
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -1291,7 +1298,7 @@ export default crons;
         it("threads package.json version into info.version of both OpenAPI and OpenRPC docs", () => {
             expect.assertions(2);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ name: "test-app", version: "1.2.3" }), "utf8");
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*" }, name: "test-app", version: "1.2.3" }), "utf8");
 
             const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
             const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
@@ -1505,7 +1512,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/auth": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1524,7 +1531,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/auth": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1557,7 +1564,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // Depending on @lunora/svelte surfaces the framework terminal + the runtime composer import.
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/svelte": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/svelte": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1639,6 +1646,89 @@ export default schema;
             // Both imports are type-only, so the `Id` edge back into dataModel.ts —
             // which is itself derived from these tables — is erased at compile time.
             expect(result.generated.drizzleShard).not.toContain("import { Id }");
+        });
+
+        it("names the constraint and the workaround for a nested index path", () => {
+            expect.assertions(3);
+
+            // LUNORA_ISSUES #5. `.index("by_state", ["state.kind"])` is a common
+            // Convex idiom (discriminated-union column with an indexed `kind`).
+            // It used to surface from the drizzle renderer as `drizzle index field
+            // is not a valid JS identifier: "state.kind"`, which names neither the
+            // real constraint nor what to do instead.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    streamingMessages: defineTable({
+        state: v.union(v.object({ kind: v.literal("streaming") }), v.object({ kind: v.literal("aborted") })),
+    }).index("by_state", ["state.kind"]),
+});
+
+export default schema;
+`,
+            );
+
+            let thrown: unknown;
+
+            try {
+                runCodegen({ projectRoot: workdir });
+            } catch (error: unknown) {
+                thrown = error;
+            }
+
+            const message = thrown instanceof Error ? thrown.message : String(thrown);
+
+            expect(message).toContain('index "by_state" indexes the nested path "state.kind"');
+            expect(message).toContain("Lunora indexes only top-level columns");
+            // Names a concrete replacement column, and points at the mechanism
+            // that keeps it in sync rather than leaving that as an exercise.
+            expect(message).toContain("`stateKind`");
+        });
+
+        it("fails before emit when a schema feature's package is not declared", () => {
+            expect.assertions(4);
+
+            // LUNORA_ISSUES #9: adding one `.global()` table to a project without
+            // @lunora/d1 left codegen succeeding and `tsc` failing with
+            // `Cannot find module '@lunora/d1'` inside generated code — far from
+            // the `.global()` that caused it. The fixture `users` table is
+            // already `.global()`, so a manifest is all this needs.
+            const manifest = join(workdir, "package.json");
+
+            writeFileSync(manifest, JSON.stringify({ dependencies: { "@lunora/server": "*" }, name: "app", version: "0.0.0" }));
+
+            let thrown: unknown;
+
+            try {
+                runCodegen({ projectRoot: workdir });
+            } catch (error: unknown) {
+                thrown = error;
+            }
+
+            const message = thrown instanceof Error ? thrown.message : String(thrown);
+
+            expect(message).toContain("@lunora/d1");
+            expect(message).toContain("pnpm add @lunora/d1");
+            // Nothing was emitted, so the failure cannot be mistaken for a
+            // type error in output the user did not write.
+            expect(existsSync(join(workdir, "lunora", "_generated", "app.ts"))).toBe(false);
+
+            // Declaring it clears the gate.
+            writeFileSync(manifest, JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/server": "*" }, name: "app", version: "0.0.0" }));
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+        });
+
+        it("skips the required-package gate when no manifest can be read", () => {
+            expect.assertions(1);
+
+            // The fixture has a `.global()` table and no package.json. An absent
+            // manifest is "cannot tell", not "declares nothing" — otherwise every
+            // manifest-less project (fixtures, embedded schemas, direct runCodegen
+            // callers) would be told every add-on is missing.
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
         });
 
         it("writes nothing when discovery fails, instead of emitting an empty api", () => {
