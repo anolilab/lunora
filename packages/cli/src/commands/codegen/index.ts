@@ -15,10 +15,20 @@ const codegenCommand: Command = {
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
+        {
+            description: "Exit non-zero when any ERROR-level advisory is reported. Defaults to on in CI, off locally; --no-strict-advisories opts out.",
+            name: "strict-advisories",
+            type: Boolean,
+        },
         TARGET_OPTION,
     ],
 };
 
 export { codegenCommand };
 
-export type CodegenOptions = CreateOptions<{ "api-spec": string | undefined; format: string | undefined; target: string | undefined }>;
+export type CodegenOptions = CreateOptions<{
+    "api-spec": string | undefined;
+    format: string | undefined;
+    "strict-advisories": boolean | undefined;
+    target: string | undefined;
+}>;

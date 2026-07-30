@@ -475,7 +475,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
                   notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
                   notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
-                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory),
+                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory, functions),
                   unrestrictedWhereBranches: discoverUnrestrictedWhereBranches(project, lunoraDirectory),
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),

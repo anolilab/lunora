@@ -460,6 +460,7 @@ interface AdvisorOwnerFieldWrite {
     file: string;
     line: number;
     method: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -523,6 +524,7 @@ interface AdvisorProcedureProtection {
 interface AdvisorQueryRead {
     exportName?: string;
     file: string;
+    filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
     line: number;
@@ -1308,6 +1310,12 @@ const externalSourceOnGlobal: Lint;
 
 ```ts
 const externalSourceUnscoped: Lint;
+```
+
+### `filterOnPrimaryKey` (const)
+
+```ts
+const filterOnPrimaryKey: Lint;
 ```
 
 ### `filterWithoutIndex` (const)

@@ -63,10 +63,36 @@ const SECRET_RULES: ReadonlyArray<{ kind: string; test: (value: string) => boole
     { kind: "hex_secret", test: isHexSecret },
 ];
 
+/**
+ * The heuristic rules — shape alone, no vendor prefix to anchor on. A hex run or
+ * a mixed-charset token is only *maybe* a secret: a hash, a fixture id, a
+ * checksum, or a spec's example value has exactly the same shape.
+ *
+ * The vendor-prefixed kinds (`sk_live_…`, `AKIA…`, `ghp_…`, a PEM header) carry
+ * their own evidence and stay unconditional — one of those in a test file is
+ * still a live leak.
+ */
+const HEURISTIC_SECRET_KINDS: ReadonlySet<string> = new Set(["hex_secret", "high_entropy"]);
+
+/**
+ * Names that make a secret-shaped literal actually look like a secret. Used to
+ * gate the heuristic kinds: "long hex string" on its own has a false-positive
+ * rate near 1 (LUNORA_ISSUES #37 — ten findings, all of them the W3C Trace
+ * Context spec's example trace ids that every traceparent implementation tests
+ * against).
+ */
+const SECRET_NAME_RE = /auth|bearer|credential|hmac|key|passphrase|password|private|secret|signature|signing|token/iu;
+
+/** Whether an identifier / property name is evidence that the value it holds is a secret. */
+const isSecretishName = (name: string | undefined): boolean => name !== undefined && SECRET_NAME_RE.test(name);
+
 /** The matching secret rule's `kind` for a string value, or `undefined` when none matches. */
 const secretKindOf = (value: string): string | undefined => SECRET_RULES.find((rule) => rule.test(value))?.kind;
+
+/** Whether a matched `kind` needs corroborating name evidence before it is reported. */
+const isHeuristicSecretKind = (kind: string): boolean => HEURISTIC_SECRET_KINDS.has(kind);
 
 /** A redacted preview of a secret value — first 4 chars plus its length, never the full value. */
 const redact = (value: string): string => `${value.slice(0, 4)}…(${String(value.length)} chars)`;
 
-export { redact, SECRET_RULES, secretKindOf };
+export { isHeuristicSecretKind, isSecretishName, redact, SECRET_RULES, secretKindOf };

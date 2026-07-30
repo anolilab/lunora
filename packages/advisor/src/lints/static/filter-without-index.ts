@@ -23,6 +23,7 @@ const filterWithoutIndex: Lint = {
     remediation: 'Narrow the read with `.withIndex("name", (q) => q.eq(...))` first, then `.filter()` only for what the index cannot express.',
     run: (context) => {
         const findings = [];
+        const shardKindByTable = new Map(context.schema.tables.map((table) => [table.name, table.shardKind]));
 
         for (const read of context.queries ?? []) {
             // Only an *unindexed* filter on a known table is a scan we can name.
@@ -31,12 +32,39 @@ const filterWithoutIndex: Lint = {
             }
 
             const location = read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
+            const shardKind = shardKindByTable.get(read.table);
+            const metadata = { exportName: read.exportName, file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table };
+            const cacheKey = `filter_without_index:${read.file}:${read.line.toString()}:${read.table}`;
+
+            // A `.shardBy()` table's rows are partitioned across Durable Objects
+            // and a query runs inside ONE of them, so this reads a single
+            // tenant's rows — not the table. Reporting it identically to a scan
+            // of a `.global()` D1 table (which genuinely is unbounded) makes the
+            // two cases that need very different responses look the same
+            // (LUNORA_ISSUES #41).
+            if (shardKind === "shardBy") {
+                findings.push(
+                    emit(filterWithoutIndex, {
+                        cacheKey,
+                        detail: `Query on "${read.table}" at ${location} calls .filter() without an index. "${read.table}" is \`.shardBy()\`, so the read is already scoped to one shard rather than the whole table — this is bounded by one tenant's row count, not the dataset. Add an index if that per-shard count grows large.`,
+                        level: "INFO",
+                        metadata,
+                    }),
+                );
+
+                continue;
+            }
+
+            const scope =
+                shardKind === "global"
+                    ? `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`
+                    : `it loads every row of "${read.table}" and filters in memory`;
 
             findings.push(
                 emit(filterWithoutIndex, {
-                    cacheKey: `filter_without_index:${read.file}:${read.line.toString()}:${read.table}`,
-                    detail: `Query on "${read.table}" at ${location} calls .filter() without an index — it loads every row of "${read.table}" and filters in memory.`,
-                    metadata: { exportName: read.exportName, file: read.file, line: read.line, table: read.table },
+                    cacheKey,
+                    detail: `Query on "${read.table}" at ${location} calls .filter() without an index — ${scope}.`,
+                    metadata,
                 }),
             );
         }

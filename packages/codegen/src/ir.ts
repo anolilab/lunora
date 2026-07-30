@@ -708,6 +708,14 @@ export interface QueryReadIR {
     exportName: string;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
+
+    /**
+     * True when the chain's `.filter()` predicate compares `_id`
+     * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`
+     * addresses directly. Optional so a feeder predating this field still
+     * typechecks; absent is treated as "not a primary-key filter".
+     */
+    filtersPrimaryKey?: boolean;
     /** The chain calls `.filter(...)`. */
     hasFilter: boolean;
     /** The chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
@@ -1249,6 +1257,15 @@ export interface OwnerFieldWriteIR {
     line: number;
     /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
     method: string;
+
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures are not
+     * reachable by a caller, so the lint's premise ("any caller can write rows
+     * owned by another user") does not hold there — see
+     * `owner_field_from_args_not_auth`. `undefined` when the write sits outside
+     * any recognised procedure (a bare helper).
+     */
+    visibility?: "internal" | "public";
 }
 
 /**

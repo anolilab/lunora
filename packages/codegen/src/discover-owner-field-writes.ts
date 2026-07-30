@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { OwnerFieldWriteIR } from "./ir";
+import type { FunctionIR, OwnerFieldWriteIR } from "./ir";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted
@@ -145,11 +145,19 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string): Own
 };
 
 /** Identity columns written from `args` across one source file's `ctx.db` writes. */
-const ownerFieldWritesInSourceFile = (sourceFile: SourceFile, relativePath: string): OwnerFieldWriteIR[] => {
+const ownerFieldWritesInSourceFile = (
+    sourceFile: SourceFile,
+    relativePath: string,
+    visibilityOf: (exportName: string) => "internal" | "public" | undefined,
+): OwnerFieldWriteIR[] => {
     const found: OwnerFieldWriteIR[] = [];
 
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        found.push(...ownerFieldWritesInCall(call, relativePath));
+        for (const write of ownerFieldWritesInCall(call, relativePath)) {
+            const visibility = visibilityOf(write.exportName);
+
+            found.push(visibility === undefined ? write : { ...write, visibility });
+        }
     }
 
     return found;
@@ -166,13 +174,17 @@ const ownerFieldWritesInSourceFile = (sourceFile: SourceFile, relativePath: stri
  * set to a fixed literal, is not recorded; only an arg-derived identity write
  * (directly, or through one local `const` hop) reaches here.
  */
-const discoverOwnerFieldWrites = (project: Project, lunoraDirectory: string): OwnerFieldWriteIR[] => {
+const discoverOwnerFieldWrites = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): OwnerFieldWriteIR[] => {
     const writes: OwnerFieldWriteIR[] = [];
+    // Keyed on file + export because two modules may export the same name.
+    const visibilityByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.visibility]));
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        writes.push(...ownerFieldWritesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
+
+        writes.push(...ownerFieldWritesInSourceFile(sourceFile, relativePath, (exportName) => visibilityByKey.get(`${relativePath}:${exportName}`)));
     }
 
     return writes;
