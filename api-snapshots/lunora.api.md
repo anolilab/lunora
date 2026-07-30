@@ -6825,11 +6825,11 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SearchLanguage` (type)
 
-Re-exported from `@lunora/search-core` — signature tracked at its source.
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SearchStrategy` (type)
 
-Re-exported from `@lunora/search-core` — signature tracked at its source.
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Secrets` (interface)
 

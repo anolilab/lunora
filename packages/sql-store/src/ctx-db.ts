@@ -81,6 +81,7 @@ import {
     throwingScheduler,
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
     assertSearchWithinCap,
     createSearchAnalyzer,
