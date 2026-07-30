@@ -31,8 +31,8 @@
  * Caller contract: each pulled row is the *mapped* document and MUST carry `_id`.
  */
 
-import type { CdcChange } from "@lunora/shard-engine";
-import { stableStringify } from "@lunora/shard-engine";
+import type { CdcChange } from "./ctx-db-cdc";
+import { stableStringify } from "./reactive-cache";
 
 /** The result of {@link diffExternalSource}: the changes to replay, and the baseline the next tick diffs from. */
 interface ExternalSourceDiffResult {

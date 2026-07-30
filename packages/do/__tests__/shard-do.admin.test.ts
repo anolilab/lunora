@@ -4,25 +4,33 @@ import type {
     AdvisoryFinding,
     AggregateIndexDefinitionLike,
     DatabaseWriterLike,
+    DataMigrationLike,
     FanoutMetricsResult,
     FanoutPathCounters,
     FanoutTopicStat,
     FlagEvaluation,
     FlagsResult,
+    MigrationRunResult,
+    QueueMessageRow,
     QueueMetadata,
     RankIndexDefinitionLike,
+    RecordQueueMessageInput,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
     SqlExec,
     StudioFeaturesResult,
 } from "@lunora/shard-engine";
-import { ADMIN_FUNCTIONS, applyCdcChanges, createShardCtxDb as createShardContextDatabase, rankKeyFromDoc, runShardMigrations } from "@lunora/shard-engine";
+import {
+    ADMIN_FUNCTIONS,
+    applyCdcChanges,
+    createShardCtxDb as createShardContextDatabase,
+    rankKeyFromDoc,
+    runDataMigration,
+    runShardMigrations,
+} from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
-import { runDataMigration } from "../src/data-migration";
-import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,

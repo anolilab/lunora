@@ -1,7 +1,7 @@
-import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createShardCtxDb as createShardContextDatabase } from "../src/ctx-db";
+import { runShardMigrations } from "../src/ctx-db-migrations";
 import { readSourceCursor } from "../src/external-source-cursor";
 import type { ExternalSourceLike, SourceClientLike } from "../src/external-source-pull";
 import {
@@ -12,6 +12,7 @@ import {
     pullExternalSourceIncrementalTick,
     pullExternalSourceTick,
 } from "../src/external-source-pull";
+import type { DatabaseWriterLike, SchemaLike } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

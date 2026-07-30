@@ -12,12 +12,13 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { DatabaseWriterLike, SqlExec } from "@lunora/shard-engine";
-import { liftSourceId } from "@lunora/shard-engine";
 
+import type { SqlExec } from "./ctx-db";
 import { deserializeCursor, maxCursorValue, migrateSourceCursor, readSourceCursor, writeSourceCursor } from "./external-source-cursor";
+import { liftSourceId } from "./external-source-lift";
 import type { MaterializeResult } from "./external-source-materialize";
 import { materializeExternalRowsIncremental, runExternalSourceTick } from "./external-source-materialize";
+import type { DatabaseWriterLike } from "./schema-types";
 
 /** The minimal SqlClient surface the poll loop calls (mirrors `@lunora/hyperdrive`'s `SqlClient`). */
 interface SourceClientLike {
@@ -253,4 +254,4 @@ const pullExternalSourceIncrementalTick = async (
 export { isSoftDeleted, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick };
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh };
 
-export { liftSourceId, normalizeSourceValue } from "@lunora/shard-engine";
+export { liftSourceId, normalizeSourceValue } from "./external-source-lift";

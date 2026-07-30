@@ -1,46 +1,7 @@
-export type {
-    ExportRow,
-    ExportShardAdminArgs,
-    ExportShardArgs,
-    ImportError,
-    ImportShardAdminArgs,
-    ImportShardArgs,
-    ImportShardResult,
-} from "./admin-export-import";
-export {
-    exportShardRows,
-    exportShardTable,
-    importShardRows,
-    parseExportShardArgs,
-    parseImportShardArgs,
-    selectExportTables,
-    validateImportRow,
-} from "./admin-export-import";
-export type {
-    DataMigrationDocument,
-    DataMigrationLike,
-    DataMigrationTransform,
-    MigrationDirection,
-    MigrationRunResult,
-    MigrationStatus,
-    MigrationStatusRow,
-    RunDataMigrationOptions,
-} from "./data-migration";
-export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
 // `external-source-cursor` is an internal ingest detail (the durable watermark
 // codec + reserved-table helpers), consumed only by `external-source-pull` and its
 // own tests — not re-exported, mirroring `external-source-diff`'s module-private
 // `projectExternalSourceRow`.
-export type { ExternalSourceDiffResult } from "./external-source-diff";
-export { diffExternalSource } from "./external-source-diff";
-export type { IncrementalMaterializeResult, MaterializeResult } from "./external-source-materialize";
-export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
-export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
-export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
-export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
-export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
-export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
-export { armRestore, readBookmark } from "./pitr";
 export { serveRelationFanout } from "./relation-fanout";
 // The search core moved out of this package. It used to be re-exported from
 // here so `@lunora/sql-store` could reuse it, which turned two dozen internal
@@ -70,10 +31,6 @@ export type {
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
-export type { SqlConsoleResult } from "./sql-console";
-export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
-export type { TtlSweepSpec } from "./ttl-sweep";
-export { selectExpiredIds } from "./ttl-sweep";
 // Cloudflare implementations of the `@lunora/platform` host contracts. These
 // are what `@lunora/platform-cloudflare` will re-export as the default host.
 export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";
@@ -81,6 +38,32 @@ export { createShardAlarms, createShardDirectory, createShardHost, createShardKv
 // from the two lifetimes a Worker has (DO state, worker env).
 export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
 export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-cloudflare";
+export type {
+    ExportRow,
+    ExportShardAdminArgs,
+    ExportShardArgs,
+    ImportError,
+    ImportShardAdminArgs,
+    ImportShardArgs,
+    ImportShardResult,
+} from "@lunora/shard-engine";
+export type {
+    DataMigrationDocument,
+    DataMigrationLike,
+    DataMigrationTransform,
+    MigrationDirection,
+    MigrationRunResult,
+    MigrationStatus,
+    MigrationStatusRow,
+    RunDataMigrationOptions,
+} from "@lunora/shard-engine";
+export type { ExternalSourceDiffResult } from "@lunora/shard-engine";
+export type { IncrementalMaterializeResult, MaterializeResult } from "@lunora/shard-engine";
+export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "@lunora/shard-engine";
+export type { CapturedMailRow, RecordMailInput } from "@lunora/shard-engine";
+export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "@lunora/shard-engine";
+export type { SqlConsoleResult } from "@lunora/shard-engine";
+export type { TtlSweepSpec } from "@lunora/shard-engine";
 export type { AuditEntry } from "@lunora/shard-engine";
 export type {
     BroadcastDelta,
@@ -200,6 +183,23 @@ export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
 export {
+    exportShardRows,
+    exportShardTable,
+    importShardRows,
+    parseExportShardArgs,
+    parseImportShardArgs,
+    selectExportTables,
+    validateImportRow,
+} from "@lunora/shard-engine";
+export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "@lunora/shard-engine";
+export { diffExternalSource } from "@lunora/shard-engine";
+export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "@lunora/shard-engine";
+export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "@lunora/shard-engine";
+export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "@lunora/shard-engine";
+export { armRestore, readBookmark } from "@lunora/shard-engine";
+export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "@lunora/shard-engine";
+export { selectExpiredIds } from "@lunora/shard-engine";
+export {
     applyCdcChanges,
     assertValidClientId,
     backfillAggregateIndexes,
@@ -270,3 +270,6 @@ export { ConflictError } from "@lunora/shard-engine";
 // does not own: every symbol that package adds would silently widen this one's
 // frozen surface, and a second host would reach telemetry *through* the
 // Cloudflare package — the exact coupling the extraction removed.
+// Relocated to `@lunora/shard-engine` (host-neutral: these touch only SQL and
+// the schema, never a Durable Object). Re-exported here because `@lunora/do`'s
+// export surface is frozen by plan 114 §5.2 — codegen emits against it.

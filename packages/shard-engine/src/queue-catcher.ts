@@ -16,7 +16,7 @@
  * codegen `queue()` handler wires the sink only when enabled — on by default in
  * dev), so a production consumer pays nothing unless the operator turns it on.
  */
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved consumed-message table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const QUEUE_TABLE = "__lunora_queue_messages";

@@ -1,8 +1,7 @@
 import type { SchemaLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
-import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+import { createShardCtxDb, runExternalSourceTick, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { runExternalSourceTick } from "../src/external-source-materialize";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";

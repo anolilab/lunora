@@ -20,7 +20,7 @@
 // close the loop. The mirrors below (`RecordMailInput` / `CapturedMailRow`) are
 // therefore hand-maintained copies of mail's `SendPayload` / `CapturedMail`;
 // keep them in sync manually (the studio consumer imports mail's type directly).
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved captured-mail table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const MAIL_TABLE = "__lunora_mail";

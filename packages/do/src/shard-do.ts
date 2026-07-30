@@ -74,13 +74,16 @@ import type {
     ColumnMeta,
     CreateWorkflowInstanceResult,
     DependencyTracker,
+    ExportRow,
     FanoutMetricsResult,
     FlagsResult,
     FunctionCallStat,
     FunctionStatsResult,
+    ImportShardResult,
     LifecycleDispatchInfo,
     LifecycleEvent,
     MaskPoliciesResult,
+    MigrationRunResult,
     MutationDelta,
     OwnerRelay,
     QueueMetadata,
@@ -107,6 +110,7 @@ import type {
     SubscriptionsResult,
     TableIndexInfo,
     TransactionSqlLike,
+    TtlSweepSpec,
     WorkflowInstanceStatusResult,
     WorkflowsResult,
 } from "@lunora/shard-engine";
@@ -115,14 +119,19 @@ import {
     ADMIN_FUNCTIONS,
     advanceClientWatermark,
     appendAuditEntry,
+    armRestore,
     awaitWsDrain,
     buildPokeFrames,
+    buildSettings,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
+    clearCapturedMail,
+    clearQueueMessages,
     ConflictError,
     createDependencyTracker,
     createFanoutCounters,
     createRelayLink,
+    DATA_MIGRATION_STATE_TABLE,
     DEFAULT_MAX_RELAYS,
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
@@ -131,25 +140,40 @@ import {
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
+    isDevEnvironment,
+    isLossyBody,
     listTables,
+    MAIL_TABLE,
     MAX_PAGE_SIZE,
     migrateClientWatermark,
     minCdcSeq,
+    parseExportShardArgs,
+    parseImportShardArgs,
     projectColumns,
+    QUEUE_TABLE,
     ReactiveCache,
     reactiveCacheKey,
     readAuditLog,
+    readBookmark,
+    readCapturedMail,
     readCdcChanges,
     readCdcCursor,
     readCdcEpoch,
     readClientWatermark,
     readGlobalShapeSnapshot,
     readIdempotent,
+    readMigrationStatus,
+    readQueueMessageById,
+    readQueueMessages,
     readTablePage,
+    recordCapturedMail,
     recordFanoutPass,
+    recordQueueMessages,
     RELATION_FUNCTION_PREFIX,
+    runReadonlySql,
     runSocketPool,
     SCAN_DEP,
+    selectExpiredIds,
     selectMatchingIds,
     selectShapeMemberIds,
     selectShapeRows,
@@ -179,8 +203,6 @@ import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
-import type { ExportRow, ImportShardResult } from "./admin-export-import";
-import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import type {
     QueueBindingHandle,
     RunShardApplyCdcArgs,
@@ -239,17 +261,8 @@ import {
     toWorkflowInstanceState,
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
-import type { MigrationRunResult } from "./data-migration";
-import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
-import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
-import { armRestore, readBookmark } from "./pitr";
-import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { buildSettings, isDevEnvironment } from "./settings";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
-import { runReadonlySql } from "./sql-console";
-import type { TtlSweepSpec } from "./ttl-sweep";
-import { selectExpiredIds } from "./ttl-sweep";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}

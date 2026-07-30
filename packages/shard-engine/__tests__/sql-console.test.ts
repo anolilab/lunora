@@ -1,7 +1,7 @@
-import type { SqlExec } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
+import type { SqlExec } from "../src/ctx-db";
 import { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */

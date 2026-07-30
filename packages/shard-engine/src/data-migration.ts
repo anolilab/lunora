@@ -25,7 +25,9 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { DatabaseWriterLike, SqlCursor, SqlExec } from "@lunora/shard-engine";
+
+import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { DatabaseWriterLike } from "./schema-types";
 
 /** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__lunora` prefix. */
 const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";

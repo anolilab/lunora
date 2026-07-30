@@ -1,7 +1,6 @@
-import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS, buildSettings, isDevEnvironment } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildSettings, isDevEnvironment } from "../src/settings";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";

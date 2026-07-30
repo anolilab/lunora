@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
-import type { SqlExec } from "@lunora/shard-engine";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
+import type { SqlExec } from "./ctx-db";
 
 /**
  * Result of a `__lunora_admin__:runSql` read-only query: the column names (from

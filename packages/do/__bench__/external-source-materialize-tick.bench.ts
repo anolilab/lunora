@@ -1,9 +1,8 @@
 import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, diffExternalSource, runShardMigrations } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import { diffExternalSource } from "../src/external-source-diff";
 
 /**
  * Plan 077 Phase 0 gate (design shipped in PR #80 `d5cf9151e`; §9 in git history): the DO-side

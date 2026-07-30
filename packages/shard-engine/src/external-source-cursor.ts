@@ -16,9 +16,10 @@
  * mark to bind next tick.
  */
 
-import type { SqlExec } from "@lunora/shard-engine";
-import { runDrizzle } from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
+
+import type { SqlExec } from "./ctx-db";
+import { runDrizzle } from "./do-exec";
 
 /** Reserved per-(table, shard) cursor table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const SOURCE_CURSOR_TABLE = "__lunora_source_cursor";

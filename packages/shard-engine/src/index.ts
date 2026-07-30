@@ -6,6 +6,27 @@
  * per-shard state, OCC, CDC, reactive subscriptions, and the poke protocol.
  */
 
+// Relocated from `@lunora/do`: host-neutral admin/ops, external-source ingest and
+// dev catchers — they touch only SQL and the schema, never a Durable Object.
+// Exactly the names `@lunora/do` published, so its frozen surface is unchanged.
+export type {
+    ExportRow,
+    ExportShardAdminArgs,
+    ExportShardArgs,
+    ImportError,
+    ImportShardAdminArgs,
+    ImportShardArgs,
+    ImportShardResult,
+} from "./admin-export-import";
+export {
+    exportShardRows,
+    exportShardTable,
+    importShardRows,
+    parseExportShardArgs,
+    parseImportShardArgs,
+    selectExportTables,
+    validateImportRow,
+} from "./admin-export-import";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 export type { AggregateTally } from "./aggregate-tally";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
@@ -51,6 +72,17 @@ export { computeRankPage, hydrateDocsById } from "./ctx-db-rank-page";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
+export type {
+    DataMigrationDocument,
+    DataMigrationLike,
+    DataMigrationTransform,
+    MigrationDirection,
+    MigrationRunResult,
+    MigrationStatus,
+    MigrationStatusRow,
+    RunDataMigrationOptions,
+} from "./data-migration";
+export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
 export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 export { runDrizzle, runSql } from "./do-exec";
@@ -74,7 +106,13 @@ export {
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { param, renderSql } from "./drizzle";
+export type { ExternalSourceDiffResult } from "./external-source-diff";
+export { diffExternalSource } from "./external-source-diff";
 export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";
+export type { IncrementalMaterializeResult, MaterializeResult } from "./external-source-materialize";
+export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
+export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
+export { isSoftDeleted, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export type {
@@ -150,8 +188,18 @@ export {
     summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
+export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
+export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export { NotFoundError } from "./not-found-error";
+export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
+export { armRestore, readBookmark } from "./pitr";
 export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+// Consumed by `@lunora/do` internals rather than by end users: these were
+// module-private inside `@lunora/do` before the relocation, and are published
+// here only because the import now crosses a package boundary. They are not
+// part of `@lunora/do`'s frozen surface and it does not re-export them.
+export type { QueueMessageOutcome, QueueMessageRow, RecordQueueMessageInput } from "./queue-catcher";
+export { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
@@ -180,6 +228,7 @@ export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionSt
 export type { RelayHost } from "./relay-hub";
 export { createRelayLink, DEFAULT_MAX_RELAYS, OwnerRelay, RelayMember } from "./relay-hub";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
+export { readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS } from "./schema-history";
 export type {
     AggregateIndexDefinitionLike,
     AggregateOp,
@@ -238,11 +287,16 @@ export type {
     WithInput,
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
+export { buildSettings, isDevEnvironment } from "./settings";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";
 export { ShardRunner } from "./shard-runner";
 export { runSocketPool } from "./socket-pool";
+export type { SqlConsoleResult } from "./sql-console";
+export type { SqlLintResult } from "./sql-console";
+export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
+export { lintReadonlySql } from "./sql-console";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type {
     ScheduledFunctionDoc,
@@ -261,6 +315,8 @@ export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
+export type { TtlSweepSpec } from "./ttl-sweep";
+export { selectExpiredIds } from "./ttl-sweep";
 export type {
     LifecycleDispatchInfo,
     LifecycleEvent,
@@ -278,4 +334,3 @@ export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";
-export { SCHEMA_HISTORY_MAX_VERSIONS, readSchemaHistory, readSchemaVersion, recordSchemaVersion } from "./schema-history";

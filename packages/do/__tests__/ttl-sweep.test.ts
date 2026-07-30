@@ -1,11 +1,9 @@
-import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
+import type { DatabaseWriterLike, SchemaLike, TtlSweepSpec } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations, selectExpiredIds } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { TtlSweepSpec } from "../src/ttl-sweep";
-import { selectExpiredIds } from "../src/ttl-sweep";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
