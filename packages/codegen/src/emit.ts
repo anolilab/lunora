@@ -624,6 +624,28 @@ const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =
     (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(body));
 
 /**
+ * The `Return` a `FunctionReference` should carry.
+ *
+ * Prefers the declared `.output(validator)` over the handler's inferred return
+ * type. `.output()` is what validates at runtime and what a reader takes as the
+ * contract, so a caller must be able to handle every branch it permits.
+ *
+ * Two things went wrong while the handler won (LUNORA_ISSUES #40). A function
+ * declaring a two-arm `v.union` whose handler currently returns only one arm
+ * typed as JUST that arm, so the other was unreachable to every consumer even
+ * though the validator permits it and the runtime emits it the moment the
+ * handler grows a second path. And a single `as any` in a handler erased the
+ * whole signature to `unknown`, propagating to every `runQuery` result and
+ * every field read off it — ten stray casts left by one port's codemod were
+ * worth 20 errors, with the link between cast and error invisible from either
+ * end.
+ *
+ * Falls back to the handler when no `.output()` is declared, so a project that
+ * never uses it emits byte-identical output.
+ */
+const referenceReturnType = (definition: FunctionIR): string => (definition.output ? validatorToType(definition.output) : definition.returnType);
+
+/**
  * Render the grouped-by-namespace body of an api interface for a subset of
  * functions. Returns `""` when the subset is empty so the caller can emit an
  * empty `{}` interface.
@@ -652,7 +674,7 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
                 const argsType = renderArgsType(definition.args);
-                const returnType = relocateGeneratedImports(definition.returnType);
+                const returnType = relocateGeneratedImports(referenceReturnType(definition));
 
                 return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
             })

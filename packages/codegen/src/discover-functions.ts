@@ -17,7 +17,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "./ir";
 import { isServerSurfaceModule } from "./module-specifiers";
-import { parseObjectShape } from "./parse-validator";
+import { parseObjectShape, parseValidator } from "./parse-validator";
 import sanitizeNamespace from "./paths";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
@@ -85,6 +85,8 @@ interface DiscoveredFunction {
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
     kind: string;
     lifecycle?: "connect" | "disconnect";
+    /** The `.output(validator)` declaration, when the chain has one. */
+    output?: ValidatorIR;
     returnType: string;
     visibility: "internal" | "public";
 }
@@ -688,6 +690,35 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
     return merged;
 };
 
+/**
+ * The `.output(validator)` declaration on a builder chain, if any.
+ *
+ * Walks leftward like {@link argsFromBuilderChain}. Chains read terminal → root,
+ * so the FIRST `.output()` encountered is the LAST one written, which is the one
+ * that wins at runtime (each `.output()` replaces the previous).
+ */
+const outputFromBuilderChain = (receiver: Node): ValidatorIR | undefined => {
+    let node: Node = receiver;
+
+    while (Node.isCallExpression(node)) {
+        const chainCallee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(chainCallee)) {
+            return undefined;
+        }
+
+        if (chainCallee.getName() === "output") {
+            const argument = node.getArguments()[0];
+
+            return argument && Node.isExpression(argument) ? parseValidator(argument) : undefined;
+        }
+
+        node = chainCallee.getExpression();
+    }
+
+    return undefined;
+};
+
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {
     /** Registration kind: `query` | `mutation` | `action` | `stream`. */
@@ -944,11 +975,13 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
     if (classified.receiver) {
         const expose = exposeFromBuilderChain(classified.receiver);
+        const output = outputFromBuilderChain(classified.receiver);
 
         return {
             args: argsFromBuilderChain(classified.receiver),
             ...(expose ? { expose } : {}),
             kind: classified.kind,
+            ...(output ? { output } : {}),
             returnType: returnTypeFromBuilderCall(call),
             visibility: classified.visibility,
         };
@@ -1096,6 +1129,7 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         filePath: relativePath,
         kind: discovered.kind as FunctionIR["kind"],
         returnType: discovered.returnType,
+        ...(discovered.output ? { output: discovered.output } : {}),
         visibility: discovered.visibility,
         ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),

@@ -1648,6 +1648,41 @@ export default schema;
             expect(result.generated.drizzleShard).not.toContain("import { Id }");
         });
 
+        it("types the reference from .output(), not the handler's inferred return", () => {
+            expect.assertions(4);
+
+            // LUNORA_ISSUES #40. `.output()` is what validates at runtime and what
+            // a reader takes as the contract, but the emitted `Return` came from
+            // the handler — so a declared union whose handler currently returns
+            // one arm typed as JUST that arm, leaving the other unreachable to
+            // every consumer, and a single `as any` erased the whole signature.
+            writeFileSync(
+                join(workdir, "lunora", "access.ts"),
+                `import { internalQuery, v } from "./_generated/server.js";
+
+export const checkAccess = internalQuery
+    .input({ id: v.string() })
+    .output(v.union(v.object({ hasAccess: v.literal(true), role: v.string() }), v.object({ hasAccess: v.literal(false) })))
+    .query(async () => ({ hasAccess: false as const }));
+
+export const raw = internalQuery
+    .input({ id: v.string() })
+    .query(async () => "plain");
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // Both arms of the declared union survive to the caller.
+            expect(result.generated.api).toContain("hasAccess: true");
+            expect(result.generated.api).toContain("role: string");
+            expect(result.generated.api).toContain("hasAccess: false");
+
+            // No `.output()` → the handler still supplies the type, so projects
+            // that never declare one are unaffected.
+            expect(result.generated.api).toContain('raw: FunctionReference<"query", { id: string }, string>');
+        });
+
         it("registers a default-exported procedure as <module>.default", () => {
             expect.assertions(2);
 
