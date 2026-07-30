@@ -72,6 +72,7 @@
     },
     "devDependencies": {
         "@lunora/do": "workspace:*",
+        "@lunora/observability": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

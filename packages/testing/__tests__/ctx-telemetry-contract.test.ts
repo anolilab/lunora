@@ -1,13 +1,13 @@
-import type { ContextMetrics, ContextTracer, SpanHandle as DoSpanHandle } from "@lunora/do";
+import type { ContextMetrics, ContextTracer, SpanHandle as ObservabilitySpanHandle } from "@lunora/observability";
 import type { LunoraMetrics, LunoraTracer, SpanHandle as ServerSpanHandle } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
 /**
  * Cross-package drift guard for the `ctx.trace` / `ctx.metrics` contracts.
  *
- * `@lunora/do` declares `ContextTracer`/`ContextMetrics` structurally rather than
- * importing `@lunora/server`, because the dependency edge runs the other way —
- * the DO is the lower tier. That leaves two hand-mirrored definitions of one
+ * `@lunora/observability` declares `ContextTracer`/`ContextMetrics` structurally
+ * rather than importing `@lunora/server`, because the dependency edge runs the
+ * other way — the telemetry layer is the lower tier. That leaves two hand-mirrored definitions of one
  * contract, and a mirror with no guard drifts (the studio's `TraceSummary` copy
  * already did, one commit after the shape it mirrors was corrected).
  *
@@ -34,27 +34,27 @@ const TRACER_CONTRACT_GUARD: MutuallyAssignable<ContextTracer, LunoraTracer> = t
 
 const METRICS_CONTRACT_GUARD: MutuallyAssignable<ContextMetrics, LunoraMetrics> = true;
 
-// The `SpanHandle` the tracer's body receives (post-hoc attributes). `@lunora/do`
-// re-exports the shared/bundler-inlined shape; `@lunora/server` mirrors it
+// The `SpanHandle` the tracer's body receives (post-hoc attributes).
+// `@lunora/observability` re-exports the shared/bundler-inlined shape; `@lunora/server` mirrors it
 // structurally — this fails the build if the two drift. Unlike the tracer guard,
 // `SpanHandle`'s members are non-optional, so a widened/renamed/dropped method is
 // caught outright (no trailing-optional blind spot).
-const SPAN_HANDLE_CONTRACT_GUARD: MutuallyAssignable<DoSpanHandle, ServerSpanHandle> = true;
+const SPAN_HANDLE_CONTRACT_GUARD: MutuallyAssignable<ObservabilitySpanHandle, ServerSpanHandle> = true;
 
 describe("ctx telemetry contract", () => {
-    it("keeps @lunora/do's ContextTracer in lockstep with @lunora/server's LunoraTracer", () => {
+    it("keeps @lunora/observability's ContextTracer in lockstep with @lunora/server's LunoraTracer", () => {
         expect.assertions(1);
 
         expect(TRACER_CONTRACT_GUARD).toBe(true);
     });
 
-    it("keeps @lunora/do's ContextMetrics in lockstep with @lunora/server's LunoraMetrics", () => {
+    it("keeps @lunora/observability's ContextMetrics in lockstep with @lunora/server's LunoraMetrics", () => {
         expect.assertions(1);
 
         expect(METRICS_CONTRACT_GUARD).toBe(true);
     });
 
-    it("keeps @lunora/do's SpanHandle in lockstep with @lunora/server's SpanHandle", () => {
+    it("keeps @lunora/observability's SpanHandle in lockstep with @lunora/server's SpanHandle", () => {
         expect.assertions(1);
 
         expect(SPAN_HANDLE_CONTRACT_GUARD).toBe(true);
