@@ -123,12 +123,64 @@ const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] =
     return steps;
 };
 
+/**
+ * Resolve `defineWorkflow`'s argument to the object literal describing the
+ * workflow, following one local `const` hop.
+ *
+ * Passing a typed `WorkflowConfig` variable is the natural thing to reach for
+ * once the handlers grow — putting three 100-line handlers in the registry file
+ * is worse code — so the scan resolves `const config = { … };
+ * defineWorkflow(config)` rather than rejecting it (LUNORA_ISSUES #36).
+ *
+ * Deliberately one hop and local-only: the point is to read `name` and the
+ * `ctx.step.*` calls statically, and a value assembled across modules or by a
+ * function call cannot be read at all. Those still fail loudly — silently
+ * registering a workflow whose declared `name` we could not see would make
+ * `ctx.workflows.get("&lt;name>")` throw at runtime with nothing pointing here.
+ */
+/** Strip `as` / `satisfies` / parenthesized wrappers from an expression. */
+const unwrapTypeWrappers = (node: Node | undefined): Node | undefined => {
+    let current = node;
+
+    while (current && (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current))) {
+        current = current.getExpression();
+    }
+
+    return current;
+};
+
+const resolveWorkflowConfig = (argument: Node | undefined): ObjectLiteralExpression | undefined => {
+    const unwrapped = unwrapTypeWrappers(argument);
+
+    if (unwrapped && Node.isObjectLiteralExpression(unwrapped)) {
+        return unwrapped;
+    }
+
+    if (!unwrapped || !Node.isIdentifier(unwrapped)) {
+        return undefined;
+    }
+
+    for (const declaration of unwrapped.getSymbol()?.getDeclarations() ?? []) {
+        const initializer = Node.isVariableDeclaration(declaration) ? unwrapTypeWrappers(declaration.getInitializer()) : undefined;
+
+        if (initializer && Node.isObjectLiteralExpression(initializer)) {
+            return initializer;
+        }
+    }
+
+    return undefined;
+};
+
 /** Lift one exported `defineWorkflow({...})` declaration into {@link WorkflowIR}. */
 const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR => {
-    const argument = call.getArguments()[0];
+    const argument = resolveWorkflowConfig(call.getArguments()[0]);
 
-    if (!argument || !Node.isObjectLiteralExpression(argument)) {
-        throw diagnosticAt(call, `workflow "${exportName}": defineWorkflow must be passed an inline object literal`);
+    if (!argument) {
+        throw diagnosticAt(
+            call,
+            `workflow "${exportName}": defineWorkflow's argument must be an object literal, or a local \`const\` holding one — codegen reads \`name\` and the \`ctx.step.*\` calls out of it statically. ` +
+                `Keep the handler wherever you like and pass it through: \`const config = { handler: myHandler }; export const ${exportName} = defineWorkflow(config);\`.`,
+        );
     }
 
     const ir: WorkflowIR = {

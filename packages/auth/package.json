@@ -112,7 +112,6 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@better-auth/core": "catalog:auth",
         "@better-auth/mcp": "catalog:auth",
         "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
@@ -123,10 +122,10 @@
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
         "@visulima/free-email-domains": "catalog:email",
-        "@visulima/redact": "catalog:redact",
-        "better-auth": "catalog:auth"
+        "@visulima/redact": "catalog:redact"
     },
     "devDependencies": {
+        "@better-auth/core": "catalog:auth",
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
@@ -134,6 +133,7 @@
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "better-auth": "catalog:auth",
         "better-sqlite3": "^12.11.1",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
@@ -143,7 +143,9 @@
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
-        "@better-auth/sso": "catalog:auth"
+        "@better-auth/core": "^1.7.0-rc.2",
+        "@better-auth/sso": "catalog:auth",
+        "better-auth": "^1.7.0-rc.2"
     },
     "peerDependenciesMeta": {
         "@better-auth/sso": {

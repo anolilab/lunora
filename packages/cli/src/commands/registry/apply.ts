@@ -240,6 +240,133 @@ const ALLOWED_BINDING_ROOTS = new Set([
 ]);
 
 /** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */
+
+/**
+ * The `binding` name a wrangler resource entry claims, when it has one. Every
+ * array-shaped wrangler binding (`d1_databases`, `r2_buckets`, `kv_namespaces`,
+ * …) keys on this field, and two entries sharing it is always a
+ * misconfiguration.
+ */
+const bindingNameOf = (entry: unknown): string | undefined => {
+    if (typeof entry !== "object" || entry === null) {
+        return undefined;
+    }
+
+    const name = (entry as { binding?: unknown }).binding;
+
+    return typeof name === "string" && name.length > 0 ? name : undefined;
+};
+
+/**
+ * The incoming array entries that should actually be appended to `existing`.
+ *
+ * Drops structural duplicates (so a re-run is idempotent) and — the part that
+ * matters — drops any entry whose `binding` name the project already claims.
+ * Structural dedupe alone let a manifest's placeholder sit ALONGSIDE a real
+ * entry under the same name: two `DB` bindings, one pointing at
+ * `replace-me-db`. Wrangler then picks one and the app can deploy against a
+ * database that does not exist (LUNORA_ISSUES #26). The project's entry wins,
+ * and the skip is reported rather than silent.
+ */
+const freshArrayEntries = (existing: ReadonlyArray<unknown>, incoming: ReadonlyArray<unknown>, path: string, logger: Logger): unknown[] => {
+    const seen = new Set(existing.map((entry) => JSON.stringify(entry)));
+    const claimed = new Set(existing.map((entry) => bindingNameOf(entry)).filter((name): name is string => name !== undefined));
+    const fresh: unknown[] = [];
+
+    for (const entry of incoming) {
+        if (seen.has(JSON.stringify(entry))) {
+            continue;
+        }
+
+        const name = bindingNameOf(entry);
+
+        if (name !== undefined && claimed.has(name)) {
+            logger.warn(
+                `binding "${name}" already exists in ${path} — keeping the project's entry and skipping the registry item's. Reconcile by hand if the item needs different settings.`,
+            );
+
+            continue;
+        }
+
+        if (name !== undefined) {
+            claimed.add(name);
+        }
+
+        fresh.push(entry);
+    }
+
+    return fresh;
+};
+
+/** Narrowing guard that yields `unknown[]` (not `any[]`) from `Array.isArray`. */
+const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
+
+/** Read the current value at a jsonc key path in `text` (comments tolerated). */
+const readAt = (text: string, path: ReadonlyArray<string>): unknown => {
+    let node: unknown = parse(text);
+
+    for (const segment of path) {
+        if (typeof node !== "object" || node === null) {
+            return undefined;
+        }
+
+        node = (node as Record<string, unknown>)[segment];
+    }
+
+    return node;
+};
+
+/**
+ * Whether a binding's key path may be written.
+ *
+ * Refuses anything outside the resource-binding allowlist: a
+ * remote/attacker-influenceable manifest could otherwise set
+ * `build.command`/`main`/`node_compat` and run code on the next dev/deploy.
+ */
+const isWritableBindingPath = (path: ReadonlyArray<string>, logger: Logger): boolean => {
+    const root = path[0];
+
+    if (root !== undefined && ALLOWED_BINDING_ROOTS.has(root)) {
+        return true;
+    }
+
+    logger.warn(
+        `skipping binding "${path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`,
+    );
+
+    return false;
+};
+
+/** Sentinel distinguishing "nothing to write" from a legitimate `undefined` binding value. */
+const SKIP_BINDING = Symbol("skip-binding");
+
+/**
+ * The value to write for one binding, or {@link SKIP_BINDING} when there is
+ * nothing new.
+ *
+ * Array bindings (e.g. `r2_buckets`) MERGE into any existing array rather than
+ * replacing it — otherwise adding `storage` then `backup` (or adding into a
+ * project that already has buckets) would silently drop the earlier entries.
+ */
+// Returns `unknown` rather than a union with the sentinel: `typeof SKIP_BINDING | unknown` collapses to `unknown` anyway, so the caller compares by identity.
+const mergedBindingValue = (text: string, binding: RegistryBinding, logger: Logger): unknown => {
+    const { value } = binding;
+
+    if (!isUnknownArray(value)) {
+        return value;
+    }
+
+    const existing = readAt(text, binding.path);
+
+    if (!isUnknownArray(existing)) {
+        return value;
+    }
+
+    const fresh = freshArrayEntries(existing, value, binding.path.join("."), logger);
+
+    return fresh.length === 0 ? SKIP_BINDING : [...existing, ...fresh];
+};
+
 const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: string, logger: Logger): ReadonlyArray<string> => {
     if (bindings.length === 0) {
         return [];
@@ -257,53 +384,17 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
     let text = readFileSync(wranglerPath, "utf8");
     const applied: string[] = [];
 
-    /** Narrowing guard that yields `unknown[]` (not `any[]`) from `Array.isArray`. */
-    const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
-
-    /** Read the current value at a jsonc key path (comments tolerated). */
-    const readAt = (path: ReadonlyArray<string>): unknown => {
-        let node: unknown = parse(text);
-
-        for (const segment of path) {
-            if (typeof node !== "object" || node === null) {
-                return undefined;
-            }
-
-            node = (node as Record<string, unknown>)[segment];
-        }
-
-        return node;
-    };
-
     for (const binding of bindings) {
-        // Refuse to write any key outside the safe resource-binding allowlist. A
-        // remote/attacker-influenceable manifest could otherwise set
-        // `build.command`/`main`/`node_compat` to run code on the next dev/deploy.
-        const root = binding.path[0];
-
-        if (root === undefined || !ALLOWED_BINDING_ROOTS.has(root)) {
-            logger.warn(
-                `skipping binding "${binding.path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`,
-            );
-
+        if (!isWritableBindingPath(binding.path, logger)) {
             continue;
         }
 
-        // `RegistryBinding.value` is `unknown`; destructure then narrow below.
-        let { value } = binding;
+        const value = mergedBindingValue(text, binding, logger);
 
-        // Array bindings (e.g. `r2_buckets`) MERGE into any existing array rather
-        // than replacing it — otherwise adding `storage` then `backup` (or adding
-        // into a project that already has buckets) would silently drop the
-        // earlier entries. Dedupe by structural equality so re-runs are idempotent.
-        if (isUnknownArray(value)) {
-            const existing = readAt(binding.path);
-
-            if (isUnknownArray(existing)) {
-                const seen = new Set(existing.map((entry) => JSON.stringify(entry)));
-                // `value` is the narrowed incoming array; evaluated before reassignment.
-                value = [...existing, ...value.filter((entry) => !seen.has(JSON.stringify(entry)))];
-            }
+        // `undefined` means "nothing new to write" — every incoming array entry
+        // was already present, or its `binding` name is already claimed.
+        if (value === SKIP_BINDING) {
+            continue;
         }
 
         const edits = modify(text, [...binding.path], value, {

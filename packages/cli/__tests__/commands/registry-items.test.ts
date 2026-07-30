@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parseManifest, runAddCommand, runBuildIndexCommand } from "../../src/commands/registry/index";
@@ -98,6 +99,43 @@ describe("shipped registry items", () => {
 
         expect(wrangler).toContain("UPLOADS");
         expect(wrangler).toContain("BACKUP_BUCKET");
+    });
+
+    it("keeps a project's existing binding instead of adding a second under the same name", async () => {
+        expect.assertions(4);
+
+        // LUNORA_ISSUES #26: `auth` contributes a `d1_databases` entry bound to
+        // DB with placeholder ids. Structural dedupe alone let that sit ALONGSIDE
+        // a real DB entry, so wrangler saw two bindings named DB and the app
+        // could deploy against `replace-me-db`.
+        const wranglerPath = join(workdir, "wrangler.jsonc");
+        // The fixture is real JSONC (comments), so it is edited structurally
+        // rather than round-tripped through JSON.parse.
+        const seeded = applyEdits(
+            readFileSync(wranglerPath, "utf8"),
+            modify(readFileSync(wranglerPath, "utf8"), ["d1_databases"], [{ binding: "DB", database_id: "real-id-0001", database_name: "production" }], {}),
+        );
+
+        writeFileSync(wranglerPath, seeded);
+
+        const { logger, messages } = ((): { logger: Logger; messages: string[] } => {
+            const captured: string[] = [];
+            const record = (message: string): void => {
+                captured.push(message);
+            };
+
+            return { logger: { error: record, info: record, success: record, warn: record }, messages: captured };
+        })();
+
+        await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["auth"], yes: true });
+
+        const databases = (parseJsonc(readFileSync(wranglerPath, "utf8")) as { d1_databases: { binding: string; database_id: string }[] }).d1_databases;
+
+        expect(databases).toHaveLength(1);
+        expect(databases[0]?.database_id).toBe("real-id-0001");
+        expect(JSON.stringify(databases)).not.toContain("replace-me-db");
+        // Silently keeping it would be its own trap — the skip is reported.
+        expect(messages.some((message) => message.includes('binding "DB" already exists'))).toBe(true);
     });
 
     it("self-describing bindings (ai/browser/images) are single objects, not arrays", () => {

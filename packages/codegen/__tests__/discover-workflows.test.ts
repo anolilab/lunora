@@ -68,6 +68,54 @@ describe("discover-workflows", () => {
         ]);
     });
 
+    it("resolves a config passed through a local const", () => {
+        expect.assertions(3);
+
+        // LUNORA_ISSUES #36: the scan matched only an inline object literal, so
+        // passing a typed `WorkflowConfig` variable was rejected — but that is
+        // exactly what you reach for once the handlers grow, since putting three
+        // 100-line handlers in the registry file is worse code.
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            const config = {
+                name: "order-pipeline",
+                handler: async (ctx) => {
+                    await ctx.step.do("charge", async () => 1);
+
+                    return ctx.params;
+                },
+            };
+
+            export const orderPipeline = defineWorkflow(config);
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        expect(workflow?.exportName).toBe("orderPipeline");
+        // The declared `name` is read through the hop — registering the default
+        // instead would make `ctx.workflows.get("order-pipeline")` throw at runtime.
+        expect(workflow?.name).toBe("order-pipeline");
+        expect(workflow?.steps.map((step) => step.name)).toStrictEqual(["charge"]);
+    });
+
+    it("still fails loudly when the config cannot be read statically", () => {
+        expect.assertions(1);
+
+        // One local hop, deliberately. A config assembled by a call cannot be
+        // read, and silently registering it under the default name would make a
+        // `ctx.workflows.get("<declared name>")` throw with nothing pointing here.
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            const build = () => ({ handler: async (ctx) => ctx.params });
+
+            export const orderPipeline = defineWorkflow(build());
+        `);
+
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/must be an object literal, or a local `const` holding one/u);
+    });
+
     it("lifts the durable step labels from the handler body", () => {
         expect.assertions(1);
 
