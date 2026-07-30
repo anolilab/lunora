@@ -56,6 +56,8 @@ interface ProcedureScore {
     checks: CheckResult[];
     /** Verdict derived from {@link ProcedureScore.score}. */
     coverage: Coverage;
+    /** Why this row is `exempt`, when a source directive said so. Empty when none was given. */
+    exemptReason?: string;
     /** Exported binding name, e.g. `sendMessage`. */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */

@@ -159,7 +159,8 @@ const scoreAdvisor = (context: LintContext, findings: ReadonlyArray<Finding>, op
             const id = procedureId(procedure.file, procedure.exportName);
             const checks = attributed.byProcedure.get(id) ?? [];
             const score = scoreProcedure(checks);
-            const isExempt = exempt.has(id);
+            // Either the caller's list or the source directive opts a row out.
+            const isExempt = exempt.has(id) || procedure.exempt === true;
             // Sensitivity is computed before the verdict so a rule can gate on it
             // and so it can weight the row — see `classifySensitivity`.
             const sensitivity = classifySensitivity(procedure);
@@ -167,6 +168,9 @@ const scoreAdvisor = (context: LintContext, findings: ReadonlyArray<Finding>, op
             return {
                 checks,
                 coverage: isExempt ? ("exempt" as const) : coverageFromScore(score),
+                // Spread rather than `undefined`: an explicit undefined key survives in
+                // memory but not through JSON, so the artifact would not round-trip.
+                ...(isExempt ? { exemptReason: procedure.exemptReason ?? "" } : {}),
                 exportName: procedure.exportName,
                 file: procedure.file,
                 id,

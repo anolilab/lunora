@@ -353,6 +353,34 @@ const throwsBareError = (declaration: TsNode): boolean =>
         return Node.isIdentifier(callee) && callee.getText() === "Error";
     });
 
+/**
+ * The opt-out directive, with an optional trailing reason:
+ *
+ * ```ts
+ * // lunora-advisor-exempt -- legacy endpoint, replaced by v2 in Q3
+ * export const legacy = mutation({ … });
+ * ```
+ *
+ * A leading comment rather than a config list: it sits next to the code it
+ * excuses, survives a file move, and shows up in the diff of whoever removes the
+ * handler. The reason is captured into the artifact so an exemption has to be
+ * argued in review rather than added silently.
+ */
+const EXEMPT_DIRECTIVE = /lunora-advisor-exempt\b[^\S\n]*(?:--[^\S\n]*(?<reason>[^\n*]*))?/u;
+
+/** Read the exemption directive off a declaration's leading comments, if present. */
+const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemptReason: string } => {
+    // The directive sits above `export const …`, i.e. on the statement, not the declarator.
+    const statement = declaration.getFirstAncestorByKind(SyntaxKind.VariableStatement);
+    const text = (statement ?? declaration)
+        .getLeadingCommentRanges()
+        .map((range) => range.getText())
+        .join("\n");
+    const matched = EXEMPT_DIRECTIVE.exec(text);
+
+    return { exempt: matched !== null, exemptReason: matched?.groups?.reason?.trim() ?? "" };
+};
+
 /** Behavioural facts read from the procedure declaration body. */
 const behaviourOf = (
     declaration: TsNode,
@@ -426,9 +454,12 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
     const behaviour = behaviourOf(declaration);
     const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviour;
+    const exemption = exemptionOf(declaration);
 
     return {
         callsMail,
+        exempt: exemption.exempt,
+        exemptReason: exemption.exemptReason,
         emitsEvent: behaviour.emitsEvent,
         handlesErrors: behaviour.handlesErrors,
         reachesOutbound: behaviour.reachesOutbound,

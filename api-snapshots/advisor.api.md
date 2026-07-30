@@ -494,6 +494,8 @@ interface AdvisorPrivilegedDispatch {
 interface AdvisorProcedureProtection {
     callsMail: boolean;
     emitsEvent?: boolean;
+    exempt?: boolean;
+    exemptReason?: string;
     exportName: string;
     fanOut: boolean;
     file: string;
@@ -1032,6 +1034,7 @@ interface ProcedureDelta {
 interface ProcedureScore {
     checks: CheckResult[];
     coverage: Coverage;
+    exemptReason?: string;
     exportName: string;
     file: string;
     id: string;

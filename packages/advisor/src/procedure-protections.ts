@@ -10,8 +10,18 @@
 export interface AdvisorProcedureProtection {
     /** `true` when the handler references `ctx.mail` / `ctx.email` (sends mail). */
     callsMail: boolean;
+
     /** `true` when the handler emits a structured observability event (`ctx.log` / `ctx.span` / `ctx.trace`). */
     emitsEvent?: boolean;
+
+    /**
+     * `true` when the source carries a `// lunora-advisor-exempt` directive above
+     * the export — the developer's explicit opt-out. The row still appears in the
+     * map, marked `exempt`, but pulls no weight.
+     */
+    exempt?: boolean;
+    /** The `-- reason` from the directive, so an exemption is argued rather than silent. */
+    exemptReason?: string;
     /** The exported binding name of the procedure (e.g. `signUp`). */
     exportName: string;
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Read by the privileged-fanout lint, paired with public visibility and no rate limit. */

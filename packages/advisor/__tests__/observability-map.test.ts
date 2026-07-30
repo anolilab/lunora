@@ -214,6 +214,20 @@ describe("scoreAdvisor artifact", () => {
         expect(map.score).toBe(100);
     });
 
+    it("honours a source-level exemption directive and records its reason", () => {
+        expect.assertions(3);
+
+        const map = scoreAdvisor(
+            contextWith([procedure({ exempt: true, exemptReason: "legacy, replaced by v2", exportName: "legacy", file: "old" })]),
+            [finding("bad", "ERROR", { exportName: "legacy", file: "old" })],
+            { generatedAt: STAMP },
+        );
+
+        expect(map.procedures[0]?.coverage).toBe("exempt");
+        expect(map.procedures[0]?.exemptReason).toBe("legacy, replaced by v2");
+        expect(map.procedures[0]?.weight).toBe(0);
+    });
+
     it("produces a deterministic, stably-sorted map for a committed baseline", () => {
         expect.assertions(2);
 

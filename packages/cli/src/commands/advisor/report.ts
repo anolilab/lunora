@@ -3,6 +3,15 @@ import type { AdvisorMap, BaselineComparison, Coverage, ProcedureScore } from "@
 /** Single-character verdict marks, so a wide matrix stays readable. */
 const MARK: Readonly<Record<Coverage, string>> = { clean: "·", exempt: "–", failing: "✗", warned: "!" };
 
+/** Codepoint ordering, so output does not shift with the host locale. */
+const byText = (a: string, b: string): number => {
+    if (a === b) {
+        return 0;
+    }
+
+    return a < b ? -1 : 1;
+};
+
 /** Pad to a fixed width so columns line up without a table library. */
 const pad = (value: string, width: number): string => (value.length >= width ? value : value + " ".repeat(width - value.length));
 
@@ -82,30 +91,46 @@ const formatSummary = (map: AdvisorMap, comparison?: BaselineComparison): string
     return lines.join("\n");
 };
 
-/** `--all`: every procedure, grouped by file. */
-const formatMatrix = (map: AdvisorMap): string => {
-    const width = idWidth(map.procedures);
+/** The detail lines under one procedure in the matrix: its exemption, or the rules that fired. */
+const detailLines = (entry: ProcedureScore): string[] => {
+    if (entry.coverage === "exempt") {
+        const reason = entry.exemptReason === undefined || entry.exemptReason === "" ? "no reason given" : entry.exemptReason;
+
+        return [`         exempt: ${reason}`];
+    }
+
+    return entry.checks.map((check) => {
+        const repeats = check.occurrences > 1 ? `, ×${String(check.occurrences)}` : "";
+
+        return `         ${check.name} (−${String(check.weight)}${repeats})`;
+    });
+};
+
+/** Group the map's rows by source file. */
+const groupByFile = (entries: ReadonlyArray<ProcedureScore>): [string, ProcedureScore[]][] => {
     const byFile = new Map<string, ProcedureScore[]>();
 
-    for (const entry of map.procedures) {
+    for (const entry of entries) {
         byFile.set(entry.file, [...(byFile.get(entry.file) ?? []), entry]);
     }
 
+    return [...byFile].toSorted(([a], [b]) => byText(a, b));
+};
+
+/** `--all`: every procedure, grouped by file. */
+const formatMatrix = (map: AdvisorMap): string => {
+    const width = idWidth(map.procedures);
     const lines = [
         `advisor health ${String(map.score)}/100 — ${map.grade}`,
         "",
         `  legend: ${MARK.clean} clean  ${MARK.warned} warned  ${MARK.failing} failing  ${MARK.exempt} exempt`,
     ];
 
-    for (const [file, entries] of [...byFile].toSorted(([a], [b]) => (a < b ? -1 : 1))) {
+    for (const [file, entries] of groupByFile(map.procedures)) {
         lines.push("", `  ${file}`);
 
         for (const entry of entries) {
-            lines.push(row(entry, width));
-
-            for (const check of entry.checks) {
-                lines.push(`         ${check.name} (−${String(check.weight)}${check.occurrences > 1 ? `, ×${String(check.occurrences)}` : ""})`);
-            }
+            lines.push(row(entry, width), ...detailLines(entry));
         }
     }
 

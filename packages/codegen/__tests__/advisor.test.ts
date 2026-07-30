@@ -203,6 +203,29 @@ export const careful = action({ args: {}, handler: async (ctx) => { try { await 
         expect([...names].filter((name) => name.startsWith("action_without_error_handling:"))).toStrictEqual(["action_without_error_handling:risky"]);
     });
 
+    it("reads a source-level exemption directive above an export", () => {
+        expect.assertions(3);
+
+        writeFileSync(
+            join(workdir, "lunora", "legacy.ts"),
+            `import { mutation } from "@lunora/server";
+// lunora-advisor-exempt -- legacy endpoint, removed in Q3
+export const legacy = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+export const current = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+`,
+            "utf8",
+        );
+
+        const context = runCodegen({ dryRun: true, projectRoot: workdir }).advisorContext;
+        const rows = context?.procedureProtections ?? [];
+        const exempted = rows.find((row) => row.exportName === "legacy");
+
+        expect(exempted?.exempt).toBe(true);
+        expect(exempted?.exemptReason).toBe("legacy endpoint, removed in Q3");
+        // The directive is per-export, not per-file.
+        expect(rows.find((row) => row.exportName === "current")?.exempt).toBe(false);
+    });
+
     it('flags a `.public()` table with a PII column under `.rls("required")` (full discover → lint path)', () => {
         expect.assertions(2);
 

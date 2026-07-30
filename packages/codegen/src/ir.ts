@@ -1034,9 +1034,13 @@ export interface HttpRouteIR {
 export interface ProcedureMiddlewareIR {
     /** `true` when the handler (or a helper inside it) references `ctx.mail` / `ctx.email`. */
     callsMail: boolean;
-    /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     /** `true` when the handler emits a structured observability event (`ctx.log` / `ctx.span` / `ctx.trace`). */
     emitsEvent: boolean;
+    /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
+    /** `true` when a `// lunora-advisor-exempt` directive sits above the export. */
+    exempt: boolean;
+    /** The `-- reason` from that directive, or `""`. */
+    exemptReason: string;
     /** Export binding name of the procedure (e.g. `signUp`). */
     exportName: string;
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
