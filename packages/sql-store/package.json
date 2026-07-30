@@ -1,6 +1,6 @@
 {
     "name": "@lunora/sql-store",
-    "version": "1.0.0-alpha.52",
+    "version": "1.0.0-alpha.53",
     "description": "Internal dialect-parameterized SQL store core for Lunora .global() backends (D1, PlanetScale)",
     "keywords": [
         "cloudflare",
@@ -74,6 +74,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "workspace:*",
+        "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
