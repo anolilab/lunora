@@ -18,7 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { IndexHit, IssueSeverity, IssueStatus, LogEntry, TraceAnchor } from "@lunora/observability";
-import { ISSUE_SEVERITIES, ISSUE_STATUSES, recordAuthEvent } from "@lunora/observability";
+import { ISSUE_SEVERITIES, ISSUE_STATUSES } from "@lunora/observability";
 import type {
     CdcChange,
     ExportRow,
@@ -31,7 +31,7 @@ import type {
     RecordQueueMessageInput,
     WorkflowInstanceStatusResult,
 } from "@lunora/shard-engine";
-import { ADMIN_FUNCTION_PREFIX, isDevEnvironment, tableFromDepKey } from "@lunora/shard-engine";
+import { ADMIN_FUNCTION_PREFIX, tableFromDepKey } from "@lunora/shard-engine";
 
 /** Recovers the process exit code embedded in a container `stop` message as `(exit &lt;n>)`. */
 const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
@@ -494,7 +494,7 @@ const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteA
  * fire-and-forget record of one auth attempt (PLAN3 §2.3). `outcome` must be
  * exactly `"ok"` or `"fail"`; anything else throws a 400 `LunoraError`, keeping
  * the error shape uniform with the other admin write parsers. Returns the
- * narrowed outcome the {@link recordAuthEvent} helper consumes.
+ * narrowed outcome `@lunora/observability`'s `recordAuthEvent` consumes.
  */
 const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fail" | "ok" } => {
     const { outcome } = args;
@@ -1165,7 +1165,7 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
  * Resolve the per-dispatch console-stream toggle (`LUNORA_REQUEST_LOG_EMIT`).
  * An explicit `"1"`/`"true"` forces it on and `"0"`/`"false"` forces it off
  * (even in dev); when the var is unset/empty it falls back to `devDefault` —
- * which the caller passes as {@link isDevEnvironment}, so a dev deployment
+ * which the caller passes as `isDevEnvironment`, so a dev deployment
  * streams every successful dispatch by default while production stays quiet
  * unless an operator opts in. Errors always stream regardless — see
  * `recordRequestLog`.

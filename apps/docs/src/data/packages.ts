@@ -466,6 +466,7 @@ export const packages: PackageInfo[] = [
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
         description: "Multi-channel notifications: ctx.notify / ctx.push over @visulima/notification.",
+        docsPath: "/docs/packages/notify",
         features: ["Web Push + FCM, edge-safe", "Chat, in-app inbox and webhook channels", "Subscription storage + queue fan-out"],
         name: "Notifications",
         npmName: "@lunora/notify",
