@@ -109,6 +109,15 @@ interface AgentRulesStatus {
 }
 ```
 
+### `AlchemyTranslation` (interface)
+
+```ts
+interface AlchemyTranslation {
+    source: string;
+    unsupported: ReadonlyArray<string>;
+}
+```
+
 ### `ApplyEditResult` (type)
 
 ```ts
@@ -1275,6 +1284,47 @@ interface WranglerConfig {
 }
 ```
 
+### `WranglerConfigShape` (interface)
+
+```ts
+interface WranglerConfigShape {
+    compatibility_date?: string;
+    compatibility_flags?: ReadonlyArray<string>;
+    d1_databases?: ReadonlyArray<{
+        binding?: string;
+        database_id?: string;
+        database_name?: string;
+    }>;
+    durable_objects?: {
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
+    };
+    kv_namespaces?: ReadonlyArray<{
+        binding?: string;
+        id?: string;
+    }>;
+    main?: string;
+    migrations?: ReadonlyArray<{
+        new_classes?: ReadonlyArray<string>;
+        new_sqlite_classes?: ReadonlyArray<string>;
+    }>;
+    name?: string;
+    queues?: {
+        producers?: ReadonlyArray<{
+            binding?: string;
+            queue?: string;
+        }>;
+    };
+    r2_buckets?: ReadonlyArray<{
+        binding?: string;
+        bucket_name?: string;
+    }>;
+    triggers?: {
+        crons?: ReadonlyArray<string>;
+    };
+    vars?: Readonly<Record<string, unknown>>;
+}
+```
+
 ### `WranglerContainerEntry` (interface)
 
 ```ts
@@ -1805,6 +1855,12 @@ const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit) => WireResult;
 
 ```ts
 const withTailConsumer: (wrangler: WranglerConfig, consumer: TailConsumer) => WranglerConfig;
+```
+
+### `wranglerToAlchemy` (const)
+
+```ts
+const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 ```
 
 ### `writeDevServerState` (const)
