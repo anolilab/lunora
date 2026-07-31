@@ -109,8 +109,14 @@ import workflowUnused from "./lints/static/workflow-unused";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAdminRoute } from "./admin-routes";
+// `AE_METRIC_EVENTS` / `loadAnalyticsRuntimeMetrics` are QUARANTINED (plan 225 /
+// ADVISOR-01), not re-exported here: no writer in the runtime emits the AE
+// events this module reads, and the one caller that could supply
+// `analyticsMetrics` (the studio's `deriveRuntimeAdvisories`) never does. The
+// types stay public — `AnalyticsRuntimeMetrics` is the shape of that still-valid,
+// still-optional extension point — but the reader is a design note, not a
+// package export, until something actually writes those events.
 export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
-export { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics } from "./ae-metrics";
 export type { AdvisorAiRawRun } from "./ai-raw-runs";
 export type { AdvisorAiToolSideEffect } from "./ai-tool-side-effects";
 export type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";

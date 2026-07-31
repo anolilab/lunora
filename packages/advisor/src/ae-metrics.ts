@@ -1,26 +1,35 @@
 /**
- * Analytics-Engine-derived feed for the runtime lints.
+ * Analytics-Engine-derived feed for the runtime lints — QUARANTINED design note,
+ * **not exported** from `@lunora/advisor`'s package root (plan 225 / ADVISOR-01).
  *
  * The runtime lints (`hot_shard`, `index_utilization`) are pure over the
  * {@link LintContext} arrays `shardTraffic` / `tableScans` / `indexHits`. By
  * default the studio backend fills those from each shard's durable in-DO
- * counters (`__lunora_metrics*`). This module is the **alternative feeder**:
+ * counters (`__lunora_metrics*`). This module sketches an **alternative feeder**:
  * given a read client over the Analytics Engine SQL API (the one
- * `@lunora/bindings/analytics` exposes as `createAnalyticsSqlClient`), it produces the
- * same arrays from real, cross-shard scan-attribution data — so the advisors can
- * be backed by AE instead of (or alongside) the in-DO counters.
+ * `@lunora/bindings/analytics` exposes as `createAnalyticsSqlClient`), it would
+ * reconstruct the same arrays from cross-shard scan-attribution data in AE —
+ * so the advisors could be backed by AE instead of (or alongside) the in-DO
+ * counters.
  *
- * It is **strictly optional**: with no AE token configured the caller passes no
- * source and the runtime lints fall back to the in-DO signals. A query that
- * fails (a revoked token, a dataset that has never been written) degrades to an
- * empty array for that metric rather than throwing, so a misconfigured read path
- * never breaks an advisor run.
+ * It never shipped a writer: nothing in the runtime calls
+ * `ctx.analytics.track("lunora.index.hit" | "lunora.shard.request" |
+ * "lunora.table.scan", …)`, so the `{@link AE_METRIC_EVENTS}` this reader queries
+ * for are never populated, and `loadAnalyticsRuntimeMetrics` always returns three
+ * empty arrays against a live AE dataset. The one caller shaped to consume it —
+ * the studio's `deriveRuntimeAdvisories` (`analyticsMetrics` input) — never
+ * actually supplies it either. Silently wiring this as-is would disable the
+ * dead-index half of `index_utilization` (an AE array that's merely empty reads
+ * as "no dead indexes" rather than "no data"), so it stays unexported until a
+ * writer exists. The read-side logic and its test coverage stay in place as the
+ * groundwork for that follow-up; import from `./ae-metrics` directly (not the
+ * package root) if you need it for that work.
  *
- * ## Read contract
+ * ## Read contract (for when a writer exists)
  *
- * The arrays are reconstructed from data points the runtime mirrors into AE via
- * `ctx.analytics.track(name, { dimensions })`. `track` reserves `blob1` for the
- * event name and lays dimensions out from `blob2` in key order (see
+ * The arrays would be reconstructed from data points the runtime mirrors into AE
+ * via `ctx.analytics.track(name, { dimensions })`. `track` reserves `blob1` for
+ * the event name and lays dimensions out from `blob2` in key order (see
  * `@lunora/bindings/analytics`' `createAnalytics`). The event names + dimension columns
  * this reader expects are the {@link AE_METRIC_EVENTS} constants below; the
  * un-sampled count is AE's `sum(_sample_interval)`.
@@ -218,6 +227,14 @@ const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsM
  * `indexHits`) from the Analytics Engine SQL API. The three reads run
  * concurrently; each degrades to an empty array on a query failure, so a
  * partially-misconfigured read path still returns what it can.
+ *
+ * QUARANTINED — not exported from `@lunora/advisor`'s package root. No writer
+ * ever calls `ctx.analytics.track` with the events this reads, so every call
+ * today returns three empty arrays against a real dataset. Wiring this in as-is
+ * would silently disable `index_utilization`'s dead-index check (empty reads as
+ * "nothing dead", not "no data"). See the module doc for the full rationale;
+ * import from `./ae-metrics` directly if you're doing the follow-up work that
+ * adds the writer.
  *
  * Feed the result into a {@link LintContext} alongside the declared schema:
  *
