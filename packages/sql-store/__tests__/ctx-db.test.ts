@@ -534,6 +534,94 @@ describe("createSqlCtxDb — indexed groupBy honours a partial where", () => {
     });
 });
 
+/** A `notes` table carrying both an aggregate and a rank index, so one backfill pass exercises both companion-tally loops. */
+const backfillSchema: SchemaLike = {
+    tables: {
+        notes: {
+            aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "notes", op: "count" }],
+            indexes: [],
+            rankIndexes: [{ name: "byPriority", on: "notes", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+            shape: {
+                archived: col("boolean"),
+                priority: col("number"),
+                slug: col("string"),
+            },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — aggregate + rank backfills route through batch when the exec supports it", () => {
+    it("issues one batch call per companion backfill (not one run() per row) when rebuilding from pre-existing rows", async () => {
+        expect.assertions(3);
+
+        const database = new DatabaseSync(":memory:");
+        const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
+
+        const plainExec: SqlCtxExec = {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
+
+        let batchCalls = 0;
+        const batchingExec: SqlCtxExec = {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            batch: (statements) => {
+                batchCalls += 1;
+
+                for (const statement of statements) {
+                    all(statement.sql, statement.params);
+                }
+
+                return Promise.resolve(statements.map(() => undefined));
+            },
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
+
+        try {
+            // Seed the base table (and migrate the companions) through a plain
+            // writer, five rows, so a from-scratch backfill has more than one
+            // tally/tuple to insert.
+            const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: plainExec, schema: backfillSchema });
+
+            for (const [index, slug] of ["a", "b", "c", "d", "e"].entries()) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seeding
+                await seeder.insert("notes", { archived: false, priority: index, slug });
+            }
+
+            // A SECOND writer over the SAME database, with its own empty
+            // backfill cache: its first write re-derives both companions from
+            // scratch — the historical backfill path both loops share — this
+            // time through the batching exec.
+            const rebuilder = createSqlCtxDb({ clock: () => 2, dialect: makeSqliteDialect(), exec: batchingExec, schema: backfillSchema });
+
+            await rebuilder.insert("notes", { archived: false, priority: 99, slug: "f" });
+
+            // One batch call for the aggregate tally backfill, one for the rank
+            // tuple backfill — never a run()-per-row loop.
+            expect(batchCalls).toBe(2);
+
+            const groups = await rebuilder.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
+
+            expect(groups[0]?.value).toBe(6);
+
+            const page = await rebuilder.rankPage("notes", "byPriority", { take: 10 });
+
+            expect(page.page).toHaveLength(6);
+        } finally {
+            database.close();
+        }
+    });
+});
+
 describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
     /** A recording exec that captures every rendered statement and answers reads from a fixed row set. */
     const recordingExec = (rows: Record<string, unknown>[]): { exec: SqlCtxExec; statements: string[] } => {
