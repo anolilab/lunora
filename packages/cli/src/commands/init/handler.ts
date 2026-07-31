@@ -1584,7 +1584,23 @@ const scaffoldCiPipeline = (options: InitCommandOptions, result: InitCommandResu
         return;
     }
 
-    scaffoldCiWorkflow(options.inPlace === true ? cwd : result.target, options.ci, options.logger);
+    const target = options.inPlace === true ? cwd : result.target;
+
+    try {
+        // Same detection the post-install summary uses, resolved fresh here
+        // rather than threaded through — by this point the project's lock
+        // file / `packageManager` field is written (scaffold, or the install
+        // offer just above), so this is a real signal, not a guess.
+        const manager = detectPackageManager(target);
+
+        scaffoldCiWorkflow(target, options.ci, manager, options.logger);
+    } catch {
+        // No lock file / `packageManager` field, launching manager, or
+        // installed manager to fall back on — there is nothing honest to
+        // template a manager-specific pipeline with. Per `detectPackageManager`'s
+        // own contract, that is a reason to skip, not to guess pnpm.
+        options.logger.warn(`--ci ${options.ci}: could not detect a package manager for this project — skipped the CI pipeline.`);
+    }
 };
 
 const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
