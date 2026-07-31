@@ -179,6 +179,89 @@ describe("redirectTo", () => {
     });
 });
 
+describe("redirectTo reaches every sign-in transport", () => {
+    afterEach(() => {
+        // jsdom keeps the URL across tests otherwise, and these all set it.
+        window.history.pushState({}, "", "/");
+    });
+
+    it("passes an on-origin redirectTo as the social callbackURL", async () => {
+        expect.assertions(1);
+
+        const { resolveContext, signInWithSocial } = await import("../../src/core");
+
+        window.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+
+        const social = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), signIn: { social } } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+        });
+
+        await signInWithSocial(context, "google");
+
+        expect(social).toHaveBeenCalledWith(expect.objectContaining({ callbackURL: "/invite/xyz" }));
+    });
+
+    it("falls back to the configured default when redirectTo would leave the origin", async () => {
+        expect.assertions(1);
+
+        const { resolveContext, signInWithSocial } = await import("../../src/core");
+
+        window.history.pushState({}, "", "/sign-in?redirectTo=https%3A%2F%2Fevil.example");
+
+        const social = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), signIn: { social } } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            redirects: { afterSignIn: "/app" },
+        });
+
+        await signInWithSocial(context, "google");
+
+        expect(social).toHaveBeenCalledWith(expect.objectContaining({ callbackURL: "/app" }));
+    });
+
+    it("passes an on-origin redirectTo as the magic-link callbackURL", async () => {
+        expect.assertions(1);
+
+        const { createMagicLinkController, resolveContext } = await import("../../src/core");
+
+        window.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+
+        const magicLink = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), signIn: { magicLink } } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+        });
+
+        const controller = createMagicLinkController(context);
+
+        controller.actions.setField("email", "ada@example.com");
+        await controller.actions.submit();
+
+        expect(magicLink).toHaveBeenCalledWith(expect.objectContaining({ callbackURL: "/invite/xyz" }));
+    });
+
+    it("passes an on-origin redirectTo as the One Tap callbackURL", async () => {
+        expect.assertions(1);
+
+        const { promptOneTap, resolveContext } = await import("../../src/core");
+
+        window.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+
+        const oneTap = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), oneTap } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+        });
+
+        await promptOneTap(context);
+
+        expect(oneTap).toHaveBeenCalledWith(expect.objectContaining({ callbackURL: "/invite/xyz" }));
+    });
+});
+
 describe("oauth-provider consent", () => {
     it("labels known scopes and shows unknown ones verbatim", async () => {
         expect.assertions(2);
