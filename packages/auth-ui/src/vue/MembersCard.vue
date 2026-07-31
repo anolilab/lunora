@@ -49,7 +49,7 @@ const onCancelInvitation = (id: string): void => {
 </script>
 
 <template>
-    <AuthCard v-if="enabled" :title="t.members">
+    <AuthCard v-if="enabled" :headingLevel="2" :title="t.members">
         <FormBanner :error="state.error" />
 
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>

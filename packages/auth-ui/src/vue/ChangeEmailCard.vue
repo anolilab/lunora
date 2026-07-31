@@ -12,7 +12,7 @@ const { actions, state } = useController(createChangeEmailController);
 </script>
 
 <template>
-    <AuthCard :title="t.changeEmail">
+    <AuthCard :headingLevel="2" :title="t.changeEmail">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <Field
