@@ -250,10 +250,27 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
    `INSERT INTO channels … FROM <exported.jsonl>` step. Run
    `lunora migrate generate init` to get the schema SQL, then add a
    one-off data-import migration alongside it.
-5. **Export Convex data**: `npx convex export` produces a JSONL dump per
-   table. Reshape it to your new schema (drop `_creationTime` if you don't
-   need it; Lunora uses `createdAt` columns you populate yourself), then
-   batch-insert via a Lunora mutation or a `lunora run` script.
+5. **Export Convex data**: `npx convex export --path ./convex-export` produces a
+   JSONL dump per table. Point `lunora import` straight at that directory —
+   it reads the export layout, so there is no reshaping step:
+
+    ```bash
+    lunora import ./convex-export
+    ```
+
+    **Your Convex `_id`s carry across verbatim.** The import path writes each
+    row's supplied `_id` rather than minting a new one, so every foreign key
+    referencing it stays valid and the whole thing is one pass. That is what
+    makes self-referential and cross-table cycles (a folder's `parentId`, a
+    supersession chain) ordinary rows rather than special cases — there is
+    nothing to remap, so there is no ordering problem to solve.
+
+    <Callout type="warn">
+        `ctx.db.insert` does the **opposite**: it discards a supplied `_id` and mints a fresh one. So a hand-rolled importer that batch-inserts through a
+        mutation renumbers your data and breaks every foreign key, which is exactly the failure that makes a Convex migration look impossible. Use `lunora
+        import` (or the admin import endpoint it calls) for a data load; `ctx.db.insert` is for new rows.
+    </Callout>
+
 6. **Wire the React provider**: replace `<ConvexProvider client={…}>` with
    `<LunoraProvider client={createLunoraClient({ url })}>`. URL is your
    Worker's `*.workers.dev` hostname.
