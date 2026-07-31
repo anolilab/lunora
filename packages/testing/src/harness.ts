@@ -19,7 +19,7 @@ import type {
     TableDefinition,
 } from "@lunora/server";
 import type { SchemaLike } from "@lunora/shard-engine";
-import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations } from "@lunora/shard-engine";
 
 import { evaluationAttributes } from "./evaluation-telemetry";
 import { createFakeScheduler } from "./fake-scheduler";
@@ -83,6 +83,36 @@ type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMu
  * clearly-throwing stubs for unsupported surfaces.
  */
 interface LunoraTestOptions {
+    /**
+     * Enforce the secure-by-default RLS guard on the writer registered
+     * procedures dispatch through (`query`/`mutation`/`action`, via
+     * `reference.handler`) — the same `enforceRls: true` production's generated
+     * `buildCtx` always passes. Under a `.rls("required")` schema, a procedure
+     * that touches a known, non-`.public()` table without `.use(rls(...))` in
+     * its chain rejects with `RlsRequiredError`, exactly as it would on first
+     * dispatch in production. Defaults to `true` so a green suite means the
+     * deploy is RLS-safe; the harness's other surfaces — `t.run` and any
+     * `@lunora/seed` helper built on it — stay on the trusted, UNGUARDED writer
+     * regardless of this flag (mirroring production's admin/migration system
+     * paths).
+     *
+     * Set to `false` to opt back into the pre-guard permissive behaviour (every
+     * `lunoraTest` release before this option existed): every procedure's
+     * `ctx.db` goes unguarded even under a `.rls("required")` schema. This
+     * forfeits the "a passing suite means the deploy is safe" guarantee — a
+     * procedure that forgot `.use(rls(...))` will pass in tests and throw
+     * `RlsRequiredError` on its first production request. No effect when the
+     * schema does not declare `.rls("required")` (the guard is a no-op there
+     * either way).
+     * @default true
+     * @example
+     * ```ts
+     * // Restores the old permissive behavior for a suite not yet migrated.
+     * const t = lunoraTest(schema, { enforceRls: false });
+     * ```
+     */
+    enforceRls?: boolean;
+
     /**
      * Injectable `ctx.env` for every context (query / mutation / action). When
      * provided, handlers that read `ctx.env.SOME_KEY` (the validated `defineEnv`
@@ -166,7 +196,17 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
-    /** Direct db access at mutation-level (read + write), mirroring `convexTest`'s `run`. */
+
+    /**
+     * Direct db access at mutation-level (read + write), mirroring `convexTest`'s
+     * `run`. This is the harness's trusted escape hatch: `ctx.db` here is always
+     * the UNGUARDED writer, regardless of `options.enforceRls` or the schema's
+     * RLS mode — seeding/asserting against a protected table never trips the
+     * secure-by-default guard. A `ctx.runMutation`/`ctx.runQuery` call from
+     * inside the body still dispatches the target as a real registered
+     * procedure, so it is guarded exactly as `t.mutation`/`t.query` would guard
+     * it.
+     */
     run: <R>(function_: InlineMutationFunction<R>) => Promise<R>;
 
     /**
@@ -636,9 +676,14 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  *
  * `lunoraTest(schema)` runs the migrations against a fresh `node:sqlite`
  * database, builds the same `ctx.db` writer the real Durable Object builds (via
- * `@lunora/do`'s `createShardCtxDb`), and returns a harness whose `query` /
- * `mutation` / `action` / `run` execute a registered function's `handler`
- * directly — no Durable Object, no `wrangler`, no network.
+ * `@lunora/shard-engine`'s `createShardCtxDb`, with the same `enforceRls: true`
+ * production's generated `buildCtx` passes), and returns a harness whose
+ * `query` / `mutation` / `action` execute a registered function's `handler`
+ * directly — no Durable Object, no `wrangler`, no network. Under a
+ * `.rls("required")` schema a procedure missing `.use(rls(...))` therefore
+ * rejects here exactly as it would on its first production dispatch — see
+ * `LunoraTestOptions.enforceRls` to opt out, and `run`'s doc for the trusted
+ * escape hatch (always unguarded).
  *
  * **v1 surfaces now supported:**
  *
@@ -658,7 +703,23 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
     runShardMigrations(sql, ddlSchema);
 
-    const database = createShardCtxDb({ schema: ddlSchema, sql }) as unknown as DatabaseWriter;
+    // Secure-by-default: mirrors production's generated `buildCtx`, which always
+    // passes `enforceRls: true` (a no-op unless the schema is `.rls("required")`).
+    // `options.enforceRls` is the harness's opt-out — default `true` so a green
+    // suite means a procedure that forgot `.use(rls(...))` against a protected
+    // table would fail here exactly as it fails on first production dispatch.
+    const database = createShardCtxDb({ enforceRls: options?.enforceRls ?? true, schema: ddlSchema, sql }) as unknown as DatabaseWriter;
+
+    // The trusted, UNGUARDED writer — recovered through the same well-known
+    // `RLS_UNWRAP_SYMBOL` seam `@lunora/server`'s `rls()` middleware uses to
+    // reach the raw writer, rather than a second `createShardCtxDb` call. When
+    // the guard didn't wrap `database` (schema not `.rls("required")`, or
+    // `enforceRls: false`), the symbol is absent and `rawDatabase` is `database`
+    // itself. Backs the harness's explicit trusted escape hatch (`t.run`, and any
+    // `@lunora/seed` helper built on it) — mirrors production's admin/migration/
+    // studio writers, which are built from `createShardCtxDb` WITHOUT `enforceRls`
+    // and so are never guarded.
+    const rawDatabase = ((database as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as DatabaseWriter | undefined) ?? database;
 
     // Mutation atomicity — mirrors the real ShardDO, whose codegen `handleRpc`
     // dispatches a mutation inside `runInTransaction` (a BEGIN/COMMIT span). Only
@@ -863,6 +924,16 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // same scheduler so the base mutationContext is the canonical one.
         mutationContextRef ??= mutationContext;
 
+        // The trusted escape hatch's context: same auth/env/scheduler/runMutation/
+        // runQuery as `mutationContext` (composed `ctx.runMutation`/`ctx.runQuery`
+        // calls still dispatch registered procedures through the GUARDED
+        // `mutationContext`/`queryContext` closures above — only DIRECT `ctx.db`
+        // access from a `t.run` body is unguarded), but `db` is the raw writer.
+        // Backs `harness.run` only — `query`/`mutation`/`action` dispatch (both the
+        // registered-procedure and inline-callback forms) stays on the guarded
+        // `queryContext`/`mutationContext`/`actionContext` above.
+        const rawMutationContext: MutationCtx = { ...mutationContext, db: rawDatabase };
+
         const actionContext: ActionCtx = {
             auth,
             db: database,
@@ -987,7 +1058,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             mutation,
             query,
             run: (function_) =>
-                runInMutationTransaction(() => function_(mutationContext)).then((result) => {
+                runInMutationTransaction(() => function_(rawMutationContext)).then((result) => {
                     notifyMutationListeners();
 
                     return result;
