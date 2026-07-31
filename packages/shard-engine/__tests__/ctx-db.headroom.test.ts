@@ -136,7 +136,15 @@ describe("ctx-db transaction headroom", () => {
             return { body: "b", bucket: "a" };
         });
 
-        await expect(writer.insertManyUnsafe("notes", rows)).resolves.toHaveLength(5);
+        const { insertManyUnsafe } = writer;
+
+        // Optional on the writer interface (the global/D1 twin has no batch
+        // primitive); the shard writer always implements it.
+        if (!insertManyUnsafe) {
+            throw new Error("expected the shard writer to implement insertManyUnsafe");
+        }
+
+        await expect(insertManyUnsafe("notes", rows)).resolves.toHaveLength(5);
     });
 
     it("charges a full-table scan by the rows it materialized", async () => {
