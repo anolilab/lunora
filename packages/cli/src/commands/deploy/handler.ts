@@ -39,6 +39,7 @@ import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
@@ -138,6 +139,17 @@ interface DeployCommandOptions {
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
+
+    /**
+     * Fail the deploy when codegen reports an ERROR-level advisory. Same
+     * option `lunora codegen` exposes as `--no-strict-advisories`; defaults to
+     * CI detection (on in CI, off locally) so a legitimately-partial target
+     * can still be shipped interactively. Does NOT gate platform diagnostics
+     * (`platform_unsupported_feature` / `platform_unknown_target`), which
+     * always block — those mean the emitted `ctx.*` surface does not match
+     * what the target can serve, not merely a style nit.
+     */
+    strictAdvisories?: boolean;
 
     /**
      * Deploy target. Falls back to `"target"` in `lunora.json`, then
@@ -750,6 +762,7 @@ const runCodegenStep = async (
     target: string,
     spawner: Spawner | undefined,
     jsonOutput: boolean,
+    strictAdvisories: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -766,6 +779,34 @@ const runCodegenStep = async (
 
         if (!codegenSpinner) {
             logger.success("codegen complete");
+        }
+
+        // Portability diagnostics (`platform_unsupported_feature` /
+        // `platform_unknown_target`) mean the emitted `ctx.*` surface does not
+        // match what the deploy target can actually serve — always blocking,
+        // no opt-out, same as every other codegen caller
+        // (`reportPlatformDiagnostics` is shared for exactly this reason).
+        const platformError = reportPlatformDiagnostics(result.platformDiagnostics, logger);
+
+        if (platformError !== undefined) {
+            return { error: platformError };
+        }
+
+        // ERROR-level schema advisories ("the call throws at runtime") gate on
+        // the same `--no-strict-advisories` opt-out `lunora codegen` uses, so a
+        // legitimately-partial target can still ship interactively while CI
+        // stays strict by default.
+        const errorAdvisories = result.advisories.filter((advisory) => advisory.level === "ERROR");
+
+        if (errorAdvisories.length > 0 && strictAdvisories) {
+            const names = [...new Set(errorAdvisories.map((advisory) => advisory.name))].toSorted((a, b) => a.localeCompare(b));
+            const message =
+                `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
+                `Pass --no-strict-advisories to downgrade this to a warning and deploy anyway.`;
+
+            logger.error(message);
+
+            return { error: message };
         }
 
         // Codegen ran in-process, not through the project's own `codegen`
@@ -1051,6 +1092,9 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string> },
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
+    // Same CI-detection default `lunora codegen` uses: strict in CI, advisory
+    // locally, so a legitimately-partial target can still be shipped by hand.
+    const strictAdvisories = options.strictAdvisories ?? (process.env["CI"] !== undefined && process.env["CI"] !== "");
 
     // Resolved ONCE, and before anything writes. Deploy rewrites `_generated/*`
     // and may mutate `wrangler.jsonc` well before it reaches the wrangler step,
@@ -1074,7 +1118,16 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     let codegen: CodegenResult | undefined;
 
     if (!options.skipCodegen) {
-        const codegenStep = await runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target, options.spawner, isJsonFormat(options.format));
+        const codegenStep = await runCodegenStep(
+            cwd,
+            interactive,
+            options.logger,
+            options.apiSpec,
+            target,
+            options.spawner,
+            isJsonFormat(options.format),
+            strictAdvisories,
+        );
 
         if (codegenStep.error !== undefined) {
             return {
@@ -1267,6 +1320,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
         temporary: options.temporary === true,
         updateSchemaBaseline: options.updateSchemaBaseline === true,

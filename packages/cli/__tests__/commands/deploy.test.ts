@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
+import { runCodegen } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +12,19 @@ import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+
+// A pass-through wrapper around the real `runCodegen` — every existing test in
+// this file runs the genuine codegen pass unmodified. Only the platform-
+// diagnostics / advisory gate tests below override a single call's result (via
+// `mockImplementationOnce`, layered on the REAL result so the rest of the
+// deploy pipeline still gets a valid `CodegenResult`) to exercise a diagnostic
+// shape the shipped `cloudflare` capability matrix can never actually produce
+// (it rates every feature `native`/`emulated`, never `unsupported`).
+vi.mock("@lunora/codegen", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@lunora/codegen")>();
+
+    return { ...actual, runCodegen: vi.fn(actual.runCodegen) };
+});
 
 // Keep the deploy suite hermetic: the deploy-time missing-secret gate lists the
 // target's remote secrets via `wrangler secret list`, which would shell out to a
@@ -1011,6 +1026,108 @@ export const backfillNames = defineMigration({
 
                 expect(result.code).toBe(1);
                 expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
+            });
+        });
+
+        describe("platform-diagnostics / advisory gate", () => {
+            /** Append an index referencing a column that doesn't exist — `index_references_unknown_field` is an ERROR-level advisory. */
+            const addBogusIndexToSchema = (dir: string): void => {
+                const schemaPath = join(dir, "lunora", "schema.ts");
+                const schema = readFileSync(schemaPath, "utf8");
+                const patched = schema.replace(
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+                );
+
+                expect(patched).not.toBe(schema);
+                writeFileSync(schemaPath, patched, "utf8");
+            };
+
+            it("deploys a clean project with the gate in place", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: true });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("aborts a strict deploy on an ERROR-level codegen advisory", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema(workdir);
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: true });
+
+                expect(result.code).toBe(1);
+                expect(calls).toHaveLength(0);
+                expect(result.error).toContain("ERROR-level");
+                expect(errors.some((line) => line.includes("index_references_unknown_field"))).toBe(true);
+            });
+
+            it("--no-strict-advisories deploys anyway despite the same ERROR-level advisory", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema(workdir);
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: false });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("aborts on an error-level platform diagnostic even with the advisory opt-out set", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // The shipped `cloudflare` capability matrix rates every feature
+                // native/emulated — never unsupported — so a real project can't
+                // produce this diagnostic today. Layer it onto the REAL codegen
+                // result (one call only) so the rest of the pipeline still sees a
+                // valid `CodegenResult`.
+                const actual = await vi.importActual<typeof import("@lunora/codegen")>("@lunora/codegen");
+                const diagnostic: PlatformDiagnostic = {
+                    level: "error",
+                    message: `ctx.ai is used, but target "cloudflare" does not support it`,
+                    name: "platform_unsupported_feature",
+                    remediation: "remove the usage, or choose a target that supports it",
+                    target: "cloudflare",
+                };
+
+                vi.mocked(runCodegen).mockImplementationOnce(
+                    (options): CodegenResult => ({ ...actual.runCodegen(options), platformDiagnostics: [diagnostic] }),
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    // The opt-out downgrades ERROR advisories, never platform
+                    // diagnostics — those mean the emitted surface doesn't match
+                    // what the target can actually serve.
+                    strictAdvisories: false,
+                });
+
+                expect(result.code).toBe(1);
+                expect(calls).toHaveLength(0);
+                expect(result.error).toContain("ctx.ai");
+                expect(errors.some((line) => line.includes("platform_unsupported_feature"))).toBe(true);
             });
         });
     });
