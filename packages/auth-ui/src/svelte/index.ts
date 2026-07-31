@@ -75,6 +75,7 @@ export { default as PhoneSignInCard } from "./PhoneSignInCard.svelte";
 export { default as ProfileCard } from "./ProfileCard.svelte";
 export { default as ResendVerificationCard } from "./ResendVerificationCard.svelte";
 export { default as ResetPasswordCard } from "./ResetPasswordCard.svelte";
+export { default as ResetPasswordOtpCard } from "./ResetPasswordOtpCard.svelte";
 export { default as SessionsCard } from "./SessionsCard.svelte";
 export { default as SetUsernameCard } from "./SetUsernameCard.svelte";
 export { default as SignInCard } from "./SignInCard.svelte";

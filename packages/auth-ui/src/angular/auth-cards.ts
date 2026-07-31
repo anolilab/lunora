@@ -18,6 +18,8 @@ import { readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import type { ResetPasswordField } from "../core/reset-password";
 import { createResetPasswordController } from "../core/reset-password";
+import type { ResetPasswordOtpField } from "../core/reset-password-otp";
+import { createResetPasswordOtpController } from "../core/reset-password-otp";
 import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
@@ -318,6 +320,69 @@ class ResetPasswordCardComponent implements OnInit {
     }
 }
 
+/**
+ * Redeems an emailed one-time code instead of a link — for apps that set
+ * `forgotPassword: { method: "otp" }`. Unlike {@link ResetPasswordCardComponent},
+ * the email address is a field rather than something carried from the previous
+ * screen: a code can legitimately be redeemed from a fresh tab.
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    imports: [AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent],
+    selector: "lunora-reset-password-otp-card",
+    standalone: true,
+    template: `
+        <lunora-auth-card [title]="t.resetPassword" [description]="t.resetPasswordOtpDescription">
+            <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
+                <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
+                <lunora-auth-field
+                    [field]="state().fields.email"
+                    [label]="t.emailLabel"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    (changed)="actions.setField('email', $event)"
+                    (blurred)="actions.blur('email')"
+                />
+                <lunora-auth-field
+                    [field]="state().fields.otp"
+                    [label]="t.codeLabel"
+                    name="otp"
+                    autoComplete="one-time-code"
+                    (changed)="actions.setField('otp', $event)"
+                    (blurred)="actions.blur('otp')"
+                />
+                <lunora-auth-field
+                    [field]="state().fields.password"
+                    [label]="t.passwordLabel"
+                    name="password"
+                    type="password"
+                    autoComplete="new-password"
+                    (changed)="actions.setField('password', $event)"
+                    (blurred)="actions.blur('password')"
+                />
+                <lunora-auth-field
+                    [field]="state().fields.confirmPassword"
+                    [label]="t.confirmPasswordLabel"
+                    name="confirmPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    (changed)="actions.setField('confirmPassword', $event)"
+                    (blurred)="actions.blur('confirmPassword')"
+                />
+                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.resetPassword }}</lunora-auth-submit-button>
+            </form>
+        </lunora-auth-card>
+    `,
+})
+class ResetPasswordOtpCardComponent {
+    private readonly context = injectAuthUIContext();
+    protected readonly t = this.context().localization;
+    private readonly bridge = controllerSignal(createResetPasswordOtpController, { context: this.context });
+    protected readonly state: Signal<FormState<ResetPasswordOtpField>> = this.bridge.state;
+    protected readonly actions: FormActions<ResetPasswordOtpField> = this.bridge.actions;
+}
+
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     imports: [AuthCardComponent, AuthFieldComponent, AuthLinkComponent, FormBannerComponent, SubmitButtonComponent],
@@ -457,6 +522,7 @@ export {
     ForgotPasswordCardComponent,
     MagicLinkCardComponent,
     ResetPasswordCardComponent,
+    ResetPasswordOtpCardComponent,
     SignInCardComponent,
     SignUpCardComponent,
     TwoFactorCardComponent,

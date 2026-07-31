@@ -3,7 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient } from "../../src/core";
 import { pushToast, resetToasts } from "../../src/core";
-import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, ResetPasswordCard, SignUpCard, TwoFactorSetupCard } from "../../src/react";
+import {
+    AuthUIProvider,
+    ConsentCard,
+    ErrorToaster,
+    OrganizationLogoCard,
+    ResetPasswordCard,
+    ResetPasswordOtpCard,
+    SignUpCard,
+    TwoFactorSetupCard,
+} from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
@@ -212,6 +221,31 @@ describe("resetPasswordCard reads the token from the URL", () => {
 
         await waitFor(() => {
             expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
+        });
+    });
+});
+
+describe("resetPasswordOtpCard", () => {
+    it("redeems the emailed code and sets a new password", async () => {
+        expect.assertions(1);
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { emailOtp: { resetPassword }, getSession: vi.fn() } as unknown as AuthClient;
+
+        render(
+            <AuthUIProvider authClient={client} discover={false} forgotPassword={{ method: "otp" }} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ResetPasswordOtpCard />
+            </AuthUIProvider>,
+        );
+
+        fireEvent.change(screen.getByLabelText("Email"), { target: { value: "ada@example.com" } });
+        fireEvent.change(screen.getByLabelText("Verification code"), { target: { value: "123456" } });
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Set new password" }));
+
+        await waitFor(() => {
+            expect(resetPassword).toHaveBeenCalledWith({ email: "ada@example.com", otp: "123456", password: "hunter2hunter2" });
         });
     });
 });

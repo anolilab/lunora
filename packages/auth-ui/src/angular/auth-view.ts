@@ -17,6 +17,7 @@ import {
     ForgotPasswordCardComponent,
     MagicLinkCardComponent,
     ResetPasswordCardComponent,
+    ResetPasswordOtpCardComponent,
     SignInCardComponent,
     SignUpCardComponent,
     TwoFactorCardComponent,
@@ -136,6 +137,7 @@ class PhoneSignInCardComponent {
         ForgotPasswordCardComponent,
         MagicLinkCardComponent,
         ResetPasswordCardComponent,
+        ResetPasswordOtpCardComponent,
         SignInCardComponent,
         SignUpCardComponent,
         TwoFactorCardComponent,
@@ -173,7 +175,11 @@ class PhoneSignInCardComponent {
                 }
             }
             @case (viewPaths().resetPassword) {
-                <lunora-reset-password-card />
+                @if (forgotPasswordMethod() === "otp") {
+                    <lunora-reset-password-otp-card />
+                } @else {
+                    <lunora-reset-password-card />
+                }
             }
             @case (viewPaths().signUp) {
                 <lunora-sign-up-card />
@@ -202,6 +208,7 @@ class AuthViewComponent {
 
     /** Derived, so a discovery answer that turns a plugin off redirects to sign-in. */
     protected readonly plugins: Signal<Required<PluginFlags>> = computed(() => this.context().plugins);
+    protected readonly forgotPasswordMethod: Signal<"link" | "otp"> = computed(() => this.context().forgotPasswordMethod);
     protected readonly viewPaths: Signal<Required<ViewPaths>> = computed(() => this.context().viewPaths);
 }
 

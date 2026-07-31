@@ -133,6 +133,7 @@ interface Localization {
     remove: string;
     resetPassword: string;
     resetPasswordDone: string;
+    resetPasswordOtpDescription: string;
     revoke: string;
     revokeAccess: string;
     revokeOthers: string;
@@ -306,6 +307,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     remove: "Remove",
     resetPassword: "Set new password",
     resetPasswordDone: "Your password has been updated. You can sign in now.",
+    resetPasswordOtpDescription: "Enter the code we emailed you, then choose a new password.",
     revoke: "Revoke",
     revokeAccess: "Revoke access",
     revokeOthers: "Sign out other sessions",

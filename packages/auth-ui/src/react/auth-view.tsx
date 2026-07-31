@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createPhoneSignInController } from "../core/phone-number";
 import { createUsernameSignInController } from "../core/username";
-import { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+import { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, ResetPasswordOtpCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
 import { DeviceAuthorizationCard } from "./plugin-cards";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
@@ -123,7 +123,7 @@ interface AuthViewProps {
 }
 
 const AuthView = ({ view }: AuthViewProps = {}): ReactElement => {
-    const { plugins, viewPaths } = useAuthUI();
+    const { forgotPasswordMethod, plugins, viewPaths } = useAuthUI();
 
     /*
      * A lookup keyed by the resolved segment, not a `switch` over
@@ -143,7 +143,7 @@ const AuthView = ({ view }: AuthViewProps = {}): ReactElement => {
         [viewPaths.emailOtp]: () => (plugins.emailOtp ? <EmailOtpCard /> : <SignInCard />),
         [viewPaths.forgotPassword]: () => <ForgotPasswordCard />,
         [viewPaths.magicLink]: () => (plugins.magicLink ? <MagicLinkCard /> : <SignInCard />),
-        [viewPaths.resetPassword]: () => <ResetPasswordCard />,
+        [viewPaths.resetPassword]: () => (forgotPasswordMethod === "otp" ? <ResetPasswordOtpCard /> : <ResetPasswordCard />),
         [viewPaths.signUp]: () => <SignUpCard />,
         [viewPaths.twoFactor]: () => (plugins.twoFactor ? <TwoFactorCard /> : <SignInCard />),
         [viewPaths.verifyEmail]: () => <VerifyEmailCard />,

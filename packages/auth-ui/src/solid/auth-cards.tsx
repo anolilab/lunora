@@ -9,6 +9,7 @@ import { createForgotPasswordController } from "../core/forgot-password";
 import { readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
+import { createResetPasswordOtpController } from "../core/reset-password-otp";
 import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
@@ -262,6 +263,77 @@ const ResetPasswordCard = (props: ResetPasswordCardProps = {}): JSX.Element => {
     );
 };
 
+/**
+ * Redeems an emailed one-time code instead of a link — for apps that set
+ * `forgotPassword: { method: "otp" }`. Unlike {@link ResetPasswordCard}, the
+ * email address is a field rather than something carried from the previous
+ * screen: a code can legitimately be redeemed from a fresh tab.
+ */
+const ResetPasswordOtpCard = (): JSX.Element => {
+    const { localization: t } = useAuthUI();
+    const [state, actions] = createController((context) => createResetPasswordOtpController(context));
+
+    return (
+        <AuthCard description={t.resetPasswordOtpDescription} title={t.resetPassword}>
+            <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                <FormBanner error={state.formError} success={state.successMessage} />
+                <Field
+                    autoComplete="email"
+                    field={state.fields.email}
+                    label={t.emailLabel}
+                    name="email"
+                    onBlur={() => {
+                        actions.blur("email");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("email", value);
+                    }}
+                    type="email"
+                />
+                <Field
+                    autoComplete="one-time-code"
+                    field={state.fields.otp}
+                    label={t.codeLabel}
+                    name="otp"
+                    onBlur={() => {
+                        actions.blur("otp");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("otp", value);
+                    }}
+                />
+                <Field
+                    autoComplete="new-password"
+                    field={state.fields.password}
+                    label={t.passwordLabel}
+                    name="password"
+                    onBlur={() => {
+                        actions.blur("password");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("password", value);
+                    }}
+                    type="password"
+                />
+                <Field
+                    autoComplete="new-password"
+                    field={state.fields.confirmPassword}
+                    label={t.confirmPasswordLabel}
+                    name="confirmPassword"
+                    onBlur={() => {
+                        actions.blur("confirmPassword");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("confirmPassword", value);
+                    }}
+                    type="password"
+                />
+                <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
+            </form>
+        </AuthCard>
+    );
+};
+
 interface MagicLinkCardProps {
     signInHref?: string;
 }
@@ -393,4 +465,4 @@ const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
 };
 
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps };
-export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard };
+export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, ResetPasswordOtpCard, SignInCard, SignUpCard, TwoFactorCard };

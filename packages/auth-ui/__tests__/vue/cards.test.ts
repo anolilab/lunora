@@ -13,6 +13,7 @@ import { resetFlowWarnings } from "../../src/core";
 import AuthUIProvider from "../../src/vue/AuthUIProvider.vue";
 import MagicLinkCard from "../../src/vue/MagicLinkCard.vue";
 import ResetPasswordCard from "../../src/vue/ResetPasswordCard.vue";
+import ResetPasswordOtpCard from "../../src/vue/ResetPasswordOtpCard.vue";
 import SignInCard from "../../src/vue/SignInCard.vue";
 import SignUpCard from "../../src/vue/SignUpCard.vue";
 import type { FakeClient } from "../fake-client";
@@ -21,8 +22,7 @@ import { bareClient, fakeNav, pluginClient } from "../fake-client";
 const renderInProvider = (component: unknown, fake: FakeClient, extra: Record<string, unknown> = {}, componentProps: Record<string, unknown> = {}): void => {
     render(
         defineComponent({
-            render: () =>
-                h(AuthUIProvider, { authClient: fake.client, nav: fakeNav(), ...extra }, { default: () => h(component as never, componentProps) }),
+            render: () => h(AuthUIProvider, { authClient: fake.client, nav: fakeNav(), ...extra }, { default: () => h(component as never, componentProps) }),
         }),
     );
 };
@@ -170,5 +170,24 @@ describe("vue ResetPasswordCard reads the token from the URL", () => {
         await fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
 
         expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
+    });
+});
+
+describe("vue ResetPasswordOtpCard", () => {
+    it("redeems the emailed code and sets a new password", async () => {
+        expect.assertions(1);
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const fake = { client: { emailOtp: { resetPassword }, getSession: vi.fn() } as unknown as AuthClient, signInEmail: vi.fn() };
+
+        renderInProvider(ResetPasswordOtpCard, fake, { discover: false, forgotPassword: { method: "otp" } });
+
+        await fireEvent.update(screen.getByLabelText("Email"), "ada@example.com");
+        await fireEvent.update(screen.getByLabelText("Verification code"), "123456");
+        await fireEvent.update(screen.getByLabelText("Password"), "hunter2hunter2");
+        await fireEvent.update(screen.getByLabelText("Confirm password"), "hunter2hunter2");
+        await fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith({ email: "ada@example.com", otp: "123456", password: "hunter2hunter2" });
     });
 });
