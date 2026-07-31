@@ -1250,8 +1250,11 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
         // Fall back to the `.lunora/project.json` link so a linked checkout no
-        // longer needs --migrate-url repeated on every `deploy --migrate`.
-        migrateUrl: resolveWorkerUrl({ cwd, url: options.migrateUrl }),
+        // longer needs --migrate-url repeated on every `deploy --migrate`. The
+        // link is only trusted when it was recorded for THIS `--env` — a
+        // production-linked checkout must not silently supply its URL to a
+        // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
+        migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
