@@ -4,6 +4,7 @@ export type { JsonSchema, SchemaNodeReader } from "./json-schema-core";
 export { jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
 export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";
 export type {
+    ArrayColumnValidator,
     CheckOptions,
     Column,
     ColumnMeta,
@@ -17,8 +18,10 @@ export type {
     InsertShape,
     JsonSchemaFragment,
     MetaOptions,
+    NumberColumnValidator,
     SelectShape,
     ServerDefaultContext,
+    StringColumnValidator,
     TimestampColumnValidator,
     Validator,
     ValidatorKind,

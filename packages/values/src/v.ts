@@ -84,7 +84,15 @@ interface Validator<T = unknown> extends StandardSchemaV1<T, T> {
      *
      * Works in any context — argument validators, column validators, or
      * standalone — so it can encode invariants like
-     * `v.number().check(n => n >= 0)` or
+     * `v.number().check(n => n >= 0)`.
+     *
+     * For the common length/format/range cases, prefer the named shortcuts
+     * (`v.string().min(1)`, `.max(n)`, `.length(n)`, `.pattern(re)`, `.email()`,
+     * `.url()`; `v.number().min(n)`, `.max(n)`, `.int()`, `.positive()`;
+     * `v.array(...).min(n)`, `.max(n)`) — each is sugar over this same
+     * `.check(predicate, { schema })` path, so the predicate and the JSON Schema
+     * keyword are set together and can never drift apart. `.check()` remains the
+     * escape hatch for anything the shortcuts don't cover, e.g.
      * `v.string().check(s => s.length > 0, { message: "non-empty", schema: { minLength: 1 } })`.
      */
     check: (predicate: (value: T) => boolean, options?: CheckOptions | string) => Validator<T>;
@@ -203,6 +211,56 @@ interface TimestampColumnValidator extends ColumnValidator<number, number> {
     defaultNow: () => ColumnValidator<number, number | undefined>;
 }
 
+/**
+ * A {@link ColumnValidator} for `v.string()` with ergonomic refinement
+ * shortcuts. Each method is sugar over `.check(predicate, { schema })` — it
+ * sets the runtime predicate AND the matching JSON Schema keyword in one call
+ * so the two can never drift (see the module-level `.check()` docstring for
+ * the underlying two-part mechanism). Chainable among each other; `.check()`/
+ * `.meta()` compose after them but the return narrows to the base
+ * {@link ColumnValidator} (no further refinement shortcuts after that point).
+ */
+interface StringColumnValidator extends ColumnValidator<string, string> {
+    /** Require a valid email address (`format: "email"`). Uses a pragmatic (non-RFC-5322-exhaustive) pattern. */
+    email: () => StringColumnValidator;
+    /** Require exactly `length` characters (`minLength`/`maxLength` both set to `length`). */
+    length: (length: number) => StringColumnValidator;
+    /** Require at most `max` characters (`maxLength`). */
+    max: (max: number) => StringColumnValidator;
+    /** Require at least `min` characters (`minLength`). */
+    min: (min: number) => StringColumnValidator;
+    /** Require the value to match `pattern` (JSON Schema `pattern` set from `pattern.source`). */
+    pattern: (pattern: RegExp) => StringColumnValidator;
+    /** Require a valid URL, parseable by the WHATWG `URL` constructor (`format: "uri"`). */
+    url: () => StringColumnValidator;
+}
+
+/**
+ * A {@link ColumnValidator} for `v.number()` with ergonomic refinement
+ * shortcuts — see {@link StringColumnValidator} for the delegation pattern.
+ */
+interface NumberColumnValidator extends ColumnValidator<number, number> {
+    /** Require an integer value (`Number.isInteger`); JSON Schema `type` narrows to `"integer"`. */
+    int: () => NumberColumnValidator;
+    /** Require at most `max` (`maximum`). */
+    max: (max: number) => NumberColumnValidator;
+    /** Require at least `min` (`minimum`). */
+    min: (min: number) => NumberColumnValidator;
+    /** Require a value strictly greater than zero (`exclusiveMinimum: 0`). */
+    positive: () => NumberColumnValidator;
+}
+
+/**
+ * A {@link ColumnValidator} for `v.array(...)` with ergonomic length-refinement
+ * shortcuts — see {@link StringColumnValidator} for the delegation pattern.
+ */
+interface ArrayColumnValidator<TItem> extends ColumnValidator<TItem[], TItem[]> {
+    /** Require at most `max` items (`maxItems`). */
+    max: (max: number) => ArrayColumnValidator<TItem>;
+    /** Require at least `min` items (`minItems`). */
+    min: (min: number) => ArrayColumnValidator<TItem>;
+}
+
 /** The type a validator/column presents on **select** (reads). */
 type InferSelect<V> = V extends Validator<infer T> ? T : never;
 
@@ -261,6 +319,48 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
     serverDefault: (function_: (context: ServerDefaultContext) => T) => InternalColumnValidator<T>;
     unique: () => InternalColumnValidator<T>;
 }
+
+/** Internal runtime shape backing {@link StringColumnValidator}. */
+interface InternalStringColumnValidator extends InternalColumnValidator<string> {
+    email: () => InternalStringColumnValidator;
+    length: (length: number) => InternalStringColumnValidator;
+    max: (max: number) => InternalStringColumnValidator;
+    min: (min: number) => InternalStringColumnValidator;
+    pattern: (pattern: RegExp) => InternalStringColumnValidator;
+    url: () => InternalStringColumnValidator;
+}
+
+/** Internal runtime shape backing {@link NumberColumnValidator}. */
+interface InternalNumberColumnValidator extends InternalColumnValidator<number> {
+    int: () => InternalNumberColumnValidator;
+    max: (max: number) => InternalNumberColumnValidator;
+    min: (min: number) => InternalNumberColumnValidator;
+    positive: () => InternalNumberColumnValidator;
+}
+
+/** Internal runtime shape backing {@link ArrayColumnValidator}. */
+interface InternalArrayColumnValidator<T> extends InternalColumnValidator<T[]> {
+    max: (max: number) => InternalArrayColumnValidator<T>;
+    min: (min: number) => InternalArrayColumnValidator<T>;
+}
+
+/**
+ * A pragmatic (not RFC-5322-exhaustive) email pattern: one-or-more
+ * non-whitespace/non-`@` chars (dots allowed), `@`, then one-or-more
+ * dot-separated domain labels each excluding `.` from their own character
+ * class. The domain-label classes are dot-exclusive specifically so the two
+ * `+`-quantified groups either side of the repeated `\.` never overlap in
+ * what they can match — that disjointness is what keeps the match linear
+ * instead of letting the engine try every possible split point around each
+ * dot (a super-linear backtracking blowup on adversarial input otherwise).
+ * Good enough to catch the common "missing `@`"/"missing domain" mistakes
+ * without pretending to fully validate deliverability (RFC 5322 pedantry does
+ * not either).
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/u;
+
+/** True when `value` parses as a WHATWG URL. */
+const isValidUrl = (value: string): boolean => URL.canParse(value);
 
 // Declared as a function (not an arrow expression) so TypeScript treats its
 // `: never` return as a control-flow assertion — callers rely on this to narrow
@@ -403,6 +503,97 @@ const createValidator = <T>(
         return createValidator<T>(kind, parser, mergeConstraints(meta, fragment));
     };
 
+    // Kind-specific ergonomic refinements (`.min()`/`.email()`/`.int()`/…). Each
+    // is sugar over the SAME `validator.check(predicate, { schema })` path just
+    // defined above, so runtime predicate and JSON-Schema keyword can never
+    // drift apart. Attached here (inside `createValidator`, gated on `kind`)
+    // rather than on the public factories so they survive `.check()`'s
+    // recursive `createValidator` call and stay available for further chaining
+    // (`.min(1).email()`), since `kind` is threaded through every rebuild.
+    switch (kind) {
+        case "array": {
+            const self = validator as unknown as InternalArrayColumnValidator<unknown>;
+
+            self.min = (min) =>
+                self.check((value) => value.length >= min, {
+                    message: `expected array length >= ${String(min)}`,
+                    schema: { minItems: min },
+                }) as InternalArrayColumnValidator<unknown>;
+            self.max = (max) =>
+                self.check((value) => value.length <= max, {
+                    message: `expected array length <= ${String(max)}`,
+                    schema: { maxItems: max },
+                }) as InternalArrayColumnValidator<unknown>;
+
+            break;
+        }
+        case "number": {
+            const self = validator as unknown as InternalNumberColumnValidator;
+
+            self.min = (min) =>
+                self.check((value) => value >= min, {
+                    message: `expected number >= ${String(min)}`,
+                    schema: { minimum: min },
+                }) as InternalNumberColumnValidator;
+            self.max = (max) =>
+                self.check((value) => value <= max, {
+                    message: `expected number <= ${String(max)}`,
+                    schema: { maximum: max },
+                }) as InternalNumberColumnValidator;
+            self.int = () =>
+                self.check((value) => Number.isInteger(value), {
+                    message: "expected an integer",
+                    schema: { type: "integer" },
+                }) as InternalNumberColumnValidator;
+            self.positive = () =>
+                self.check((value) => value > 0, {
+                    message: "expected a positive number",
+                    schema: { exclusiveMinimum: 0 },
+                }) as InternalNumberColumnValidator;
+
+            break;
+        }
+        case "string": {
+            const self = validator as unknown as InternalStringColumnValidator;
+
+            self.min = (min) =>
+                self.check((value) => value.length >= min, {
+                    message: `expected string length >= ${String(min)}`,
+                    schema: { minLength: min },
+                }) as InternalStringColumnValidator;
+            self.max = (max) =>
+                self.check((value) => value.length <= max, {
+                    message: `expected string length <= ${String(max)}`,
+                    schema: { maxLength: max },
+                }) as InternalStringColumnValidator;
+            self.length = (length) =>
+                self.check((value) => value.length === length, {
+                    message: `expected string length === ${String(length)}`,
+                    schema: { maxLength: length, minLength: length },
+                }) as InternalStringColumnValidator;
+            self.pattern = (pattern) =>
+                self.check((value) => pattern.test(value), {
+                    message: `expected string matching ${pattern.toString()}`,
+                    schema: { pattern: pattern.source },
+                }) as InternalStringColumnValidator;
+            self.email = () =>
+                self.check((value) => EMAIL_PATTERN.test(value), {
+                    message: "expected a valid email address",
+                    schema: { format: "email" },
+                }) as InternalStringColumnValidator;
+            self.url = () =>
+                self.check((value) => isValidUrl(value), {
+                    message: "expected a valid URL",
+                    schema: { format: "uri" },
+                }) as InternalStringColumnValidator;
+
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+
     return validator;
 };
 
@@ -412,19 +603,28 @@ const toInternal = <T>(validator: Validator<T>): InternalValidator<T> => validat
 const asColumn = <TSelect, TInsert = TSelect>(validator: InternalColumnValidator<TSelect>): ColumnValidator<TSelect, TInsert> =>
     validator as unknown as ColumnValidator<TSelect, TInsert>;
 
-const string = (): ColumnValidator<string, string> =>
-    asColumn(
+/** Bridge the loose runtime validator to the public {@link StringColumnValidator} surface. */
+const asStringColumn = (validator: InternalStringColumnValidator): StringColumnValidator => validator as unknown as StringColumnValidator;
+
+/** Bridge the loose runtime validator to the public {@link NumberColumnValidator} surface. */
+const asNumberColumn = (validator: InternalNumberColumnValidator): NumberColumnValidator => validator as unknown as NumberColumnValidator;
+
+/** Bridge the loose runtime validator to the public {@link ArrayColumnValidator} surface. */
+const asArrayColumn = <T>(validator: InternalArrayColumnValidator<T>): ArrayColumnValidator<T> => validator as unknown as ArrayColumnValidator<T>;
+
+const string = (): StringColumnValidator =>
+    asStringColumn(
         createValidator<string>("string", (value, context) => {
             if (typeof value !== "string") {
                 fail(context, "string", value);
             }
 
             return value;
-        }),
+        }) as unknown as InternalStringColumnValidator,
     );
 
-const number = (): ColumnValidator<number, number> =>
-    asColumn(
+const number = (): NumberColumnValidator =>
+    asNumberColumn(
         createValidator<number>("number", (value, context) => {
             // Reject NaN and ±Infinity — they round-trip through JSON as `null`
             // and break downstream code that assumes a real numeric value.
@@ -433,7 +633,7 @@ const number = (): ColumnValidator<number, number> =>
             }
 
             return value;
-        }),
+        }) as unknown as InternalNumberColumnValidator,
     );
 
 /** Shared parser for the time validators: a finite epoch-millisecond number. */
@@ -593,10 +793,10 @@ const literal = <T extends bigint | boolean | number | string | null>(literalVal
         ),
     );
 
-const array = <V extends Validator>(inner: V): ColumnValidator<Infer<V>[], Infer<V>[]> => {
+const array = <V extends Validator>(inner: V): ArrayColumnValidator<Infer<V>> => {
     const innerInternal = toInternal(inner as Validator<Infer<V>>);
 
-    return asColumn(
+    return asArrayColumn(
         createValidator<Infer<V>[]>(
             "array",
             (value, context) => {
@@ -626,7 +826,7 @@ const array = <V extends Validator>(inner: V): ColumnValidator<Infer<V>[], Infer
                 return out;
             },
             { inner },
-        ),
+        ) as unknown as InternalArrayColumnValidator<Infer<V>>,
     );
 };
 
@@ -1023,6 +1223,7 @@ const v: {
 };
 
 export type {
+    ArrayColumnValidator,
     CheckOptions,
     Column,
     ColumnMeta,
@@ -1036,9 +1237,11 @@ export type {
     InsertShape,
     JsonSchemaFragment,
     MetaOptions,
+    NumberColumnValidator,
     OptionalizeShape,
     SelectShape,
     ServerDefaultContext,
+    StringColumnValidator,
     TimestampColumnValidator,
     Validator,
     ValidatorKind,
