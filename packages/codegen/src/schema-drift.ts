@@ -151,8 +151,6 @@ interface SchemaDriftDecision {
 
 /** The commands that can print the blocked-drift remediation, and which override flags each accepts. */
 const DRIFT_FLAG_SUPPORT: Record<string, { allowDrift: boolean; updateBaseline: boolean }> = {
-    build: { allowDrift: false, updateBaseline: false },
-    codegen: { allowDrift: false, updateBaseline: false },
     deploy: { allowDrift: true, updateBaseline: true },
     prepare: { allowDrift: true, updateBaseline: true },
     verify: { allowDrift: true, updateBaseline: false },
@@ -167,8 +165,10 @@ const DRIFT_FLAG_SUPPORT: Record<string, { allowDrift: boolean; updateBaseline: 
  * and `verify` accepts only the first. This is the message a first-time deployer
  * hits, and half its own advice did not work on the command that printed it.
  *
- * An unrecognised caller falls back to listing both — better an over-broad hint
- * than none.
+ * Only the three commands that actually run the gate are listed
+ * (`prepare` / `deploy` / `verify`); `build` and `codegen` never reach it, so an
+ * entry for them would describe a message no user can see. An unrecognised
+ * caller falls back to listing both flags — better an over-broad hint than none.
  */
 const ALLOW_DRIFT_LINE = "  • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.";
 const UPDATE_BASELINE_LINE = "  • To accept the new shape without a migration (you know data is compatible): pass `--update-schema-baseline`.";
@@ -180,27 +180,14 @@ const remediationFlagLines = (command: string | undefined): string => {
         return `${ALLOW_DRIFT_LINE}\n${UPDATE_BASELINE_LINE}\n`;
     }
 
-    const lines: string[] = [];
+    // Every command that runs the gate accepts `--allow-schema-drift`, so that
+    // line is unconditional; only the baseline re-bless varies. (`verify` runs
+    // the gate read-only, so re-blessing from it would be wrong, not missing.)
+    const baselineLine = support.updateBaseline
+        ? UPDATE_BASELINE_LINE
+        : `  • To accept the new shape without a migration, run \`lunora prepare --update-schema-baseline\` — \`lunora ${command}\` does not take that flag.`;
 
-    if (support.allowDrift) {
-        lines.push(ALLOW_DRIFT_LINE);
-    }
-
-    if (support.updateBaseline) {
-        lines.push(UPDATE_BASELINE_LINE);
-    }
-
-    if (lines.length === 0) {
-        lines.push(
-            `  • \`lunora ${command}\` has no override flag for this — run \`lunora prepare --allow-schema-drift\` (or \`--update-schema-baseline\`) first, then re-run it.`,
-        );
-    } else if (!support.updateBaseline) {
-        lines.push(
-            `  • To accept the new shape without a migration, run \`lunora prepare --update-schema-baseline\` — \`lunora ${command}\` does not take that flag.`,
-        );
-    }
-
-    return `${lines.join("\n")}\n`;
+    return `${ALLOW_DRIFT_LINE}\n${baselineLine}\n`;
 };
 
 /**

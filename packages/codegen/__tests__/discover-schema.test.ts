@@ -199,6 +199,34 @@ describe("discoverSchema", () => {
         expect(message).toContain("_content");
     });
 
+    it("rejects a collision with the fts5vocab companion, which fails SILENTLY at runtime", () => {
+        expect.assertions(2);
+
+        // `__vocab` is created with `IF NOT EXISTS`, so unlike the reserved
+        // SQLite shadows this does not error — the second index binds to the
+        // first's vocab table and returns wrong results with no signal at all.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                prompts: defineTable({ body: v.string(), name: v.string() })
+                    .searchIndex("search_prompts", { field: "name" })
+                    .searchIndex("search_prompts__vocab", { field: "body" }),
+            });
+        `);
+
+        let message = "";
+
+        try {
+            discoverSchema(project, schemaPath);
+        } catch (error: unknown) {
+            message = error instanceof Error ? error.message : String(error);
+        }
+
+        expect(message).toContain("search_prompts__vocab");
+        expect(message).toContain("__vocab");
+    });
+
     it("allows two search indexes whose names do not collide through a shadow suffix", () => {
         expect.assertions(1);
 

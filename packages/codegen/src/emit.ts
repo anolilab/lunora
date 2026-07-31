@@ -647,12 +647,10 @@ const normalizeRelativePath = (path: string): string => {
  * `lunora/_generated/lib/types`, which does not exist — TS2307, inside a
  * generated file, while `lunora codegen` exits 0.
  *
- * That combination is the reason it hid: a progress script that greps out
- * `_generated` (reasonable, since nobody edits generated files) reads zero
- * errors while `api.ts` has nine, and it only surfaces when a SIBLING package
- * compiles the same file and has nowhere to hide them. A generated file that
- * does not typecheck is a defect that hides from exactly the person who could
- * fix it.
+ * That combination is why it hides: a build script that filters `_generated`
+ * out of its error report — reasonable, since nobody edits generated files —
+ * sees a clean run while `api.ts` does not compile. It surfaces only when a
+ * SIBLING package builds the same file and has nowhere to hide the errors.
  *
  * `_generated/*` qualifiers are handled by {@link relocateGeneratedImports} and
  * left alone here; absolute specifiers are already correct from any directory.
@@ -5109,6 +5107,15 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         // reported success and wrote nothing, and an import reported success and
         // dropped every row. Overriding both here is what makes the two admin
         // RPCs real for a \`.shardBy()\` table.
+        //
+        // NOTE: the admin export RPC is not paginated — \`parseExportShardArgs\`
+        // takes \`tables\`/\`batchSize\` but no cursor, and the coordinator issues
+        // one call per shard — so the rows are collected into a single response.
+        // \`batchSize\` bounds the SQLite scan page, not the reply. A shard holding
+        // more rows than fit in the DO's memory budget will therefore fail the
+        // export rather than stream it. That is a loud failure where the bug this
+        // replaces was a silent empty one, but a cursor on the RPC is what makes
+        // this a complete backup path for large shards.
         protected override async runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
             this.ensureMigrated();
 

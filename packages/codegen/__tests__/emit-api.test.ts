@@ -152,7 +152,7 @@ describe("emitApi", () => {
         const functions: ReadonlyArray<FunctionIR> = [
             {
                 args: {
-                    // Nested inside v.object(...) — the reported failure.
+                    // Nested inside v.object(...) — where the optionality was lost.
                     patch: {
                         kind: "object",
                         shape: {

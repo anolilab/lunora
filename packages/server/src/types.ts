@@ -846,6 +846,16 @@ interface PaginationResult<T = Record<string, unknown>> {
  * at runtime or silently degraded to a full table scan — the second being the
  * worse outcome, since it stays green in tests and surfaces months later as a
  * latency regression.
+ *
+ * **Why `with*` are method signatures and everything else is a property.**
+ * Narrowing a parameter makes the enclosing type contravariant in it, so as
+ * function properties these would make a BOUND reader
+ * (`TableReader&lt;Doc, "by_x">`, what `ctx.db.query(t)` returns) unassignable to
+ * the unbound `TableReader&lt;Doc>` — quietly breaking every helper factored as
+ * `(reader: TableReader&lt;Doc&lt;"users">>) => …`, which is the obvious way to share
+ * query logic. A method signature is bivariant in its parameters, which keeps
+ * that direction working while the narrow parameter still rejects an undeclared
+ * name at the call site. Both directions are pinned in `types.test-d.ts`.
  */
 interface TableReader<
     Row = Record<string, unknown>,
@@ -903,7 +913,8 @@ interface TableReader<
      * scan over the index's companion followed by a Haversine refine. Pair with
      * `.take(n)` to cap results (`.paginate()` is not supported on a geo query).
      */
-    withGeoIndex: (indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withGeoIndex(indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
     /**
      * Restrict the query to a declared `.index()`. `indexName` is constrained to
@@ -911,7 +922,8 @@ interface TableReader<
      * renamed, dropped, or mistyped index is a compile error rather than a
      * runtime throw or a silent full-table scan.
      */
-    withIndex: (indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withIndex(indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
     /**
      * Restrict the query to a declared `.searchIndex()`. The builder's
@@ -920,10 +932,8 @@ interface TableReader<
      * field. Results come back ordered by relevance — pair with `.take(n)`
      * (`.paginate()` is not supported on a search query).
      */
-    withSearchIndex: (
-        indexName: SearchIndexes,
-        search: (q: SearchFilterBuilder) => SearchFilterBuilder,
-    ) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withSearchIndex(indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 
 interface IndexRangeBuilder {

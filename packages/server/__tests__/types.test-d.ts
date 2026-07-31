@@ -217,6 +217,19 @@ const check = (): void => {
     // @ts-expect-error -- a table with no indexes accepts no index name at all
     unindexedReader.withIndex("by_anything");
 
+    // A BOUND reader must stay assignable to the unbound published type. This is
+    // the compatibility direction the narrowing could silently have broken: a
+    // helper factored as `(reader: TableReader<Doc>) => …` is the obvious way to
+    // share query logic, and it is handed exactly what `ctx.db.query(t)` returns.
+    // It holds only because the three `with*` members are METHOD signatures
+    // (bivariant); as function properties, `strictFunctionTypes` would reject it.
+    const acceptsUnbound = (_reader: TableReader<{ channelId: string; text: string }>): void => {};
+    const acceptsUnboundTextRow = (_reader: TableReader<{ text: string }>): void => {};
+
+    acceptsUnbound(boundReader);
+    // Also holds for the `never` end of the range — a table declaring no indexes.
+    acceptsUnboundTextRow(unindexedReader);
+
     // Reference every compile-time assertion so the unused-local lint can't strip
     // the checks; each `Check*` fails at its definition if the equality regresses.
     const assertions = null as unknown as [

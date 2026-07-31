@@ -93,7 +93,7 @@ interface DataMigrationContext {
  * could only rewrite the row it was handed, which covers a backfill whose new
  * value is a pure function of the old row but not the one people actually write
  * — denormalising a parent's field onto its children, which needs a cross-table
- * read. Both real migrations in the port that surfaced this were that shape.
+ * read.
  *
  * May return a promise, since a cross-table read is asynchronous.
  */

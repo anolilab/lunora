@@ -267,15 +267,6 @@ describe("schema-drift", () => {
                 expect(reason).toContain("`lunora verify` does not take that flag");
             });
 
-            it("names prepare on build, which accepts neither flag", () => {
-                expect.assertions(2);
-
-                const { reason } = evaluateSchemaDrift({ baseline, command: "build", current: breaking() });
-
-                expect(reason).toContain("`lunora build` has no override flag");
-                expect(reason).toContain("lunora prepare --allow-schema-drift");
-            });
-
             it("falls back to listing both when the caller is unknown", () => {
                 expect.assertions(2);
 

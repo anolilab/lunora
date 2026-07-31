@@ -628,12 +628,18 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
 };
 
 /**
- * The shadow tables SQLite's FTS5 creates alongside a virtual table `X`. They
- * are real objects in the schema and their names are reserved, so `CREATE
- * VIRTUAL TABLE` on a name that collides with one is rejected outright.
+ * Every companion table created alongside a search index's FTS5 table `X`.
+ *
+ * The single-underscore five are SQLite's own shadow tables. Their names are
+ * reserved, so `CREATE VIRTUAL TABLE` on a colliding name is rejected outright.
+ *
+ * `__vocab` is Lunora's — `runShardMigrations` creates an `fts5vocab` companion
+ * per index. It matters MORE than the reserved five, not less: it is created
+ * with `IF NOT EXISTS`, so a collision does not error. The second index simply
+ * binds to the first's vocab table and returns wrong results, silently.
  * @see {@link https://www.sqlite.org/fts5.html}
  */
-const FTS5_SHADOW_SUFFIXES = ["_config", "_content", "_data", "_docsize", "_idx"] as const;
+const FTS5_SHADOW_SUFFIXES = ["__vocab", "_config", "_content", "_data", "_docsize", "_idx"] as const;
 
 /**
  * Reject two search indexes on one table whose generated FTS5 table names

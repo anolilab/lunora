@@ -203,14 +203,15 @@ const escapeHelpBraces = (text: string): string => text.replaceAll("{", String.r
  * either a list of bare invocations or a list of `[invocation, caption]` rows.
  */
 const escapeExamples = (examples: string[] | string[][]): string[] | string[][] => {
-    // The two shapes are homogeneous per cerebro's type, so branch once on the
-    // list rather than per element — which also keeps the callback's return type
-    // singular.
+    // Branch per element, not once on the list. cerebro's type says the array is
+    // homogeneous, but this runs at CLI construction for every command on every
+    // invocation — a mixed array would throw `row.map is not a function` and take
+    // down the whole CLI, not just that command's help.
     if (examples.every((example) => typeof example === "string")) {
         return examples.map((example) => escapeHelpBraces(example));
     }
 
-    return examples.map((row) => row.map((part) => escapeHelpBraces(part)));
+    return examples.map((row) => (typeof row === "string" ? [escapeHelpBraces(row)] : row.map((part) => escapeHelpBraces(part))));
 };
 
 /** Apply {@link escapeHelpBraces} to every field of a command that reaches the help renderer. */

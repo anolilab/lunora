@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
-import { detectPackageManager, execArgsFor } from "./detect-package-manager";
+import { detectPackageManager, runScriptArgsFor } from "./detect-package-manager";
 import type { Logger } from "./logger";
 import type { Spawner } from "./spawn";
 import { defaultSpawner } from "./spawn";
@@ -77,8 +77,19 @@ const runPostCodegenHook = async (options: { cwd: string; logger: Logger; spawne
         return { ran: false };
     }
 
-    const manager = detectPackageManager(cwd);
-    const exec = execArgsFor(manager, "run", [POST_CODEGEN_SCRIPT]);
+    let exec: { args: string[]; command: string };
+
+    try {
+        // `runScriptArgsFor`, NOT `execArgsFor` — the latter runs a BINARY, so it
+        // would emit `pnpm exec run postcodegen` (fails) or `npx -- run
+        // postcodegen` (fetches the registry package named `run`).
+        exec = runScriptArgsFor(detectPackageManager(cwd), POST_CODEGEN_SCRIPT);
+    } catch (error: unknown) {
+        // `detectPackageManager` throws when it can resolve nothing. The caller
+        // turns an `error` into a `code: 1` result; letting the throw escape
+        // would take down `prepare` with an unhandled exception instead.
+        return { error: `cannot run \`${POST_CODEGEN_SCRIPT}\`: ${error instanceof Error ? error.message : String(error)}`, ran: true };
+    }
 
     logger.info(`running \`${POST_CODEGEN_SCRIPT}\``);
 

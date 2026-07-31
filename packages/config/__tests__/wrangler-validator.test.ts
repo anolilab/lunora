@@ -464,9 +464,11 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.valid).toBe(false);
-                expect(result.problems.join("\n")).toContain("SchedulerDO");
-                expect(result.problems.join("\n")).toContain("does not export it");
+                // A warning, not an error: the scanner cannot know every export
+                // form, and a miss must not block a deploy that would have worked.
+                expect(result.report.valid).toBe(true);
+                expect(result.report.warnings.join("\n")).toContain("SchedulerDO");
+                expect(result.report.warnings.join("\n")).toContain("does not export it");
             });
 
             it("passes once the class is exported", () => {
@@ -479,7 +481,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.problems.filter((problem) => problem.includes("does not export it"))).toEqual([]);
+                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
             });
 
             it("treats a type-only export as unexported — it compiles away", () => {
@@ -490,7 +492,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.problems.join("\n")).toContain("SchedulerDO");
+                expect(result.report.warnings.join("\n")).toContain("SchedulerDO");
             });
 
             it("does not accept a commented-out export, or the class named in prose", () => {
@@ -509,7 +511,56 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.problems.join("\n")).toContain("SchedulerDO");
+                expect(result.report.warnings.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("accepts a multi-line export list — the way prettier formats three or more", () => {
+                expect.assertions(1);
+
+                // A proximity regex bounded at the newline read this as "not
+                // exported", so a correctly-wired project got a hard error from
+                // prepare/verify/deploy and `lunora dev` refused to start. It
+                // fails CLOSED, which is the worst direction for this check.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export {\n    ShardDO,\n    SchedulerDO,\n} from "./lunora/_generated/shard";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+            });
+
+            it("does not let a type-only re-export elsewhere suppress a real value export", () => {
+                expect.assertions(1);
+
+                // The type check used to be whole-file, so an unrelated
+                // `export type { SchedulerDO as … }` poisoned the real export.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(
+                    `export { ShardDO } from "./shard";\n` +
+                        `export type { SchedulerDO as SchedulerDOType } from "./types";\n` +
+                        `export { SchedulerDO } from "./scheduler";\n` +
+                        `export default { fetch() {} };\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+            });
+
+            it("resolves `export { Local as Bound }` by the EXPORTED name, which is what wrangler binds", () => {
+                expect.assertions(2);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport { InternalScheduler as SchedulerDO } from "./s";\nexport default { fetch() {} };\n`);
+
+                const accepted = validateWranglerProject({ projectRoot: workdir });
+
+                expect(accepted.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+
+                // The LOCAL name is not what is bound, so aliasing it away is a miss.
+                writeEntry(`export { ShardDO } from "./shard";\nexport { SchedulerDO as SomethingElse } from "./s";\nexport default { fetch() {} };\n`);
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.warnings.join("\n")).toContain("SchedulerDO");
             });
 
             it("stays silent when the entry has a star re-export", () => {
@@ -523,7 +574,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.problems.filter((problem) => problem.includes("does not export it"))).toEqual([]);
+                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
             });
 
             it("ignores a binding whose class lives in another script", () => {
@@ -534,7 +585,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.problems.filter((problem) => problem.includes("RemoteDO"))).toEqual([]);
+                expect(result.report.warnings.filter((warning) => warning.includes("RemoteDO"))).toEqual([]);
             });
         });
 

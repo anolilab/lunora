@@ -74,7 +74,7 @@ describe("lunora prepare", () => {
         // was silently skipped — and a deploy would ship output the project
         // considers unfinished, with nothing else to catch it.
         it("runs the project's postcodegen script after generating", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
@@ -89,7 +89,11 @@ describe("lunora prepare", () => {
 
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(1);
-            expect(calls[0]?.descriptor.args).toContain("postcodegen");
+            // The FULL argv, not just membership: `execArgsFor(manager, "run", …)`
+            // also "contains" postcodegen, but emits `pnpm exec run postcodegen`
+            // (fails) / `npx -- run postcodegen` (fetches a registry package).
+            expect(calls[0]?.descriptor.command).toBe("pnpm");
+            expect(calls[0]?.descriptor.args).toStrictEqual(["run", "postcodegen"]);
         });
 
         it("fails the run when postcodegen exits non-zero", async () => {

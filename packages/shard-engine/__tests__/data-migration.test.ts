@@ -98,9 +98,8 @@ describe("runDataMigration", () => {
             expect.assertions(2);
 
             // The shape people actually write: read the parent, copy a field
-            // down. A transform that only receives the row cannot express it,
-            // which ruled out both real migrations in the port that surfaced
-            // this — one read `threads` to stamp `userId` onto its children.
+            // down. A transform that only receives the row cannot express it at
+            // all — e.g. reading `threads` to stamp `userId` onto its children.
             const schemaWithTeams: SchemaLike = {
                 tables: {
                     members: { indexes: [], shape: { name: { kind: "string" }, teamId: { kind: "string" }, teamName: { kind: "optional" } } },
