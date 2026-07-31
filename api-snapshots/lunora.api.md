@@ -1591,6 +1591,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `anyApi` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `applyDelta` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

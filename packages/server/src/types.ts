@@ -5,13 +5,8 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+import { anyApi as sharedAnyApi } from "../../../shared/any-api";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
-
-// Cache the namespace proxies and the per-function reference objects so that
-// `api.foo.bar` returns the *same* object on every access. React hooks
-// (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
-// identity per render would re-run effects every render and loop forever.
-const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
 
 /** Map of validators describing a function's args record. Alias of `@lunora/values`' shared {@link ValidatorMap}. */
 type ArgsValidator = ValidatorMap;
@@ -2207,42 +2202,11 @@ interface ActionCtx {
  */
 type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
 
-const anyApi: AnyApi = new Proxy(
-    {},
-    {
-        get(_target, namespace: PropertyKey) {
-            const cached = namespaceCache.get(namespace);
-
-            if (cached) {
-                return cached;
-            }
-
-            const refCache = new Map<PropertyKey, { __lunoraRef: string }>();
-            const nsProxy = new Proxy(
-                {},
-                {
-                    get(_inner, functionName: PropertyKey) {
-                        const cachedRef = refCache.get(functionName);
-
-                        if (cachedRef) {
-                            return cachedRef;
-                        }
-
-                        const ref = { __lunoraRef: `${String(namespace)}:${String(functionName)}` };
-
-                        refCache.set(functionName, ref);
-
-                        return ref;
-                    },
-                },
-            );
-
-            namespaceCache.set(namespace, nsProxy);
-
-            return nsProxy;
-        },
-    },
-);
+// The proxy itself lives in `shared/any-api.ts` so `@lunora/client` can serve
+// the same value: the generated `api.ts` is what a sibling package imports, and
+// its runtime import should not be the server runtime. Re-exported here
+// unchanged, typed to this package's `AnyApi`.
+const anyApi = sharedAnyApi as unknown as AnyApi;
 
 export { anyApi };
 

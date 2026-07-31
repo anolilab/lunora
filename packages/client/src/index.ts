@@ -1,3 +1,9 @@
+// The `api` / `internal` proxy the generated `_generated/api.ts` imports.
+// Served from here as well as `@lunora/server` so a SIBLING package (a web
+// app, another Worker) consuming `<backend>/api` needs only the client
+// package at runtime, not the server runtime. One shared implementation, so
+// the two cannot drift.
+export { anyApi } from "../../../shared/any-api";
 export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-reconcile";
 export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";

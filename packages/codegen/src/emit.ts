@@ -1290,8 +1290,13 @@ ${schedulerReferences.block}${httpStreamsRef.block}`;
     ];
     const clientImportLine = clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${base.client}";\n` : "";
 
+    // `anyApi` comes from the CLIENT package, not the server one. `api.ts` is the
+    // file a sibling package imports (a web app, another Worker), and its only
+    // runtime import should be one that package already depends on — the server
+    // specifier made a browser app resolve the server runtime for a proxy. Both
+    // packages re-export the same shared implementation.
     return relocateBaseQualifiers(
-        `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
+        `${GENERATED_HEADER}import { anyApi } from "${base.client}";
 ${clientImportLine}${schedulerReferences.importLine}${dataModelImportLine}
 ${fileBody}`,
         useUmbrella,

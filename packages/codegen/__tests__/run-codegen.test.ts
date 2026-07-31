@@ -192,7 +192,7 @@ export default defineSchema({
 
             expect(result.generated.server).toContain('from "@lunora/server"');
             expect(result.generated.dataModel).toContain('from "@lunora/server/data-model"');
-            expect(result.generated.api).toContain('from "@lunora/server/types"');
+            expect(result.generated.api).toContain('import { anyApi } from "@lunora/client";');
             expect(result.generated.api).toContain('from "@lunora/client"');
             expect(result.generated.shard).toContain('from "@lunora/do"');
             expect(result.generated.drizzleShard).toContain('from "@lunora/server/drizzle"');
@@ -208,7 +208,7 @@ export default defineSchema({
             // Base surface routed through the umbrella…
             expect(result.generated.server).toContain('from "lunorash/server"');
             expect(result.generated.dataModel).toContain('from "lunorash/server/data-model"');
-            expect(result.generated.api).toContain('from "lunorash/server/types"');
+            expect(result.generated.api).toContain('import { anyApi } from "lunorash/client";');
             expect(result.generated.api).toContain('from "lunorash/client"');
             expect(result.generated.shard).toContain('from "lunorash/do"');
             expect(result.generated.drizzleShard).toContain('from "lunorash/server/drizzle"');

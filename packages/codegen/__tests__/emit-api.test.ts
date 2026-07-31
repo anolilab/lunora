@@ -518,15 +518,18 @@ describe("emitApi", () => {
     });
 
     it("excludes non-stream routes and omits the block entirely when no `.stream()` route exists", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute({ stream: false })] });
 
         expect(rendered).not.toContain("HttpStreamsRef");
         expect(rendered).not.toContain("HttpStreamRef");
-        // Nothing left to import from the client package, so the import line goes
-        // away entirely rather than dangling (`noUnusedLocals` would flag it).
-        expect(rendered).not.toContain('from "@lunora/client"');
+        // Nothing left to import as a TYPE from the client package, so that line
+        // goes away rather than dangling (`noUnusedLocals` would flag it). The
+        // `anyApi` value import stays — it is always needed, and it comes from
+        // the client package so a sibling consumer needs no server runtime.
+        expect(rendered).not.toContain('import type { } from "@lunora/client"');
+        expect(rendered).not.toContain("FunctionReference");
     });
 
     it("renders a chunkType-less stream route as `unknown` and defaults empty validator maps to `{}`", () => {
