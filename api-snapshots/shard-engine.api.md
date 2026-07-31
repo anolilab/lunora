@@ -539,7 +539,7 @@ interface DataMigrationLike {
 ### `DataMigrationTransform` (type)
 
 ```ts
-type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined;
+type DataMigrationTransform = (document: DataMigrationDocument, context: DataMigrationContext) => DataMigrationDocument | Promise<DataMigrationDocument | undefined> | undefined;
 ```
 
 ### `DatabaseWriterLike` (interface)

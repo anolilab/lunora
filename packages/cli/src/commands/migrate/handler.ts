@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { discoverMigrations, discoverSchema } from "@lunora/codegen";
+import { discoverMigrations, discoverSchema, readPackageDependencies } from "@lunora/codegen";
 import { isInteractive, promptSelect, promptText } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
@@ -216,7 +216,24 @@ const RESERVED_WORDS = new Set([
     "with",
     "yield",
 ]);
-const DEFINE_MIGRATION_IMPORT = `import { defineMigration } from "@lunora/server";`;
+
+/**
+ * The `defineMigration` import the scaffold writes.
+ *
+ * `@lunora/server` is real, but it is NOT a declared dependency of a project
+ * that depends on the `lunorash` umbrella — there the specifier that resolves is
+ * `lunorash/server`, which re-exports it. Emitting the scoped form
+ * unconditionally produced a file that did not resolve in exactly the setup the
+ * docs recommend, so the choice follows the same rule codegen uses for every
+ * other generated import: umbrella when the project declares it, scoped
+ * otherwise.
+ */
+const defineMigrationImportFor = (projectRoot: string): string => {
+    const dependencies = readPackageDependencies(projectRoot);
+    const useUmbrella = dependencies?.has("lunorash") ?? false;
+
+    return `import { defineMigration } from "${useUmbrella ? "lunorash/server" : "@lunora/server"}";`;
+};
 const RUN_MIGRATION_OP = "__lunora_admin__:runMigration";
 const MIGRATION_STATUS_OP = "__lunora_admin__:migrationStatus";
 const MIGRATE_ENDPOINT_PATH = "/_lunora/migrate";
@@ -384,10 +401,12 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
         return { code: 1, file: "" };
     }
 
+    const defineMigrationImport = defineMigrationImportFor(cwd);
+
     if (content.trim() === "") {
-        content = `${DEFINE_MIGRATION_IMPORT}\n`;
-    } else if (!content.includes(DEFINE_MIGRATION_IMPORT)) {
-        content = `${DEFINE_MIGRATION_IMPORT}\n${content}`;
+        content = `${defineMigrationImport}\n`;
+    } else if (!content.includes(defineMigrationImport)) {
+        content = `${defineMigrationImport}\n${content}`;
     }
 
     const block = `export const ${exportName} = defineMigration({

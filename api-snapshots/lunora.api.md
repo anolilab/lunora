@@ -409,11 +409,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MigrationDocument` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MigrationReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5483,11 +5491,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MigrationDocument` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MigrationReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

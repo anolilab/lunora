@@ -1080,6 +1080,14 @@ interface MiddlewareNext<ContextIn> {
 }
 ```
 
+### `MigrationCtx` (interface)
+
+```ts
+interface MigrationCtx {
+    db: MigrationReader;
+}
+```
+
 ### `MigrationDefinition` (interface)
 
 ```ts
@@ -1098,10 +1106,24 @@ interface MigrationDefinition {
 type MigrationDocument = Record<string, unknown>;
 ```
 
+### `MigrationReader` (interface)
+
+```ts
+interface MigrationReader {
+    count: (table: string, where?: Record<string, unknown>) => Promise<number>;
+    findFirst: (table: string, args?: Record<string, unknown>) => Promise<MigrationDocument | null>;
+    findMany: (table: string, args?: Record<string, unknown>) => Promise<{
+        isDone: boolean;
+        page: MigrationDocument[];
+    }>;
+    get: (id: string, expectedTable?: string) => Promise<MigrationDocument | null>;
+}
+```
+
 ### `MigrationTransform` (type)
 
 ```ts
-type MigrationTransform = (document: MigrationDocument) => MigrationDocument | undefined | void;
+type MigrationTransform = (document: MigrationDocument, ctx: MigrationCtx) => MigrationDocument | Promise<MigrationDocument | undefined | void> | undefined | void;
 ```
 
 ### `MonthlySchedule` (interface)

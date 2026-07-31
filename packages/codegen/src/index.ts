@@ -28,6 +28,11 @@ export { default as discoverMigrations } from "./discover-migrations";
 export { discoverMutators, MUTATORS_FILENAME } from "./discover-mutators";
 export { default as discoverNondeterministicCalls } from "./discover-nondeterministic-calls";
 export { discoverNotifyCalls, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover-notify";
+// Exported so the CLI's scaffolds pick the same import form codegen emits —
+// `lunorash/server` for an umbrella project, `@lunora/server` otherwise.
+// Returns `undefined` (not an empty set) for an absent/unparseable manifest, so
+// a caller can tell "no dependencies declared" from "could not read".
+export { default as readPackageDependencies } from "./discover-package-dependencies";
 export { default as discoverQueries } from "./discover-queries";
 export { discoverQueues, QUEUES_FILENAME } from "./discover-queues";
 export { default as discoverR2sqlCalls } from "./discover-r2sql-calls";

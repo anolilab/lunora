@@ -1158,6 +1158,12 @@ const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | und
 const platformMatrixIds: () => ReadonlyArray<string>;
 ```
 
+### `readPackageDependencies` (const)
+
+```ts
+const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
+```
+
 ### `readProjectTarget` (const)
 
 ```ts

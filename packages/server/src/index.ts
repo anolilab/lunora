@@ -44,7 +44,7 @@ export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsVa
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskStrategy } from "./mask/index";
 export { mask } from "./mask/index";
-export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
+export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";
 export { defineMigration } from "./migration";
 export type { MutatorDefinition, RegisteredMutator } from "./mutators";
 export { defineMutator } from "./mutators";
