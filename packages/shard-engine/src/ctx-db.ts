@@ -1679,6 +1679,47 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     const { headroom } = options;
+
+    /**
+     * Scoped bypass for every headroom charge below, usable ONLY by primitives
+     * that are deliberately unbounded by design — today, only `deleteAll` (see
+     * its docstring: "Deliberately uncapped… erasure primitive"). Not exported,
+     * so user code (a mutation handler, a trigger function) has no way to reach
+     * it directly; the only caller is `deleteAll`'s own implementation below.
+     *
+     * Closure-scoped to THIS writer instance rather than a bare top-level
+     * `let`: every dispatch builds a fresh `createShardCtxDb(...)` writer (see
+     * the generated `buildCtx`), so this flag can never leak across a
+     * CONCURRENT dispatch on a different writer instance — each has its own.
+     * Within one writer/dispatch a Durable Object is single-threaded (no true
+     * parallelism, only `await`-point interleaving of THAT SAME writer's own
+     * sequential work), so `runUnmetered`'s synchronous set/restore around an
+     * `await` chain is race-free for the erasure loop that uses it.
+     *
+     * Gating the SHARED `onRead`/`onWrite` hooks (rather than only the two call
+     * sites `deleteAll` itself makes) means a trigger's own writes, fired as a
+     * side effect of the row `deleteAll` is erasing, are ALSO exempt for that
+     * one row's pipeline — there is no separate metering surface to gate
+     * instead, since triggers run against this same writer. That is bounded by
+     * "one row's worth of side effects" per iteration, not by "however many
+     * rows deleteAll erases", so it does not reopen the isolate-exhaustion gap
+     * the meter exists to close.
+     */
+    let meterExempt = false;
+
+    /** Run `run` with every headroom charge below suppressed. See `meterExempt`. */
+    const runUnmetered = async <T>(run: () => Promise<T>): Promise<T> => {
+        const previous = meterExempt;
+
+        meterExempt = true;
+
+        try {
+            return await run();
+        } finally {
+            meterExempt = previous;
+        }
+    };
+
     const reportRead = options.onRead ?? (() => undefined);
     // An unwired host must degrade to the whole-table dep, NOT to silence: the
     // terminal reports either a range or a scan, so dropping the range would
@@ -1699,7 +1740,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * instead (see `meterRows` in `buildReader`).
      */
     const onRead: ReadHook = (table, idOrScan) => {
-        if (idOrScan !== undefined && idOrScan !== SCAN_DEP) {
+        if (idOrScan !== undefined && idOrScan !== SCAN_DEP && !meterExempt) {
             headroom?.recordRead(1);
         }
 
@@ -1714,7 +1755,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * costs a row, just no bytes.
      */
     const onWrite: WriteHook = async (event) => {
-        headroom?.recordWrite(event.doc);
+        if (!meterExempt) {
+            headroom?.recordWrite(event.doc);
+        }
 
         await reportWrite(event);
     };
@@ -2499,33 +2542,42 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             let deleted = 0;
 
             // Resolve-then-delete in chunks until the table is empty. Deliberately
-            // uncapped: this is the erasure primitive, so stopping at
-            // DEFAULT_BATCH_LIMIT would leave data behind — the opposite of the
-            // guarantee the caller needs. On a `.softDelete()` table the default
-            // flips the marker (so the loop must not re-read the same rows forever);
-            // `{ hard: true }` removes them physically.
-            for (;;) {
-                // eslint-disable-next-line no-await-in-loop -- chunked by design: one page of ids at a time, single-threaded SQLite
-                const page = await writer.findMany(tableName, { limit: chunkSize });
-                const ids = page.page.map((row) => String(row["_id"]));
+            // uncapped AND METER-EXEMPT: this is the erasure primitive, so
+            // stopping at DEFAULT_BATCH_LIMIT — or at the transaction headroom's
+            // read/write ceilings — would leave data behind, the opposite of the
+            // guarantee the caller needs (a GDPR/tenant-erasure "this table is
+            // now empty" claim that quietly stops at 50k rows is not that
+            // guarantee). The bound on this primitive is the table's own size,
+            // not `TransactionLimits` — `runUnmetered` (see its definition
+            // above) is what makes that true for both halves: the paging
+            // `findMany` reads AND the per-row `writer.delete` writes below. On
+            // a `.softDelete()` table the default flips the marker (so the loop
+            // must not re-read the same rows forever); `{ hard: true }` removes
+            // them physically.
+            await runUnmetered(async () => {
+                for (;;) {
+                    // eslint-disable-next-line no-await-in-loop -- chunked by design: one page of ids at a time, single-threaded SQLite
+                    const page = await writer.findMany(tableName, { limit: chunkSize });
+                    const ids = page.page.map((row) => String(row["_id"]));
 
-                if (ids.length === 0) {
-                    break;
-                }
+                    if (ids.length === 0) {
+                        break;
+                    }
 
-                for (const id of ids) {
-                    // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                    await writer.delete(id, expectedTable, deleteOptions);
-                    deleted += 1;
-                }
+                    for (const id of ids) {
+                        // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
+                        await writer.delete(id, expectedTable, deleteOptions);
+                        deleted += 1;
+                    }
 
-                // A short page means the table is drained. This also makes the
-                // soft-delete case terminate: `findMany` hides soft-deleted rows, so
-                // each pass sees only rows still to erase, never the ones just marked.
-                if (ids.length < chunkSize) {
-                    break;
+                    // A short page means the table is drained. This also makes the
+                    // soft-delete case terminate: `findMany` hides soft-deleted rows, so
+                    // each pass sees only rows still to erase, never the ones just marked.
+                    if (ids.length < chunkSize) {
+                        break;
+                    }
                 }
-            }
+            });
 
             return { deleted };
         },
@@ -2694,7 +2746,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // rows this call materialized. Charge them here. Predicated reads are
             // charged by their per-row stamps below, so they must not be charged
             // twice.
-            if (isFullScan) {
+            if (isFullScan && !meterExempt) {
                 headroom?.recordRead(rows.length);
             }
 
@@ -2954,7 +3006,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // meter normally charges — so charge here, or a transaction could
                 // write unbounded rows to a `.global()` table without ever
                 // consuming its ceiling.
-                headroom?.recordWrite(document);
+                if (!meterExempt) {
+                    headroom?.recordWrite(document);
+                }
 
                 // A `.global()` (D1) write lands in another backend, but live
                 // subscriptions on this DO that read the table still need to be
@@ -3070,7 +3124,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                     // Same reason as the single-insert global branch: this loop
                     // never reaches `onWrite`, so it must charge the meter itself.
-                    headroom?.recordWrite(document);
+                    if (!meterExempt) {
+                        headroom?.recordWrite(document);
+                    }
 
                     broadcast({
                         key: globalId,
@@ -3114,8 +3170,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // only after the multi-row INSERT has already landed, so metering
             // there would let one oversized batch materialize in full — which
             // is exactly the isolate exhaustion the meter exists to prevent.
-            for (const row of rows) {
-                headroom?.recordWrite(row.document);
+            if (!meterExempt) {
+                for (const row of rows) {
+                    headroom?.recordWrite(row.document);
+                }
             }
 
             // ONE multi-row INSERT — the throughput win over `insertMany`'s N
@@ -3357,7 +3415,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         onRead(tableName, SCAN_DEP);
                     }
                 },
-                (count) => headroom?.recordRead(count),
+                (count) => {
+                    if (!meterExempt) {
+                        headroom?.recordRead(count);
+                    }
+                },
             );
         },
 
