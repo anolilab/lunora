@@ -245,14 +245,26 @@ const ALLOWED_BINDING_ROOTS = new Set([
  * …) keys on this field, and two entries sharing it is always a
  * misconfiguration.
  */
+const BINDING_KEY_FIELDS = ["binding", "name", "queue", "pattern"] as const;
+
 const bindingNameOf = (entry: unknown): string | undefined => {
     if (typeof entry !== "object" || entry === null) {
         return undefined;
     }
 
-    const name = (entry as { binding?: unknown }).binding;
+    // Not every array-shaped wrangler binding keys on `binding`: a queue
+    // consumer keys on `queue`, a migration on `tag`-adjacent `name`, a route on
+    // `pattern`. Keying only on `binding` let those collide silently, which is
+    // the same failure this guard exists to stop.
+    for (const field of BINDING_KEY_FIELDS) {
+        const value = (entry as Record<string, unknown>)[field];
 
-    return typeof name === "string" && name.length > 0 ? name : undefined;
+        if (typeof value === "string" && value.length > 0) {
+            return `${field}:${value}`;
+        }
+    }
+
+    return undefined;
 };
 
 /**
@@ -280,7 +292,7 @@ const freshArrayEntries = (existing: ReadonlyArray<unknown>, incoming: ReadonlyA
 
         if (name !== undefined && claimed.has(name)) {
             logger.warn(
-                `binding "${name}" already exists in ${path} — keeping the project's entry and skipping the registry item's. Reconcile by hand if the item needs different settings.`,
+                `${name.replace(":", " ")} already exists in ${path} — keeping the project's entry and skipping the registry item's. Reconcile by hand if the item needs different settings.`,
             );
 
             continue;
@@ -346,7 +358,9 @@ const SKIP_BINDING = Symbol("skip-binding");
  * replacing it — otherwise adding `storage` then `backup` (or adding into a
  * project that already has buckets) would silently drop the earlier entries.
  */
-// Returns `unknown` rather than a union with the sentinel: `typeof SKIP_BINDING | unknown` collapses to `unknown` anyway, so the caller compares by identity.
+// Returns `unknown` because a union with the sentinel collapses to `unknown`
+// anyway (`typeof SKIP_BINDING | unknown` is just `unknown`), so the caller
+// compares against SKIP_BINDING by identity rather than narrowing.
 const mergedBindingValue = (text: string, binding: RegistryBinding, logger: Logger): unknown => {
     const { value } = binding;
 

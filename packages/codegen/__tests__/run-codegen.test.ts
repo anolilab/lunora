@@ -1690,7 +1690,7 @@ export const inline = query.input({}).output(v.object({ title: v.string() })).qu
 `,
             );
 
-            const {api} = runCodegen({ projectRoot: workdir }).generated;
+            const { api } = runCodegen({ projectRoot: workdir }).generated;
 
             // Hoisted: unreadable validator, so the handler's inferred type wins.
             // The trailing `;` is TS's own type renderer — which is exactly how

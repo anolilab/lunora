@@ -60,6 +60,28 @@ describe("filter_without_index storage-tier awareness", () => {
         expect(findings[0]?.detail).toContain("loads every row");
     });
 
+    it("defers to filter_on_primary_key rather than double-reporting", () => {
+        expect.assertions(2);
+
+        // Both lints would otherwise fire on `.filter(d => d._id === id)` with
+        // no index, pointing at different fixes — one says "add an index", the
+        // other says "use ctx.db.get". Only the second is right.
+        const primaryKeyRead = read("notes", { filtersPrimaryKey: true });
+
+        expect(filterWithoutIndex.run({ queries: [primaryKeyRead], schema: schema() })).toHaveLength(0);
+        expect(filterOnPrimaryKey.run({ queries: [primaryKeyRead], schema: schema() })).toHaveLength(1);
+    });
+
+    it("names the root Durable Object rather than reusing the unknown-tier wording", () => {
+        expect.assertions(2);
+
+        // `root` is the default single-DO table (its own SQLite), not D1 —
+        // `global` is the D1 tier. An unrecognised table keeps the neutral
+        // wording, since we cannot claim anything about its storage.
+        expect(filterWithoutIndex.run({ queries: [read("notes")], schema: schema() })[0]?.detail).toContain("root Durable Object's SQLite");
+        expect(filterWithoutIndex.run({ queries: [read("unknownTable")], schema: schema() })[0]?.detail).toContain("loads every row");
+    });
+
     it("still says nothing about an indexed read", () => {
         expect.assertions(1);
 

@@ -135,7 +135,7 @@ describe("shipped registry items", () => {
         expect(databases[0]?.database_id).toBe("real-id-0001");
         expect(JSON.stringify(databases)).not.toContain("replace-me-db");
         // Silently keeping it would be its own trap — the skip is reported.
-        expect(messages.some((message) => message.includes('binding "DB" already exists'))).toBe(true);
+        expect(messages.some((message) => message.includes("binding DB already exists"))).toBe(true);
     });
 
     it("self-describing bindings (ai/browser/images) are single objects, not arrays", () => {

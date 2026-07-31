@@ -2985,7 +2985,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
                 return await schedule(Date.now() + delayMs, target, args);
             },
-            runAt: async (timestampMs, target, args) => await schedule(timestampMs, target, args),
+            runAt: async (timestampMs, target, args) => {
+                // Same guard as `runAfter`: an unchecked NaN/Infinity serializes
+                // to `null` through JSON and reaches the DO as a malformed
+                // `scheduledFor`, instead of failing here with something the
+                // caller can act on.
+                if (!Number.isFinite(timestampMs)) {
+                    throw new LunoraError("ctx.scheduler.runAt: `timestampMs` must be a finite epoch-millisecond number", { code: "BAD_REQUEST", status: 400 });
+                }
+
+                return await schedule(timestampMs, target, args);
+            },
         };
     };
 

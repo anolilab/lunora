@@ -22,8 +22,8 @@ const REGISTERED_TYPE_NAMES = new Set(["RegisteredAction", "RegisteredMutation",
  * type is an error type whose symbol matches nothing — so this reports nothing
  * rather than reporting everything, which is the right way to fail.
  */
-const registrationTypeName = (declaration: VariableDeclaration): string | undefined => {
-    const type = declaration.getType();
+const registrationTypeName = (node: Node): string | undefined => {
+    const type = node.getType();
     const name = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
 
     return name !== undefined && REGISTERED_TYPE_NAMES.has(name) ? name : undefined;
@@ -80,14 +80,10 @@ const findingFor = (relativePath: string, exportName: string, typeName: string, 
  * This is a type-level check rather than a syntactic one, so it cannot be
  * fooled by the very indirection that causes the bug.
  */
-const fileFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
+const namedExportFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
     const findings: Finding[] = [];
 
-    for (const statement of source.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
-
+    for (const statement of source.getVariableStatements().filter((entry) => entry.isExported())) {
         for (const declaration of statement.getDeclarations()) {
             const exportName = declaration.getName();
 
@@ -105,6 +101,35 @@ const fileFindings = (source: SourceFile, relativePath: string, registered: Read
 
     return findings;
 };
+
+/**
+ * `export default buildProcedure()` registers only when the initializer is a
+ * readable builder chain, so an unresolvable factory behind a default export is
+ * dropped exactly like a named one — and would otherwise be the single shape
+ * this check could not see.
+ */
+const defaultExportFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
+    if (registered.has(`${relativePath}:default`)) {
+        return [];
+    }
+
+    const findings: Finding[] = [];
+
+    for (const assignment of source.getExportAssignments().filter((entry) => !entry.isExportEquals())) {
+        const typeName = registrationTypeName(assignment.getExpression());
+
+        if (typeName !== undefined) {
+            findings.push(findingFor(relativePath, "default", typeName, assignment.getStartLineNumber()));
+        }
+    }
+
+    return findings;
+};
+
+const fileFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => [
+    ...namedExportFindings(source, relativePath, registered),
+    ...defaultExportFindings(source, relativePath, registered),
+];
 
 const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR>): Finding[] => {
     const registered = new Set(functions.map((entry) => `${entry.filePath}:${entry.exportName}`));

@@ -81,10 +81,47 @@ const HEURISTIC_SECRET_KINDS: ReadonlySet<string> = new Set(["hex_secret", "high
  * Context spec's example trace ids that every traceparent implementation tests
  * against).
  */
-const SECRET_NAME_RE = /auth|bearer|credential|hmac|key|passphrase|password|private|secret|signature|signing|token/iu;
+const SECRET_NAME_WORDS: ReadonlySet<string> = new Set([
+    "auth",
+    "bearer",
+    "credential",
+    "credentials",
+    "hmac",
+    "key",
+    "keys",
+    "passphrase",
+    "password",
+    "private",
+    "secret",
+    "secrets",
+    "signature",
+    "signing",
+    "token",
+]);
 
-/** Whether an identifier / property name is evidence that the value it holds is a secret. */
-const isSecretishName = (name: string | undefined): boolean => name !== undefined && SECRET_NAME_RE.test(name);
+/** A lowercase-then-uppercase run, i.e. the seam inside `apiKey`. */
+const CAMEL_BOUNDARY_RE = /([a-z\d])([A-Z])/gu;
+
+/** Any run of non-alphanumerics — covers snake_case, kebab-case, dots and whitespace. */
+const WORD_SEPARATOR_RE = /[^A-Za-z\d]+/u;
+
+/** Split an identifier into lower-cased words across camelCase, snake_case and kebab boundaries. */
+const nameWords = (name: string): string[] =>
+    name
+        .replaceAll(CAMEL_BOUNDARY_RE, "$1 $2")
+        .split(WORD_SEPARATOR_RE)
+        .filter(Boolean)
+        .map((word) => word.toLowerCase());
+
+/**
+ * Whether an identifier / property name is evidence that the value it holds is
+ * a secret.
+ *
+ * Word-wise rather than substring: a bare `/key/` also matches `monkey` and
+ * `keyboard`, which widens the very gate this exists to narrow. Splitting on
+ * camel/snake boundaries keeps `apiKey` and `signing_key` while dropping those.
+ */
+const isSecretishName = (name: string | undefined): boolean => name !== undefined && nameWords(name).some((word) => SECRET_NAME_WORDS.has(word));
 
 /** The matching secret rule's `kind` for a string value, or `undefined` when none matches. */
 const secretKindOf = (value: string): string | undefined => SECRET_RULES.find((rule) => rule.test(value))?.kind;

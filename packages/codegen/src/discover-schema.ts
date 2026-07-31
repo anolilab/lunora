@@ -233,35 +233,58 @@ const assertTopLevelIndexField = (element: TsNode, field: string, indexName: str
     );
 };
 
+/**
+ * Read `{ unique }` off an index's options object.
+ *
+ * `unique` must be a literal `true`/`false`. A computed value (`unique: !!x`,
+ * `Boolean(...)`, a referenced const) can't be resolved statically here, so we
+ * fail loudly rather than silently dropping a `uniqueIndex` from the emitted
+ * metadata.
+ */
+const parseIndexUniqueOption = (optionsExpression: Node | undefined): boolean => {
+    if (!optionsExpression || !Node.isObjectLiteralExpression(optionsExpression)) {
+        return false;
+    }
+
+    const property = optionsExpression.getProperty("unique");
+
+    if (!property || !Node.isPropertyAssignment(property)) {
+        return false;
+    }
+
+    const initializer = property.getInitializer();
+
+    if (initializer === undefined) {
+        return false;
+    }
+
+    if (!Node.isTrueLiteral(initializer) && !Node.isFalseLiteral(initializer)) {
+        throw diagnosticAt(initializer, `\`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
+    }
+
+    return Node.isTrueLiteral(initializer);
+};
+
 /** Parse a `.index(name, [fields], { unique? })` call into an {@link IndexIR}. */
 const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
     const [indexName, fieldsExpression, optionsExpression] = args;
-    let unique = false;
+    const unique = parseIndexUniqueOption(optionsExpression);
+    const name = indexNameOf(indexName);
+    const rawElements = fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression) ? fieldsExpression.getElements() : [];
 
-    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
-        const property = optionsExpression.getProperty("unique");
-
-        if (property && Node.isPropertyAssignment(property)) {
-            const initializer = property.getInitializer();
-
-            // `unique` must be a literal `true`/`false`. A computed value
-            // (`unique: !!x`, `Boolean(...)`, a referenced const) can't be
-            // resolved statically here, so we fail loudly rather than silently
-            // dropping a `uniqueIndex` from the emitted metadata.
-            if (initializer && !Node.isTrueLiteral(initializer) && !Node.isFalseLiteral(initializer)) {
-                throw diagnosticAt(initializer, `\`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
-            }
-
-            unique = initializer ? Node.isTrueLiteral(initializer) : false;
+    // A computed element (`[FIELD]`, `...spread`) was silently dropped, so the
+    // index emitted with fewer columns than it declares — and a partial index
+    // reads as a working one right up until a query needs the missing column.
+    for (const element of rawElements) {
+        if (!Node.isStringLiteral(element)) {
+            throw diagnosticAt(
+                element,
+                `index "${name}" lists a non-literal field (${JSON.stringify(element.getText())}); codegen reads index fields statically, so every entry must be a string literal.`,
+            );
         }
     }
 
-    const fieldElements =
-        fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
-            ? fieldsExpression.getElements().filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
-            : [];
-
-    const name = indexNameOf(indexName);
+    const fieldElements = rawElements.filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element));
 
     for (const element of fieldElements) {
         assertTopLevelIndexField(element, element.getLiteralText(), name);

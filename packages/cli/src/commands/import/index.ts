@@ -2,7 +2,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 const importCommand: Command = {
     argument: { description: "Source NDJSON file, or a `npx convex export --path <dir>` directory", name: "file", type: String },
-    description: "Bulk-insert rows from an NDJSON file via the worker's admin endpoint",
+    description: "Bulk-insert rows from an NDJSON file — or a Convex export directory — via the worker's admin endpoint",
     examples: [
         ["lunora import backup.ndjson", "Bulk-insert rows from an NDJSON file"],
         ["lunora import ./convex-export", "Import a `npx convex export --path` directory (ids are preserved, so no remapping)"],

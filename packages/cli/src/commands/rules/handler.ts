@@ -107,7 +107,7 @@ const copySkill = (source: string, destination: string, overwrite: boolean): boo
  * trusted. A lockfile or a workspace manifest is a far stronger signal than a
  * `package.json` (every package in a monorepo has one of those).
  */
-const WORKSPACE_ROOT_MARKERS = ["pnpm-workspace.yaml", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "bun.lockb", ".git"];
+const WORKSPACE_ROOT_MARKERS = ["pnpm-workspace.yaml", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "bun.lock", "bun.lockb", ".git"];
 
 /**
  * Walk up from `start` to the nearest workspace/repository root.
@@ -137,6 +137,15 @@ const resolveWorkspaceRoot = (start: string): string => {
 };
 
 /**
+ * The directory `install` writes to and `check` reads from.
+ *
+ * Shared so the two cannot drift: if `check` resolved differently it would
+ * report "missing" for skills `install` had just written one level up.
+ */
+const resolveRulesRoot = (invokedFrom: string, directory: string | undefined): string =>
+    directory === undefined ? resolveWorkspaceRoot(invokedFrom) : resolve(invokedFrom, directory);
+
+/**
  * `lunora rules install` — copy the bundled Lunora agent skills into the
  * project's `.agents/skills/`. Existing skill files are left untouched unless
  * `--overwrite` is set, so local edits survive a re-run.
@@ -145,7 +154,7 @@ const runRulesInstall = (options: RunRulesOptions): RunRulesResult => {
     const invokedFrom = options.cwd ?? process.cwd();
     // `--dir` wins; otherwise install at the workspace root rather than wherever
     // the command was invoked from.
-    const cwd = options.dir === undefined ? resolveWorkspaceRoot(invokedFrom) : resolve(invokedFrom, options.dir);
+    const cwd = resolveRulesRoot(invokedFrom, options.dir);
     const overwrite = options.overwrite === true;
     const skillsDirectory = resolveBundledSkillsDirectory();
 
@@ -192,7 +201,7 @@ const runRulesCheck = (options: RunRulesOptions): RunRulesResult => {
     const invokedFrom = options.cwd ?? process.cwd();
     // Must resolve the root exactly as `install` does, or `check` reports
     // "missing" for skills `install` just wrote one directory up.
-    const cwd = options.dir === undefined ? resolveWorkspaceRoot(invokedFrom) : resolve(invokedFrom, options.dir);
+    const cwd = resolveRulesRoot(invokedFrom, options.dir);
     const status = detectAgentRules(cwd);
 
     if (status.installed) {

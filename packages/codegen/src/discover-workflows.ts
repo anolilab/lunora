@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { LunoraError } from "@lunora/errors";
 import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { WorkflowIR, WorkflowStepIR } from "./ir";
@@ -161,7 +161,11 @@ const resolveWorkflowConfig = (argument: Node | undefined): ObjectLiteralExpress
     }
 
     for (const declaration of unwrapped.getSymbol()?.getDeclarations() ?? []) {
-        const initializer = Node.isVariableDeclaration(declaration) ? unwrapTypeWrappers(declaration.getInitializer()) : undefined;
+        // `const` only. A `let`/`var` binding can be reassigned after the
+        // literal, so codegen would emit the original `name`/steps while the
+        // runtime receives the replacement — a divergence nothing would catch.
+        const isConst = Node.isVariableDeclaration(declaration) && declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+        const initializer = isConst ? unwrapTypeWrappers(declaration.getInitializer()) : undefined;
 
         if (initializer && Node.isObjectLiteralExpression(initializer)) {
             return initializer;

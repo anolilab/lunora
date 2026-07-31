@@ -121,6 +121,7 @@ actionCache: defineTable({
     key: v.string(), // sha-256 of `${name}:${JSON.stringify(args)}`
     value: v.string(), // JSON-encoded result
     expiresAt: v.number(), // epoch ms
+    leaseUntil: v.number(), // epoch ms; guards against a stampede on a cold key
 })
     .index("by_key", ["key"], { unique: true })
     // Reap expired rows automatically — see the warning below.
@@ -149,13 +150,45 @@ export const writeCache = internalMutation.input({ key: v.string(), ttlMs: v.num
 });
 ```
 
-The action then reads, computes on a miss, and writes back:
+The action claims the key before computing, so concurrent callers do not all
+run the expensive work:
 
 ```ts
-const cached = await ctx.runQuery(internal.lib_actionCache.readCache, { key });
+// lunora/lib/actionCache.ts — one mutation, two outcomes.
+export const claimOrRead = internalMutation.input({ key: v.string(), leaseMs: v.number() }).mutation(async ({ ctx, args }) => {
+    const hit = await ctx.db
+        .query("actionCache")
+        .withIndex("by_key", (q) => q.eq("key", args.key))
+        .first();
 
-if (cached !== null) {
-    return cached;
+    if (hit && hit.expiresAt > ctx.now) {
+        return { value: hit.value } as const;
+    }
+
+    // A live lease means someone else is already computing this key.
+    if (hit && hit.leaseUntil > ctx.now) {
+        return { claimed: false } as const;
+    }
+
+    const row = { expiresAt: hit?.expiresAt ?? 0, key: args.key, leaseUntil: ctx.now + args.leaseMs, value: hit?.value ?? "" };
+
+    await (hit ? ctx.db.replace(hit._id, row) : ctx.db.insert("actionCache", row));
+
+    return { claimed: true } as const;
+});
+```
+
+```ts
+// The action: compute only if we won the claim.
+const outcome = await ctx.runMutation(internal.lib_actionCache.claimOrRead, { key, leaseMs: 30_000 });
+
+if ("value" in outcome) {
+    return JSON.parse(outcome.value) as Result;
+}
+
+if (!outcome.claimed) {
+    // Someone else is computing it. Wait and re-read, or serve stale — your call.
+    return await waitForOrServeStale(key);
 }
 
 const fresh = await expensiveThing();
@@ -166,12 +199,15 @@ return fresh;
 ```
 
 <Callout type="info">
-    **Single-flight comes free — that is the part you would otherwise have to build.** The usual danger with a TTL cache is the stampede: a cold key, a
-    hundred concurrent callers, a hundred identical upstream calls. A mutation runs inside **one** Durable Object and that object is single-threaded, so the
-    write side is already serialized. Put the *compute* in a mutation (or in an action the mutation schedules) rather than in each caller, and the second
-    caller finds the row the first one wrote.
+    **The Durable Object makes the *claim* atomic — that is the part you would otherwise have to build.** A cold key with a hundred concurrent callers is the
+    classic stampede. `claimOrRead` is a mutation, and a mutation runs to completion inside one Durable Object without interleaving, so exactly one caller can
+    observe "no live lease" and take it. The other ninety-nine get `claimed: false` on their first round-trip.
 
-    This is why Lunora ships no cache add-on: on a Durable Object the hard half of one is already solved, and the rest is the thirty lines above.
+    What is **not** free: the compute itself has to stay outside the mutation. A mutation runs in a transaction that can roll back and must not do slow external
+    I/O, so the winner computes in the action and writes back after. That means the lease is what serialises callers, not the write — and a lease needs a
+    duration, so pick one longer than the work and shorter than your patience.
+
+    This is why Lunora ships no cache add-on: the hard half is the atomic claim, and a Durable Object gives you that in a single mutation.
 
 </Callout>
 

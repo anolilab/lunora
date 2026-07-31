@@ -30,12 +30,30 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     // resolves to the local checkout, but that protocol is meaningless in a
     // consumer's package.json — printing it raw made the plan look like it was
     // about to break `pnpm install` (LUNORA_ISSUES #26).
+    // `resolveDepRange` resolves the CLI's dist-tag for every bare `workspace:`
+    // specifier, so it is memoised across the whole plan rather than re-resolved
+    // per dependency line.
+    const renderedRange = new Map<string, string>();
+    const rangeFor = (range: string): string => {
+        const cached = renderedRange.get(range);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const resolved = resolveDepRange(range);
+
+        renderedRange.set(range, resolved);
+
+        return resolved;
+    };
+
     for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
-        logger.info(`  dep   ${dep}@${resolveDepRange(range)}`);
+        logger.info(`  dep   ${dep}@${rangeFor(range)}`);
     }
 
     for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
-        logger.info(`  dev   ${dep}@${resolveDepRange(range)}`);
+        logger.info(`  dev   ${dep}@${rangeFor(range)}`);
     }
 
     for (const binding of manifest.bindings ?? []) {

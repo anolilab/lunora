@@ -31,6 +31,13 @@ const filterWithoutIndex: Lint = {
                 continue;
             }
 
+            // A primary-key filter is reported by `filter_on_primary_key`, whose
+            // remediation is `ctx.db.get(id)` — not an index. Two findings on
+            // one read, pointing at different fixes, is worse than one.
+            if (read.filtersPrimaryKey === true) {
+                continue;
+            }
+
             const location = read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
             const shardKind = shardKindByTable.get(read.table);
             const metadata = { exportName: read.exportName, file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table };
@@ -55,10 +62,16 @@ const filterWithoutIndex: Lint = {
                 continue;
             }
 
+            // `root` is the default single-Durable-Object table (its own SQLite),
+            // NOT D1 — `global` is the D1 tier. Both scan every row, but the
+            // cost differs enough to say which one you are paying, and an
+            // unrecognised table (an external/unknown tier) gets the neutral
+            // wording rather than a claim about storage we cannot make.
             const scope =
-                shardKind === "global"
-                    ? `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`
-                    : `it loads every row of "${read.table}" and filters in memory`;
+                {
+                    global: `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`,
+                    root: `it loads every row of "${read.table}" from the root Durable Object's SQLite and filters in memory`,
+                }[shardKind as "global" | "root"] ?? `it loads every row of "${read.table}" and filters in memory`;
 
             findings.push(
                 emit(filterWithoutIndex, {

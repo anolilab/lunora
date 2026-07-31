@@ -20,6 +20,7 @@ import {
     createSearchAnalyzer,
     createSearchBuilder,
     finishSearchPage,
+    MAX_SEARCH_SCAN,
     planSearchPage,
     resolveSearchScan,
     searchPageScan,
@@ -2710,9 +2711,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const LEGACY_READER_ERROR = "the legacy query()/withIndex() reader is not available on the D1 (global) backend; use findMany";
 
-            // Matches the shard reader's page size so iteration costs the same
-            // per row on either backend.
-            const ITERATOR_PAGE_SIZE = 128;
+            // Sized to the search cap on purpose, unlike the shard reader's
+            // smaller page. A relevance-ordered search has to score its whole
+            // window to rank it, and `searchPageScan` grows that window with the
+            // offset — so paging in small steps would re-scan an ever-larger
+            // prefix on every page. The result set is capped at
+            // `MAX_SEARCH_SCAN` anyway, so one page costs exactly what
+            // `.collect()` costs and never more.
+            const ITERATOR_PAGE_SIZE = MAX_SEARCH_SCAN;
 
             // The D1 backend doesn't expose the scan/index reader — `findMany`
             // is the public read surface there. Only `.withSearchIndex()` is

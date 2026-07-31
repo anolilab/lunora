@@ -1151,35 +1151,53 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         /**
          * Lazy row iteration — `for await (const row of ctx.db.query(t)…)`.
          *
-         * Pulls one page at a time through the existing keyset pagination and
-         * yields its rows, so a consumer that stops early (a `break`, a `.first()`
-         * -like scan, a k-way merge that only needs the head of each branch)
-         * stops the reads too.
+         * Pulls one keyset page at a time and yields its rows, so a consumer
+         * that stops early (a `break`, a k-way merge that only needs the head of
+         * each branch) stops the reads too. That laziness is the point: a
+         * userland merged-index stream otherwise has to materialise each branch
+         * with a bounded `take(n)`, so asking for one row reads `n` per branch.
          *
-         * That laziness is the point: without it, userland reimplementations of
-         * Convex's merged-index streams had to materialise each branch with a
-         * bounded `take(1024)` and merge, so asking for one row read up to 1,024
-         * per branch (LUNORA_GAPS #6). Ordering, `.withIndex()` and `.filter()`
-         * all apply exactly as they do to the other terminals, because this IS
-         * the other terminal underneath.
+         * **In-memory filters are applied here, not by `paginate`.** `paginate`
+         * must return a FULL page of surviving rows, so when the stage carries
+         * `.filter()` predicates it drops the SQL `LIMIT` and scans the whole
+         * remainder of the table on every call — which would make iteration
+         * quadratic (`N²/pageSize`) and, because RLS pushes its policy down as
+         * an in-memory filter, would do so on every guarded read even when the
+         * caller wrote no `.filter()` at all. Paging the UNFILTERED stage keeps
+         * the scan bounded to one page, and the predicates run over each page as
+         * it arrives — same rows, same order, linear.
          */
         // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
         async *[Symbol.asyncIterator]() {
+            const predicates = [...stage.inMemoryFilters];
             let cursor: string | undefined;
 
-            for (;;) {
-                // Sequential by construction: each page's cursor comes from the
-                // previous page, so these reads cannot be parallelised.
-                // eslint-disable-next-line no-await-in-loop, unicorn/no-null -- see above; `null` is PaginationOptions' documented first-page sentinel
-                const page: QueryPage = await reader.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
+            // Swapped out for the duration of the walk so `paginate` keeps its
+            // `LIMIT`; restored in `finally` so an early `break` (which
+            // finalizes the generator) leaves the reader exactly as it found it.
+            stage.inMemoryFilters = [];
 
-                yield* page.page;
+            try {
+                for (;;) {
+                    // Sequential by construction: each page's cursor comes from
+                    // the previous page, so these reads cannot be parallelised.
+                    // eslint-disable-next-line no-await-in-loop, unicorn/no-null -- see above; `null` is PaginationOptions' documented first-page sentinel
+                    const page: QueryPage = await reader.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
 
-                if (page.isDone || page.continueCursor === null) {
-                    return;
+                    for (const row of page.page) {
+                        if (predicates.every((predicate) => predicate(row))) {
+                            yield row;
+                        }
+                    }
+
+                    if (page.isDone || page.continueCursor === null) {
+                        return;
+                    }
+
+                    cursor = page.continueCursor;
                 }
-
-                cursor = page.continueCursor;
+            } finally {
+                stage.inMemoryFilters = predicates;
             }
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
