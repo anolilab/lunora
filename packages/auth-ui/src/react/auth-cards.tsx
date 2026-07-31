@@ -3,6 +3,7 @@
 import type { ReactElement } from "react";
 
 import { signInAnonymously } from "../core/anonymous";
+import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
@@ -219,13 +220,14 @@ const ForgotPasswordCard = ({ resetPath, signInHref = "/sign-in" }: ForgotPasswo
 };
 
 interface ResetPasswordCardProps {
-    /** The reset token from the URL (`?token=...`). */
+    /** Defaults to `?token=` from the URL. */
     token?: string;
 }
 
 const ResetPasswordCard = ({ token }: ResetPasswordCardProps = {}): ReactElement => {
     const { localization: t } = useAuthUI();
-    const [state, actions] = useController((context) => createResetPasswordController(context, { token }), [token]);
+    const resolved = token ?? queryParameter("token");
+    const [state, actions] = useController((context) => createResetPasswordController(context, { token: resolved }), [resolved]);
 
     return (
         <AuthCard title={t.resetPassword}>

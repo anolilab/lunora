@@ -3,13 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient } from "../../src/core";
 import { pushToast, resetToasts } from "../../src/core";
-import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, SignUpCard, TwoFactorSetupCard } from "../../src/react";
+import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, ResetPasswordCard, SignUpCard, TwoFactorSetupCard } from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
 // One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetToasts();
+    // jsdom keeps the URL across tests otherwise, and the reset-password suite
+    // below relies on a clean starting point.
+    window.history.pushState({}, "", "/");
 });
 
 describe("errorToaster", () => {
@@ -158,6 +161,57 @@ describe("two-factor setup without a password", () => {
 
         await waitFor(() => {
             expect(screen.queryByText("Set a password before turning on two-factor authentication.")).toBeNull();
+        });
+    });
+});
+
+describe("resetPasswordCard reads the token from the URL", () => {
+    const renderCard = (client: AuthClient) =>
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ResetPasswordCard />
+            </AuthUIProvider>,
+        );
+
+    it("submits the ?token= from the URL when no prop is passed", async () => {
+        expect.assertions(1);
+
+        window.history.pushState({}, "", "/reset-password?token=abc");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        renderCard(client);
+
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Set new password" }));
+
+        await waitFor(() => {
+            expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "abc" }));
+        });
+    });
+
+    it("lets an explicit prop win over the URL", async () => {
+        expect.assertions(1);
+
+        window.history.pushState({}, "", "/reset-password?token=from-url");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ResetPasswordCard token="from-prop" />
+            </AuthUIProvider>,
+        );
+
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Set new password" }));
+
+        await waitFor(() => {
+            expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
         });
     });
 });

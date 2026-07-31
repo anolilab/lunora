@@ -2,6 +2,7 @@ import type { JSX } from "solid-js";
 import { Show } from "solid-js";
 
 import { signInAnonymously } from "../core/anonymous";
+import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
@@ -217,13 +218,13 @@ const ForgotPasswordCard = (props: ForgotPasswordCardProps = {}): JSX.Element =>
 };
 
 interface ResetPasswordCardProps {
-    /** The reset token from the URL (`?token=...`). */
+    /** Defaults to `?token=` from the URL. */
     token?: string;
 }
 
 const ResetPasswordCard = (props: ResetPasswordCardProps = {}): JSX.Element => {
     const { localization: t } = useAuthUI();
-    const [state, actions] = createController((context) => createResetPasswordController(context, { token: props.token }));
+    const [state, actions] = createController((context) => createResetPasswordController(context, { token: props.token ?? queryParameter("token") }));
 
     return (
         <AuthCard title={t.resetPassword}>

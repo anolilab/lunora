@@ -8,6 +8,7 @@ import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, computed, inject, Injector, input } from "@angular/core";
 
 import { signInAnonymously } from "../core/anonymous";
+import { queryParameter } from "../core/browser-location";
 import type { EmailOtpActions, EmailOtpState } from "../core/email-otp";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
@@ -293,7 +294,7 @@ class ForgotPasswordCardComponent implements OnInit {
     `,
 })
 class ResetPasswordCardComponent implements OnInit {
-    /** The reset token from the URL (`?token=...`). */
+    /** Defaults to `?token=` from the URL. */
     readonly token = input<string>();
 
     private readonly context = injectAuthUIContext();
@@ -302,8 +303,12 @@ class ResetPasswordCardComponent implements OnInit {
     protected state!: Signal<FormState<ResetPasswordField>>;
     protected actions!: FormActions<ResetPasswordField>;
 
+    // Built in ngOnInit, not a field initializer: `token()` is unbound until
+    // Angular has set the inputs, so the controller would consume the URL's
+    // token even when the caller passed one of their own.
     ngOnInit(): void {
-        const bridge = controllerSignal((context) => createResetPasswordController(context, { token: this.token() }), {
+        const resolved = this.token() ?? queryParameter("token");
+        const bridge = controllerSignal((context) => createResetPasswordController(context, { token: resolved }), {
             context: this.context,
             injector: this.injector,
         });
