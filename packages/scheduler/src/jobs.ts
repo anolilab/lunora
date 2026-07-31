@@ -168,8 +168,13 @@ const stepField = (value: number, label: string, period: number): string => {
  * Exactly one unit is allowed; the value is rendered as a stepped wildcard
  * (`star-slash-n`) in the corresponding cron field and must evenly divide the
  * field's period so the recurrence is truly `every n` (see {@link stepField}).
+ *
+ * `jobName` is optional so `@lunora/codegen`'s static AST-based discovery (which
+ * calls this without a resolved job name in scope) still gets a rejection — just
+ * without the job name in the message; the `cronJobs()` builder below always has
+ * a name and passes it.
  */
-const compileInterval = (schedule: IntervalSchedule): string => {
+const compileInterval = (schedule: IntervalSchedule, jobName?: string): string => {
     const units = (["seconds", "minutes", "hours"] as const).filter((unit) => schedule[unit] !== undefined);
 
     if (units.length !== 1) {
@@ -198,8 +203,17 @@ const compileInterval = (schedule: IntervalSchedule): string => {
         );
     }
 
+    // Cloudflare Cron Triggers have a one-minute floor: the platform only
+    // understands the standard 5-field (minute-granularity) grammar, so a
+    // 6-field seconds-leading expression compiles cleanly, survives codegen,
+    // and lands in the user's committed wrangler.jsonc — then fails only at
+    // `wrangler deploy`, with an error naming neither the job nor the file.
+    // Reject it here instead, where the job name is still in scope.
     if (unit === "seconds") {
-        return `*/${stepField(value, "interval.seconds", 60)} * * * * *`;
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/scheduler: cron job${jobName ? ` "${jobName}"` : ""} uses interval.seconds (${String(value)}) — Cloudflare Cron Triggers have a one-minute floor and cannot run sub-minute schedules; \`wrangler deploy\` would reject the resulting 6-field cron expression. Use ctx.scheduler.runAfter/runAt (optionally via a workpool for bounded concurrency) for sub-minute recurrence, or crons.interval(name, { minutes: 1 }, …) for the fastest cron-native cadence.`,
+        );
     }
 
     if (unit === "minutes") {
@@ -249,11 +263,14 @@ const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleK
  * Compile one of the ergonomic schedule forms into a standard cron expression.
  * Exposed as a pure function so `@lunora/codegen` can reuse the exact same
  * compilation when it statically lifts a `crons.{kind}(...)` call out of the
- * AST — codegen imports this directly (no duplicated mirror).
+ * AST — codegen imports this directly (no duplicated mirror). `jobName` is
+ * optional (see {@link compileInterval}) so codegen's existing 2-arg call site
+ * keeps working unchanged.
  */
 const compileCronSchedule = (
     kind: CronScheduleKind,
     schedule: DailySchedule | HourlySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule,
+    jobName?: string,
 ): string => {
     switch (kind) {
         case "daily": {
@@ -263,7 +280,7 @@ const compileCronSchedule = (
             return compileHourly(schedule as HourlySchedule);
         }
         case "interval": {
-            return compileInterval(schedule as IntervalSchedule);
+            return compileInterval(schedule as IntervalSchedule, jobName);
         }
         case "monthly": {
             return compileMonthly(schedule as MonthlySchedule);
@@ -365,7 +382,7 @@ const cronJobs = (): CronJobsBuilder => {
             return builder;
         },
         interval(name, schedule, function_, args) {
-            register(name, compileCronSchedule("interval", schedule), function_, args);
+            register(name, compileCronSchedule("interval", schedule, name), function_, args);
 
             return builder;
         },
