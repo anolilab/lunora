@@ -114,7 +114,7 @@ describe("listRemoteSecrets", () => {
     it("passes the resolved command through to the runner (env + package-manager aware)", async () => {
         expect.assertions(1);
 
-        let seenArgs: readonly string[] | undefined;
+        let seenArgs: ReadonlyArray<string> | undefined;
 
         await listRemoteSecrets({
             cwd: workdir,

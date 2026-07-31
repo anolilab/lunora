@@ -42,13 +42,13 @@ interface ListRemoteSecretsResult {
 
 /**
  * Runs `wrangler secret list` through {@link defaultSpawner} rather than a bare
- * `execFile`, so it gets the same Windows `.cmd`-shim handling every other
- * spawned command in this CLI relies on ({@link spawnShellCompat} inside
- * `defaultSpawner`) — `execFile` on a package-manager shim (`pnpm`/`npx`/`yarn`/
- * `bun`) fails outright on Windows (`EINVAL`/`ENOENT`, no PID) since Node's
- * CVE-2024-27980 hardening. A spawn error (the child never started) is reported
- * as a failed result rather than a thrown rejection, matching the previous
- * `execFile`-based runner's contract.
+ * `execFile`, so it gets the same Windows `.cmd`-shim handling (`spawnShellCompat`,
+ * used inside `defaultSpawner`) every other spawned command in this CLI relies
+ * on — `execFile` on a package-manager shim (`pnpm`/`npx`/`yarn`/`bun`) fails
+ * outright on Windows (`EINVAL`/`ENOENT`, no PID) since Node's CVE-2024-27980
+ * hardening. A spawn error (the child never started) is reported as a failed
+ * result rather than a thrown rejection, matching the previous `execFile`-based
+ * runner's contract.
  */
 const defaultRunner: SecretListRunner = async (command, args, cwd) => {
     try {

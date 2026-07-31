@@ -77,6 +77,9 @@ interface WranglerShape {
     containers?: ReadonlyArray<ContainerEntry>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
+    // Presence-only: read here just to tell whether a requested `--env <name>`
+    // is declared at all, for the advisory warning below. Never written into.
+    env?: Record<string, unknown>;
     // Hint-only: the `app_id` is a remote Flagship app Lunora can't mint — warned, never written.
     flagship?: ReadonlyArray<{ app_id?: string; binding?: string }>;
     // Hint-only: the `id` is a remote Hyperdrive resource Lunora can't mint — warned, never written.
@@ -687,8 +690,21 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
  *
  * Writes only when something is missing; returns `changed: false` when the
  * config already satisfies the inferred needs.
+ *
+ * `environment`, when passed, does NOT change where this writes — every step
+ * below still only touches the TOP-LEVEL config; wrangler's `env.&lt;name>`
+ * blocks have no auto-provisioning path today. It is used only to emit an
+ * advisory warning, because bindings (`durable_objects`, `d1_databases`, …)
+ * are non-inheritable (see `wrangler-validator.ts`'s `NON_INHERITABLE_KEYS`):
+ * a `--env production` deploy needs its OWN copy of each one, and silently
+ * writing only to the top level would leave that gap unmentioned. Extending
+ * the JSONC writer itself to target `env.&lt;name>.*` idempotently for every
+ * binding kind here is a separate, larger change (each of the ~10 pipeline
+ * steps below reads AND writes the top-level path) that this fix does not
+ * attempt — `lunora deploy --env &lt;name>` now VALIDATES the env-scoped view
+ * (closing the reported gap), it just doesn't yet auto-provision it.
  */
-const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings): ReconcileBindingsResult => {
+const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings, environment?: string): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     const exportGaps = collectExportGaps(inferred);
@@ -713,6 +729,19 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     // Hints are filtered against the existing config so a wired-up project is quiet.
     const warnings = collectWarnings(inferred, projectRoot, parsed);
+
+    // See the doc comment above: auto-provisioning has no env-scoped write
+    // path, so a `--env <name>` deploy is told plainly rather than silently
+    // getting top-level-only bindings its non-inheritable ones won't reach.
+    if (environment !== undefined) {
+        const envBlockDeclared = parsed.env?.[environment] !== undefined;
+
+        warnings.push(
+            envBlockDeclared
+                ? `auto-provisioned bindings are written to the top level of wrangler.jsonc only — "env.${environment}" has its own (non-inheritable) bindings and must be reconciled by hand; \`lunora deploy --env ${environment}\` now validates them, so a gap here will be reported at deploy time.`
+                : `--env "${environment}" was requested but wrangler.jsonc declares no "env.${environment}" block — auto-provisioned bindings are written to the top level only and will not apply to that environment.`,
+        );
+    }
 
     // Only exported container classes are provisionable — wrangler rejects a
     // class_name the worker doesn't export. Their DO bindings + migration

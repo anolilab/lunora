@@ -309,6 +309,15 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
 };
 
 /**
+ * Same CI-detection default `lunora codegen` uses: strict in CI, advisory
+ * locally, so a legitimately-partial target can still be shipped by hand.
+ * Extracted (rather than inlined in `executeDeploy`) purely to keep that
+ * function's cognitive complexity within the repo's lint budget.
+ */
+const resolveStrictAdvisories = (options: DeployCommandOptions): boolean =>
+    options.strictAdvisories ?? (process.env["CI"] !== undefined && process.env["CI"] !== "");
+
+/**
  * Return the name of any D1 binding that still carries the placeholder
  * database_id written by `reconcileWranglerBindings`. Returns `undefined`
  * when no placeholder is found (or when wrangler.jsonc is absent/unparseable —
@@ -396,7 +405,13 @@ const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArr
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined, target: string): Promise<void> => {
+const provisionBindings = async (
+    cwd: string,
+    logger: Logger,
+    cronTriggers: ReadonlyArray<string> | undefined,
+    target: string,
+    environment: string | undefined,
+): Promise<void> => {
     try {
         // Resolved for its side effect: reject an unregistered target before
         // reconciling a config shaped for the wrong provider. `prepare` routes
@@ -405,7 +420,7 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         resolveDeployDriver(target);
 
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
-        const reconciled = reconcileWranglerBindings(cwd, inferred);
+        const reconciled = reconcileWranglerBindings(cwd, inferred, environment);
 
         if (reconciled.changed) {
             logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
@@ -1092,9 +1107,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string> },
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
-    // Same CI-detection default `lunora codegen` uses: strict in CI, advisory
-    // locally, so a legitimately-partial target can still be shipped by hand.
-    const strictAdvisories = options.strictAdvisories ?? (process.env["CI"] !== undefined && process.env["CI"] !== "");
+    const strictAdvisories = resolveStrictAdvisories(options);
 
     // Resolved ONCE, and before anything writes. Deploy rewrites `_generated/*`
     // and may mutate `wrangler.jsonc` well before it reaches the wrangler step,
@@ -1175,7 +1188,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
@@ -1192,7 +1205,11 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: 1, descriptor: undefined, error: preflightError, validation: { problems: [], wranglerPath: undefined } };
     }
 
-    const validation = validateWrangler({ projectRoot: cwd });
+    // `--env <name>` validates the env-scoped view — a binding present only
+    // at the top level is a real gap for that environment (non-inheritable;
+    // see wrangler-validator.ts's NON_INHERITABLE_KEYS), and the deploy that
+    // follows targets exactly this environment via `wrangler deploy --env`.
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
 
     if (reportWranglerProblems(validation, options.logger)) {
         return { code: 1, descriptor: undefined, error: "wrangler validation failed", validation };

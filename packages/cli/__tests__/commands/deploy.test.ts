@@ -20,10 +20,11 @@ import { createRecordingSpawner } from "../../src/util/spawn";
 // deploy pipeline still gets a valid `CodegenResult`) to exercise a diagnostic
 // shape the shipped `cloudflare` capability matrix can never actually produce
 // (it rates every feature `native`/`emulated`, never `unsupported`).
+// eslint-disable-next-line vitest/prefer-import-in-mock -- `vi.mock(import("@lunora/codegen"), ...)` type-checks the mock's shape against the module's `default`-bearing type, which this partial re-export doesn't satisfy
 vi.mock("@lunora/codegen", async (importOriginal) => {
     const actual = await importOriginal<typeof import("@lunora/codegen")>();
 
-    return { ...actual, runCodegen: vi.fn(actual.runCodegen) };
+    return { ...actual, runCodegen: vi.fn<typeof actual.runCodegen>(actual.runCodegen) };
 });
 
 // Keep the deploy suite hermetic: the deploy-time missing-secret gate lists the
@@ -72,6 +73,36 @@ const VALID_WRANGLER = `{
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
+}
+`;
+
+/**
+ * `VALID_WRANGLER` plus a declared `env.&lt;name>` block repeating the same
+ * (non-inheritable) bindings — real wrangler only WARNS on an undeclared
+ * `--env &lt;name>` and then deploys with NO bindings at all (confirmed against
+ * wrangler 4.114.0: `wrangler deploy --dry-run --env doesnotexist` prints
+ * "No bindings found."), which is exactly the silent failure mode the deploy
+ * validator's env-scoping gate exists to turn into a loud one — so any test
+ * exercising a real `--env &lt;name>` deploy needs a matching declared block,
+ * same as a correctly-configured project would have.
+ */
+const validWranglerWithEnv = (name: string): string => `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "env": {
+        "${name}": {
+            "durable_objects": {
+                "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+            },
+            "d1_databases": [{ "binding": "DB", "database_name": "x-${name}", "database_id": "real-db-id-${name}" }]
+        }
+    }
 }
 `;
 
@@ -400,7 +431,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
         it("forwards --env to wrangler", async () => {
             expect.assertions(2);
 
-            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
 
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
@@ -411,6 +442,69 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             expect(args).toContain("--env");
             expect(args).toContain("production");
+        });
+
+        describe("env-scoped wrangler validation (CONFIG-02)", () => {
+            it("blocks --env production when the SHARD binding exists only at the top level (env.production has none)", async () => {
+                expect.assertions(3);
+
+                // Top-level-only bindings, `env.production` declares nothing —
+                // the exact shape a `deploy --env production` gate used to wave
+                // through despite wrangler deploying with NO bindings at all for
+                // that environment (durable_objects is non-inheritable).
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "env": { "production": {} }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(1);
+                expect(result.error).toBe("wrangler validation failed");
+                // Never reached the wrangler spawn.
+                expect(calls).toHaveLength(0);
+            });
+
+            it("deploys once env.production repeats its own bindings", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("blocks --env <name> that names no declared environment", async () => {
+                expect.assertions(3);
+
+                // No "env" block at all in the config.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "canary", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(1);
+                expect(calls).toHaveLength(0);
+                expect(errors.some((line) => line.includes("names no environment declared"))).toBe(true);
+            });
         });
 
         it("forwards --temporary to wrangler", async () => {
@@ -1010,7 +1104,7 @@ export const backfillNames = defineMigration({
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
                 expect.assertions(2);
 
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
 
                 const { spawner } = createRecordingSpawner();
                 const { errors, logger } = silentLogger();
@@ -1040,6 +1134,7 @@ export const backfillNames = defineMigration({
                 );
 
                 expect(patched).not.toBe(schema);
+
                 writeFileSync(schemaPath, patched, "utf8");
             };
 
@@ -1106,9 +1201,9 @@ export const backfillNames = defineMigration({
                     target: "cloudflare",
                 };
 
-                vi.mocked(runCodegen).mockImplementationOnce(
-                    (options): CodegenResult => ({ ...actual.runCodegen(options), platformDiagnostics: [diagnostic] }),
-                );
+                vi.mocked(runCodegen).mockImplementationOnce((options): CodegenResult => {
+                    return { ...actual.runCodegen(options), platformDiagnostics: [diagnostic] };
+                });
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { errors, logger } = silentLogger();

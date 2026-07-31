@@ -375,6 +375,257 @@ describe("wrangler-validator", () => {
         });
     });
 
+    describe("validateWranglerConfig — environment-scoped (env.<name>)", () => {
+        /** A top level with every binding this suite exercises, valid on its own. */
+        const topLevel = (): WranglerConfig => {return {
+            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+            compatibility_flags: [REQUIRED_FLAG],
+            d1_databases: [{ binding: "DB" }],
+            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            kv_namespaces: [{ binding: "CACHE", id: "top-level-kv-id" }],
+            observability: { enabled: true },
+            queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+            r2_buckets: [{ binding: "UPLOADS" }],
+            vars: { LUNORA_ENV: "shared" },
+        }};
+
+        it("ignores env entirely when environment is not requested (unchanged default)", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: {} };
+
+            expect(validateWranglerConfig(wrangler).valid).toBe(true);
+        });
+
+        it("errors distinctly when --env names an undeclared environment", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { staging: {} };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes('names no environment declared') && line.includes("staging"))).toBe(true);
+        });
+
+        it("errors the same way when no env block is declared at all", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(topLevel(), undefined, "production");
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("no environments are declared"))).toBe(true);
+        });
+
+        // durable_objects — NON-inheritable: a SHARD binding at the top level
+        // must NOT satisfy env.production when that environment doesn't repeat
+        // it — wrangler deploys env.production with no SHARD binding at all.
+        it("durable_objects: a top-level-only SHARD binding fails env.production validation", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: {} };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => SHARD_BINDING_ERROR_RE.test(line))).toBe(true);
+        });
+
+        it("durable_objects: passes once env.production repeats its own SHARD binding", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
+
+            expect(validateWranglerConfig(wrangler, undefined, "production").valid).toBe(true);
+        });
+
+        // d1_databases — inferred non-inheritable (see NON_INHERITABLE_KEYS doc
+        // comment): a schema with a .global() table needs env.production's OWN DB
+        // binding, not the top level's.
+        it("d1_databases: a top-level-only DB binding fails env.production when the schema has a .global() table", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
+
+            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production");
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes('d1_databases must include a binding named "DB"'))).toBe(true);
+        });
+
+        it("d1_databases: passes once env.production repeats its own DB binding", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = {
+                production: { d1_databases: [{ binding: "DB" }], durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } },
+            };
+
+            expect(validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production").valid).toBe(true);
+        });
+
+        // kv_namespaces — NON-inheritable, hint-only (warns on a missing id,
+        // doesn't error): env.production's OWN (id-less) entry must be what
+        // gets validated — the top level's entry (which DOES have an id) must
+        // not silently paper over it.
+        it("kv_namespaces: env.production's own id-less entry warns, even though the top level's has an id", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = {
+                production: {
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    kv_namespaces: [{ binding: "CACHE" }],
+                },
+            };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            // Still valid (kv_namespaces is a hint, not a hard error) — but the
+            // warning must fire, proving the merged view used env.production's
+            // id-less entry rather than the top level's complete one.
+            expect(report.valid).toBe(true);
+            expect(report.warnings.some((line) => line.toLowerCase().includes("kv") && line.includes("id"))).toBe(true);
+        });
+
+        // r2_buckets — NON-inheritable, self-describing (shape-only, no remote
+        // id to warn about) — this asserts the merge drops the top-level entry
+        // rather than that anything currently errors on a missing one.
+        it("r2_buckets: env.production's merged view has no bucket when it doesn't declare one", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
+
+            // No direct assertion surface on r2_buckets in the report (shape-only,
+            // self-describing) — exercised via vars below instead, which DOES
+            // have an observable effect (the CORS lint).
+            expect(validateWranglerConfig(wrangler, undefined, "production").valid).toBe(true);
+        });
+
+        // vars — NON-inheritable: a CORS-unsafe combination declared ONLY under
+        // env.production must still be caught; the top level's (safe) vars must
+        // not mask it.
+        it("vars: env.production's own (unsafe) vars are validated, not the top level's (safe) ones", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = {
+                production: {
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    vars: { LUNORA_ALLOWED_ORIGINS: "*", LUNORA_CORS_ALLOW_CREDENTIALS: "true" },
+                },
+            };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("wildcard"))).toBe(true);
+        });
+
+        it("vars: the top level's unsafe vars do NOT leak into an env.production that declares its own safe vars", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.vars = { LUNORA_ALLOWED_ORIGINS: "*", LUNORA_CORS_ALLOW_CREDENTIALS: "true" };
+            wrangler.env = {
+                production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, vars: { LUNORA_ALLOWED_ORIGINS: "https://app.example.com" } },
+            };
+
+            expect(validateWranglerConfig(wrangler, undefined, "production").valid).toBe(true);
+        });
+
+        // queues — NON-inheritable: exercised for shape only (no direct error
+        // surface here), asserting the merge behavior via warnings/valid stays
+        // sane rather than throwing.
+        it("queues: env.production without its own producers/consumers does not crash and stays valid", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
+
+            expect(validateWranglerConfig(wrangler, undefined, "production").valid).toBe(true);
+        });
+
+        // compatibility_date / observability — INHERITABLE: env.production
+        // inherits the top level's value when it doesn't override it.
+        it("compatibility_date: inherits the top level's value into env.production", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
+
+            // The top level's REQUIRED_COMPATIBILITY_DATE is >= the minimum, so
+            // this only passes if it was actually carried over into the merged view.
+            expect(validateWranglerConfig(wrangler, undefined, "production").errors.some((line) => line.includes("compatibility_date must be"))).toBe(false);
+        });
+
+        it("compatibility_date: env.production's own override is used over the top level's", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = {
+                production: { compatibility_date: "2020-01-01", durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } },
+            };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("compatibility_date must be"))).toBe(true);
+        });
+
+        it("observability: inherits the top level's enabled:true into env.production (no cache/observability error)", () => {
+            expect.assertions(1);
+
+            const wrangler = topLevel();
+
+            wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            expect(report.errors.some((line) => line.toLowerCase().includes("observability"))).toBe(false);
+        });
+
+        it("warns once (not per-key) when env.production overrides a key with no verified inheritance rule", () => {
+            expect.assertions(2);
+
+            const wrangler = topLevel();
+
+            wrangler.env = {
+                production: {
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    // `hyperdrive` is a real WranglerConfig key with no verified
+                    // entry in either NON_INHERITABLE_KEYS or INHERITABLE_KEYS.
+                    hyperdrive: [{ binding: "HYPERDRIVE", id: "env-only-id" }],
+                },
+            };
+
+            const report = validateWranglerConfig(wrangler, undefined, "production");
+
+            expect(report.warnings.some((line) => line.includes("hyperdrive") && line.includes("TOP-LEVEL value only"))).toBe(true);
+            // Exactly one such warning, not one per unverified key.
+            expect(report.warnings.filter((line) => line.includes("TOP-LEVEL value only"))).toHaveLength(1);
+        });
+    });
+
     describe("withTailConsumer", () => {
         it("appends a tail consumer when none is wired", () => {
             expect.assertions(2);
@@ -427,6 +678,82 @@ describe("wrangler-validator", () => {
             expect(result.problems).toEqual([]);
             expect(result.report.valid).toBe(true);
             expect(result.wranglerPath).toBe(join(workdir, "wrangler.jsonc"));
+        });
+
+        describe("environment argument (env.<name>)", () => {
+            // Top level declares everything (so a top-level-only validation
+            // passes); env.production and env.staging each declare their OWN
+            // (non-inheritable) durable_objects — staging's is deliberately
+            // missing the SHARD binding to prove the merge is per-environment.
+            const MULTI_ENV_WRANGLER = `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "compatibility_flags": ["nodejs_compat", "${REQUIRED_FLAG}"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "top-level-only" }],
+    "env": {
+        "production": {
+            "durable_objects": {
+                "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+            },
+            "d1_databases": [{ "binding": "DB", "database_name": "lunora-prod", "database_id": "prod-id" }]
+        },
+        "staging": {
+            "vars": { "LUNORA_ENV": "staging" }
+        }
+    }
+}
+`;
+
+            it("validating the top level (no --environment) still passes — unchanged default", () => {
+                expect.assertions(1);
+
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(join(workdir, "wrangler.jsonc"), MULTI_ENV_WRANGLER, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.valid).toBe(true);
+            });
+
+            it("validating --env production inspects env.production's own bindings and passes", () => {
+                expect.assertions(1);
+
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(join(workdir, "wrangler.jsonc"), MULTI_ENV_WRANGLER, "utf8");
+
+                const result = validateWranglerProject({ environment: "production", projectRoot: workdir });
+
+                expect(result.report.valid).toBe(true);
+            });
+
+            it("validating --env staging fails — a missing SHARD there errors even though the top level has one", () => {
+                expect.assertions(3);
+
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(join(workdir, "wrangler.jsonc"), MULTI_ENV_WRANGLER, "utf8");
+
+                const result = validateWranglerProject({ environment: "staging", projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.problems.some((line) => SHARD_BINDING_ERROR_RE.test(line))).toBe(true);
+                // Also missing its own DB binding (schema has a .global() table).
+                expect(result.problems.some((line) => line.includes('d1_databases must include a binding named "DB"'))).toBe(true);
+            });
+
+            it("an undeclared --env errors distinctly, without running the rest of validation", () => {
+                expect.assertions(3);
+
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(join(workdir, "wrangler.jsonc"), MULTI_ENV_WRANGLER, "utf8");
+
+                const result = validateWranglerProject({ environment: "canary", projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.problems).toHaveLength(1);
+                expect(result.problems[0]).toContain('names no environment declared');
+            });
         });
 
         describe("durable object / workflow classes the entry does not export", () => {

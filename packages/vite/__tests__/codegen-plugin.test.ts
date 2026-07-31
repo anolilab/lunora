@@ -131,6 +131,7 @@ describe("codegen-plugin", () => {
             );
 
             expect(badSchema).not.toBe(SCHEMA_SOURCE);
+
             writeFileSync(join(workdir, "lunora", "schema.ts"), badSchema, "utf8");
 
             const plugin = codegenPlugin(makeOptions(workdir));

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
+import type { CodegenResult } from "@lunora/codegen";
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
@@ -136,6 +137,29 @@ interface CodegenSafelyResult {
 }
 
 /**
+ * The `blockingMessage` for {@link runCodegenSafely}'s result: one aggregated
+ * line naming every ERROR-level advisory/platform diagnostic, or `undefined`
+ * when none. Extracted purely to keep `runCodegenSafely`'s cognitive
+ * complexity within the repo's lint budget — no behavior change from inlining
+ * it.
+ */
+const buildBlockingMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">): string | undefined => {
+    const blockingNames = [
+        ...result.advisories.filter((advisory) => advisory.level === "ERROR").map((advisory) => advisory.name),
+        ...result.platformDiagnostics.filter((diagnostic) => diagnostic.level === "error").map((diagnostic) => diagnostic.name),
+    ];
+
+    if (blockingNames.length === 0) {
+        return undefined;
+    }
+
+    const names = [...new Set(blockingNames)].join(", ");
+    const noun = blockingNames.length === 1 ? "issue" : "issues";
+
+    return `${LUNORA_TAG} ${String(blockingNames.length)} ERROR-level ${noun} (${names}) — see the log above for detail.`;
+};
+
+/**
  * Run codegen, returning the absolute directory codegen actually wrote to
  * (so callers can invalidate the *real* output, not an independently-guessed
  * path) and — when any advisory/platform diagnostic is ERROR-level — an
@@ -210,16 +234,8 @@ const runCodegenSafely = (
         // platform diagnostic says the emitted surface doesn't match the
         // target) — `vite dev` never does, matching `lunora codegen`'s own
         // advisory-outside-CI default.
-        const blockingNames = [
-            ...result.advisories.filter((advisory) => advisory.level === "ERROR").map((advisory) => advisory.name),
-            ...result.platformDiagnostics.filter((diagnostic) => diagnostic.level === "error").map((diagnostic) => diagnostic.name),
-        ];
-
         return {
-            blockingMessage:
-                blockingNames.length > 0
-                    ? `${LUNORA_TAG} ${String(blockingNames.length)} ERROR-level ${blockingNames.length === 1 ? "issue" : "issues"} (${[...new Set(blockingNames)].join(", ")}) — see the log above for detail.`
-                    : undefined,
+            blockingMessage: buildBlockingMessage(result),
             outputDirectory: resolve(result.outputDirectory),
         };
     } catch (error: unknown) {
