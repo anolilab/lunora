@@ -253,12 +253,29 @@ const streamingImport = async (
     conflicts: number;
     errors: ImportRowError[];
     inserted: Record<string, number>;
+    received: number;
+    warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     const { errors, globalRows, perShard } = await bucketImportStream(request, options, defaultShard);
 
     const totals: ImportTotals = { conflicts: 0, errors, inserted: {} };
+    const warnings: string[] = [];
+
+    // A worker with no `resolveTableSharding` cannot tell a `.global()` table
+    // from a shard-local one, so every row routes to the default shard. That is
+    // the right default for a single-shard app and silent misplacement for a
+    // sharded one — and it also suppresses the `GLOBAL_NOT_CONFIGURED` error
+    // below, because no row is ever classified global. Two missing options
+    // cancelling out each other's diagnostics is why this read as a 200 with
+    // nothing written and nothing wrong.
+    if (options.resolveTableSharding === undefined && perShard.size > 0) {
+        warnings.push(
+            "no `resolveTableSharding` is configured, so every row was routed to the default shard and no row could be recognised as `.global()` — " +
+                "correct for a single-shard app, silent misplacement for a sharded one",
+        );
+    }
 
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
@@ -305,7 +322,22 @@ const streamingImport = async (
         }
     }
 
-    return { conflicts: totals.conflicts, errors: totals.errors, inserted: totals.inserted };
+    // `received` is the honest denominator. Without it the response asserted
+    // success by omission: `errors: []` and `conflicts: 0` together read as
+    // "nothing went wrong", and an empty `inserted` map is also exactly what a
+    // legitimately empty batch returns — so a bulk import that was structurally
+    // unable to write was indistinguishable from one that had nothing to do, and
+    // a migration script could report "imported 4.2M rows" against an empty
+    // database. A caller can now compare `received` against the inserted total.
+    const received = globalRows.length + [...perShard.values()].reduce((sum, batch) => sum + batch.rows.length, 0) + totals.errors.length;
+
+    return {
+        conflicts: totals.conflicts,
+        errors: totals.errors,
+        inserted: totals.inserted,
+        received,
+        ...(warnings.length > 0 ? { warnings } : {}),
+    };
 };
 
 export type { ImportRowError };

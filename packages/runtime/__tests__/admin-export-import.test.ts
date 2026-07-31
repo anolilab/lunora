@@ -292,6 +292,60 @@ describe("createWorker — admin import endpoint", () => {
         expect(response.status).toBe(403);
     });
 
+    it("reports `received` and warns when no resolveTableSharding is configured", async () => {
+        expect.assertions(4);
+
+        // `errors: []` + `conflicts: 0` together assert nothing went wrong, and
+        // an empty `inserted` map is also what a legitimately empty batch
+        // returns — so an import that was structurally unable to write looked
+        // identical to one that had nothing to do, and a migration script could
+        // report "imported N rows" against an empty database.
+        //
+        // Without `resolveTableSharding` the worker also cannot recognise a
+        // `.global()` table, so every row goes to the default shard AND the
+        // `GLOBAL_NOT_CONFIGURED` error never fires. Two missing options
+        // cancelling out each other's diagnostics is the whole bug.
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const ndjson = [
+            JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+            JSON.stringify({ doc: { _id: "u2", email: "c@d.com" }, table: "users" }),
+        ].join("\n");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: { received: number; warnings?: string[] } = await response.json();
+
+        expect(body.received).toBe(2);
+        expect(body.warnings).toHaveLength(1);
+        expect(body.warnings?.[0]).toContain("resolveTableSharding");
+    });
+
     it("buckets rows by shard and forwards via orchestrateImport", async () => {
         expect.assertions(5);
 
