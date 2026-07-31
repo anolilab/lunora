@@ -48,8 +48,8 @@ interface LocalMirrorOptions {
 
 // ── LocalMirror ──────────────────────────────────────────────────────────
 
-// Reserved for future mirror bookkeeping (e.g. persisting a sync watermark).
-// Created on construction; there is no reader/writer yet.
+// Bookkeeping table for mirror-wide state — currently just the schema
+// version (see `MIRROR_SCHEMA_VERSION` below). Created on construction.
 const MIRROR_META_TABLE = "__lunora_mirror_meta";
 
 const ensureMetaTable = (database: SqliteAdapter): void => {
@@ -59,6 +59,55 @@ const ensureMetaTable = (database: SqliteAdapter): void => {
             value TEXT NOT NULL
         )`,
     );
+};
+
+const SCHEMA_VERSION_META_KEY = "schema_version";
+
+/**
+ * Bump this when a change to `#ensureTableSchema`'s type-mapping makes
+ * tables created by an older version stale.
+ *
+ * Version 2: column affinity is inferred from the first observed value
+ * (INTEGER/REAL/TEXT) instead of declaring every non-PK column TEXT. TEXT
+ * affinity coerces bound integers/reals to text, so `ORDER BY`/comparisons/
+ * `SUM`/`AVG` over a numeric column silently returned wrong results on a
+ * version-1 mirror. `#reconcileSchemaVersion` drops every mirrored table
+ * when the stored version doesn't match this constant, so a stale mirror
+ * re-seeds itself (with correct affinities) from the next `applyDiff`
+ * instead of staying wrong forever.
+ */
+const MIRROR_SCHEMA_VERSION = 2;
+
+/** SQLite column type affinity declared for a mirrored table's column. */
+type ColumnAffinity = "INTEGER" | "REAL" | "TEXT";
+
+/**
+ * Infer the SQLite column affinity to declare for a diff column from one of
+ * its observed (non-null) values.
+ *
+ * - JS integers and bigints → `INTEGER`.
+ * - Non-integer numbers → `REAL`.
+ * - Booleans → `INTEGER` (SQLite has no boolean type; `normalizeBindValue`
+ * in `diff-applier.ts` binds them as 0/1).
+ * - Everything else — strings, and objects/arrays, which
+ * `normalizeBindValue` JSON-encodes before binding — declares `TEXT`.
+ * A JSON-encoded column therefore reads back as a **string**; callers
+ * that stored an object/array must `JSON.parse` it themselves.
+ */
+const inferColumnAffinity = (value: unknown): ColumnAffinity => {
+    if (typeof value === "bigint") {
+        return "INTEGER";
+    }
+
+    if (typeof value === "number") {
+        return Number.isInteger(value) ? "INTEGER" : "REAL";
+    }
+
+    if (typeof value === "boolean") {
+        return "INTEGER";
+    }
+
+    return "TEXT";
 };
 
 /**
@@ -142,6 +191,7 @@ class LocalMirror {
         this.#eventLog = new EventLog({ maxEntries: options.maxEventLogEntries });
 
         ensureMetaTable(this.#db);
+        this.#reconcileSchemaVersion();
     }
 
     /**
@@ -240,14 +290,7 @@ class LocalMirror {
      * mirror was cleared and keep rendering deleted rows.
      */
     public clearData(): void {
-        // The `_` wildcard in a LIKE pattern matches any single character, so
-        // an unescaped `'__lunora_%'` / `'sqlite_%'` also matches unrelated
-        // tables that merely happen to contain "lunora"/"sqlite" at the right
-        // offset (e.g. "AAlunoraBdata"), wrongly skipping them from the clear.
-        // `ESCAPE '\'` makes the `\_` sequences literal underscores.
-        const tables = this.#db.query<{ name: string }>(
-            String.raw`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\_\_lunora\_%' ESCAPE '\' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`,
-        );
+        const tables = this.#nonReservedTables();
 
         this.#db.transaction(() => {
             for (const { name } of tables) {
@@ -294,6 +337,59 @@ class LocalMirror {
     // ── Internal ───────────────────────────────────────────────────────
 
     /**
+     * List every mirrored data table — i.e. every table in `sqlite_master`
+     * EXCLUDING the mirror's own reserved-prefix bookkeeping tables
+     * (`__lunora_*`) and SQLite's own (`sqlite_*`).
+     *
+     * Shared by `clearData` (DELETE the rows) and `#reconcileSchemaVersion`
+     * (DROP the tables outright).
+     *
+     * The `_` wildcard in a LIKE pattern matches any single character, so an
+     * unescaped `'__lunora_%'` / `'sqlite_%'` also matches unrelated tables
+     * that merely happen to contain "lunora"/"sqlite" at the right offset
+     * (e.g. "AAlunoraBdata"), wrongly sweeping them up too. `ESCAPE '\'`
+     * makes the `\_` sequences literal underscores.
+     */
+    #nonReservedTables(): { name: string }[] {
+        return this.#db.query<{ name: string }>(
+            String.raw`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\_\_lunora\_%' ESCAPE '\' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`,
+        );
+    }
+
+    /**
+     * Drop every mirrored data table when the persisted schema version
+     * doesn't match {@link MIRROR_SCHEMA_VERSION}, so a mirror created
+     * before column-affinity inference (every column declared TEXT) forgets
+     * its stale schema and re-seeds itself — with correct affinities — from
+     * the next `applyDiff` instead of silently returning wrong numeric
+     * comparisons forever.
+     *
+     * The version lives in the meta table (part of the mirror's persisted
+     * identity), so this is a real migration, not a no-op in-memory flag:
+     * a brand-new adapter (nothing stored yet) and a stale one (an older
+     * version stored) both take the drop path once; a mirror already on the
+     * current version returns immediately without touching any table.
+     */
+    #reconcileSchemaVersion(): void {
+        const rows = this.#db.query<{ key: string; value: string }>(`SELECT key, value FROM ${MIRROR_META_TABLE}`);
+        const stored = rows.find((row) => row.key === SCHEMA_VERSION_META_KEY)?.value;
+
+        if (stored === String(MIRROR_SCHEMA_VERSION)) {
+            return;
+        }
+
+        const tables = this.#nonReservedTables();
+
+        this.#db.transaction(() => {
+            for (const { name } of tables) {
+                this.#db.exec(`DROP TABLE IF EXISTS ${escapeIdentifier_(name)}`);
+            }
+
+            this.#db.exec(`INSERT OR REPLACE INTO ${MIRROR_META_TABLE} (key, value) VALUES (?, ?)`, [SCHEMA_VERSION_META_KEY, String(MIRROR_SCHEMA_VERSION)]);
+        });
+    }
+
+    /**
      * Derive the UNION of non-PK column names across every non-delete change.
      * @param diff The table diff whose changes are scanned.
      * @param pk The primary-key column to exclude from the result.
@@ -317,16 +413,52 @@ class LocalMirror {
     }
 
     /**
+     * Infer the affinity to declare for each of `columns` from the first
+     * non-null value observed for that column, in diff order. A column that
+     * never carries a non-null value (e.g. every change so far set it to
+     * `null`) is left unmapped — callers fall back to `TEXT`.
+     * @param diff The table diff whose changes are scanned.
+     * @param pk The primary-key column to skip (already declared separately).
+     * @param columns The column names to resolve an affinity for.
+     */
+    static #inferColumnAffinities(diff: TableDiff, pk: string, columns: ReadonlySet<string>): Map<string, ColumnAffinity> {
+        const affinities = new Map<string, ColumnAffinity>();
+
+        for (const change of diff.changes) {
+            if (change.type === "delete" || affinities.size === columns.size) {
+                continue;
+            }
+
+            for (const key of columns) {
+                if (key === pk || affinities.has(key)) {
+                    continue;
+                }
+
+                const value = change.data[key];
+
+                if (value === null || value === undefined) {
+                    continue;
+                }
+
+                affinities.set(key, inferColumnAffinity(value));
+            }
+        }
+
+        return affinities;
+    }
+
+    /**
      * Ensure the target table exists with all columns needed by the diff.
      *
-     * - If the table doesn't exist yet, CREATE it with columns derived from the diff data (PK + every non-delete column).
-     * - If the table already exists, ALTER TABLE ADD COLUMN for any keys in the diff that don't have a corresponding column yet (schema evolution).
+     * - If the table doesn't exist yet, CREATE it with columns derived from the diff data (PK + every non-delete column), each declared with the affinity inferred from its first observed value.
+     * - If the table already exists, ALTER TABLE ADD COLUMN for any keys in the diff that don't have a corresponding column yet (schema evolution), with the same inferred affinity.
      */
     #ensureTableSchema(diff: TableDiff): void {
         const pk = this.#tables[diff.table]?.primaryKey ?? "id";
 
         // Derive required columns from the UNION of keys across every non-delete change
         const requiredColumns = LocalMirror.#collectDiffColumns(diff, pk);
+        const affinities = LocalMirror.#inferColumnAffinities(diff, pk, requiredColumns);
 
         // Check if the table already exists
         const existing = this.#db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [diff.table]);
@@ -336,7 +468,7 @@ class LocalMirror {
             let columnDefs = `${escapeIdentifier_(pk)} TEXT PRIMARY KEY NOT NULL`;
 
             for (const key of requiredColumns) {
-                columnDefs += `, ${escapeIdentifier_(key)} TEXT`;
+                columnDefs += `, ${escapeIdentifier_(key)} ${affinities.get(key) ?? "TEXT"}`;
             }
 
             this.#db.exec(`CREATE TABLE IF NOT EXISTS ${escapeIdentifier_(diff.table)} (${columnDefs})`);
@@ -346,7 +478,7 @@ class LocalMirror {
 
             for (const key of requiredColumns) {
                 if (!existingColumns.has(key)) {
-                    this.#db.exec(`ALTER TABLE ${escapeIdentifier_(diff.table)} ADD COLUMN ${escapeIdentifier_(key)} TEXT`);
+                    this.#db.exec(`ALTER TABLE ${escapeIdentifier_(diff.table)} ADD COLUMN ${escapeIdentifier_(key)} ${affinities.get(key) ?? "TEXT"}`);
                 }
             }
         }

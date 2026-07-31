@@ -368,6 +368,180 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         // The mirrored rows themselves are unaffected by the log cap.
         expect(mirror.query("SELECT id FROM todos")).toHaveLength(50);
     });
+
+    // Plan 218: column affinity — a diff column's SQLite type is inferred
+    // from its first observed value instead of every non-PK column being
+    // declared TEXT. TEXT affinity coerces bound integers/reals to text, so
+    // ORDER BY/comparisons/aggregates over a numeric column silently
+    // returned wrong results before this.
+    describe("column affinity", () => {
+        it("declares a numeric column with numeric affinity so ORDER BY sorts numerically, not lexicographically", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("scores", [
+                    { data: { id: "a", priority: 9 }, type: "insert" },
+                    { data: { id: "b", priority: 10 }, type: "insert" },
+                    { data: { id: "c", priority: 2 }, type: "insert" },
+                ]),
+            );
+
+            // Lexicographic (TEXT) order would read "10", "2", "9" — numeric
+            // order is 2, 9, 10.
+            expect(mirror.query<{ id: string }>("SELECT id FROM scores ORDER BY priority")).toStrictEqual([{ id: "c" }, { id: "a" }, { id: "b" }]);
+        });
+
+        it("declares a numeric column so a comparison in WHERE is numeric, not lexicographic", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("scores", [
+                    { data: { id: "a", priority: 9 }, type: "insert" },
+                    { data: { id: "b", priority: 10 }, type: "insert" },
+                    { data: { id: "c", priority: 2 }, type: "insert" },
+                ]),
+            );
+
+            // Lexicographically, "10" < "5" and "2" < "5" but "9" > "5" — only
+            // a numeric affinity gets {9, 10} for `> 5`.
+            expect(mirror.query<{ id: string }>("SELECT id FROM scores WHERE priority > ? ORDER BY id", [5])).toStrictEqual([{ id: "a" }, { id: "b" }]);
+        });
+
+        it("SUMs a numeric column arithmetically instead of coercing to string concatenation", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("scores", [
+                    { data: { id: "a", priority: 9 }, type: "insert" },
+                    { data: { id: "b", priority: 10 }, type: "insert" },
+                ]),
+            );
+
+            const [row] = mirror.query<{ total: number }>("SELECT SUM(priority) AS total FROM scores");
+
+            expect(row?.total).toBe(19);
+        });
+
+        it("declares a non-integer numeric column REAL", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("readings", [{ data: { id: "a", value: 1.5 }, type: "insert" }]));
+
+            const [row] = mirror.query<{ value: number }>("SELECT value FROM readings WHERE id = ?", ["a"]);
+
+            expect(row?.value).toBe(1.5);
+        });
+
+        it("binds booleans as 0/1 integers instead of throwing", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("flags", [
+                    { data: { id: "a", active: true }, type: "insert" },
+                    { data: { id: "b", active: false }, type: "insert" },
+                ]),
+            );
+
+            expect(mirror.query<{ active: number }>("SELECT active FROM flags ORDER BY id")).toStrictEqual([{ active: 1 }, { active: 0 }]);
+        });
+
+        it("JSON-encodes an object-valued column instead of throwing, and it round-trips as a string", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("events", [{ data: { id: "1", payload: { kind: "click", x: 1, y: 2 } }, type: "insert" }]));
+
+            const [row] = mirror.query<{ payload: string }>("SELECT payload FROM events WHERE id = ?", ["1"]);
+
+            expect(typeof row?.payload).toBe("string");
+            expect(JSON.parse(row?.payload ?? "")).toStrictEqual({ kind: "click", x: 1, y: 2 });
+        });
+
+        it("JSON-encodes an array-valued column instead of throwing, and it round-trips as a string", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("events", [{ data: { id: "1", tags: ["a", "b"] }, type: "insert" }]));
+
+            const [row] = mirror.query<{ tags: string }>("SELECT tags FROM events WHERE id = ?", ["1"]);
+
+            expect(JSON.parse(row?.tags ?? "")).toStrictEqual(["a", "b"]);
+        });
+
+        it("a mixed batch where one row carries an object-valued column still applies every row in the batch", () => {
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("events", [
+                    { data: { id: "1", payload: { nested: true } }, type: "insert" },
+                    { data: { id: "2", label: "plain" }, type: "insert" },
+                ]),
+            );
+
+            expect(mirror.query<{ id: string }>("SELECT id FROM events ORDER BY id")).toStrictEqual([{ id: "1" }, { id: "2" }]);
+        });
+    });
+
+    // Plan 218: mirror schema version — a mirror created before column
+    // affinity inference declared every column TEXT. Re-opening one of those
+    // stale mirrors must re-seed (drop + let the next applyDiff recreate)
+    // rather than staying wrong forever; a mirror already on the current
+    // version must NOT wipe data on every restart.
+    describe("schema version reconciliation", () => {
+        it("drops a stale (pre-affinity) table on construction so the next applyDiff recreates it with numeric affinity", () => {
+            const adapter = makeAdapter();
+
+            // Simulate a table created by an older LocalMirror version: every
+            // column TEXT, and no `__lunora_mirror_meta` schema_version row
+            // (constructing a mirror creates the meta table as a side effect,
+            // so a genuinely pre-versioning mirror never wrote one either).
+            adapter.exec("CREATE TABLE scores (id TEXT PRIMARY KEY NOT NULL, points TEXT)");
+            adapter.exec("INSERT INTO scores (id, points) VALUES (?, ?)", ["1", "9"]);
+            adapter.exec("INSERT INTO scores (id, points) VALUES (?, ?)", ["2", "10"]);
+
+            new LocalMirror({ db: adapter });
+
+            // The instance itself isn't needed further — read straight from
+            // the adapter to confirm the stale table no longer exists.
+            const remaining = adapter.query<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name='scores'");
+
+            expect(remaining).toStrictEqual([]);
+        });
+
+        it("re-seeds a dropped stale table with numeric affinity from the next applyDiff", () => {
+            const adapter = makeAdapter();
+
+            adapter.exec("CREATE TABLE scores (id TEXT PRIMARY KEY NOT NULL, points TEXT)");
+            adapter.exec("INSERT INTO scores (id, points) VALUES (?, ?)", ["1", "9"]);
+
+            const mirror = new LocalMirror({ db: adapter });
+
+            mirror.applyDiff(
+                createTableDiff("scores", [
+                    { data: { id: "1", points: 9 }, type: "insert" },
+                    { data: { id: "2", points: 10 }, type: "insert" },
+                ]),
+            );
+
+            // Numeric order (9, 10), not lexicographic ("10" < "9") — proves
+            // the recreated table has INTEGER affinity, and the pre-existing
+            // row ("1") from the stale table did NOT survive the drop.
+            expect(mirror.query<{ id: string }>("SELECT id FROM scores ORDER BY points")).toStrictEqual([{ id: "1" }, { id: "2" }]);
+        });
+
+        it("does not re-drop tables across a second construction once the schema version is already current", () => {
+            const adapter = makeAdapter();
+
+            const m1 = new LocalMirror({ db: adapter });
+
+            m1.applyDiff(createTableDiff("scores", [{ data: { id: "1", points: 9 }, type: "insert" }]));
+
+            // Simulates a restart: a fresh LocalMirror instance over the same
+            // (persisted) adapter must find `schema_version` already current
+            // and leave the table alone.
+            const m2 = new LocalMirror({ db: adapter });
+
+            expect(m2.query<{ id: string; points: number }>("SELECT id, points FROM scores")).toStrictEqual([{ id: "1", points: 9 }]);
+        });
+    });
 });
 
 describe(createSqliteWasmAdapter, () => {
