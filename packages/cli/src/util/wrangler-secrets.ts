@@ -7,18 +7,10 @@
  * reconcile against and `env diff` needs to compare. The command runner is
  * injectable so tests can stub the wrangler invocation.
  */
-import { execFile } from "node:child_process";
-
 import { resolveDeployDriver, resolveProjectTarget } from "@lunora/config";
 
 import { detectPackageManager, execArgsFor } from "./detect-package-manager";
-
-/**
- * The shape of an `execFile` callback error we care about. `@types/node`'s
- * `ExecFileException` covers this but is now deprecated; we only read `code`
- * (a number, or an `errno` string like `ENOENT`), so type it structurally.
- */
-type ExecFileError = Error & { code?: number | string | null };
+import { defaultSpawner } from "./spawn";
 
 interface SecretListRunnerResult {
     code: number;
@@ -48,21 +40,25 @@ interface ListRemoteSecretsResult {
     ok: boolean;
 }
 
-/** Map an execFile error to an exit code (0 on success, the child's code, else 1). */
-const execCode = (error: ExecFileError | null): number => {
-    if (!error) {
-        return 0;
+/**
+ * Runs `wrangler secret list` through {@link defaultSpawner} rather than a bare
+ * `execFile`, so it gets the same Windows `.cmd`-shim handling every other
+ * spawned command in this CLI relies on ({@link spawnShellCompat} inside
+ * `defaultSpawner`) — `execFile` on a package-manager shim (`pnpm`/`npx`/`yarn`/
+ * `bun`) fails outright on Windows (`EINVAL`/`ENOENT`, no PID) since Node's
+ * CVE-2024-27980 hardening. A spawn error (the child never started) is reported
+ * as a failed result rather than a thrown rejection, matching the previous
+ * `execFile`-based runner's contract.
+ */
+const defaultRunner: SecretListRunner = async (command, args, cwd) => {
+    try {
+        const result = await defaultSpawner({ args, captureStderr: true, captureStdout: true, command, cwd });
+
+        return { code: result.code, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
+    } catch (error: unknown) {
+        return { code: 1, stderr: error instanceof Error ? error.message : String(error), stdout: "" };
     }
-
-    return typeof error.code === "number" ? error.code : 1;
 };
-
-const defaultRunner: SecretListRunner = (command, args, cwd) =>
-    new Promise<SecretListRunnerResult>((resolve) => {
-        execFile(command, [...args], { cwd }, (error, stdout, stderr) => {
-            resolve({ code: execCode(error), stderr, stdout });
-        });
-    });
 
 /**
  * Parse `wrangler secret list --format json` output into a sorted name list.
