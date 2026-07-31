@@ -12,7 +12,7 @@
  * Pure WebCrypto, no binding I/O → deterministic, safe to call from any handler.
  */
 
-import { extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../../shared/hmac-url";
+import { assertCanonicalSafe, extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../../shared/hmac-url";
 import type { TransformOptions } from "./types";
 
 // Hoisted to module scope so the literal isn't recompiled on every call. The
@@ -111,6 +111,13 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
     // the URL path so signing and verification always agree, even when the
     // caller passes a key with a leading slash.
     const normalizedKey = options.key.replace(LEADING_SLASH_RE, "");
+
+    // The canonical is newline-delimited and `key` is not its last field, so a
+    // key containing a raw CR/LF could shift `exp` (and `transform`) on
+    // re-split — reject it here rather than minting a URL two different keys
+    // could both satisfy. See `shared/hmac-url.ts#assertCanonicalSafe`.
+    assertCanonicalSafe(normalizedKey);
+
     const sig = await signCanonical(options.secret, canonicalize(host, normalizedKey, exp, transform));
 
     const base = options.baseUrl.endsWith("/") ? options.baseUrl.slice(0, -1) : options.baseUrl;
@@ -172,6 +179,9 @@ export const verifySignedImageUrl = async (input: string | URL, secret: string, 
             .split("/")
             .map((segment) => decodeURIComponent(segment))
             .join("/");
+        // A percent-decoded key carrying a raw CR/LF is rejected the same as a
+        // decode failure — see the build-side comment on `assertCanonicalSafe`.
+        assertCanonicalSafe(key);
         sigBytes = fromBase64Url(sig);
     } catch {
         return { reason: "malformed", valid: false };

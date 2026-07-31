@@ -206,6 +206,8 @@ describe("createStorage", () => {
         ["/leading", /must not start with/u],
         ["nul\0byte", /NUL byte/u],
         ["", /non-empty/u],
+        ["cr\rlf", /control character/u],
+        ["new\nline", /control character/u],
     ])("upload() rejects an unsafe key %s before touching the bucket", async (key, pattern) => {
         expect.assertions(2);
 

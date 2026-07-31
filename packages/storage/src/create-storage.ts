@@ -23,6 +23,16 @@ type UploadBody = ReadableStream | ArrayBuffer | Blob;
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
 
+// Matches any C0 control character (codes 0-31), which includes CR and LF —
+// built from code points rather than a `\u` escape range so the regex source
+// can't be mistaken for (or mangled into) a literal control byte sitting in
+// this file. Mirrors `shared/hmac-url.ts#assertCanonicalSafe`, which guards
+// the same class of value once it reaches the HMAC canonical; this guard runs
+// earlier, at the point a caller-supplied key first enters `@lunora/storage`
+// (uploads, not just signed-URL minting).
+const CONTROL_CHAR_CODES: number[] = Array.from({ length: 32 }, (_, index) => index);
+const CONTROL_CHAR_RE = new RegExp(`[${CONTROL_CHAR_CODES.map((code) => String.fromCodePoint(code)).join("")}]`, "u");
+
 /** R2's documented per-page list ceiling. */
 const MAX_LIST_LIMIT = 1000;
 
@@ -214,6 +224,14 @@ const validateKey = (key: string): void => {
 
     if (key.includes("\0")) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains NUL byte");
+    }
+
+    // CR/LF (and other C0 controls) in a key would let a signed-URL canonical
+    // (`shared/hmac-url.ts`, host\nkey\nexp\n...) re-split so a different
+    // `exp` reads back for the same signature — reject at the point the key
+    // enters storage, not just when a signed URL happens to be minted for it.
+    if (CONTROL_CHAR_RE.test(key)) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains a control character (including CR/LF)");
     }
 
     if (key.startsWith("/")) {
