@@ -1617,6 +1617,7 @@ interface WranglerConfig {
         id?: string;
     } | null | undefined>;
     logpush?: boolean;
+    main?: string;
     migrations?: ReadonlyArray<{
         new_classes?: ReadonlyArray<string>;
         new_sqlite_classes?: ReadonlyArray<string>;

@@ -429,6 +429,115 @@ describe("wrangler-validator", () => {
             expect(result.wranglerPath).toBe(join(workdir, "wrangler.jsonc"));
         });
 
+        describe("durable object / workflow classes the entry does not export", () => {
+            // `.scheduler()` / `.workflow()` write the binding and the migration
+            // entry but cannot add the `export { SchedulerDO }` the entry needs,
+            // so the wiring is half done and wrangler refuses to bundle:
+            // "Your Worker depends on the following Durable Objects, which are
+            // not exported in your entrypoint file". `verify` and `doctor` both
+            // reported a clean tree in the meantime.
+            const writeWrangler = (extra: string): void => {
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }${extra}] }
+}
+`,
+                    "utf8",
+                );
+            };
+
+            const writeEntry = (source: string): void => {
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), source, "utf8");
+            };
+
+            it("errors when a declared class is not exported by the entry", () => {
+                expect.assertions(3);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./lunora/_generated/shard";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.problems.join("\n")).toContain("SchedulerDO");
+                expect(result.problems.join("\n")).toContain("does not export it");
+            });
+
+            it("passes once the class is exported", () => {
+                expect.assertions(1);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(
+                    `export { ShardDO } from "./lunora/_generated/shard";\nexport { SchedulerDO } from "@lunora/scheduler";\nexport default { fetch() {} };\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.problems.filter((problem) => problem.includes("does not export it"))).toEqual([]);
+            });
+
+            it("treats a type-only export as unexported — it compiles away", () => {
+                expect.assertions(1);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport type { SchedulerDO } from "@lunora/scheduler";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.problems.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("does not accept a commented-out export, or the class named in prose", () => {
+                expect.assertions(1);
+
+                // A worker entry that discusses its Durable Objects in comments is
+                // the normal case, so a scan that counts them would silently pass
+                // on exactly the tree this check exists to catch.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(
+                    `export { ShardDO } from "./shard";\n` +
+                        `// export { SchedulerDO } from "@lunora/scheduler";\n` +
+                        `/** The SchedulerDO dispatches HTTP callbacks back to this origin. */\n` +
+                        `export default { fetch() {} };\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.problems.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("stays silent when the entry has a star re-export", () => {
+                expect.assertions(1);
+
+                // A star re-export forwards names no per-name scan can see, so
+                // absence proves nothing. A false error here would block a
+                // deploy that works — worse than missing one.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./lunora/_generated/workflows";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.problems.filter((problem) => problem.includes("does not export it"))).toEqual([]);
+            });
+
+            it("ignores a binding whose class lives in another script", () => {
+                expect.assertions(1);
+
+                writeWrangler(`, { "name": "OTHER", "class_name": "RemoteDO", "script_name": "other-worker" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.problems.filter((problem) => problem.includes("RemoteDO"))).toEqual([]);
+            });
+        });
+
         it("returns a problem when wrangler.jsonc is missing entirely", () => {
             expect.assertions(2);
 
