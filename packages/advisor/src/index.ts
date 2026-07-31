@@ -41,6 +41,7 @@ import exportSinkMisconfigured from "./lints/static/export-sink-misconfigured";
 import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
+import filterOnPrimaryKey from "./lints/static/filter-on-primary-key";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
 import geoIndexFieldNotGeopoint from "./lints/static/geo-index-field-not-geopoint";
@@ -167,6 +168,7 @@ export { default as exportSinkMisconfigured } from "./lints/static/export-sink-m
 export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
+export { default as filterOnPrimaryKey } from "./lints/static/filter-on-primary-key";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
 export { default as geoIndexFieldNotGeopoint } from "./lints/static/geo-index-field-not-geopoint";
@@ -304,6 +306,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     tableWithoutInsert,
     workflowUnused,
     queueWithoutDlq,
+    filterOnPrimaryKey,
     filterWithoutIndex,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,

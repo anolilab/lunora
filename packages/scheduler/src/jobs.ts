@@ -50,6 +50,20 @@ interface DailySchedule {
     minuteUTC: number;
 }
 
+/**
+ * Hourly recurrence at a fixed minute past the hour.
+ *
+ * `crons.interval({ hours: 1 })` compiles to the same expression, but the
+ * asymmetry of having `daily`/`weekly`/`monthly` and no `hourly` is its own
+ * papercut — and unlike the interval form this one lets
+ * the caller place the job off the hour boundary, which is how you stop a
+ * dozen hourly jobs from stampeding at `:00`.
+ */
+interface HourlySchedule {
+    /** 0–59. */
+    minuteUTC: number;
+}
+
 /** Weekly recurrence at a fixed UTC time on a given weekday. */
 interface WeeklySchedule extends DailySchedule {
     /** Long weekday name, case-insensitive (e.g. `"monday"`). */
@@ -101,6 +115,19 @@ const WEEKDAY_INDEX: Record<WeeklySchedule["dayOfWeek"], number> = {
     wednesday: 3,
 };
 
+const HOURS_PER_DAY = 24;
+
+/**
+ * Appended to every interval error that a daily-or-longer schedule would fix.
+ *
+ * `{ hours: 24 }` is the ordinary Convex idiom for "once a day", and the
+ * natural next guess once it is rejected — `{ days: 1 }` — is not a unit
+ * either. An error that only restates the constraint therefore sends people in
+ * a circle, so both messages name the method they actually want.
+ */
+const DAILY_SCHEDULE_HINT =
+    " For a daily or longer schedule use crons.daily(name, { hourUTC, minuteUTC }, …), crons.weekly(name, { dayOfWeek, hourUTC, minuteUTC }, …) or crons.monthly(name, { day, hourUTC, minuteUTC }, …).";
+
 /** Validate an integer in `[min, max]` and return it as a cron field string. */
 const field = (value: number, label: string, min: number, max: number): string => {
     if (!Number.isInteger(value) || value < min || value > max) {
@@ -146,11 +173,30 @@ const compileInterval = (schedule: IntervalSchedule): string => {
     const units = (["seconds", "minutes", "hours"] as const).filter((unit) => schedule[unit] !== undefined);
 
     if (units.length !== 1) {
-        throw new LunoraError("INTERNAL", `@lunora/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }`);
+        const supplied = Object.entries(schedule as Record<string, unknown>)
+            .filter(([, value]) => value !== undefined)
+            .map(([key]) => key);
+
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }, got { ${supplied.join(", ")} }.${DAILY_SCHEDULE_HINT}`,
+        );
     }
 
     const unit = units[0] as "hours" | "minutes" | "seconds";
     const value = schedule[unit] as number;
+
+    // An interval renders as a cron STEP within its field's period, so hours
+    // tops out at 23: `*/24` in a 0–23 field would mean "every 24th hour of a
+    // 24-hour day", which is not a recurrence. Named separately from the generic
+    // range check because `{ hours: 24 }` is the ordinary Convex idiom for
+    // "once a day" and deserves to be told where daily actually lives.
+    if (unit === "hours" && value >= HOURS_PER_DAY) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/scheduler: interval.hours is capped at 23, got ${String(value)} — an interval repeats WITHIN a day rather than spanning one.${DAILY_SCHEDULE_HINT}`,
+        );
+    }
 
     if (unit === "seconds") {
         return `*/${stepField(value, "interval.seconds", 60)} * * * * *`;
@@ -162,6 +208,8 @@ const compileInterval = (schedule: IntervalSchedule): string => {
 
     return `0 */${stepField(value, "interval.hours", 24)} * * *`;
 };
+
+const compileHourly = (schedule: HourlySchedule): string => `${field(schedule.minuteUTC, "hourly.minuteUTC", 0, 59)} * * * *`;
 
 const compileDaily = (schedule: DailySchedule): string => {
     const minute = field(schedule.minuteUTC, "daily.minuteUTC", 0, 59);
@@ -192,10 +240,10 @@ const compileMonthly = (schedule: MonthlySchedule): string => {
 };
 
 /** The ergonomic builder methods, excluding the raw `.cron` escape hatch. */
-type CronScheduleKind = "daily" | "interval" | "monthly" | "weekly";
+type CronScheduleKind = "daily" | "hourly" | "interval" | "monthly" | "weekly";
 
 /** The ergonomic schedule kinds as a runtime set (codegen reads this to detect cron builder methods). */
-const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleKind>(["daily", "interval", "monthly", "weekly"]);
+const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleKind>(["daily", "hourly", "interval", "monthly", "weekly"]);
 
 /**
  * Compile one of the ergonomic schedule forms into a standard cron expression.
@@ -203,10 +251,16 @@ const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleK
  * compilation when it statically lifts a `crons.{kind}(...)` call out of the
  * AST — codegen imports this directly (no duplicated mirror).
  */
-const compileCronSchedule = (kind: CronScheduleKind, schedule: DailySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule): string => {
+const compileCronSchedule = (
+    kind: CronScheduleKind,
+    schedule: DailySchedule | HourlySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule,
+): string => {
     switch (kind) {
         case "daily": {
             return compileDaily(schedule as DailySchedule);
+        }
+        case "hourly": {
+            return compileHourly(schedule as HourlySchedule);
         }
         case "interval": {
             return compileInterval(schedule as IntervalSchedule);
@@ -237,6 +291,8 @@ interface CronJobsBuilder {
     cron: <T extends CronTarget>(name: string, cronExpr: string, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Daily at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
     daily: <T extends CronTarget>(name: string, schedule: DailySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Hourly at `minuteUTC` past the hour. The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    hourly: <T extends CronTarget>(name: string, schedule: HourlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Every `{ seconds | minutes | hours }`. The target may be a function or a durable workflow (`workflows.&lt;name>`). */
     interval: <T extends CronTarget>(name: string, schedule: IntervalSchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Snapshot of the registered jobs, in declaration order. */
@@ -303,6 +359,11 @@ const cronJobs = (): CronJobsBuilder => {
 
             return builder;
         },
+        hourly(name, schedule, function_, args) {
+            register(name, compileCronSchedule("hourly", schedule), function_, args);
+
+            return builder;
+        },
         interval(name, schedule, function_, args) {
             register(name, compileCronSchedule("interval", schedule), function_, args);
 
@@ -325,4 +386,4 @@ const cronJobs = (): CronJobsBuilder => {
 };
 
 export { compileCronSchedule, CRON_SCHEDULE_KINDS, cronJobs };
-export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule };
+export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, HourlySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule };

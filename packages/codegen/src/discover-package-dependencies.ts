@@ -2,24 +2,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * The set of every package name the project declares a dependency on, read from
- * the `package.json` at the project root across all four dependency fields
- * (`dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`).
+ * Every package name the project declares a dependency on, read from the
+ * `package.json` at the project root across all four dependency fields
+ * (`dependencies`, `devDependencies`, `peerDependencies`,
+ * `optionalDependencies`).
  *
- * Studio nav gating OR's this into the per-feature visibility: a package wired
- * only in the worker entry (`src/server`) — not under `lunora/` — is invisible to
- * the `lunora/`-scoped usage scan, but its presence here keeps the feature's page
- * shown. Reading declared deps (rather than walking the worker entry) keeps the
- * signal cheap and robust to however the app composes its worker.
- *
- * Returns an empty set when the manifest is absent or unparseable — gating then
- * falls back to the usage/schema signals alone, never throwing codegen.
+ * Returns `undefined` — NOT an empty set — when the manifest is absent or
+ * unparseable, which is the whole reason this exists. Studio nav gating can
+ * treat "declares nothing" and "cannot tell" the same way, but a check that
+ * errors on a missing package cannot: conflating them makes it fire on every
+ * project without a root `package.json` (the codegen fixtures, an embedded
+ * schema, a tool driving `runCodegen` directly).
  */
-const discoverPackageDependencies = (projectRoot: string): Set<string> => {
+const readPackageDependencies = (projectRoot: string): Set<string> | undefined => {
     const manifestPath = join(projectRoot, "package.json");
 
     if (!existsSync(manifestPath)) {
-        return new Set();
+        return undefined;
     }
 
     try {
@@ -38,10 +37,10 @@ const discoverPackageDependencies = (projectRoot: string): Set<string> => {
 
         return names;
     } catch {
-        // A malformed manifest must never break codegen — treat it as "no
-        // declared deps" so gating leans on the usage/schema signals instead.
-        return new Set();
+        // A malformed manifest must never break codegen — indistinguishable from
+        // an absent one for our purposes, so callers fall back the same way.
+        return undefined;
     }
 };
 
-export default discoverPackageDependencies;
+export default readPackageDependencies;

@@ -40,10 +40,15 @@ const uuidV5 = async (name: string): Promise<string> => {
 
     // eslint-disable-next-line sonarjs/hashing -- SHA-1 is mandated by RFC 4122 §4.3 for UUIDv5; this is deterministic id derivation, not a security/integrity context.
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", input));
+    // Read/written through a DataView rather than by index: `getUint8` is typed
+    // `number`, where `digest[6]` widens to `number | undefined` under
+    // `noUncheckedIndexedAccess` (which `tsconfig.generated.json` turns on).
+    const view = new DataView(digest.buffer);
+
     // eslint-disable-next-line no-bitwise -- RFC 4122 requires setting the version (5) and variant (10) bits.
-    digest[6] = (digest[6] & 0x0f) | 0x50;
+    view.setUint8(6, (view.getUint8(6) & 0x0f) | 0x50);
     // eslint-disable-next-line no-bitwise -- variant bits per RFC 4122 §4.1.1.
-    digest[8] = (digest[8] & 0x3f) | 0x80;
+    view.setUint8(8, (view.getUint8(8) & 0x3f) | 0x80);
 
     const hex = Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
 

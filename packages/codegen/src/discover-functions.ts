@@ -17,7 +17,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "./ir";
 import { isServerSurfaceModule } from "./module-specifiers";
-import { parseObjectShape } from "./parse-validator";
+import { parseObjectShape, parseValidator } from "./parse-validator";
 import sanitizeNamespace from "./paths";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
@@ -85,6 +85,8 @@ interface DiscoveredFunction {
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
     kind: string;
     lifecycle?: "connect" | "disconnect";
+    /** The `.output(validator)` declaration, when the chain has one. */
+    output?: ValidatorIR;
     returnType: string;
     visibility: "internal" | "public";
 }
@@ -616,6 +618,57 @@ const unwrapHandlerReturn = (handler: Node): string => {
 };
 
 /**
+ * The inferred type of a `v.from(externalSchema)` argument, rendered for
+ * `_generated/`.
+ *
+ * Reads `~standard.types.output` off the wrapped schema — the property Standard
+ * Schema v1 exposes precisely so tooling can recover the inferred type, and the
+ * same one the runtime's `InferStandardOutput` reads, so the emitted type and
+ * the value that actually reaches the handler agree.
+ *
+ * Runs the result through the same guards as the handler-return path: an
+ * `any`-degraded render (checker without tsconfig wiring) falls back to
+ * `unknown` rather than misleading, and a locally-declared type unreachable
+ * from `_generated/` is structurally expanded rather than emitted as a bare
+ * name that would not resolve. Returns `undefined` when nothing safe can be
+ * produced, leaving the caller on `unknown`.
+ */
+const resolveStandardSchemaType = (node: Node): string | undefined => {
+    const standard = node.getType().getProperty("~standard");
+
+    if (!standard) {
+        return undefined;
+    }
+
+    const types = standard.getTypeAtLocation(node).getProperty("types");
+
+    if (!types) {
+        return undefined;
+    }
+
+    const output = types.getTypeAtLocation(node).getNonNullableType().getProperty("output");
+
+    if (!output) {
+        return undefined;
+    }
+
+    const outputType = output.getTypeAtLocation(node);
+    const rendered = outputType.getText(node);
+
+    if (!rendered || rendered === "any" || rendered === "never" || ANY_TOKEN_RE.test(rendered.replaceAll(STRING_LITERAL_SPAN_RE, ""))) {
+        return undefined;
+    }
+
+    const filePath = node.getSourceFile().getFilePath();
+
+    if (referencesUnreachableLocalType(outputType, node, filePath)) {
+        return expandUnreachableType(outputType, node, filePath, 0, new Set<Type>());
+    }
+
+    return rendered;
+};
+
+/**
  * Pull the handler's return type out of an object-literal `query/mutation/action`
  * call (the `{ args, handler }` form).
  */
@@ -686,6 +739,35 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
     }
 
     return merged;
+};
+
+/**
+ * The `.output(validator)` declaration on a builder chain, if any.
+ *
+ * Walks leftward like {@link argsFromBuilderChain}. Chains read terminal → root,
+ * so the FIRST `.output()` encountered is the LAST one written, which is the one
+ * that wins at runtime (each `.output()` replaces the previous).
+ */
+const outputFromBuilderChain = (receiver: Node): ValidatorIR | undefined => {
+    let node: Node = receiver;
+
+    while (Node.isCallExpression(node)) {
+        const chainCallee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(chainCallee)) {
+            return undefined;
+        }
+
+        if (chainCallee.getName() === "output") {
+            const argument = node.getArguments()[0];
+
+            return argument && Node.isExpression(argument) ? parseValidator(argument) : undefined;
+        }
+
+        node = chainCallee.getExpression();
+    }
+
+    return undefined;
 };
 
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
@@ -944,11 +1026,13 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
     if (classified.receiver) {
         const expose = exposeFromBuilderChain(classified.receiver);
+        const output = outputFromBuilderChain(classified.receiver);
 
         return {
             args: argsFromBuilderChain(classified.receiver),
             ...(expose ? { expose } : {}),
             kind: classified.kind,
+            ...(output ? { output } : {}),
             returnType: returnTypeFromBuilderCall(call),
             visibility: classified.visibility,
         };
@@ -1096,10 +1180,43 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         filePath: relativePath,
         kind: discovered.kind as FunctionIR["kind"],
         returnType: discovered.returnType,
+        ...(discovered.output ? { output: discovered.output } : {}),
         visibility: discovered.visibility,
         ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
     };
+};
+
+/**
+ * Lift `export default &lt;procedure>` into a `&lt;module>.default` registration,
+ * matching Convex.
+ *
+ * Only named exports used to be walked, so a module whose sole registration was
+ * a default export did not merely lose that entry — the whole module was absent
+ * from `api.ts`, and the caller's error read "Property '&lt;module>' does not
+ * exist", pointing at a file that was entirely correct.
+ *
+ * `export = x` is CJS and never a Lunora registration. Non-procedure defaults
+ * (`export default cronJobs()`, a workflow registry) classify to `undefined`
+ * and are skipped like any other non-registration call.
+ */
+const defaultExportFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
+    const found: FunctionIR[] = [];
+
+    for (const assignment of source.getExportAssignments()) {
+        if (assignment.isExportEquals()) {
+            continue;
+        }
+
+        const call = resolveExpressionToCall(assignment.getExpression());
+        const entry = call ? functionIrFromCall(call, "default", relativePath) : undefined;
+
+        if (entry) {
+            found.push(entry);
+        }
+    }
+
+    return found;
 };
 
 /** Lift every Lunora registration in one source file into {@link FunctionIR} entries. */
@@ -1121,6 +1238,8 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
             }
         }
     }
+
+    found.push(...defaultExportFunctions(source, relativePath));
 
     return found;
 };
@@ -1190,5 +1309,6 @@ export {
     listLunoraSourceFiles,
     lunoraRelativePath,
     procedureHandler,
+    resolveStandardSchemaType,
     unwrapHandlerReturn,
 };

@@ -1402,6 +1402,96 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.text()).resolves.toBe("pong");
     });
 
+    it("c.var.lunora.scheduler.runAfter reaches the scheduler DO", async () => {
+        expect.assertions(5);
+
+        // "receive webhook → enqueue the real work → return
+        // 200" is the most common HTTP-action shape, and HttpActionCtx had no
+        // scheduler. Apps hopped through a mutation and, because a function
+        // reference cannot cross the RPC boundary, named targets by string —
+        // which on an unauthenticated webhook endpoint is a "call any internal
+        // function" primitive needing a closed allow-list.
+        const scheduler = createShardSpy(Response.json({ id: "job-1", scheduledFor: 1 }, { status: 200 }));
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/stripe", async (c) => {
+                    const id = await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "billing:sync" }, { eventId: "evt_1" });
+
+                    return new Response(id ?? "no-scheduler", { status: 202 });
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hooks/stripe", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(202);
+        await expect(res.text()).resolves.toBe("job-1");
+        expect(scheduler.calls).toHaveLength(1);
+
+        const body = (await scheduler.calls[0]?.request.json()) as Record<string, unknown>;
+
+        expect(body).toMatchObject({ args: { eventId: "evt_1" }, functionPath: "billing:sync" });
+        // No origin is sent. The DO takes its callback origin from
+        // `env.LUNORA_ORIGIN_URL` at both schedule and fire time, deliberately,
+        // so a request cannot steer where the job dispatches back to.
+        expect(body["originUrl"]).toBeUndefined();
+    });
+
+    it("refuses a bare function-path string as a scheduler target", async () => {
+        expect.assertions(2);
+
+        // An HTTP action can be reached unauthenticated, so accepting a
+        // caller-shaped `"ns:fn"` here would be a "call any internal function"
+        // primitive — the very thing this surface exists to avoid. `run()`
+        // beside it rejects anything without `__lunoraRef` for the same reason.
+        const scheduler = createShardSpy(Response.json({ id: "job-1" }, { status: 200 }));
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/evil", async (c) => {
+                    try {
+                        await c.var.lunora.scheduler?.runAfter(0, c.req.header("x-job") ?? "", {});
+
+                        return new Response("accepted", { status: 200 });
+                    } catch {
+                        return new Response("refused", { status: 400 });
+                    }
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/hooks/evil", { headers: { "x-job": "admin:deleteEverything" }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        await expect(res.text()).resolves.toBe("refused");
+        expect(scheduler.calls).toHaveLength(0);
+    });
+
+    it("leaves ctx.scheduler undefined when the worker declares no schedulerDO", async () => {
+        expect.assertions(2);
+
+        // Optional rather than a throwing stub: an app that never declared
+        // `.scheduler(...)` should see the capability absent, and `?.` is the
+        // documented way to branch on it.
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => new Response(String(c.var.lunora.scheduler === undefined), { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("true");
+    });
+
     it("c.var.lunora.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
         expect.assertions(6);
 

@@ -57,6 +57,26 @@ describe("discover-crons", () => {
         ]);
     });
 
+    it("lifts an hourly registration", () => {
+        expect.assertions(1);
+
+        // `hourly` is discovered off CRON_SCHEDULE_KINDS like
+        // every other ergonomic method, so this also guards that the runtime set
+        // and the compiler stay in step when a kind is added.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.hourly("sweep sessions", { minuteUTC: 17 }, internal.presence.sweep, {});
+            export default crons;
+        `,
+        );
+
+        expect(discoverCrons(newProject(), workdir)).toEqual([{ args: {}, cron: "17 * * * *", functionPath: "presence:sweep", name: "sweep sessions" }]);
+    });
+
     it("discovers cronJobs imported from the @lunora/server re-export", () => {
         expect.assertions(1);
 

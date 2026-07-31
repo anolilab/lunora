@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "@visulima/path";
 
 import type { Logger } from "../../util/logger";
-import { confirmDepMutation } from "./apply";
+import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
 import reconcileItems from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
@@ -25,12 +25,35 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
         logger.info(`  file  ${file.to}  (${file.merge})`);
     }
 
+    // Show the range that will actually be WRITTEN, not the manifest's internal
+    // one. Registry manifests pin siblings with `workspace:*` so development
+    // resolves to the local checkout, but that protocol is meaningless in a
+    // consumer's package.json — printing it raw made the plan look like it was
+    // about to break `pnpm install`.
+    // `resolveDepRange` resolves the CLI's dist-tag for every bare `workspace:`
+    // specifier, so it is memoised across the whole plan rather than re-resolved
+    // per dependency line.
+    const renderedRange = new Map<string, string>();
+    const rangeFor = (range: string): string => {
+        const cached = renderedRange.get(range);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const resolved = resolveDepRange(range);
+
+        renderedRange.set(range, resolved);
+
+        return resolved;
+    };
+
     for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
-        logger.info(`  dep   ${dep}@${range}`);
+        logger.info(`  dep   ${dep}@${rangeFor(range)}`);
     }
 
     for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
-        logger.info(`  dev   ${dep}@${range}`);
+        logger.info(`  dev   ${dep}@${rangeFor(range)}`);
     }
 
     for (const binding of manifest.bindings ?? []) {

@@ -81,6 +81,18 @@ export interface BrowserContextLike {
 export interface BrowserLike {
     close: () => Promise<void>;
     newContext: () => Promise<BrowserContextLike>;
+
+    /**
+     * The Browser Rendering session this browser is attached to, when the
+     * runtime exposes it.
+     *
+     * Optional because this is a structural projection, not a re-declaration of
+     * the upstream Playwright type — but without it there is no way to learn
+     * the id of a session you just held open with `launch(fn, { keepAlive })`,
+     * which makes {@link Browser.connect} unreachable except by guessing from
+     * {@link Browser.sessions}.
+     */
+    sessionId?: () => string | undefined;
 }
 
 /* eslint-disable no-secrets/no-secrets -- the entropy scanner trips on the repeated `@cloudflare/playwright` package name in these doc comments, not a credential */
@@ -95,6 +107,33 @@ export interface BrowserLike {
  * @experimental
  */
 export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
+
+/**
+ * One live Browser Rendering session, as `@cloudflare/playwright`'s `sessions()`
+ * reports it. `connectionId` is set while another worker holds the session — you
+ * can only {@link Browser.connect} to a free one.
+ * @experimental
+ */
+export interface BrowserSession {
+    connectionId?: string;
+    sessionId: string;
+    startTime?: number;
+}
+
+/**
+ * Structural projection of `@cloudflare/playwright`'s `connect` export —
+ * re-attaches to an existing session rather than starting a new browser.
+ * Injected like {@link BrowserLaunchLike} so the peer dep stays optional.
+ * @experimental
+ */
+export type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Promise<BrowserLike>;
+
+/**
+ * Structural projection of `@cloudflare/playwright`'s `sessions` export — lists
+ * the account's live Browser Rendering sessions for this binding.
+ * @experimental
+ */
+export type BrowserSessionsLike = (binding: BrowserBindingLike) => Promise<ReadonlyArray<BrowserSession>>;
 
 /**
  * Options shared by the page-driving helpers ({@link Browser.screenshot} etc.).
@@ -181,6 +220,12 @@ export interface LunoraBrowserOptions {
     binding: BrowserBindingLike;
 
     /**
+     * The `@cloudflare/playwright` `connect` function, injected like
+     * {@link LunoraBrowserOptions.launch}. Required for {@link Browser.connect}.
+     */
+    connect?: BrowserConnectLike;
+
+    /**
      * The `@cloudflare/playwright` `launch` function. Injected rather than
      * imported at module top so the optional peer dep stays out of the bundle
      * for non-browser apps and tests can pass a double. The generated worker
@@ -188,7 +233,6 @@ export interface LunoraBrowserOptions {
      * with a clear "install `@cloudflare/playwright`" error.
      */
     launch?: BrowserLaunchLike;
-    /* eslint-enable no-secrets/no-secrets */
 
     /**
      * Best-effort DNS-rebinding re-check. When `true` (and `allowPrivateTargets`
@@ -202,6 +246,13 @@ export interface LunoraBrowserOptions {
      * For a hard guarantee prefer {@link LunoraBrowserOptions.allowedHosts}.
      */
     resolveDns?: boolean;
+    /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * The `@cloudflare/playwright` `sessions` function, injected like
+     * {@link LunoraBrowserOptions.launch}. Required for {@link Browser.sessions}.
+     */
+    sessions?: BrowserSessionsLike;
 
     /**
      * Default navigation timeout (ms) applied when a per-call `timeoutMs` is not
@@ -222,16 +273,40 @@ export interface LunoraBrowserOptions {
  * @experimental
  */
 export interface Browser {
+    /**
+     * Re-attach to an existing session and hand the browser to `fn`.
+     *
+     * Get the id either by reading it inside the call that opened the session
+     * (`launch(async (browser) => browser.sessionId?.(), { keepAlive: 600 })`)
+     * and persisting it, or by picking a free one out of
+     * {@link Browser.sessions} — an entry with a `connectionId` is already held
+     * by another worker.
+     *
+     * The session is deliberately **left open** afterwards — closing it is the
+     * whole thing you are avoiding. Close it when the flow is done by passing
+     * `close: true`, or let `keepAlive` lapse.
+     *
+     * This is what makes agent-style browsing possible: a model calls
+     * `navigate`, then `click`, then `extract` as three separate action
+     * invocations, and the page has to survive between them. With only the
+     * per-call lifecycle each step got a fresh browser, so `click` ran against
+     * a blank page — silently, which is the worst shape for that bug.
+     */
+    connect: <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, options?: { close?: boolean }) => Promise<T>;
+
     /** Serialized HTML of `url` after navigation settles. */
     content: (url: string, options?: NavigateOptions) => Promise<string>;
 
     /**
      * Low-level escape hatch: launch a raw Playwright `Browser` and hand it to
-     * `fn` (e.g. for multi-page flows or APIs not surfaced here). The browser is
-     * **always closed** when `fn` resolves or throws — do not retain references
-     * to it past the callback.
+     * `fn` (e.g. for multi-page flows or APIs not surfaced here).
+     *
+     * The browser is **always closed** when `fn` resolves or throws — unless
+     * `keepAlive` is set, which holds the session open for that many seconds so
+     * a later {@link Browser.connect} can re-attach. Do not retain references to
+     * the browser past the callback either way.
      */
-    launch: <T>(function_: (browser: BrowserLike) => Promise<T>) => Promise<T>;
+    launch: <T>(function_: (browser: BrowserLike) => Promise<T>, options?: { keepAlive?: number }) => Promise<T>;
 
     /** Render `url` to a PDF buffer. */
     pdf: (url: string, options?: PdfOptions) => Promise<Uint8Array>;
@@ -245,4 +320,11 @@ export interface Browser {
 
     /** Render `url` to an image buffer (PNG by default). */
     screenshot: (url: string, options?: ScreenshotOptions) => Promise<Uint8Array>;
+
+    /**
+     * List the live Browser Rendering sessions for this binding, so a caller can
+     * pick a free one to {@link Browser.connect} to. An entry with a
+     * `connectionId` is already held by another worker.
+     */
+    sessions: () => Promise<ReadonlyArray<BrowserSession>>;
 }

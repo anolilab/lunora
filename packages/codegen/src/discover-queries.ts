@@ -60,6 +60,54 @@ const chainMethods = (queryCall: CallExpression): string[] => {
     return methods;
 };
 
+/**
+ * A `.filter()` predicate that compares the primary key: `(d) => d._id === x`.
+ *
+ * Matched on the predicate's source text rather than its AST — the shapes are
+ * few and fixed, and a false negative costs only a missed nudge.
+ */
+// Equality ONLY. `[!=]==?` also matched `!==`, and `.filter((d) => d._id !== x)`
+// — "every row except this one" — is a legitimate read that `ctx.db.get(id)`
+// cannot express, so flagging it inverted the query the remediation suggested.
+// The lint's whole claim is that it needs no triage; inequality breaks that.
+const PRIMARY_KEY_PREDICATE_RE = /\b[A-Za-z_$][\w$]*\._id\s*===?[^=]/u;
+
+/**
+ * Whether the chain's `.filter()` predicate tests `_id`.
+ *
+ * `.query("user").filter((d) => d._id === args.userId).first()` is a full scan
+ * for a row that is directly addressable by `ctx.db.get` — always wrong, never
+ * a judgement call, and invisible to `filter_without_index`, which sees only
+ * that a filter has no index.
+ */
+const filtersPrimaryKeyOf = (queryCall: CallExpression): boolean => {
+    let node: TsNode = queryCall;
+
+    for (;;) {
+        const parent = node.getParent();
+
+        if (!parent || !Node.isPropertyAccessExpression(parent)) {
+            return false;
+        }
+
+        const callParent = parent.getParent();
+
+        if (!callParent || !Node.isCallExpression(callParent)) {
+            return false;
+        }
+
+        if (parent.getName() === "filter") {
+            const predicate = callParent.getArguments()[0];
+
+            if (predicate && PRIMARY_KEY_PREDICATE_RE.test(predicate.getText())) {
+                return true;
+            }
+        }
+
+        node = callParent;
+    }
+};
+
 /** The literal table name from a `query("table")` call, or `""` when the argument is not a string literal. */
 const tableOf = (queryCall: CallExpression): string => {
     const argument = queryCall.getArguments()[0];
@@ -94,6 +142,7 @@ const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR
             reads.push({
                 exportName: enclosingExportName(call),
                 file: relativePath,
+                filtersPrimaryKey: filtersPrimaryKeyOf(call),
                 hasFilter: true,
                 hasIndex: methods.some((method) => INDEX_METHODS.has(method)),
                 line: call.getStartLineNumber(),

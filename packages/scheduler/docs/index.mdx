@@ -74,6 +74,7 @@ import { internal } from "@/lunora/_generated/api";
 const crons = cronJobs();
 
 crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
+crons.hourly("sweep sessions", { minuteUTC: 17 }, internal.presence.sweep, {});
 crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
 crons.weekly("weekly report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.reports.weekly, {});
 crons.monthly("monthly invoice", { day: 1, hourUTC: 0, minuteUTC: 0 }, internal.billing.invoice, {});
@@ -89,8 +90,17 @@ function reference (a one-shot dispatch) or a durable workflow reference
 fire, and its `args` are type-checked against the workflow's `params`.
 
 <Callout type="info">
-    `interval` takes exactly one of `{seconds | minutes | hours}`. `daily`, `weekly`, and `monthly` schedule at a fixed UTC wall-clock time. Use `.cron` for the
-    raw 5- or 6-field grammar when the ergonomic forms don't fit.
+    `interval` takes exactly one of `{seconds | minutes | hours}`. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC wall-clock time. Use
+    `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
+</Callout>
+
+<Callout type="warn">
+    **Migrating from Convex: `{ hours: 24 }` is not "once a day".** An interval compiles to a cron *step* within its field's period, so `interval.hours` is capped
+    at **23** and must divide 24 — `*/24` in a 0–23 field is not a recurrence. `{ days: 1 }` is not a unit either. Use `crons.daily(name, { hourUTC, minuteUTC },
+    …)` instead.
+
+    Prefer `hourly`/`daily` over `interval` generally: they let you place a job *off* the boundary, which is how you stop a dozen jobs from all firing at `:00`.
+
 </Callout>
 
 ### Imperative cron triggers

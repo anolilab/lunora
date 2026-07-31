@@ -206,38 +206,91 @@ const parseRelations = (argument: Node): RelationIR[] => {
 const indexNameOf = (nameArgument: Node | undefined): string =>
     nameArgument && Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralText() : "_unnamed_";
 
+/**
+ * Reject a dotted index field, naming the constraint and the workaround.
+ *
+ * Convex supports `.index("by_state", ["threadId", "state.kind", "order"])`, and
+ * a discriminated-union state column with an indexed `kind` is a common idiom
+ * there — so ports hit this. Lunora indexes only top-level columns: SQLite would
+ * need a generated column, which the schema has no way to declare.
+ *
+ * Without this the failure surfaced from the drizzle renderer as `drizzle index
+ * field is not a valid JS identifier: "state.kind"`, which names neither the
+ * real constraint nor what to do instead.
+ */
+const assertTopLevelIndexField = (element: TsNode, field: string, indexName: string): void => {
+    if (!field.includes(".")) {
+        return;
+    }
+
+    const [head = "", ...rest] = field.split(".");
+    const denormalised = `${head}${rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("")}`;
+
+    throw diagnosticAt(
+        element,
+        `index "${indexName}" indexes the nested path ${JSON.stringify(field)} — Lunora indexes only top-level columns. ` +
+            `Denormalise the value into its own column (e.g. \`${denormalised}\`), index that instead, and keep it in sync with a table \`.triggers()\` beforeInsert/beforeUpdate.`,
+    );
+};
+
+/**
+ * Read `{ unique }` off an index's options object.
+ *
+ * `unique` must be a literal `true`/`false`. A computed value (`unique: !!x`,
+ * `Boolean(...)`, a referenced const) can't be resolved statically here, so we
+ * fail loudly rather than silently dropping a `uniqueIndex` from the emitted
+ * metadata.
+ */
+const parseIndexUniqueOption = (optionsExpression: Node | undefined): boolean => {
+    if (!optionsExpression || !Node.isObjectLiteralExpression(optionsExpression)) {
+        return false;
+    }
+
+    const property = optionsExpression.getProperty("unique");
+
+    if (!property || !Node.isPropertyAssignment(property)) {
+        return false;
+    }
+
+    const initializer = property.getInitializer();
+
+    if (initializer === undefined) {
+        return false;
+    }
+
+    if (!Node.isTrueLiteral(initializer) && !Node.isFalseLiteral(initializer)) {
+        throw diagnosticAt(initializer, `\`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
+    }
+
+    return Node.isTrueLiteral(initializer);
+};
+
 /** Parse a `.index(name, [fields], { unique? })` call into an {@link IndexIR}. */
 const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
     const [indexName, fieldsExpression, optionsExpression] = args;
-    let unique = false;
+    const unique = parseIndexUniqueOption(optionsExpression);
+    const name = indexNameOf(indexName);
+    const rawElements = fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression) ? fieldsExpression.getElements() : [];
 
-    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
-        const property = optionsExpression.getProperty("unique");
-
-        if (property && Node.isPropertyAssignment(property)) {
-            const initializer = property.getInitializer();
-
-            // `unique` must be a literal `true`/`false`. A computed value
-            // (`unique: !!x`, `Boolean(...)`, a referenced const) can't be
-            // resolved statically here, so we fail loudly rather than silently
-            // dropping a `uniqueIndex` from the emitted metadata.
-            if (initializer && !Node.isTrueLiteral(initializer) && !Node.isFalseLiteral(initializer)) {
-                throw diagnosticAt(initializer, `\`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
-            }
-
-            unique = initializer ? Node.isTrueLiteral(initializer) : false;
+    // A computed element (`[FIELD]`, `...spread`) was silently dropped, so the
+    // index emitted with fewer columns than it declares — and a partial index
+    // reads as a working one right up until a query needs the missing column.
+    for (const element of rawElements) {
+        if (!Node.isStringLiteral(element)) {
+            throw diagnosticAt(
+                element,
+                `index "${name}" lists a non-literal field (${JSON.stringify(element.getText())}); codegen reads index fields statically, so every entry must be a string literal.`,
+            );
         }
     }
 
-    const fields =
-        fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
-            ? fieldsExpression
-                  .getElements()
-                  .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
-                  .map((element) => element.getLiteralText())
-            : [];
+    const fieldElements = rawElements.filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element));
 
-    return { fields, name: indexNameOf(indexName), unique };
+    for (const element of fieldElements) {
+        assertTopLevelIndexField(element, element.getLiteralText(), name);
+    }
+
+    return { fields: fieldElements.map((element) => element.getLiteralText()), name, unique };
 };
 
 /** Parse a `.searchIndex(name, { field, filterFields? })` call into a {@link SearchIndexIR}. */
@@ -603,6 +656,18 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 
             if (first && Node.isObjectLiteralExpression(first)) {
                 shape = parseObjectShape(first);
+            } else if (first) {
+                // `defineTable(fieldsIdentifier)` is what anyone writes to share a
+                // field map between the schema and an `.input()`. Codegen reads the
+                // shape syntactically, so a non-literal argument silently yielded a
+                // table with NO columns — `Doc_<table>` came out with `_id` and
+                // `_creationTime` and nothing else, with no error anywhere.
+                // A column-less table is never intended.
+                throw diagnosticAt(
+                    first,
+                    `table "${name}" calls defineTable(${JSON.stringify(first.getText())}), but codegen reads the field map syntactically and can only read an object literal. ` +
+                        `Inline the fields into the defineTable(...) call. To reuse them in an \`.input()\`, derive from the generated \`Doc_${name}\` / \`Insert_${name}\` type instead of sharing the runtime value.`,
+                );
             }
 
             break;

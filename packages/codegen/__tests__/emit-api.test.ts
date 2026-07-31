@@ -303,6 +303,24 @@ describe("emitApi", () => {
         expect(emitApi({ functions: [], mutators: [] })).toBe(emitApi({ functions: [] }));
     });
 
+    it("imports FunctionReference only when the body references it", () => {
+        expect.assertions(3);
+
+        // The import used to be unconditional, so a project
+        // with no discovered functions — including one where discovery had failed
+        // and emitted an empty api — produced `_generated/api.ts` that fails
+        // `tsc --noEmit` under `noUnusedLocals` with TS6133. That error points at
+        // generated code the consumer cannot edit without losing type safety.
+        const empty = emitApi({ functions: [] });
+
+        expect(empty).not.toContain("FunctionReference");
+
+        const populated = emitApi({ functions: [{ args: {}, exportName: "list", filePath: "todos", kind: "query", returnType: "string" }] });
+
+        expect(populated).toContain('import type { FunctionReference } from "@lunora/client";');
+        expect(populated).toContain('list: FunctionReference<"query", {}, string>;');
+    });
+
     it("quotes a leading-digit namespace key so the emitted interface stays valid TS", () => {
         expect.assertions(3);
 
@@ -341,8 +359,10 @@ describe("emitApi", () => {
 
         const rendered = emitApi({ functions: [], httpRoutes });
 
-        // The reference type comes from the client package (same source as FunctionReference).
-        expect(rendered).toContain('import type { FunctionReference, HttpStreamRef } from "@lunora/client";');
+        // The reference type comes from the client package (same source as
+        // FunctionReference, which this fixture declares no functions for and so
+        // does not import).
+        expect(rendered).toContain('import type { HttpStreamRef } from "@lunora/client";');
         // Namespaced like `api.*`: file `http.ts` → `httpStreams.http.streamTokens`.
         expect(rendered).toContain("export interface HttpStreamsRef {");
         expect(rendered).toContain("streamTokens: HttpStreamRef<{ text: string }, { prompt: string }, {}>;");
@@ -359,7 +379,9 @@ describe("emitApi", () => {
 
         expect(rendered).not.toContain("HttpStreamsRef");
         expect(rendered).not.toContain("HttpStreamRef");
-        expect(rendered).toContain('import type { FunctionReference } from "@lunora/client";');
+        // Nothing left to import from the client package, so the import line goes
+        // away entirely rather than dangling (`noUnusedLocals` would flag it).
+        expect(rendered).not.toContain('from "@lunora/client"');
     });
 
     it("renders a chunkType-less stream route as `unknown` and defaults empty validator maps to `{}`", () => {
@@ -387,7 +409,7 @@ describe("emitApi", () => {
 
         const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()], useUmbrella: true });
 
-        expect(rendered).toContain('import type { FunctionReference, HttpStreamRef } from "lunorash/client";');
+        expect(rendered).toContain('import type { HttpStreamRef } from "lunorash/client";');
     });
 
     it("rewrites deeply nested `../../_generated/X` qualifiers", () => {

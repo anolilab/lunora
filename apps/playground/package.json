@@ -12,7 +12,7 @@
         "dev": "vite",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit && tsc --noEmit -p tsconfig.generated.json",
         "test": "vitest run",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",

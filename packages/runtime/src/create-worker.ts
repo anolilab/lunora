@@ -88,6 +88,38 @@ interface HttpActionContext {
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
+
+    /**
+     * Deferred dispatch, present only when the worker declares a `schedulerDO`.
+     *
+     * "Receive webhook → enqueue the real work → return 200 immediately" is the
+     * most common HTTP-action shape there is, and without this every app
+     * hand-rolled a hop through a mutation. That hop is not a one-liner: a
+     * function reference cannot cross the RPC boundary, so targets had to be
+     * named by string and resolved shard-side — and on an endpoint reachable
+     * unauthenticated (a platform-signed webhook) a free-form target string is a
+     * "call any internal function" primitive, forcing a closed allow-list that
+     * needs an entry per target.
+     *
+     * Talking to the scheduler DO directly avoids all of it. This is no more
+     * privileged than the `run*` members beside it: the reference is a literal
+     * from the app's own source, never caller-supplied.
+     */
+    scheduler?: SchedulerContext;
+}
+
+/**
+ * The scheduler surface on an HTTP action context. Mirrors `@lunora/server`'s
+ * `Scheduler` so `HttpActionCtx` can `Pick` it straight off `ActionContext`;
+ * kept structural here so the runtime stays free of a `@lunora/scheduler`
+ * dependency.
+ */
+interface SchedulerContext {
+    cancel: (id: string) => Promise<{ cancelled: boolean }>;
+    get: (id: string) => Promise<Record<string, unknown> | null>;
+    list: () => Promise<Record<string, unknown>[]>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
 }
 
 interface HttpActionLike {
@@ -2868,6 +2900,105 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         resolveProbes: resolveHealthProbes,
     });
 
+    /**
+     * `ctx.scheduler` for an HTTP action — a thin RPC wrapper over the scheduler
+     * DO, mirroring what `@lunora/scheduler`'s `createScheduler` does from a
+     * shard.
+     *
+     * The scheduler DO takes its callback origin from `env.LUNORA_ORIGIN_URL`
+     * at both schedule and fire time — deliberately, so a request cannot steer
+     * the dispatch — and answers `ORIGIN_NOT_CONFIGURED` when it is unset. So
+     * nothing origin-shaped is sent from here.
+     */
+    const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
+        const instanceName = options.schedulerInstanceName ?? "default";
+        const stub = (): ReturnType<ShardNamespaceLike["get"]> => namespace.get(namespace.idFromName(instanceName));
+
+        const call = async <R>(path: string, init: RequestInit): Promise<R> => {
+            const response = await stub().fetch(new Request(`https://scheduler.internal${path}`, init));
+
+            if (!response.ok) {
+                throw new LunoraError(`ctx.scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${await response.text()}`, {
+                    code: "INTERNAL",
+                    status: 500,
+                });
+            }
+
+            return await response.json();
+        };
+
+        const post = async <R>(path: string, body: unknown): Promise<R> =>
+            await call<R>(path, { body: JSON.stringify(body), headers: { "content-type": "application/json" }, method: "POST" });
+
+        // A generated `workflows.<name>` / `agents.<name>` reference carries a
+        // `binding` and starts a durable instance per fire; a function reference
+        // carries `__lunoraRef`; a bare string is already a `"ns:fn"` path.
+        const targetFields = (target: unknown): Record<string, unknown> => {
+            // Deliberately NO bare-string branch, unlike the shard-side
+            // `createScheduler`. These endpoints are reachable unauthenticated
+            // (platform-signed webhooks), so accepting a caller-shaped
+            // `"ns:fn"` would be the "call any internal function" primitive
+            // this surface exists to avoid — and `run()` beside it rejects
+            // anything without `__lunoraRef` for the same reason. A reference
+            // from the generated `internal` / `workflows` / `agents` is a
+            // literal in the app's own source and cannot come off a request.
+            const candidate = target as { __lunoraRef?: unknown; binding?: unknown } | null | undefined;
+
+            if (candidate === null || candidate === undefined) {
+                throw new LunoraError("ctx.scheduler: target is required — pass a reference from the generated `internal` / `workflows` / `agents`", {
+                    code: "BAD_REQUEST",
+                    status: 400,
+                });
+            }
+
+            if (typeof candidate.binding === "string" && candidate.binding.length > 0) {
+                return { workflow: candidate.binding };
+            }
+
+            if (typeof candidate.__lunoraRef === "string") {
+                return { functionPath: candidate.__lunoraRef };
+            }
+
+            throw new LunoraError(
+                "ctx.scheduler: expected a reference from the generated `internal` / `workflows` / `agents` — a bare function-path string is refused here, because an HTTP action can be reached unauthenticated",
+                {
+                    code: "BAD_REQUEST",
+                    status: 400,
+                },
+            );
+        };
+
+        const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
+            const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
+
+            return id;
+        };
+
+        return {
+            cancel: async (id) => await post<{ cancelled: boolean }>("/cancel", { id }),
+            get: async (id) => await call<Record<string, unknown> | null>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" }),
+            list: async () => await call<Record<string, unknown>[]>("/list", { method: "GET" }),
+            runAfter: async (delayMs, target, args) => {
+                if (!Number.isFinite(delayMs) || delayMs < 0) {
+                    throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "BAD_REQUEST", status: 400 });
+                }
+
+                return await schedule(Date.now() + delayMs, target, args);
+            },
+            runAt: async (timestampMs, target, args) => {
+                // Same guard as `runAfter`: an unchecked NaN/Infinity serializes
+                // to `null` through JSON and reaches the DO as a malformed
+                // `scheduledFor`, instead of failing here with something the
+                // caller can act on.
+                if (!Number.isFinite(timestampMs)) {
+                    throw new LunoraError("ctx.scheduler.runAt: `timestampMs` must be a finite epoch-millisecond number", { code: "BAD_REQUEST", status: 400 });
+                }
+
+                return await schedule(timestampMs, target, args);
+            },
+        };
+    };
+
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
 
@@ -2929,6 +3060,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runAction: run,
             runMutation: run,
             runQuery: run,
+            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
         };
     };
 

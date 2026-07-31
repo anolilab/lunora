@@ -61,6 +61,18 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      */
     expose: (config: ExposeConfig) => QueryBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
+
+    /**
+     * Attach static, per-procedure metadata. Merges across calls, is readable
+     * from middleware as `ctx.meta`, and is stamped onto the registration as
+     * `fn.meta` so codegen and other tooling can enumerate it.
+     *
+     * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
+     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
+     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
+     * can only be executed. Mirrors tRPC's `.meta()`.
+     */
+    meta: (value: Record<string, unknown>) => QueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
@@ -99,6 +111,18 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
      */
     expose: (config: ExposeConfig) => MutationBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
+
+    /**
+     * Attach static, per-procedure metadata. Merges across calls, is readable
+     * from middleware as `ctx.meta`, and is stamped onto the registration as
+     * `fn.meta` so codegen and other tooling can enumerate it.
+     *
+     * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
+     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
+     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
+     * can only be executed. Mirrors tRPC's `.meta()`.
+     */
+    meta: (value: Record<string, unknown>) => MutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
@@ -128,6 +152,18 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
      */
     expose: (config: ExposeConfig) => ActionBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
+
+    /**
+     * Attach static, per-procedure metadata. Merges across calls, is readable
+     * from middleware as `ctx.meta`, and is stamped onto the registration as
+     * `fn.meta` so codegen and other tooling can enumerate it.
+     *
+     * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
+     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
+     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
+     * can only be executed. Mirrors tRPC's `.meta()`.
+     */
+    meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
 
@@ -150,6 +186,18 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     readonly __lunoraProcedure: "query";
     readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
+
+    /**
+     * Attach static, per-procedure metadata. Merges across calls, is readable
+     * from middleware as `ctx.meta`, and is stamped onto the registration as
+     * `fn.meta` so codegen and other tooling can enumerate it.
+     *
+     * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
+     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
+     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
+     * can only be executed. Mirrors tRPC's `.meta()`.
+     */
+    meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
@@ -165,6 +213,18 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
     readonly __lunoraProcedure: "mutation";
     readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
+
+    /**
+     * Attach static, per-procedure metadata. Merges across calls, is readable
+     * from middleware as `ctx.meta`, and is stamped onto the registration as
+     * `fn.meta` so codegen and other tooling can enumerate it.
+     *
+     * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
+     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
+     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
+     * can only be executed. Mirrors tRPC's `.meta()`.
+     */
+    meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
@@ -179,6 +239,18 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
+
+    /**
+     * Attach static, per-procedure metadata. Merges across calls, is readable
+     * from middleware as `ctx.meta`, and is stamped onto the registration as
+     * `fn.meta` so codegen and other tooling can enumerate it.
+     *
+     * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
+     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
+     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
+     * can only be executed. Mirrors tRPC's `.meta()`.
+     */
+    meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }

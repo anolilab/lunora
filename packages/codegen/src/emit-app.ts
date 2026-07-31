@@ -170,7 +170,15 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
     } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
 
-    const runtimeTypeImports = ["ExecutionContextLike", "LunoraWorker", "Route", "ScheduledControllerLike", "ShardNamespaceLike", "WorkerOptions"];
+    const runtimeTypeImports = [
+        "ExecutionContextLike",
+        "HttpRouterLike",
+        "LunoraWorker",
+        "Route",
+        "ScheduledControllerLike",
+        "ShardNamespaceLike",
+        "WorkerOptions",
+    ];
 
     if (hasGlobal) {
         runtimeTypeImports.push("GlobalIntrospector");
@@ -317,6 +325,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
     ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
     ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
+    `    private httpRouterApp?: HttpRouterLike;`,
     `    private readonly routeMap: Record<string, Route> = {};`,
     ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
     ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
@@ -409,6 +418,12 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
     `    /** Cloudflare Email Routing entry — exposes the top-level \`email\` handler. */
     public onEmail(handler: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>): this {
         this.emailHandler = handler;
+
+        return this;
+    }`,
+    `    /** Mount a whole HTTP app (\`httpRouter()\` from \`@lunora/server\`, or anything with a \`fetch\`) ahead of Lunora's own routes. Use this for a multi-endpoint hono app with its own CORS + error handling; \`.route()\` is for one-off endpoints. */
+    public httpRouter(app: HttpRouterLike): this {
+        this.httpRouterApp = app;
 
         return this;
     }`,
@@ -723,6 +738,10 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
               `                }),`,
           ]
         : []),
+    // Spread so an unset `.httpRouter()` leaves the key absent rather than
+    // explicitly `undefined` — `createWorker` treats the two the same, but the
+    // emitted options object reads as "not configured" either way.
+    `            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),`,
     `            routes: this.routeMap,`,
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
 ];
@@ -780,7 +799,12 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
 
         const make = (bucket: R2BucketLike): Storage =>
             createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
-        const buckets: Record<string, Storage> = { default: make(defaultBucket) };
+        // Held separately from the map so \`pick\`'s fallback is a plain binding:
+        // under \`noUncheckedIndexedAccess\` a \`Record<string, Storage>\` lookup —
+        // including \`buckets.default\` — widens to \`Storage | undefined\`, which
+        // would not satisfy \`pick\`'s declared \`Storage\` return.
+        const fallbackStorage = make(defaultBucket);
+        const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
@@ -790,7 +814,7 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? buckets.default;
+        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {

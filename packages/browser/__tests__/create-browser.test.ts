@@ -345,3 +345,134 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
         await expect(browser.content("https://user:pass@example.com/")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 }); // gitleaks:allow -- test fixture asserting embedded-credential rejection, not a real secret
     });
 });
+
+describe("session reuse", () => {
+    /**
+     * A browser whose `close()` is observable, so a test can assert the session
+     * is (or is not) torn down — that distinction IS the feature.
+     */
+    const makeSessionHarness = () => {
+        const closed = vi.fn<() => Promise<void>>(async () => {});
+        const browser = {
+            close: closed,
+            newContext: async () => {
+                return { newPage: async () => ({}) as PageLike };
+            },
+        };
+        const launchOptions: (Record<string, unknown> | undefined)[] = [];
+
+        return {
+            browser,
+            closed,
+            connect: vi.fn<(binding: BrowserBindingLike, sessionId: string) => Promise<typeof browser>>(async () => browser),
+            launch: (async (_binding, options) => {
+                launchOptions.push(options);
+
+                return browser;
+            }) as BrowserLaunchLike,
+            launchOptions,
+        };
+    };
+
+    it("keeps the session open when launch is given keepAlive", async () => {
+        expect.assertions(3);
+
+        // Without this the per-call lifecycle closes the browser, and a model
+        // driving navigate → click → extract as three separate action
+        // invocations gets a blank page on step two — silently.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.launch(async () => "done", { keepAlive: 600 })).resolves.toBe("done");
+
+        // Seconds on our API, milliseconds on Cloudflare's `keep_alive`.
+        expect(harness.launchOptions[0]).toStrictEqual({ keep_alive: 600_000 });
+        expect(harness.closed).not.toHaveBeenCalled();
+    });
+
+    it("still always closes when keepAlive is omitted", async () => {
+        expect.assertions(2);
+
+        // A leaked Browser Rendering session is billed and rate-limited, so the
+        // default must stay always-close.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await browser.launch(async () => "done");
+
+        expect(harness.launchOptions[0]).toBeUndefined();
+        expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it("connect re-attaches without closing, unless asked", async () => {
+        expect.assertions(4);
+
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, connect: harness.connect, launch: harness.launch });
+
+        await expect(browser.connect("sess-1", async () => "attached")).resolves.toBe("attached");
+        expect(harness.connect).toHaveBeenCalledWith(binding, "sess-1");
+        // Not closed — keeping the page alive across invocations is the point.
+        expect(harness.closed).not.toHaveBeenCalled();
+
+        await browser.connect("sess-1", async () => "done", { close: true });
+
+        expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the session id to the caller so connect() is reachable", async () => {
+        expect.assertions(2);
+
+        // Without this the documented flow is a dead end: `keepAlive` holds a
+        // session open but nothing tells you which one, and `sessions()` lists
+        // them all with no way to identify yours.
+        const harness = makeSessionHarness();
+        const withId = { ...harness.browser, sessionId: () => "sess-42" };
+        const browser = createBrowser({ binding, launch: async () => withId });
+
+        const captured = await browser.launch(async (b) => b.sessionId?.(), { keepAlive: 600 });
+
+        expect(captured).toBe("sess-42");
+        expect(harness.closed).not.toHaveBeenCalled();
+    });
+
+    it("throws when the handler throws with keepAlive set, leaving the session open", async () => {
+        expect.assertions(2);
+
+        // The `finally` close is deliberately skipped under keepAlive; make sure
+        // the error still propagates rather than being swallowed with it.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(
+            browser.launch(
+                async () => {
+                    throw new Error("boom");
+                },
+                { keepAlive: 60 },
+            ),
+        ).rejects.toThrow("boom");
+
+        expect(harness.closed).not.toHaveBeenCalled();
+    });
+
+    it("lists live sessions", async () => {
+        expect.assertions(1);
+
+        const live = [{ sessionId: "sess-1" }, { connectionId: "conn-9", sessionId: "sess-2" }];
+        const browser = createBrowser({ binding, launch: makeSessionHarness().launch, sessions: async () => live });
+
+        // `sess-2` carries a connectionId — already held by another worker, so a
+        // caller picking a session to connect to must skip it.
+        await expect(browser.sessions()).resolves.toStrictEqual(live);
+    });
+
+    it("names the missing peer export rather than failing obscurely", async () => {
+        expect.assertions(2);
+
+        const browser = createBrowser({ binding, launch: makeSessionHarness().launch });
+
+        await expect(browser.connect("sess-1", async () => "x")).rejects.toThrow(/`connect` is not available/u);
+        await expect(browser.sessions()).rejects.toThrow(/`sessions` is not available/u);
+    });
+});

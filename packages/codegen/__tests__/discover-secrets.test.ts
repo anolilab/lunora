@@ -22,6 +22,15 @@ const CLEAN = `
     export const count = 42;
 `;
 
+/** A 64-char single-case hex value reused by the heuristic-gating tests under two different binding names. */
+const HEX_VALUE = "a3f9c2e1b7d8049f5c6a1e2d3b4c5f6071829304a1b2c3d4e5f60718293a4b5c6";
+
+/** A vendor-prefixed key inside a test file — evidence-carrying, so still reported. */
+// eslint-disable-next-line no-secrets/no-secrets -- synthetic fixture, not a real credential
+const STRIPE_IN_TEST = `
+    const client = "sk_live_0123456789abcdefABCDEFghij"; // gitleaks:allow
+`;
+
 /** An all-lowercase 64-char hex key — single-case, missed by the mixed-charset rule. */
 const HEX_KEY = `
     export const hmac = "a3f9c2e1b7d8049f5c6a1e2d3b4c5f6071829304a1b2c3d4e5f60718293a4b5c6";
@@ -129,5 +138,40 @@ describe("discoverSecrets", () => {
         writeFileSync(join(workdir, "lunora", "clean.ts"), CLEAN, "utf8");
 
         expect(discoverSecrets(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    // `hardcoded_secret` produced ten findings on the first
+    // large port and all ten were the W3C Trace Context specification's example
+    // trace ids in `lib/traceparent.test.ts` — the canonical values every
+    // traceparent implementation tests against. Signal-to-noise was zero, and
+    // under #35 that would have blocked the build.
+    //
+    // Only the two heuristic kinds (`hex_secret`, `high_entropy`) are gated. A
+    // vendor-prefixed literal carries its own evidence and is a leak wherever it
+    // appears, tests included.
+    it("ignores a spec fixture in a test file but still flags a vendor key there", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "traceparent.test.ts"), `const traceId = "0af7651916cd43dd8448eb211c80319c";\n`, "utf8");
+        writeFileSync(join(workdir, "lunora", "stripe.test.ts"), STRIPE_IN_TEST, "utf8");
+
+        const found = discoverSecrets(project, join(workdir, "lunora"));
+
+        expect(found.filter((secret) => secret.file.includes("traceparent"))).toHaveLength(0);
+        expect(found.filter((secret) => secret.file.includes("stripe")).map((secret) => secret.kind)).toStrictEqual(["stripe_live_key"]);
+    });
+
+    it("requires a secret-ish binding name for a heuristic match outside tests", () => {
+        expect.assertions(2);
+
+        // The same literal under two names. A content hash is shaped exactly
+        // like a key, so shape alone cannot carry the finding.
+        writeFileSync(join(workdir, "lunora", "digest.ts"), `export const contentHash = "${HEX_VALUE}";\n`, "utf8");
+        writeFileSync(join(workdir, "lunora", "signer.ts"), `export const signingKey = "${HEX_VALUE}";\n`, "utf8");
+
+        const found = discoverSecrets(project, join(workdir, "lunora"));
+
+        expect(found.filter((secret) => secret.file.includes("digest"))).toHaveLength(0);
+        expect(found.filter((secret) => secret.file.includes("signer")).map((secret) => secret.kind)).toStrictEqual(["hex_secret"]);
     });
 });

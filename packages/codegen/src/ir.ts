@@ -46,6 +46,15 @@ export interface ValidatorIR {
     sourceText?: string;
     /** For `v.id("table")` — the table name. */
     tableName?: string;
+
+    /**
+     * For `v.from(externalSchema)` — the wrapped Standard Schema's inferred type,
+     * rendered as TS source. Recovered through the type checker from
+     * `~standard.types.output`, mirroring the runtime's `InferStandardOutput`.
+     * Absent when it could not be recovered safely, in which case the emitted
+     * type falls back to `unknown`.
+     */
+    tsType?: string;
     valueType?: ValidatorIR;
 }
 
@@ -296,6 +305,16 @@ export interface FunctionIR {
      * ordinary functions.
      */
     lifecycle?: "connect" | "disconnect";
+
+    /**
+     * The `.output(validator)` declaration, when the chain has one.
+     *
+     * Takes precedence over {@link FunctionIR.returnType} (the handler's
+     * inferred type) for the emitted `FunctionReference`. `.output()` is what
+     * validates at runtime and what a reader takes as the contract, so the two
+     * must agree — see the emit-side note for what went wrong when they did not.
+     */
+    output?: ValidatorIR;
 
     /**
      * Serialized TS source for the handler's return type, with `Promise&lt;T>`
@@ -708,6 +727,14 @@ export interface QueryReadIR {
     exportName: string;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
+
+    /**
+     * True when the chain's `.filter()` predicate compares `_id`
+     * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`
+     * addresses directly. Optional so a feeder predating this field still
+     * typechecks; absent is treated as "not a primary-key filter".
+     */
+    filtersPrimaryKey?: boolean;
     /** The chain calls `.filter(...)`. */
     hasFilter: boolean;
     /** The chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
@@ -1249,6 +1276,15 @@ export interface OwnerFieldWriteIR {
     line: number;
     /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
     method: string;
+
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures are not
+     * reachable by a caller, so the lint's premise ("any caller can write rows
+     * owned by another user") does not hold there — see
+     * `owner_field_from_args_not_auth`. `undefined` when the write sits outside
+     * any recognised procedure (a bare helper).
+     */
+    visibility?: "internal" | "public";
 }
 
 /**

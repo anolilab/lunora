@@ -2538,6 +2538,7 @@ interface TablePage {
 
 ```ts
 interface TableReaderLike {
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;

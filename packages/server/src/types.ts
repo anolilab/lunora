@@ -551,6 +551,13 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * Absent on ordinary registrations.
      */
     readonly lifecycle?: LifecycleEventKind;
+
+    /**
+     * Static per-procedure metadata declared with `.meta(...)`. Present so
+     * middleware (via `ctx.meta`) and tooling can read the same object; absent
+     * when the chain never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
 
     /**
@@ -564,6 +571,64 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
 type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
 type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
 type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+
+/**
+ * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
+ * generated `api` / `internal` objects hand you, carrying `&lt;file>:&lt;function>`
+ * in `__lunoraRef`. Redeclared here so `@lunora/server` needs no dependency on
+ * the client package, exactly as {@link Scheduler} avoids one on
+ * `@lunora/scheduler`. `RegisteredFunction` has no `__lunoraRef`, so the two
+ * shapes never overlap.
+ */
+interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream", Args, Return> {
+    /** Phantom marker carrying the type parameters; never present at runtime. */
+    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
+    readonly __lunoraRef: string;
+}
+
+/*
+ * `ctx.run*` accepts EITHER handle shape.
+ *
+ * `_generated/api.ts` types every entry as a `FunctionReference`, but these
+ * were declared to take `RegisteredQuery` — the server-side registration
+ * object — so the documented example (`ctx.runQuery(api.todos.list, args)`,
+ * straight out of this package's own JSDoc) did not typecheck. There was no
+ * user-side fix short of a cast at every call site; on the first large port it
+ * was ~370 errors and the single largest class remaining.
+ *
+ * Overloads rather than a union parameter: `Args` cannot be inferred backwards
+ * through `InferArgs<A>`, so the two shapes need separate inference sites. The
+ * registration overload comes first so importing a module directly keeps its
+ * existing, more precise behaviour.
+ */
+
+/**
+ * `ctx.runQuery` — overloaded, see the note above.
+ *
+ * A single generic signature over the reference would be nicer (TS will not
+ * contextually type a parameter against a multi-signature type, so a hand-built
+ * ctx object must annotate its `(reference, args)` explicitly — see
+ * `@lunora/testing`'s harness). It does not work: a concrete
+ * `RegisteredQuery&lt;{…}, number>` is not assignable to a
+ * `RegisteredFunction&lt;ArgsValidator, …>` constraint, because `handler`'s args
+ * are in a contravariant position. Two inference sites it is.
+ */
+interface RunQuery {
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args): Promise<R>;
+}
+
+/** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
+interface RunMutation {
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
+}
+
+/** `ctx.runAction` — overloaded for the same reason as {@link RunQuery}. */
+interface RunAction {
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
+}
 
 /** Which side of the WebSocket lifecycle a hook fires on. */
 type LifecycleEventKind = "connect" | "disconnect";
@@ -775,6 +840,27 @@ interface PaginationResult<T = Record<string, unknown>> {
  * (schema-agnostic) `@lunora/server` reader.
  */
 interface TableReader<Row = Record<string, unknown>> {
+    /**
+     * Iterate rows lazily: `for await (const row of ctx.db.query("t").withIndex(…))`.
+     *
+     * Pages through the result set behind the scenes and yields row by row, so
+     * a consumer that stops early stops the reads too. `.collect()` is still the
+     * right terminal when you want the whole set; this exists for the cases
+     * where you cannot know up front how far you need to read.
+     *
+     * That is what merged/ordered index streams need. Reimplementing Convex's
+     * `convex-helpers/server/stream` in userland previously meant materialising
+     * each branch with a bounded `.take(1024)` before merging, so asking a
+     * merged stream for ONE row read up to 1,024 rows per branch. The k-way merge itself is application code and stays there — only
+     * the laziness had to come from the database layer.
+     *
+     * Iteration pages through `.paginate()`, so it follows the same order —
+     * which is `.collect()`'s order whenever the sort key is unique. Under a
+     * TIED sort key (an unindexed read whose rows share `_creationTime`) the
+     * two can disagree, because the tie-break is left to SQLite. Read through
+     * an index when order matters, exactly as you would for `.paginate()`.
+     */
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
     filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
     first: () => Promise<Row | null>;
@@ -1901,6 +1987,14 @@ interface QueryCtx {
     readonly log: LunoraLogger;
 
     /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls. Present so middleware can read the policy it is meant to
+     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
+     * `.use()` site; absent when the procedure never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -1920,7 +2014,7 @@ interface QueryCtx {
      * `runMutation` on a `QueryCtx` (writes are not allowed from a query).
      * Mirrors Convex's `ctx.runQuery`.
      */
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
@@ -1958,6 +2052,14 @@ interface MutationCtx {
     readonly log: LunoraLogger;
 
     /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls. Present so middleware can read the policy it is meant to
+     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
+     * `.use()` site; absent when the procedure never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -1977,7 +2079,7 @@ interface MutationCtx {
      * failure does not roll back earlier writes (the same as a top-level
      * mutation). Mirrors Convex's `ctx.runMutation`.
      */
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
 
     /**
      * Compose a read-only subquery in-process, reusing this mutation's `db`.
@@ -1985,7 +2087,7 @@ interface MutationCtx {
      * it observes this mutation's in-flight writes. Mirrors Convex's
      * `ctx.runQuery`.
      */
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
@@ -2037,6 +2139,14 @@ interface ActionCtx {
     readonly log: LunoraLogger;
 
     /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls. Present so middleware can read the policy it is meant to
+     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
+     * `.use()` site; absent when the procedure never called `.meta()`.
+     */
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2045,9 +2155,9 @@ interface ActionCtx {
      * may also use ambient `Date.now()` freely.
      */
     readonly now: number;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;

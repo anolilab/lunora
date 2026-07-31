@@ -1,16 +1,115 @@
 {
     "_comment": "Shared cron-schedule compile contract. Both @lunora/scheduler's compileCronSchedule (src/jobs.ts) and @lunora/codegen's mirror (src/cron-compile.ts) are asserted against this single matrix so a drift in either copy fails CI. Update this file ONLY when the cron expression format intentionally changes, and update both compilers together.",
     "cases": [
-        { "kind": "interval", "schedule": { "seconds": 30 }, "expected": "*/30 * * * * *" },
-        { "kind": "interval", "schedule": { "minutes": 1 }, "expected": "*/1 * * * *" },
-        { "kind": "interval", "schedule": { "minutes": 5 }, "expected": "*/5 * * * *" },
-        { "kind": "interval", "schedule": { "hours": 6 }, "expected": "0 */6 * * *" },
-        { "kind": "daily", "schedule": { "hourUTC": 9, "minuteUTC": 30 }, "expected": "30 9 * * *" },
-        { "kind": "daily", "schedule": { "hourUTC": 0, "minuteUTC": 0 }, "expected": "0 0 * * *" },
-        { "kind": "weekly", "schedule": { "dayOfWeek": "monday", "hourUTC": 1, "minuteUTC": 0 }, "expected": "0 1 * * 1" },
-        { "kind": "weekly", "schedule": { "dayOfWeek": "sunday", "hourUTC": 0, "minuteUTC": 0 }, "expected": "0 0 * * 0" },
-        { "kind": "weekly", "schedule": { "dayOfWeek": "saturday", "hourUTC": 23, "minuteUTC": 59 }, "expected": "59 23 * * 6" },
-        { "kind": "monthly", "schedule": { "day": 1, "hourUTC": 0, "minuteUTC": 0 }, "expected": "0 0 1 * *" },
-        { "kind": "monthly", "schedule": { "day": 15, "hourUTC": 12, "minuteUTC": 0 }, "expected": "0 12 15 * *" }
+        {
+            "kind": "interval",
+            "schedule": {
+                "seconds": 30
+            },
+            "expected": "*/30 * * * * *"
+        },
+        {
+            "kind": "interval",
+            "schedule": {
+                "minutes": 1
+            },
+            "expected": "*/1 * * * *"
+        },
+        {
+            "kind": "interval",
+            "schedule": {
+                "minutes": 5
+            },
+            "expected": "*/5 * * * *"
+        },
+        {
+            "kind": "interval",
+            "schedule": {
+                "hours": 6
+            },
+            "expected": "0 */6 * * *"
+        },
+        {
+            "kind": "daily",
+            "schedule": {
+                "hourUTC": 9,
+                "minuteUTC": 30
+            },
+            "expected": "30 9 * * *"
+        },
+        {
+            "kind": "daily",
+            "schedule": {
+                "hourUTC": 0,
+                "minuteUTC": 0
+            },
+            "expected": "0 0 * * *"
+        },
+        {
+            "kind": "hourly",
+            "schedule": {
+                "minuteUTC": 0
+            },
+            "expected": "0 * * * *"
+        },
+        {
+            "kind": "hourly",
+            "schedule": {
+                "minuteUTC": 17
+            },
+            "expected": "17 * * * *"
+        },
+        {
+            "kind": "hourly",
+            "schedule": {
+                "minuteUTC": 59
+            },
+            "expected": "59 * * * *"
+        },
+        {
+            "kind": "weekly",
+            "schedule": {
+                "dayOfWeek": "monday",
+                "hourUTC": 1,
+                "minuteUTC": 0
+            },
+            "expected": "0 1 * * 1"
+        },
+        {
+            "kind": "weekly",
+            "schedule": {
+                "dayOfWeek": "sunday",
+                "hourUTC": 0,
+                "minuteUTC": 0
+            },
+            "expected": "0 0 * * 0"
+        },
+        {
+            "kind": "weekly",
+            "schedule": {
+                "dayOfWeek": "saturday",
+                "hourUTC": 23,
+                "minuteUTC": 59
+            },
+            "expected": "59 23 * * 6"
+        },
+        {
+            "kind": "monthly",
+            "schedule": {
+                "day": 1,
+                "hourUTC": 0,
+                "minuteUTC": 0
+            },
+            "expected": "0 0 1 * *"
+        },
+        {
+            "kind": "monthly",
+            "schedule": {
+                "day": 15,
+                "hourUTC": 12,
+                "minuteUTC": 0
+            },
+            "expected": "0 12 15 * *"
+        }
     ]
 }

@@ -41,6 +41,7 @@ interface CronJob {
 interface CronJobsBuilder {
     cron: <T extends CronTarget>(name: string, cronExpr: string, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     daily: <T extends CronTarget>(name: string, schedule: DailySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    hourly: <T extends CronTarget>(name: string, schedule: HourlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     interval: <T extends CronTarget>(name: string, schedule: IntervalSchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     jobs: () => ReadonlyArray<CronJob>;
     monthly: <T extends CronTarget>(name: string, schedule: MonthlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
@@ -51,7 +52,7 @@ interface CronJobsBuilder {
 ### `CronScheduleKind` (type)
 
 ```ts
-type CronScheduleKind = "daily" | "interval" | "monthly" | "weekly";
+type CronScheduleKind = "daily" | "hourly" | "interval" | "monthly" | "weekly";
 ```
 
 ### `CronTarget` (type)
@@ -140,6 +141,14 @@ interface EnqueueOptions {
 interface FunctionReference {
     readonly __lunoraRef: string;
     readonly _kind?: "query" | "mutation" | "action";
+}
+```
+
+### `HourlySchedule` (interface)
+
+```ts
+interface HourlySchedule {
+    minuteUTC: number;
 }
 ```
 
@@ -486,7 +495,7 @@ const assertValidCronExpression: (schedule: string, context?: string) => void;
 ### `compileCronSchedule` (const)
 
 ```ts
-const compileCronSchedule: (kind: CronScheduleKind, schedule: DailySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule) => string;
+const compileCronSchedule: (kind: CronScheduleKind, schedule: DailySchedule | HourlySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule) => string;
 ```
 
 ### `createCronTrigger` (const)

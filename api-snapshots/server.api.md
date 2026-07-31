@@ -27,6 +27,7 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
     expose: (config: ExposeConfig) => ActionBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
@@ -44,11 +45,12 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -548,7 +550,9 @@ interface GeoPointInput {
 ### `HttpActionCtx` (type)
 
 ```ts
-type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+    readonly scheduler?: ActionCtx["scheduler"];
+};
 ```
 
 ### `HttpActionHandler` (type)
@@ -745,6 +749,7 @@ interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = un
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
@@ -757,6 +762,7 @@ interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = 
     readonly __lunoraProcedure: "mutation";
     readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [
         Output
     ] extends [
@@ -780,6 +786,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
     readonly __lunoraProcedure: "query";
     readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
     query: [
         Output
@@ -1107,6 +1114,7 @@ interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefine
     readonly __lunoraProcedure: "mutation";
     expose: (config: ExposeConfig) => MutationBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => MutationBuilder<Context, Args, Output>;
     mutation: [
         Output
     ] extends [
@@ -1133,10 +1141,11 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -1355,6 +1364,7 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
     readonly __lunoraProcedure: "query";
     expose: (config: ExposeConfig) => QueryBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
+    meta: (value: Record<string, unknown>) => QueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [
         Output
@@ -1386,9 +1396,10 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
@@ -1462,6 +1473,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -1944,6 +1956,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
 
 ```ts
 interface TableReader<Row = Record<string, unknown>> {
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
     filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
     first: () => Promise<Row | null>;
@@ -4097,11 +4110,12 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -4447,10 +4461,11 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
@@ -4497,9 +4512,10 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly meta?: Record<string, unknown>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
@@ -4559,6 +4575,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -4875,6 +4892,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
 
 ```ts
 interface TableReader<Row = Record<string, unknown>> {
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
     filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
     first: () => Promise<Row | null>;

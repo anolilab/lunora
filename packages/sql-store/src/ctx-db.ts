@@ -2750,6 +2750,41 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const buildReader = (stage: SearchStage | undefined): TableReaderLike => {
                 const reader: TableReaderLike = {
+                    /**
+                     * Lazy row iteration, paging through `paginate` exactly as the
+                     * shard reader does — so `for await` behaves the same on a
+                     * `.global()` table as on a sharded one, and hits the same
+                     * directed `LEGACY_READER_ERROR` when the chain is not a
+                     * search stage (via `paginate` below). Without this the
+                     * public `TableReader` type promised an iterator that only
+                     * one backend had.
+                     */
+                    // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+                    async *[Symbol.asyncIterator]() {
+                        if (!stage) {
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
+                        }
+
+                        // Runs the same unbounded read `.collect()` runs, rather
+                        // than paging.
+                        //
+                        // Paging here could not terminate honestly. A page is
+                        // capped at `MAX_SEARCH_SCAN` and `planSearchPage`
+                        // refuses any page reaching past it, so a first page
+                        // sized to the cap comes back full with `isDone: true`
+                        // whether there were exactly that many matches or ten
+                        // times as many — the probe row that distinguishes them
+                        // cannot be fetched. `for await` would then stop at the
+                        // cap and look complete, while `.collect()` on the same
+                        // query throws. Same query, same data, two answers.
+                        //
+                        // Nothing is given up: the page size was the cap, so
+                        // the old loop already read the whole window in one
+                        // query and a `break` saved nothing. Relevance order is
+                        // why — a scored search has to rank its whole window
+                        // before it knows which row is first.
+                        yield* await runSearch(stage, undefined);
+                    },
                     async collect() {
                         if (!stage) {
                             throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);

@@ -17,6 +17,13 @@ export interface AdvisorQueryRead {
     exportName?: string;
     /** Source file the read appears in (relative to the lunora dir, no extension). */
     file: string;
+    /**
+     * True when the chain's `.filter()` predicate compares `_id`
+     * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`
+     * addresses directly. Optional so a feeder predating this field still
+     * typechecks; absent is treated as "not a primary-key filter".
+     */
+    filtersPrimaryKey?: boolean;
     /** True when the chain calls `.filter(...)`. */
     hasFilter: boolean;
     /** True when the chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */

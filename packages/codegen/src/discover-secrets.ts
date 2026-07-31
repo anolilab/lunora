@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { SecretLiteralIR } from "./ir";
-import { redact, secretKindOf } from "./secret-rules";
+import { isHeuristicSecretKind, isSecretishName, redact, secretKindOf } from "./secret-rules";
 
 /**
  * The constant string value of a node, folding `+` concatenations of string
@@ -49,6 +49,60 @@ const isFoldedConcatenationOperand = (node: TsNode): boolean => {
     return root !== node && literalValueOf(root) !== undefined;
 };
 
+/**
+ * Test files, where a secret-*shaped* literal is nearly always a fixture.
+ *
+ * Only the heuristic kinds are suppressed here — a real `sk_live_…` in a test is
+ * still a leak and still reported.
+ */
+const TEST_DIRECTORY_RE = /(?:^|\/)__tests__\//u;
+
+/** A `.test` / `.spec` module. Paths arrive without the `.ts`, so the suffix anchors at the end. */
+const TEST_SUFFIX_RE = /\.(?:spec|test)$/u;
+
+/** Whether a lunora-relative path is a test module. */
+const isTestFile = (relativePath: string): boolean => TEST_DIRECTORY_RE.test(relativePath) || TEST_SUFFIX_RE.test(relativePath);
+
+/**
+ * The nearest name a literal is bound to: `const traceId = "…"`,
+ * `{ apiKey: "…" }`, or a `name = "…"` assignment. Used as corroborating
+ * evidence for the heuristic kinds, which have no vendor prefix to anchor on.
+ */
+const boundNameOf = (node: TsNode): string | undefined => {
+    const parent = node.getParent();
+
+    if (parent === undefined) {
+        return undefined;
+    }
+
+    if (Node.isVariableDeclaration(parent) || Node.isPropertyAssignment(parent) || Node.isPropertySignature(parent)) {
+        return parent.getName();
+    }
+
+    if (Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.EqualsToken) {
+        return parent.getLeft().getText();
+    }
+
+    return undefined;
+};
+
+/**
+ * Whether a matched literal should be reported.
+ *
+ * Vendor-prefixed kinds always are. The heuristic kinds (`hex_secret`,
+ * `high_entropy`) additionally require a secret-ish binding name, and are
+ * suppressed outright in test files. Without this the rule fires on any test
+ * carrying a hash, a UUID-ish id, or a trace id — its signal-to-noise on the
+ * first large port was zero for ten.
+ */
+const isReportable = (kind: string, node: TsNode, relativePath: string): boolean => {
+    if (!isHeuristicSecretKind(kind)) {
+        return true;
+    }
+
+    return !isTestFile(relativePath) && isSecretishName(boundNameOf(node));
+};
+
 /** Secret-shaped string literals (and `+`-folded concatenations) in one source file. */
 const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): SecretLiteralIR[] => {
     const found: SecretLiteralIR[] = [];
@@ -80,7 +134,7 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
 
         const kind = secretKindOf(value);
 
-        if (kind === undefined) {
+        if (kind === undefined || !isReportable(kind, node, relativePath)) {
             continue;
         }
 

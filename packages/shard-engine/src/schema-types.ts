@@ -350,6 +350,8 @@ export interface GeoFilterBuilderLike {
 
 /** A `ctx.db.&lt;table>` reader facade. */
 export interface TableReaderLike {
+    /** Lazy row iteration — see the implementation note in `ctx-db.ts`. */
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;

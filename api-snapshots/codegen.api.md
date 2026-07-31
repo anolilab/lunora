@@ -272,6 +272,7 @@ interface FunctionIR {
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect";
+    output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
 }
@@ -521,6 +522,7 @@ const QUEUES_FILENAME = "queues.ts";
 interface QueryReadIR {
     exportName: string;
     file: string;
+    filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
     line: number;
@@ -779,6 +781,7 @@ interface ValidatorIR {
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
     tableName?: string;
+    tsType?: string;
     valueType?: ValidatorIR;
 }
 ```

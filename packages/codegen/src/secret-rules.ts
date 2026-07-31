@@ -63,10 +63,73 @@ const SECRET_RULES: ReadonlyArray<{ kind: string; test: (value: string) => boole
     { kind: "hex_secret", test: isHexSecret },
 ];
 
+/**
+ * The heuristic rules — shape alone, no vendor prefix to anchor on. A hex run or
+ * a mixed-charset token is only *maybe* a secret: a hash, a fixture id, a
+ * checksum, or a spec's example value has exactly the same shape.
+ *
+ * The vendor-prefixed kinds (`sk_live_…`, `AKIA…`, `ghp_…`, a PEM header) carry
+ * their own evidence and stay unconditional — one of those in a test file is
+ * still a live leak.
+ */
+const HEURISTIC_SECRET_KINDS: ReadonlySet<string> = new Set(["hex_secret", "high_entropy"]);
+
+/**
+ * Names that make a secret-shaped literal actually look like a secret. Used to
+ * gate the heuristic kinds: "long hex string" on its own has a false-positive
+ * rate near 1 (ten findings, all of them the W3C Trace
+ * Context spec's example trace ids that every traceparent implementation tests
+ * against).
+ */
+const SECRET_NAME_WORDS: ReadonlySet<string> = new Set([
+    "auth",
+    "bearer",
+    "credential",
+    "credentials",
+    "hmac",
+    "key",
+    "keys",
+    "passphrase",
+    "password",
+    "private",
+    "secret",
+    "secrets",
+    "signature",
+    "signing",
+    "token",
+]);
+
+/** A lowercase-then-uppercase run, i.e. the seam inside `apiKey`. */
+const CAMEL_BOUNDARY_RE = /([a-z\d])([A-Z])/gu;
+
+/** Any run of non-alphanumerics — covers snake_case, kebab-case, dots and whitespace. */
+const WORD_SEPARATOR_RE = /[^A-Za-z\d]+/u;
+
+/** Split an identifier into lower-cased words across camelCase, snake_case and kebab boundaries. */
+const nameWords = (name: string): string[] =>
+    name
+        .replaceAll(CAMEL_BOUNDARY_RE, "$1 $2")
+        .split(WORD_SEPARATOR_RE)
+        .filter(Boolean)
+        .map((word) => word.toLowerCase());
+
+/**
+ * Whether an identifier / property name is evidence that the value it holds is
+ * a secret.
+ *
+ * Word-wise rather than substring: a bare `/key/` also matches `monkey` and
+ * `keyboard`, which widens the very gate this exists to narrow. Splitting on
+ * camel/snake boundaries keeps `apiKey` and `signing_key` while dropping those.
+ */
+const isSecretishName = (name: string | undefined): boolean => name !== undefined && nameWords(name).some((word) => SECRET_NAME_WORDS.has(word));
+
 /** The matching secret rule's `kind` for a string value, or `undefined` when none matches. */
 const secretKindOf = (value: string): string | undefined => SECRET_RULES.find((rule) => rule.test(value))?.kind;
+
+/** Whether a matched `kind` needs corroborating name evidence before it is reported. */
+const isHeuristicSecretKind = (kind: string): boolean => HEURISTIC_SECRET_KINDS.has(kind);
 
 /** A redacted preview of a secret value — first 4 chars plus its length, never the full value. */
 const redact = (value: string): string => `${value.slice(0, 4)}…(${String(value.length)} chars)`;
 
-export { redact, SECRET_RULES, secretKindOf };
+export { isHeuristicSecretKind, isSecretishName, redact, SECRET_RULES, secretKindOf };

@@ -42,6 +42,49 @@ describe("lunora dev", () => {
             expect(plan.studioEnabled).toBe(true);
         });
 
+        it("plans an attached run with --no-worker, keeping codegen + studio", () => {
+            expect.assertions(4);
+
+            // `lunora dev` assumed it owned the dev process,
+            // so a repo whose task runner already supervises seven workers had
+            // no way to run the Lunora one as a node in that graph. Attached
+            // mode keeps the parts only Lunora can provide and drops the spawn.
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger(), worker: false });
+
+            expect(plan.workerEnabled).toBe(false);
+            expect(plan.codegenEnabled).toBe(true);
+            expect(plan.studioEnabled).toBe(true);
+            // The plan still records where the externally-owned worker will be,
+            // so studio and the printed hints point at the right origin.
+            expect(plan.workerOrigin).toContain(String(plan.workerPort));
+        });
+
+        it("refuses --no-worker on the vite flavor instead of parking on nothing", () => {
+            expect.assertions(3);
+
+            // The gate lives on the shared run path, so a flavor-agnostic
+            // `workerEnabled: false` would have suppressed the FRAMEWORK dev
+            // server too — and the vite plan sets codegen and studio to false
+            // because Vite runs them in-process. The process would have parked
+            // having started literally nothing, while logging that codegen was
+            // running.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "^1.0.0" } }), "utf8");
+
+            const messages: string[] = [];
+            const logger = { ...silentLogger(), warn: (message: string) => messages.push(message) };
+            const plan = planDevCommand({ cwd: workdir, logger, worker: false });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.workerEnabled).toBe(true);
+            expect(messages.some((message) => message.includes("--no-worker does not apply"))).toBe(true);
+        });
+
+        it("keeps the worker enabled by default", () => {
+            expect.assertions(1);
+
+            expect(planDevCommand({ cwd: workdir, logger: silentLogger() }).workerEnabled).toBe(true);
+        });
+
         it("adds a framework redirect hint (wrangler plan unchanged) in a Vite project", () => {
             expect.assertions(4);
 

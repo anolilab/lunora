@@ -10,6 +10,7 @@ import { Project } from "ts-morph";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
+import assertRequiredPackages from "./assert-required-packages";
 import discoverAdminRoutes from "./discover-admin-routes";
 import { discoverAgents } from "./discover-agents";
 import discoverAiRawRuns from "./discover-ai-raw-runs";
@@ -30,7 +31,7 @@ import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage, hasPaymentStoreTables } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
-import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
+import { discoverFunctions, listLunoraSourceFiles, resolveStandardSchemaType } from "./discover-functions";
 import discoverGeoIndexUsages from "./discover-geo-index-usages";
 import discoverHttpActionGuards from "./discover-http-action-guards";
 import discoverHttpHeaderWrites from "./discover-http-header-writes";
@@ -49,7 +50,7 @@ import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
 import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
-import discoverPackageDependencies from "./discover-package-dependencies";
+import readPackageDependencies from "./discover-package-dependencies";
 import discoverPaymentWebhooks from "./discover-payment-webhooks";
 import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
@@ -69,6 +70,7 @@ import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
 import discoverStorageUploads from "./discover-storage-uploads";
+import discoverUnregisteredProcedures from "./discover-unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover-unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover-workflow-calls";
@@ -95,6 +97,7 @@ import { emitApp } from "./emit-app";
 import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
+import { setStandardTypeResolver } from "./parse-validator";
 import type { PlatformDiagnostic } from "./platform-target";
 import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
 import { buildSchemaSnapshot } from "./schema-drift";
@@ -364,6 +367,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // exactly as createCodegenProject would.
     const project = options.project ?? createCodegenProject(lunoraDirectory);
 
+    // MUST run before anything parses validators — `discoverSchema` and
+    // `discoverFunctions` below are where `v.from(...)` is read, and an
+    // unregistered resolver silently yields `unknown` for every one of them.
+    // Recovering the type needs the checker plus the generated-file
+    // renderability guards, both of which live in `discover-functions`;
+    // registered here rather than imported by the parser, which would be a
+    // cycle.
+    setStandardTypeResolver(resolveStandardSchemaType);
+
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
     const functions = discoverFunctions(project, lunoraDirectory);
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -473,7 +485,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
                   notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
                   notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
-                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory),
+                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory, functions),
                   unrestrictedWhereBranches: discoverUnrestrictedWhereBranches(project, lunoraDirectory),
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
@@ -498,7 +510,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   wranglerVariables: options.wranglerVariables,
               });
 
-    const advisories = advisorContext === undefined ? [] : runAdvisor(advisorContext, { source: "static" });
+    // A binding whose TYPE is a registered procedure but which never reached
+    // `api.ts` was dropped by the syntactic scan. Reported alongside the
+    // advisor's findings so it travels the same channel to the terminal and the
+    // studio.
+    const advisories =
+        advisorContext === undefined
+            ? []
+            : [...runAdvisor(advisorContext, { source: "static" }), ...discoverUnregisteredProcedures(project, lunoraDirectory, functions)];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -586,7 +605,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
     // Emitted into the generated ShardDO's `studioFeatures()` override so the
     // studio hides only pages whose backing package the app genuinely never wires.
-    const dependencies = discoverPackageDependencies(options.projectRoot);
+    const declaredDependencies = readPackageDependencies(options.projectRoot);
+    const dependencies = declaredDependencies ?? new Set<string>();
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,
@@ -609,6 +629,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // through the umbrella's subpaths (`lunorash/server`, `lunorash/do`, …) so the
     // app needs only the single `lunorash` dependency installed.
     const useUmbrella = dependencies.has("lunorash");
+
+    // Fail before emit when the schema needs an add-on that is not installed.
+    // Emitting first would push the failure into `tsc`, reported inside a
+    // generated file the user did not write.
+    assertRequiredPackages(schema, declaredDependencies);
 
     // Boundary between the discovery phase (all `discover*` passes + the inline
     // discovers `lintSchema` drives + the metadata discovers above) and the emit

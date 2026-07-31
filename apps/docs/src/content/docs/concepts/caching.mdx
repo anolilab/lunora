@@ -87,6 +87,136 @@ export const refreshProducts = action.action(async ({ ctx }) => {
 
 Queries and mutations run inside the **Durable Object**, where the Cloudflare cache binding is not available. Actions run in the **Worker** itself, alongside the fetch handler, so they can reach `ExecutionContext.cache`. If you need to invalidate cache as a side effect of a mutation, schedule an action from the mutation or call `ctx.runAction` from the mutation's handler.
 
+## Memoizing an expensive action result
+
+Everything above caches an **HTTP response**. RPC is `POST /_lunora/rpc`, so it
+is not edge-cacheable, and an action result therefore has no cache in front of
+it. Two different problems hide under "cache my action", and only one of them
+needs code.
+
+### If the action is fetching from an upstream API, cache the fetch
+
+Model metadata, pricing tables, currency rates — anything you read over HTTP and
+that changes on a slow clock — should be cached at the `fetch`, not at the
+action. Cloudflare does this for you:
+
+```ts
+const response = await fetch("https://api.example.com/models", {
+    // Cache the upstream response at the edge for an hour, keyed on the URL.
+    cf: { cacheEverything: true, cacheTtl: 3600 },
+});
+```
+
+No Lunora code, no table, no TTL bookkeeping, and every colocation shares one
+cached copy. Reach for the recipe below only when there is no URL to key on.
+
+### Otherwise, memoize into a table
+
+For a genuinely computed result — an embedding, a derived summary — store it in
+a table keyed by a hash of the arguments:
+
+```ts
+// lunora/schema.ts
+actionCache: defineTable({
+    key: v.string(), // sha-256 of `${name}:${JSON.stringify(args)}`
+    value: v.string(), // JSON-encoded result
+    expiresAt: v.number(), // epoch ms
+    leaseUntil: v.number(), // epoch ms; guards against a stampede on a cold key
+})
+    .index("by_key", ["key"], { unique: true })
+    // Reap expired rows automatically — see the warning below.
+    .ttl("expiresAt"),
+```
+
+```ts
+// lunora/lib/actionCache.ts
+export const readCache = internalQuery.input({ key: v.string() }).query(async ({ ctx, args }) => {
+    const hit = await ctx.db
+        .query("actionCache")
+        .withIndex("by_key", (q) => q.eq("key", args.key))
+        .first();
+
+    return hit && hit.expiresAt > ctx.now ? (JSON.parse(hit.value) as unknown) : null;
+});
+
+export const writeCache = internalMutation.input({ key: v.string(), ttlMs: v.number(), value: v.string() }).mutation(async ({ ctx, args }) => {
+    const existing = await ctx.db
+        .query("actionCache")
+        .withIndex("by_key", (q) => q.eq("key", args.key))
+        .first();
+    const row = { expiresAt: ctx.now + args.ttlMs, key: args.key, value: args.value };
+
+    await (existing ? ctx.db.replace(existing._id, row) : ctx.db.insert("actionCache", row));
+});
+```
+
+The action claims the key before computing, so concurrent callers do not all
+run the expensive work:
+
+```ts
+// lunora/lib/actionCache.ts — one mutation, two outcomes.
+export const claimOrRead = internalMutation.input({ key: v.string(), leaseMs: v.number() }).mutation(async ({ ctx, args }) => {
+    const hit = await ctx.db
+        .query("actionCache")
+        .withIndex("by_key", (q) => q.eq("key", args.key))
+        .first();
+
+    if (hit && hit.expiresAt > ctx.now) {
+        return { value: hit.value } as const;
+    }
+
+    // A live lease means someone else is already computing this key.
+    if (hit && hit.leaseUntil > ctx.now) {
+        return { claimed: false } as const;
+    }
+
+    const row = { expiresAt: hit?.expiresAt ?? 0, key: args.key, leaseUntil: ctx.now + args.leaseMs, value: hit?.value ?? "" };
+
+    await (hit ? ctx.db.replace(hit._id, row) : ctx.db.insert("actionCache", row));
+
+    return { claimed: true } as const;
+});
+```
+
+```ts
+// The action: compute only if we won the claim.
+const outcome = await ctx.runMutation(internal.lib_actionCache.claimOrRead, { key, leaseMs: 30_000 });
+
+if ("value" in outcome) {
+    return JSON.parse(outcome.value) as Result;
+}
+
+if (!outcome.claimed) {
+    // Someone else is computing it. Wait and re-read, or serve stale — your call.
+    return await waitForOrServeStale(key);
+}
+
+const fresh = await expensiveThing();
+
+await ctx.runMutation(internal.lib_actionCache.writeCache, { key, ttlMs: 86_400_000, value: JSON.stringify(fresh) });
+
+return fresh;
+```
+
+<Callout type="info">
+    **The Durable Object makes the *claim* atomic — that is the part you would otherwise have to build.** A cold key with a hundred concurrent callers is the
+    classic stampede. `claimOrRead` is a mutation, and a mutation runs to completion inside one Durable Object without interleaving, so exactly one caller can
+    observe "no live lease" and take it. The other ninety-nine get `claimed: false` on their first round-trip.
+
+    What is **not** free: the compute itself has to stay outside the mutation. A mutation runs in a transaction that can roll back and must not do slow external
+    I/O, so the winner computes in the action and writes back after. That means the lease is what serialises callers, not the write — and a lease needs a
+    duration, so pick one longer than the work and shorter than your patience.
+
+    This is why Lunora ships no cache add-on: the hard half is the atomic claim, and a Durable Object gives you that in a single mutation.
+
+</Callout>
+
+<Callout type="warn">
+    **Reap expired rows.** An entry past `expiresAt` is ignored on read but still occupies the shard, so a cache without a sweep grows without bound.
+    `.ttl("expiresAt")` on the table points the runtime at the expiry column and it reaps them for you; `.ttl(field, {after})` instead treats `field` as a
+    timestamp and expires `field + after`.
+</Callout>
+
 ## Scaffolding cache-aware routes
 
 Use the built-in generator to scaffold a route with cache examples commented in:

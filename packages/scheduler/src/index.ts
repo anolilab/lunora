@@ -2,7 +2,7 @@ export { default as createScheduler } from "./create-scheduler";
 export { default as createWorkpool } from "./create-workpool";
 export type { CronTriggerOptions, CronTriggerSnippet } from "./cron";
 export { createCronTrigger } from "./cron";
-export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "./jobs";
+export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, HourlySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "./jobs";
 export { compileCronSchedule, CRON_SCHEDULE_KINDS, cronJobs } from "./jobs";
 export { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "./queue-workpool";
 export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus } from "./scheduler-do";

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { fileURLToPath } from "node:url";
 
 import { AGENT_RULES_DIR, detectAgentRules, LUNORA_SKILL_NAMES } from "@lunora/config";
-import { dirname, join, relative } from "@visulima/path";
+import { dirname, join, relative, resolve } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -11,6 +11,8 @@ import type { RulesOptions } from "./index";
 
 interface RunRulesOptions {
     cwd?: string;
+    /** Explicit install/check root, relative to `cwd`. Overrides workspace-root detection. */
+    dir?: string;
     logger: Logger;
     /** Overwrite skill files that already exist in the project (default: skip them). */
     overwrite?: boolean;
@@ -101,12 +103,57 @@ const copySkill = (source: string, destination: string, overwrite: boolean): boo
 };
 
 /**
+ * Markers that identify a workspace/repository root, in the order they are
+ * trusted. A lockfile or a workspace manifest is a far stronger signal than a
+ * `package.json` (every package in a monorepo has one of those).
+ */
+const WORKSPACE_ROOT_MARKERS = ["pnpm-workspace.yaml", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "bun.lock", "bun.lockb", ".git"];
+
+/**
+ * Walk up from `start` to the nearest workspace/repository root.
+ *
+ * Skills belong to the repo, not to whichever package you happened to `cd`
+ * into: running `lunora rules install` from a subdirectory dropped them in
+ * `&lt;pkg>/.agents/skills`, where the coding agent never looks. Falls back to `start` when no marker is found, so a standalone project
+ * behaves exactly as before.
+ */
+const resolveWorkspaceRoot = (start: string): string => {
+    let directory = start;
+
+    for (;;) {
+        if (WORKSPACE_ROOT_MARKERS.some((marker) => existsSync(join(directory, marker)))) {
+            return directory;
+        }
+
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return start;
+        }
+
+        directory = parent;
+    }
+};
+
+/**
+ * The directory `install` writes to and `check` reads from.
+ *
+ * Shared so the two cannot drift: if `check` resolved differently it would
+ * report "missing" for skills `install` had just written one level up.
+ */
+const resolveRulesRoot = (invokedFrom: string, directory: string | undefined): string =>
+    directory === undefined ? resolveWorkspaceRoot(invokedFrom) : resolve(invokedFrom, directory);
+
+/**
  * `lunora rules install` — copy the bundled Lunora agent skills into the
  * project's `.agents/skills/`. Existing skill files are left untouched unless
  * `--overwrite` is set, so local edits survive a re-run.
  */
 const runRulesInstall = (options: RunRulesOptions): RunRulesResult => {
-    const cwd = options.cwd ?? process.cwd();
+    const invokedFrom = options.cwd ?? process.cwd();
+    // `--dir` wins; otherwise install at the workspace root rather than wherever
+    // the command was invoked from.
+    const cwd = resolveRulesRoot(invokedFrom, options.dir);
     const overwrite = options.overwrite === true;
     const skillsDirectory = resolveBundledSkillsDirectory();
 
@@ -130,7 +177,10 @@ const runRulesInstall = (options: RunRulesOptions): RunRulesResult => {
         }
     }
 
-    const target = relative(cwd, join(cwd, AGENT_RULES_DIR)) || AGENT_RULES_DIR;
+    // Relative to where the user actually is, so a workspace-root install from a
+    // package subdirectory reads as `../../.agents/skills` rather than looking
+    // like it landed next to them.
+    const target = relative(invokedFrom, join(cwd, AGENT_RULES_DIR)) || AGENT_RULES_DIR;
 
     if (installed.length > 0) {
         options.logger.success(`Installed ${String(installed.length)} Lunora skill(s) into ${target}/: ${installed.join(", ")}.`);
@@ -147,7 +197,10 @@ const runRulesInstall = (options: RunRulesOptions): RunRulesResult => {
 
 /** `lunora rules check` — report which Lunora skills are installed in the project. */
 const runRulesCheck = (options: RunRulesOptions): RunRulesResult => {
-    const cwd = options.cwd ?? process.cwd();
+    const invokedFrom = options.cwd ?? process.cwd();
+    // Must resolve the root exactly as `install` does, or `check` reports
+    // "missing" for skills `install` just wrote one directory up.
+    const cwd = resolveRulesRoot(invokedFrom, options.dir);
     const status = detectAgentRules(cwd);
 
     if (status.installed) {
@@ -171,11 +224,11 @@ const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ arg
     const subcommand = argument[0] ?? "check";
 
     if (subcommand === "install") {
-        return runRulesInstall({ cwd, logger, overwrite: options.overwrite === true });
+        return runRulesInstall({ cwd, dir: options.dir, logger, overwrite: options.overwrite === true });
     }
 
     if (subcommand === "check") {
-        return runRulesCheck({ cwd, logger, strict: options.strict === true });
+        return runRulesCheck({ cwd, dir: options.dir, logger, strict: options.strict === true });
     }
 
     logger.error("rules: unknown subcommand. Usage: lunora rules <install|check>");

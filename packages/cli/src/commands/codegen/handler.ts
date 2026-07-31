@@ -21,6 +21,13 @@ interface CodegenCommandOptions {
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
     logger: Logger;
+
+    /**
+     * Fail the run when any ERROR-level advisory is reported. Defaults to CI
+     * detection so a local `lunora codegen` stays advisory while a pipeline
+     * gates on it; `--no-strict-advisories` forces it off either way.
+     */
+    strictAdvisories?: boolean;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
     target?: string;
 }
@@ -30,6 +37,8 @@ interface CodegenCommandResult {
     cronTriggers: ReadonlyArray<string>;
     /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
     error?: string;
+    /** ERROR-level advisories that made the run fail, when strict mode is on. */
+    failedAdvisories: number;
     outputDirectory: string;
 }
 
@@ -45,8 +54,12 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { advisories: [], cronTriggers: [], error: formatError, outputDirectory: "" };
+        return { advisories: [], cronTriggers: [], error: formatError, failedAdvisories: 0, outputDirectory: "" };
     }
+
+    // CI is the default gate: a pipeline should fail on an ERROR advisory, a
+    // local run should not have its workflow interrupted by one.
+    const strictAdvisories = options.strictAdvisories ?? (process.env["CI"] !== undefined && process.env["CI"] !== "");
 
     // Validated here because codegen resolves no driver of its own — an
     // unregistered name would otherwise emit the full Cloudflare surface
@@ -56,7 +69,13 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     if (resolvedTarget.target === undefined) {
         options.logger.error(resolvedTarget.error ?? "unknown deploy target");
 
-        return { advisories: [], cronTriggers: [], error: resolvedTarget.error ?? "unknown deploy target", outputDirectory: "" };
+        return {
+            advisories: [],
+            cronTriggers: [],
+            error: resolvedTarget.error ?? "unknown deploy target",
+            failedAdvisories: 0,
+            outputDirectory: "",
+        };
     }
 
     const { target } = resolvedTarget;
@@ -77,6 +96,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
             };
         }),
         cronTriggers: result.cronTriggers,
+        failedAdvisories: 0,
         outputDirectory: result.outputDirectory,
     };
 
@@ -98,6 +118,21 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         commandResult.error = platformError;
     }
 
+    // An ERROR advisory says something is broken, not merely untidy — the one
+    // that prompted this read "the call throws at runtime". Exiting 0 on those
+    // meant three workflows could deploy and fail on first use with a green
+    // build. WARN and INFO stay non-blocking.
+    const errorAdvisories = commandResult.advisories.filter((advisory) => advisory.level === "ERROR");
+
+    if (errorAdvisories.length > 0 && strictAdvisories) {
+        const names = [...new Set(errorAdvisories.map((advisory) => advisory.name))].toSorted((a, b) => a.localeCompare(b));
+
+        logger.error(
+            `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
+                `Codegen wrote its output; this exit code is the gate. Pass --no-strict-advisories to downgrade it to a warning.`,
+        );
+    }
+
     // Distinct cron expressions map 1:1 to wrangler `triggers.crons`; Cloudflare
     // caps a Worker at CRON_TRIGGER_LIMIT of them. Jobs sharing an expression
     // count once, so this fires only on genuinely distinct over-scheduling.
@@ -108,18 +143,27 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         );
     }
 
+    const finalResult: CodegenCommandResult = { ...commandResult, failedAdvisories: strictAdvisories ? errorAdvisories.length : 0 };
+
     if (json) {
-        printJson(commandResult);
+        printJson(finalResult);
     }
 
-    return commandResult;
+    return finalResult;
 };
 
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({ cwd, logger, options }) => {
-    const result = runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, format: options.format, logger, target: options.target });
+    const result = runCodegenCommand({
+        apiSpec: parseApiSpec(options.apiSpec),
+        cwd,
+        format: options.format,
+        logger,
+        strictAdvisories: options.strictAdvisories,
+        target: options.target,
+    });
 
-    return { code: result.error === undefined ? 0 : 1 };
+    return { code: result.error === undefined && result.failedAdvisories === 0 ? 0 : 1 };
 });
 
 export { execute, runCodegenCommand };

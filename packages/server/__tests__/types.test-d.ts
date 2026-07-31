@@ -17,6 +17,19 @@ type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ?
 // Server-to-server callers: `ctx.runQuery` / `runMutation` infer both the args
 // type and the result type from the passed function reference. Ambient (`declare`)
 // so they can't live inside the function body.
+
+/**
+ * Structural stand-in for `@lunora/client`'s `FunctionReference`, matching what
+ * codegen emits into `_generated/api.ts`. Declared locally because
+ * `@lunora/server` deliberately carries no dependency on the client package —
+ * the compatibility this asserts is structural, so a local mirror is the
+ * honest way to test it.
+ */
+interface FunctionReferenceLike<Kind extends "action" | "mutation" | "query" | "stream", Args, Return> {
+    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
+    readonly __lunoraRef: string;
+}
+
 declare const actionCtx: ActionCtx;
 declare const queryCtx: QueryCtx;
 
@@ -125,6 +138,34 @@ const check = (): void => {
 
     type Check16 = Assert<Equal<Awaited<typeof ranBadArgs>, number>>;
 
+    // `_generated/api.ts` types every entry as a
+    // `FunctionReference` — the CLIENT-side handle — but `ctx.run*` only
+    // accepted `RegisteredQuery`, the server-side registration object. So the
+    // documented example (`ctx.runQuery(api.todos.list, args)`, from this
+    // package's own JSDoc) did not typecheck, and there was no user-side fix
+    // short of a cast at every call site.
+    //
+    // `apiList` stands in for what codegen emits: the phantom carries the args
+    // and return types, and `__lunoraRef` is the runtime `<file>:<fn>` id.
+    const apiList = { __lunoraRef: "todos:list" } as FunctionReferenceLike<"query", { limit: number }, number>;
+    const apiSend = { __lunoraRef: "todos:send" } as FunctionReferenceLike<"mutation", { text: string }, string>;
+
+    const ranQueryByReference = actionCtx.runQuery(apiList, { limit: 3 });
+    const ranMutationByReference = actionCtx.runMutation(apiSend, { text: "hi" });
+
+    type Check19 = Assert<Equal<Awaited<typeof ranQueryByReference>, number>>;
+    type Check20 = Assert<Equal<Awaited<typeof ranMutationByReference>, string>>;
+
+    // Args stay checked through the reference form too — widening the parameter
+    // must not cost the inference that made the registration form useful.
+    // @ts-expect-error - limit must be a number, per the reference's phantom args
+    const ranReferenceBadArgs = actionCtx.runQuery(apiList, { limit: "nope" });
+
+    // The `@ts-expect-error` above IS the assertion; this only keeps the binding
+    // referenced. Overload resolution fails on the bad args, so the result type is
+    // whatever the last overload widened to — not something worth pinning.
+    type Check21 = Assert<typeof ranReferenceBadArgs extends Promise<unknown> ? true : false>;
+
     // `ctx.db.system` — read-only system tables. The overloaded `query`/`get`
     // resolve the per-table doc type (`_scheduled_functions` → ScheduledFunctionDoc,
     // `_storage` → StorageMetadata), so these awaited results are exactly typed.
@@ -156,6 +197,9 @@ const check = (): void => {
         Check16,
         Check17,
         Check18,
+        Check19,
+        Check20,
+        Check21,
     ];
 
     // eslint-disable-next-line no-void, sonarjs/void-use -- marks the type-assertion tuple as used so its `@ts-expect-error`/`Equal<>` checks are evaluated

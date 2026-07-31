@@ -825,8 +825,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             now: harnessNow,
             span: dispatchSpan.handle,
             trace: passthroughTrace,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
-            runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
+
+            runQuery: ((reference: never, args: never) =>
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
+                runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
             secrets: stubProxy("secrets") as QueryCtx["secrets"],
             storage: stubProxy("storage") as QueryCtx["storage"],
             vectors: stubProxy("vectors") as QueryCtx["vectors"],
@@ -841,10 +843,14 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             now: harnessNow,
             span: dispatchSpan.handle,
             trace: passthroughTrace,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
-            runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
-            runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
+
+            runMutation: ((reference: never, args: never) =>
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runMutation, after construction completes
+                runInternal("mutation", reference, mutationContext, args) as Promise<never>) as unknown as MutationCtx["runMutation"],
+
+            runQuery: ((reference: never, args: never) =>
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
+                runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
             scheduler: fakeScheduler,
             secrets: stubProxy("secrets") as MutationCtx["secrets"],
             storage: stubProxy("storage") as MutationCtx["storage"],
@@ -868,12 +874,18 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             now: harnessNow,
             span: dispatchSpan.handle,
             trace: passthroughTrace,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runAction, after construction completes
-            runAction: (reference, args) => runInternal("action", reference, actionContext, args) as Promise<never>,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
-            runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
-            runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
+
+            runAction: ((reference: never, args: never) =>
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runAction, after construction completes
+                runInternal("action", reference, actionContext, args) as Promise<never>) as unknown as ActionCtx["runAction"],
+
+            runMutation: ((reference: never, args: never) =>
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runMutation, after construction completes
+                runInternal("mutation", reference, mutationContext, args) as Promise<never>) as unknown as MutationCtx["runMutation"],
+
+            runQuery: ((reference: never, args: never) =>
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
+                runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
             scheduler: fakeScheduler,
             secrets: stubProxy("secrets") as ActionCtx["secrets"],
             storage: stubProxy("storage") as ActionCtx["storage"],
