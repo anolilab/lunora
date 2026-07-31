@@ -3721,19 +3721,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("RPC batch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const text = await readBodyTextWithLimit(request);
-        let body: unknown;
-
-        try {
-            body = JSON.parse(text);
-        } catch {
-            throw new LunoraError("RPC batch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        if (typeof body !== "object" || body === null || Array.isArray(body)) {
-            throw new LunoraError("RPC batch body must be an object", { code: "BAD_REQUEST", status: 400 });
-        }
-
+        // `readJsonBodyWithLimit` now rejects a non-object body (`null` / an array /
+        // a bare scalar) itself, matching what this handler used to check by hand.
+        const body = await readJsonBodyWithLimit(request);
         const { calls } = body as { calls?: unknown };
 
         if (!Array.isArray(calls)) {

@@ -132,12 +132,23 @@ const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY
  * byte-budgeted reader (so a chunked / Content-Length-stripped payload can't
  * slip past the cap) and maps a 413 through unchanged while turning any other
  * parse failure into a 400. Returns `{}` for an empty body.
+ *
+ * The return type promises `Record&lt;string, unknown>`, but `JSON.parse` alone
+ * cannot deliver that — `null`, `[1, 2]`, and a bare scalar all parse cleanly
+ * and would previously satisfy the `as` cast, letting a caller downstream
+ * dereference a property on a value that was never an object (a 500, not the
+ * 400 the malformed request deserves). Reject anything that isn't a plain,
+ * non-null, non-array object here, once — every caller inherits the guard
+ * instead of re-deriving it (see `handleBatchRpc`, which used to run the same
+ * check by hand after its own parse).
  */
 const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<Record<string, unknown>> => {
+    let body: unknown;
+
     try {
         const text = await readBodyTextWithLimit(request, limit);
 
-        return text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
+        body = text === "" ? {} : JSON.parse(text);
     } catch (error) {
         if (error instanceof LunoraError) {
             throw error;
@@ -145,6 +156,12 @@ const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_
 
         throw new LunoraError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
+
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new LunoraError("Request body must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return body as Record<string, unknown>;
 };
 
 export { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit };

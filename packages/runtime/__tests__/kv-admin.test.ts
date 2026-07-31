@@ -55,6 +55,24 @@ describe("createWorker — kv admin endpoints", () => {
         expect(body.error.code).toBe("NOT_FOUND");
     });
 
+    it("rejects a literal `null` PUT body with 400, not a 500 from dereferencing it (RUNTIME-04)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, kvIntrospector: introspector(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request(VALUE_URL, { body: "null", headers: { ...AUTH, "content-type": "application/json" }, method: "PUT" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("BAD_REQUEST");
+    });
+
     it("rejects an absolute expiration that is not >= 60s in the future (400)", async () => {
         expect.assertions(1);
 
