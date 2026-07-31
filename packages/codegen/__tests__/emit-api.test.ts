@@ -211,6 +211,82 @@ describe("emitApi", () => {
         expect(rendered).toContain("memory: string");
     });
 
+    it("rebases a relative qualifier pointing at one of the user's own modules", () => {
+        expect.assertions(3);
+
+        // The checker prints a type relative to the module it was READ in, so a
+        // handler returning a type from its own `./lib/types` renders as
+        // `import("./lib/types")`. From inside `_generated/api.ts` that means
+        // `lunora/_generated/lib/types`, which does not exist — TS2307 in a
+        // generated file, while codegen exits 0. It hid because a progress
+        // script that greps out `_generated` reads zero errors, and it only
+        // surfaces when a sibling package compiles the same file.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "getCurrentUser",
+                // Top level of `lunora/` — `./lib/types` is `lunora/lib/types`.
+                filePath: "auth",
+                kind: "query",
+                returnType: 'import("./lib/types").BetterAuthUser | undefined',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("../lib/types.js").BetterAuthUser');
+        expect(rendered).not.toContain('import("./lib/types")');
+        expect(rendered).not.toContain('import("./lib/types.js")');
+    });
+
+    it("rebases a relative qualifier from a nested module against that module's directory", () => {
+        expect.assertions(2);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "getStreamBody",
+                // `lunora/chat/streaming/functions.ts` — `./persistent` is
+                // `lunora/chat/streaming/persistent`, and `../core` is
+                // `lunora/chat/core`.
+                filePath: "chat/streaming/functions",
+                kind: "query",
+                returnType: 'import("./persistent").StreamBody | import("../core").WorkflowUsage',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("../chat/streaming/persistent.js").StreamBody');
+        expect(rendered).toContain('import("../chat/core.js").WorkflowUsage');
+    });
+
+    it("rebases a user qualifier and a _generated one in the same type, differently", () => {
+        expect.assertions(3);
+
+        // The two rebases are not interchangeable: `_generated/dataModel` is
+        // already inside the output directory and only needs its prefix
+        // stripped, while a user module has to climb OUT of `_generated/`.
+        // Ordering matters — once the generated prefix is stripped the
+        // specifier is indistinguishable from a user one, so a run in the wrong
+        // order sends `./dataModel.js` up a level and breaks every Doc/Id.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "getSkill",
+                filePath: "skills/functions",
+                kind: "query",
+                returnType: 'import("./_generated/dataModel.js").Doc_skills & import("./stats").SkillStats',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_skills');
+        expect(rendered).toContain('import("../skills/stats.js").SkillStats');
+        expect(rendered).not.toContain("_generated/dataModel");
+    });
+
     it("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
         expect.assertions(1);
 

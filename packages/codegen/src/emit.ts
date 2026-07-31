@@ -610,6 +610,71 @@ const relocateGeneratedImports = (returnType: string): string =>
         return `import("${withExtension}")`;
     });
 
+/** Any relative `import("…")` qualifier — the user's own modules as well as `_generated/*`. */
+const RELATIVE_IMPORT_RE = /import\("(?<spec>\.\.?\/[^"]+)"\)/gu;
+
+/** The leading `./` / `../` run of a relative specifier, stripped before testing for the `_generated/` prefix. */
+const LEADING_RELATIVE_RUN_RE = /^(?:\.\.?\/)+/u;
+
+/** Collapse `a/./b` and `a/b/../c` without touching a leading `../` run. */
+const normalizeRelativePath = (path: string): string => {
+    const segments: string[] = [];
+
+    for (const segment of path.split("/")) {
+        if (segment === "" || segment === ".") {
+            continue;
+        }
+
+        if (segment === ".." && segments.length > 0 && segments.at(-1) !== "..") {
+            segments.pop();
+            continue;
+        }
+
+        segments.push(segment);
+    }
+
+    return segments.join("/");
+};
+
+/**
+ * Rebase a relative `import("…")` qualifier that points at one of the USER's own
+ * modules so it resolves from `_generated/` instead of from the source file.
+ *
+ * The type checker prints a type relative to the module it was read in, so a
+ * handler in `lunora/auth/functions.ts` returning a type from its own
+ * `./lib/types` renders as `import("./lib/types").BetterAuthUser`. Inlined
+ * verbatim into `lunora/_generated/api.ts` that means
+ * `lunora/_generated/lib/types`, which does not exist — TS2307, inside a
+ * generated file, while `lunora codegen` exits 0.
+ *
+ * That combination is the reason it hid: a progress script that greps out
+ * `_generated` (reasonable, since nobody edits generated files) reads zero
+ * errors while `api.ts` has nine, and it only surfaces when a SIBLING package
+ * compiles the same file and has nowhere to hide them. A generated file that
+ * does not typecheck is a defect that hides from exactly the person who could
+ * fix it.
+ *
+ * `_generated/*` qualifiers are handled by {@link relocateGeneratedImports} and
+ * left alone here; absolute specifiers are already correct from any directory.
+ */
+const relocateUserRelativeImports = (returnType: string, filePath: string): string =>
+    returnType.replaceAll(RELATIVE_IMPORT_RE, (match, spec: string) => {
+        if (GENERATED_PREFIX_RE.test(spec.replace(LEADING_RELATIVE_RUN_RE, ""))) {
+            return match;
+        }
+
+        // `filePath` is relative to `lunora/` without an extension, so its
+        // directory is where the checker resolved this specifier from.
+        const sourceDirectory = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : "";
+        const fromLunoraRoot = normalizeRelativePath(`${sourceDirectory}/${spec}`);
+
+        // `_generated/` sits one level under `lunora/`, so climbing out of it
+        // lands on the root the resolved path is expressed from.
+        const rebased = `../${fromLunoraRoot}`;
+
+        return `import("${QUALIFIER_HAS_EXTENSION_RE.test(rebased) ? rebased : `${rebased}.js`}")`;
+    });
+
 /**
  * An `import("@lunora/&lt;base>")` qualifier the type checker rendered into a
  * function's args/return type — e.g. a mutator whose `server` impl returns
@@ -705,7 +770,7 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
                 const argsType = renderArgsType(definition.args);
-                const returnType = relocateGeneratedImports(referenceReturnType(definition));
+                const returnType = relocateGeneratedImports(relocateUserRelativeImports(referenceReturnType(definition), definition.filePath));
 
                 return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
             })
@@ -1122,7 +1187,7 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         .map(([file, list]) => {
             const members = list
                 .map((route) => {
-                    const chunkType = relocateGeneratedImports(route.chunkType ?? "unknown");
+                    const chunkType = relocateGeneratedImports(relocateUserRelativeImports(route.chunkType ?? "unknown", route.filePath));
 
                     return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${renderArgsType(route.searchParams)}, ${renderArgsType(route.params)}>;`;
                 })
@@ -1568,7 +1633,7 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
                 .map((definition) => {
                     const argsType = renderArgsType(definition.args);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = relocateGeneratedImports(definition.returnType);
+                    const returnType = relocateGeneratedImports(relocateUserRelativeImports(definition.returnType, definition.filePath));
 
                     // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
                     // `callRegistered` awaits the handler, and awaiting a non-thenable
