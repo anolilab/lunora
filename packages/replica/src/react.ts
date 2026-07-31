@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import type { LocalMirror } from "./local-mirror";
+import type { LocalMirror, LocalQueryResult } from "./local-mirror";
 
 /**
  * Options for the {@link useLocalQuery} hook.
@@ -22,8 +22,16 @@ export interface UseLocalQueryOptions {
  * React hook that subscribes to a local SQLite query and returns
  * live-updating results whenever the mirror applies a diff.
  *
- * Uses `useSyncExternalStore` to subscribe to the mirror's `onChange`
- * callback — every diff triggers a re-query against the local SQLite.
+ * Uses `useSyncExternalStore`, with `getSnapshot` reading through
+ * {@link LocalMirror.queryCached} — the render body itself never touches
+ * SQLite. `queryCached` returns the SAME cached result object for the same
+ * `(mirror.version, sql, params)` triple, so a re-render that isn't
+ * preceded by an `applyDiff`/`clearData` (e.g. a parent re-rendering for an
+ * unrelated reason) is a cache hit, not a fresh query — and because
+ * `getSnapshot` is what `useSyncExternalStore` itself calls to detect
+ * changes, the result can't tear under concurrent rendering the way an
+ * imperative `mirror.query(...)` call after the hook (decoupled from
+ * React's snapshot mechanism) could.
  *
  * The hook works with React 18+ concurrent features, Suspense, and
  * server-side rendering. During SSR the same value is returned as on
@@ -37,25 +45,27 @@ export interface UseLocalQueryOptions {
  * placeholders in `sql`.
  * @param _options Optional configuration (currently unused; reserved for
  * future features like shard key routing).
- * @returns An array of result rows typed via the generic parameter `T`, or
- * `undefined` if the query fails (e.g. the target table doesn't exist yet
- * because no matching diff has been applied). Treat `undefined` as a
- * "loading" or "no data yet" signal in your component.
- *
- * **Error handling**: The hook catches SQL errors internally and returns
- * `undefined`. Use a try-catch around `mirror.query(...)` directly if you
- * need finer-grained error diagnostics.
+ * @returns `{ data }` with the result rows typed via the generic parameter
+ * `T`, or `{ error }` when the query fails (e.g. malformed SQL, or the
+ * target table doesn't exist yet because no matching diff has been applied
+ * — that specific case surfaces as a "no such table" `Error`). Never
+ * collapses a failure to `undefined` — check `error` explicitly rather than
+ * treating a missing `data` as "still loading".
  * @example
  * ```tsx
  * import { useLocalQuery } from "@lunora/replica/react";
  * import { mirror } from "./mirror";
  *
  * function UserList() {
- *   const users = useLocalQuery<{ id: string; name: string }>(
+ *   const { data: users, error } = useLocalQuery<{ id: string; name: string }>(
  *     mirror,
  *     "SELECT id, name FROM fn_todos_list WHERE name LIKE ?",
  *     ["%alice%"],
  *   );
+ *
+ *   if (error) {
+ *     return <p>Query failed: {error.message}</p>;
+ *   }
  *
  *   if (users === undefined) {
  *     return <p>Waiting for data…</p>;
@@ -66,26 +76,20 @@ export interface UseLocalQueryOptions {
  * ```
  * @experimental
  */
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- public `<T>` row-type generic kept for caller ergonomics (specifies the returned row shape, like `useState<T>`)
 export const useLocalQuery = <T = Record<string, unknown>>(
     mirror: LocalMirror,
     sql: string,
     params?: ReadonlyArray<unknown>,
     _options?: UseLocalQueryOptions,
-): T[] | undefined => {
+): LocalQueryResult<T> => {
     const subscribe = (onStoreChange: () => void): (() => void) => mirror.onChange(onStoreChange);
 
-    // `mirror.version` (not `eventLog.size`) so operations that don't append
-    // to the log — e.g. `clearData()` — still produce a new snapshot and
-    // trigger a re-render (REPLICA-09).
-    const getSnapshot = (): number => mirror.version;
-    const getServerSnapshot = (): number => mirror.version;
+    // Reads through the mirror's per-version query cache — a pure,
+    // side-effect-free lookup on a cache hit (i.e. on every render that
+    // isn't preceded by a mutation), and the ONLY place SQLite is actually
+    // queried on a cache miss (a real `applyDiff`/`clearData`, or the very
+    // first render).
+    const getSnapshot = (): LocalQueryResult<T> => mirror.queryCached<T>(sql, params);
 
-    useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-
-    try {
-        return mirror.query<T>(sql, params);
-    } catch {
-        return undefined;
-    }
+    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 };

@@ -76,12 +76,17 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/server": "1.0.0-alpha.55",
+        "@testing-library/dom": "catalog:frontend",
+        "@testing-library/react": "catalog:frontend",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
