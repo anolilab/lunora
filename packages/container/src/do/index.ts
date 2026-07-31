@@ -342,15 +342,21 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         const tcpPort = container.getTcpPort(port);
 
         for (;;) {
+            // A container that accepts the TCP connection but never answers must not
+            // hang this loop past the deadline — bound each attempt with an abort
+            // signal, floored at one poll interval so the final attempt still gets a
+            // fair window instead of an near-instant abort.
+            const attemptTimeoutMs = Math.max(READINESS_POLL_INTERVAL_MS, deadline - Date.now());
+
             try {
                 // eslint-disable-next-line no-await-in-loop -- sequential poll: each probe waits on the previous attempt before retrying.
-                const response = await tcpPort.fetch(`http://container${path}`);
+                const response = await tcpPort.fetch(`http://container${path}`, { signal: AbortSignal.timeout(attemptTimeoutMs) });
 
                 if (response.status === expectedStatus) {
                     return;
                 }
             } catch {
-                // Connection refused / app not up yet — fall through and retry below.
+                // Connection refused, app not up yet, or the attempt timed out — fall through and retry below.
             }
 
             if (Date.now() >= deadline) {
