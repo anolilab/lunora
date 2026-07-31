@@ -12,7 +12,15 @@
  * `@lunora/react`, `@lunora/solid`, `@lunora/svelte`, or `@lunora/vue` — each of
  * which ships its own `hydratePreloaded(preloaded)` for the SSR-seed → live
  * handoff. This package owns the server/composition half only.
+ *
+ * The integration is declarative-only: it does not write or modify the
+ * project's `serverEntry` file (no injection). The `withLunora` wiring at the
+ * server-entry boundary is a step the project author performs by hand; the
+ * `astro:config:done` hook below only checks that they did, and warns (mirrors
+ * `@lunora/nuxt`'s missing-`worker.ts` check) rather than failing the build.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /**
  * Structural subset of Astro's `AstroIntegration`. Declared locally (rather than
@@ -28,6 +36,31 @@ interface AstroIntegrationLike {
     };
     readonly name: string;
 }
+
+/**
+ * Structural subset of the `astro:config:done` hook payload this integration
+ * reads: `config.root` (to resolve `serverEntry` to an absolute path) and
+ * `logger` (Astro's per-integration scoped logger). Declared locally for the
+ * same decoupling reason as {@link AstroIntegrationLike} — real Astro always
+ * passes both, but every field is optional here so a caller invoking the hook
+ * directly (tests, or a future Astro major that reshapes the payload) degrades
+ * to a no-op check rather than throwing.
+ */
+interface ConfigDoneContext {
+    readonly config?: {
+        readonly root?: URL;
+    };
+    readonly logger?: {
+        readonly warn: (message: string) => void;
+    };
+}
+
+/** Copy/paste wiring snippet shown when `serverEntry` doesn't call `withLunora`. */
+const WITH_LUNORA_SNIPPET = [
+    'import { withLunora } from "@lunora/astro/server";',
+    "",
+    "export default withLunora(astroWorker, { shardDO: env.SHARD /* , … */ });",
+].join("\n");
 
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
@@ -56,34 +89,63 @@ interface LunoraIntegrationOptions {
  *
  * What it does:
  *
- * - Marks the build so the `@astrojs/cloudflare` server entry is wrapped with
- *   `withLunora` — the composed worker reserves `/_lunora/*` for Lunora realtime
- *   and forwards everything else to Astro's SSR handler (one worker, one deploy).
  * - Documents the `serverEntry` (default `src/worker.ts`) where the
  *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition lives.
+ * - Checks, at `astro:config:done`, that `serverEntry` exists and calls
+ *   `withLunora` — and warns (does not fail the build) when it doesn't, so a
+ *   missing wrapper is caught at build time instead of shipping a worker where
+ *   `/_lunora/*` is unrouted and realtime silently 404s.
  *
- * The hook is intentionally minimal here: the load-bearing composition is the
- * `withLunora` wrapper at the server-entry boundary (see `withLunora` for the
- * `@astrojs/cloudflare` injection point). The integration object exists so the
- * wiring is declared in `astro.config` the idiomatic Astro way, and so future
- * build-time hooks (binding reconcile, dev middleware) have a home without
- * changing the public surface.
+ * This integration does NOT wrap the server entry itself — no file is written
+ * or modified. The load-bearing composition is the `withLunora` call the
+ * project author writes at the server-entry boundary (see `withLunora` for the
+ * `@astrojs/cloudflare` injection point); this object exists so the wiring is
+ * declared in `astro.config` the idiomatic Astro way, checked once at build
+ * time, and has a home for future build-time hooks (binding reconcile, dev
+ * middleware) without changing the public surface.
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
     const serverEntry = (options.serverEntry ?? "src/worker.ts").trim();
 
     return {
         hooks: {
-            "astro:config:done": () => {
-                // The composition is performed by `withLunora` at the
-                // `@astrojs/cloudflare` server-entry boundary (`serverEntry`).
-                // This hook is the declared seam for future build-time wiring
-                // (wrangler binding reconcile, dev middleware mounting
-                // `/_lunora/*`). Kept side-effect-free today (it only reads the
-                // resolved entry) so the integration is safe to add before that
-                // wiring lands.
+            "astro:config:done": (context: ConfigDoneContext = {}) => {
                 if (serverEntry.length === 0) {
                     throw new TypeError("@lunora/astro: `serverEntry` must be a non-empty path.");
+                }
+
+                const root = context.config?.root;
+
+                // Without a resolvable project root (e.g. a caller invoking this
+                // hook directly outside a real Astro build) there is nothing to
+                // check the entry file against — stay side-effect-free rather
+                // than guessing a root.
+                if (root === undefined) {
+                    return;
+                }
+
+                const warn =
+                    context.logger?.warn ??
+                    ((message: string) => {
+                        // eslint-disable-next-line no-console -- no `logger` was supplied on this call; fall back so the warning is never silently dropped
+                        console.warn(message);
+                    });
+                const entryPath = fileURLToPath(new URL(serverEntry, root));
+
+                if (!existsSync(entryPath)) {
+                    warn(
+                        `@lunora/astro: server entry "${serverEntry}" not found — add it (or point \`lunora({ serverEntry })\` at the right path) and wrap the Astro worker with \`withLunora\`, or \`/_lunora/*\` (Lunora realtime) will be unrouted:\n\n${WITH_LUNORA_SNIPPET}`,
+                    );
+
+                    return;
+                }
+
+                const source = readFileSync(entryPath, "utf8");
+
+                if (!source.includes("withLunora")) {
+                    warn(
+                        `@lunora/astro: server entry "${serverEntry}" does not call \`withLunora\` — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Wrap the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
+                    );
                 }
             },
         },

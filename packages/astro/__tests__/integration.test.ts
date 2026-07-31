@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunora } from "../src/integration";
+
+/** Minimal fake of the `astro:config:done` hook payload, scoped to what the hook reads. */
+interface ConfigDoneHookArgument {
+    config: { root: URL };
+    logger: { warn: (message: string) => void };
+}
 
 describe("lunora() Astro integration", () => {
     it("returns an AstroIntegration object with the package name", () => {
@@ -12,17 +23,79 @@ describe("lunora() Astro integration", () => {
         expect(typeof integration.hooks).toBe("object");
     });
 
-    it("exposes an astro:config:done hook that runs without side effects", () => {
+    it("exposes an astro:config:done hook that runs without side effects when no context is passed", () => {
         expect.assertions(1);
 
         const integration = lunora({ serverEntry: "src/custom-worker.ts" });
         const hook = integration.hooks["astro:config:done"];
 
-        // The hook is side-effect-free today (the load-bearing composition is
-        // `withLunora` at the server-entry boundary); it must not throw.
+        // Without a `config.root` to resolve against (e.g. a caller invoking the
+        // hook directly, as this test does), there is nothing to check the entry
+        // file against — the hook must stay side-effect-free rather than throw.
         expect(() => {
             (hook as () => void)();
         }).not.toThrow();
+    });
+
+    describe("serverEntry existence + withLunora check", () => {
+        let directory: string;
+
+        afterEach(() => {
+            rmSync(directory, { force: true, recursive: true });
+        });
+
+        const contextFor = (root: string, warn = vi.fn<(message: string) => void>()): ConfigDoneHookArgument => {
+            return { config: { root: pathToFileURL(`${root}/`) }, logger: { warn } };
+        };
+
+        it("warns when serverEntry does not exist", () => {
+            expect.assertions(2);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "src/worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/server entry "src\/worker\.ts" not found/u);
+        });
+
+        it("warns when serverEntry exists but does not call withLunora", () => {
+            expect.assertions(2);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            writeFileSync(join(directory, "worker.ts"), "export default { fetch: () => new Response('ok') };\n");
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/does not call `withLunora`/u);
+        });
+
+        it("is silent when serverEntry exists and calls withLunora", () => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            writeFileSync(
+                join(directory, "worker.ts"),
+                'import { withLunora } from "@lunora/astro/server";\nexport default withLunora(astroWorker, { shardDO: env.SHARD });\n',
+            );
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).not.toHaveBeenCalled();
+        });
     });
 
     it("defaults serverEntry without requiring options", () => {
