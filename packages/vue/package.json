@@ -1,6 +1,6 @@
 {
     "name": "@lunora/vue",
-    "version": "1.0.0-alpha.58",
+    "version": "1.0.0-alpha.59",
     "description": "Vue adapter for Lunora — live composables, optimistic mutations, and reactive loaders",
     "keywords": [
         "cloudflare",
@@ -75,7 +75,7 @@
         "@lunora/client": "1.0.0-alpha.33",
         "@lunora/errors": "1.0.0-alpha.9",
         "@lunora/ratelimit": "1.0.0-alpha.12",
-        "@lunora/runtime": "1.0.0-alpha.46",
+        "@lunora/runtime": "1.0.0-alpha.47",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
