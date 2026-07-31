@@ -27,12 +27,19 @@ afterEach(() => {
 });
 
 describe("vue ErrorToaster", () => {
-    it("renders nothing until a toast is pushed", () => {
-        expect.assertions(1);
+    it("mounts the aria-live region before any toast arrives, empty", () => {
+        expect.assertions(2);
 
+        // Regression: gating the wrapper itself on `toasts.length > 0` meant
+        // the very first toast was pushed before assistive tech was watching
+        // the region, and a live region only announces changes made AFTER it
+        // exists in the accessibility tree — so that first failure went
+        // unannounced.
         const { container } = render(ErrorToaster);
+        const toaster = container.querySelector(".lunora-auth-toaster");
 
-        expect(container.querySelector(".lunora-auth-toaster")).toBeNull();
+        expect(toaster).not.toBeNull();
+        expect(toaster?.getAttribute("aria-live")).toBe("polite");
     });
 
     it("renders a pushed toast and drops it again when dismissed", async () => {
