@@ -757,6 +757,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         // reported success and wrote nothing, and an import reported success and
         // dropped every row. Overriding both here is what makes the two admin
         // RPCs real for a `.shardBy()` table.
+        //
+        // NOTE: the admin export RPC is not paginated — `parseExportShardArgs`
+        // takes `tables`/`batchSize` but no cursor, and the coordinator issues
+        // one call per shard — so the rows are collected into a single response.
+        // `batchSize` bounds the SQLite scan page, not the reply. A shard holding
+        // more rows than fit in the DO's memory budget will therefore fail the
+        // export rather than stream it. That is a loud failure where the bug this
+        // replaces was a silent empty one, but a cursor on the RPC is what makes
+        // this a complete backup path for large shards.
         protected override async runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
             this.ensureMigrated();
 

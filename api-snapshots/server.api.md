@@ -1987,9 +1987,9 @@ interface TableReader<Row = Record<string, unknown>, Indexes extends string = st
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
     unique: () => Promise<Row | null>;
-    withGeoIndex: (indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    withIndex: (indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    withSearchIndex: (indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withGeoIndex(indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withIndex(indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withSearchIndex(indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 ```
 
@@ -4923,9 +4923,9 @@ interface TableReader<Row = Record<string, unknown>, Indexes extends string = st
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
     unique: () => Promise<Row | null>;
-    withGeoIndex: (indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    withIndex: (indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    withSearchIndex: (indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withGeoIndex(indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withIndex(indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withSearchIndex(indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 ```
 
