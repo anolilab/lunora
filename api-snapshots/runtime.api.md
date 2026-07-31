@@ -905,6 +905,7 @@ interface HttpActionContext {
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     scheduler?: SchedulerContext;
+    storage?: unknown;
 }
 ```
 
@@ -2135,6 +2136,7 @@ interface WorkerOptions {
     schedulerInstanceName?: string;
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
+    storage?: (env: unknown) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
     storageList?: StorageListFunction;

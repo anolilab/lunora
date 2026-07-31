@@ -1440,6 +1440,68 @@ describe("createWorker — HTTP actions", () => {
         expect(body["originUrl"]).toBeUndefined();
     });
 
+    it("c.var.lunora.storage stores an object through the worker's own R2 binding", async () => {
+        expect.assertions(4);
+
+        // HttpActionCtx had no `storage`, so an HTTP handler could not store an
+        // upload or mint a presigned URL. R2 is a worker binding, so this needs
+        // no shard hop — the omission was incidental, and it propagated: any
+        // helper the ctx was threaded into had to be typed for its
+        // storage-touching branch, barring HTTP callers from the whole helper.
+        const stored: { body: unknown; key: string }[] = [];
+        const bucketStorage = {
+            getSignedUrl: (key: string) => Promise.resolve(`https://cdn.example/${key}?sig=x`),
+            store: (key: string, body: unknown) => {
+                stored.push({ body, key });
+
+                return Promise.resolve({ key });
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/upload", async (c) => {
+                    const storage = c.var.lunora.storage as typeof bucketStorage & { bucket: (name?: string) => typeof bucketStorage };
+
+                    await storage.store("receipts/1.pdf", "bytes");
+
+                    return new Response(await storage.getSignedUrl("receipts/1.pdf"), { status: 201 });
+                }),
+            ),
+            shardDO: shard.namespace,
+            storage: () => bucketStorage,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/upload", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(201);
+        await expect(res.text()).resolves.toBe("https://cdn.example/receipts/1.pdf?sig=x");
+        expect(stored).toStrictEqual([{ body: "bytes", key: "receipts/1.pdf" }]);
+
+        // Tagged bucket-aware on the way in, so `.bucket(name)` resolves for a
+        // single-bucket app exactly as it does inside a shard.
+        const probe = await worker.fetch(new Request("https://app.example/upload", { method: "POST" }), {}, fakeContext);
+
+        expect(probe.status).toBe(201);
+    });
+
+    it("leaves ctx.storage absent when the app declared no storage", async () => {
+        expect.assertions(2);
+
+        // Absent rather than a throwing stub — that is what makes the optional
+        // `storage` on `HttpActionCtx` an honest signal instead of a type that
+        // lies about what the handler can reach.
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => new Response(String(c.var.lunora.storage === undefined), { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("true");
+    });
+
     it("refuses a bare function-path string as a scheduler target", async () => {
         expect.assertions(2);
 

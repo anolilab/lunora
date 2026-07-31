@@ -15,19 +15,30 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
 /**
  * Context handed to an HTTP action handler. A narrower view of {@link ActionContext}:
  * HTTP actions run in the worker (the "action runtime"), separate from the
- * transactional store, so there is no direct `db` / `vectors` / `storage`
- * surface — reach the data layer through `runQuery` / `runMutation` /
- * `runAction`, which forward to the owning shard.
+ * transactional store, so there is no direct `db` / `vectors` surface — reach the
+ * data layer through `runQuery` / `runMutation` / `runAction`, which forward to
+ * the owning shard. `db`'s absence is principled: an HTTP handler is not
+ * transactional.
  *
- * `scheduler` IS present (it talks to the scheduler DO, not the shard) but is
- * optional: it exists only when the app declared `.scheduler(...)` on the
- * generated app builder. "Receive webhook → enqueue the real work → return 200"
- * is what HTTP actions are for, so omitting it forced every app to hand-roll a
- * hop through a mutation plus a closed allow-list of target strings.
+ * `scheduler` and `storage` ARE present, because neither needs the shard — the
+ * scheduler talks to the scheduler DO, and R2 is a worker binding an HTTP
+ * handler can reach where an action does. Both are optional: each exists only
+ * when the app declared the matching capability (`.scheduler(...)` /
+ * `.storage(...)`) on the generated app builder.
+ *
+ * Omitting them was costly out of proportion to the gap. Without `scheduler`,
+ * "receive webhook → enqueue the real work → return 200" — the shape HTTP
+ * actions exist for — forced a hop through a mutation plus a closed allow-list
+ * of target strings, because a function reference cannot cross the RPC boundary
+ * and a free-form target on an unauthenticated endpoint is a "call any internal
+ * function" primitive. Without `storage`, any helper the ctx was threaded into
+ * had to be typed for its storage-touching branch, so a handler was barred from
+ * the helper even on the branches that never went near storage.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
     readonly scheduler?: ActionContext["scheduler"];
+    readonly storage?: ActionContext["storage"];
 };
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */

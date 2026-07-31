@@ -552,6 +552,7 @@ interface GeoPointInput {
 ```ts
 type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
     readonly scheduler?: ActionCtx["scheduler"];
+    readonly storage?: ActionCtx["storage"];
 };
 ```
 
