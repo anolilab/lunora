@@ -5,9 +5,11 @@
  * standalone component binding a core controller to the shared view primitives.
  */
 import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, computed, inject, Injector, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import { signInAnonymously } from "../core/anonymous";
+import type { BackupCodeSignInField } from "../core/backup-codes";
+import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import type { EmailOtpActions, EmailOtpState } from "../core/email-otp";
 import { createEmailOtpController } from "../core/email-otp";
@@ -477,20 +479,41 @@ class EmailOtpCardComponent {
     standalone: true,
     template: `
         @if (enabled()) {
-            <lunora-auth-card [title]="t.twoFactor">
-                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
-                    <lunora-auth-banner [error]="state().formError" />
-                    <lunora-auth-field
-                        [field]="state().fields.code"
-                        [label]="t.codeLabel"
-                        name="code"
-                        autoComplete="one-time-code"
-                        (changed)="actions.setField('code', $event)"
-                        (blurred)="actions.blur('code')"
-                    />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
-                </form>
-            </lunora-auth-card>
+            @if (useBackupCode()) {
+                <lunora-auth-card [title]="t.twoFactor" [footer]="true">
+                    <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); backupActions.submit()">
+                        <lunora-auth-banner [error]="backupState().formError" />
+                        <lunora-auth-field
+                            [field]="backupState().fields.code"
+                            [label]="t.backupCodeLabel"
+                            name="code"
+                            autoComplete="one-time-code"
+                            (changed)="backupActions.setField('code', $event)"
+                            (blurred)="backupActions.blur('code')"
+                        />
+                        <lunora-auth-submit-button [pending]="backupState().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
+                    </form>
+                    <button lunoraAuthCardFooter class="lunora-auth-link" type="button" (click)="useBackupCode.set(false)">
+                        {{ t.twoFactorUseAuthenticator }}
+                    </button>
+                </lunora-auth-card>
+            } @else {
+                <lunora-auth-card [title]="t.twoFactor" [footer]="true">
+                    <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
+                        <lunora-auth-banner [error]="state().formError" />
+                        <lunora-auth-field
+                            [field]="state().fields.code"
+                            [label]="t.codeLabel"
+                            name="code"
+                            autoComplete="one-time-code"
+                            (changed)="actions.setField('code', $event)"
+                            (blurred)="actions.blur('code')"
+                        />
+                        <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
+                    </form>
+                    <button lunoraAuthCardFooter class="lunora-auth-link" type="button" (click)="useBackupCode.set(true)">{{ t.backupCodeSignIn }}</button>
+                </lunora-auth-card>
+            }
         }
     `,
 })
@@ -504,6 +527,14 @@ class TwoFactorCardComponent implements OnInit {
     protected readonly t = this.context().localization;
     protected state!: Signal<FormState<TwoFactorField>>;
     protected actions!: FormActions<TwoFactorField>;
+    protected backupState!: Signal<FormState<BackupCodeSignInField>>;
+    protected backupActions!: FormActions<BackupCodeSignInField>;
+
+    /**
+     * Both controllers stay live regardless of which form is showing — a
+     * session-mutating submit must not depend on the toggle's current position.
+     */
+    protected readonly useBackupCode = signal(false);
 
     ngOnInit(): void {
         const bridge = controllerSignal((context) => createTwoFactorVerifyController(context, { method: this.method(), trustDevice: this.trustDevice() }), {
@@ -513,6 +544,14 @@ class TwoFactorCardComponent implements OnInit {
 
         this.state = bridge.state;
         this.actions = bridge.actions;
+
+        const backupBridge = controllerSignal((context) => createBackupCodeSignInController(context, { trustDevice: this.trustDevice() }), {
+            context: this.context,
+            injector: this.injector,
+        });
+
+        this.backupState = backupBridge.state;
+        this.backupActions = backupBridge.actions;
     }
 }
 

@@ -11,6 +11,7 @@ import {
     ResetPasswordCard,
     ResetPasswordOtpCard,
     SignUpCard,
+    TwoFactorCard,
     TwoFactorSetupCard,
 } from "../../src/react";
 
@@ -246,6 +247,57 @@ describe("resetPasswordOtpCard", () => {
 
         await waitFor(() => {
             expect(resetPassword).toHaveBeenCalledWith({ email: "ada@example.com", otp: "123456", password: "hunter2hunter2" });
+        });
+    });
+});
+
+describe("twoFactorCard backup-code toggle", () => {
+    const renderCard = (client: AuthClient) =>
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} plugins={{ twoFactor: true }}>
+                <TwoFactorCard />
+            </AuthUIProvider>,
+        );
+
+    it("switches to the backup-code form and submits it instead of the TOTP one", async () => {
+        expect.assertions(2);
+
+        const verifyTotp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const verifyBackupCode = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), twoFactor: { verifyBackupCode, verifyTotp } } as unknown as AuthClient;
+
+        renderCard(client);
+
+        fireEvent.click(screen.getByRole("button", { name: "Use a backup code" }));
+        fireEvent.change(screen.getByLabelText("Backup code"), { target: { value: "abc-def-ghi" } });
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+        await waitFor(() => {
+            expect(verifyBackupCode).toHaveBeenCalledWith(expect.objectContaining({ code: "abc-def-ghi" }));
+        });
+
+        expect(verifyTotp).not.toHaveBeenCalled();
+    });
+
+    it("switches back to the authenticator form", async () => {
+        expect.assertions(2);
+
+        const verifyTotp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const verifyBackupCode = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), twoFactor: { verifyBackupCode, verifyTotp } } as unknown as AuthClient;
+
+        renderCard(client);
+
+        fireEvent.click(screen.getByRole("button", { name: "Use a backup code" }));
+        fireEvent.click(screen.getByRole("button", { name: "Use your authenticator app instead" }));
+
+        expect(screen.getByLabelText("Verification code")).toBeDefined();
+
+        fireEvent.change(screen.getByLabelText("Verification code"), { target: { value: "123456" } });
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+        await waitFor(() => {
+            expect(verifyTotp).toHaveBeenCalledWith(expect.objectContaining({ code: "123456" }));
         });
     });
 });

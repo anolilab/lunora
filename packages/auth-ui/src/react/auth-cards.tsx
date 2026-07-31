@@ -1,8 +1,10 @@
 "use client";
 
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { signInAnonymously } from "../core/anonymous";
+import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
@@ -442,13 +444,66 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController((context_) => createTwoFactorVerifyController(context_, { method, trustDevice }), [method, trustDevice]);
+    const [backupState, backupActions] = useController((context_) => createBackupCodeSignInController(context_, { trustDevice }), [trustDevice]);
+    // Both controllers are always live — a form's live session-mutating submit
+    // must not depend on which mode happened to be showing when it was called.
+    const [useBackupCode, setUseBackupCode] = useState(false);
 
     if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
         return null;
     }
 
+    if (useBackupCode) {
+        return (
+            <AuthCard
+                footer={
+                    <button
+                        className="lunora-auth-link"
+                        onClick={() => {
+                            setUseBackupCode(false);
+                        }}
+                        type="button"
+                    >
+                        {t.twoFactorUseAuthenticator}
+                    </button>
+                }
+                title={t.twoFactor}
+            >
+                <form className="lunora-auth-form" noValidate onSubmit={onSubmit(backupActions.submit)}>
+                    <FormBanner error={backupState.formError} />
+                    <Field
+                        autoComplete="one-time-code"
+                        field={backupState.fields.code}
+                        label={t.backupCodeLabel}
+                        name="code"
+                        onBlur={() => {
+                            backupActions.blur("code");
+                        }}
+                        onChange={(value) => {
+                            backupActions.setField("code", value);
+                        }}
+                    />
+                    <SubmitButton pending={backupState.status === "submitting"}>{t.twoFactor}</SubmitButton>
+                </form>
+            </AuthCard>
+        );
+    }
+
     return (
-        <AuthCard title={t.twoFactor}>
+        <AuthCard
+            footer={
+                <button
+                    className="lunora-auth-link"
+                    onClick={() => {
+                        setUseBackupCode(true);
+                    }}
+                    type="button"
+                >
+                    {t.backupCodeSignIn}
+                </button>
+            }
+            title={t.twoFactor}
+        >
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
                 <Field

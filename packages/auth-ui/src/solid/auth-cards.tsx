@@ -1,7 +1,8 @@
 import type { JSX } from "solid-js";
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { signInAnonymously } from "../core/anonymous";
+import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
@@ -437,30 +438,84 @@ const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
     const [state, actions] = createController((context_) =>
         createTwoFactorVerifyController(context_, { method: props.method, trustDevice: props.trustDevice }),
     );
+    // Both controllers stay live regardless of which form is showing — a
+    // session-mutating submit must not depend on the toggle's current position.
+    const [backupState, backupActions] = createController((context_) => createBackupCodeSignInController(context_, { trustDevice: props.trustDevice }));
+    const [useBackupCode, setUseBackupCode] = createSignal(false);
 
     if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
         return null;
     }
 
     return (
-        <AuthCard title={t.twoFactor}>
-            <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
-                <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="one-time-code"
-                    field={state.fields.code}
-                    label={t.codeLabel}
-                    name="code"
-                    onBlur={() => {
-                        actions.blur("code");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("code", value);
-                    }}
-                />
-                <SubmitButton pending={state.status === "submitting"}>{t.twoFactor}</SubmitButton>
-            </form>
-        </AuthCard>
+        <Show
+            fallback={
+                <AuthCard
+                    footer={
+                        <button
+                            class="lunora-auth-link"
+                            onClick={() => {
+                                setUseBackupCode(true);
+                            }}
+                            type="button"
+                        >
+                            {t.backupCodeSignIn}
+                        </button>
+                    }
+                    title={t.twoFactor}
+                >
+                    <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                        <FormBanner error={state.formError} />
+                        <Field
+                            autoComplete="one-time-code"
+                            field={state.fields.code}
+                            label={t.codeLabel}
+                            name="code"
+                            onBlur={() => {
+                                actions.blur("code");
+                            }}
+                            onChange={(value) => {
+                                actions.setField("code", value);
+                            }}
+                        />
+                        <SubmitButton pending={state.status === "submitting"}>{t.twoFactor}</SubmitButton>
+                    </form>
+                </AuthCard>
+            }
+            when={useBackupCode()}
+        >
+            <AuthCard
+                footer={
+                    <button
+                        class="lunora-auth-link"
+                        onClick={() => {
+                            setUseBackupCode(false);
+                        }}
+                        type="button"
+                    >
+                        {t.twoFactorUseAuthenticator}
+                    </button>
+                }
+                title={t.twoFactor}
+            >
+                <form class="lunora-auth-form" noValidate onSubmit={onSubmit(backupActions.submit)}>
+                    <FormBanner error={backupState.formError} />
+                    <Field
+                        autoComplete="one-time-code"
+                        field={backupState.fields.code}
+                        label={t.backupCodeLabel}
+                        name="code"
+                        onBlur={() => {
+                            backupActions.blur("code");
+                        }}
+                        onChange={(value) => {
+                            backupActions.setField("code", value);
+                        }}
+                    />
+                    <SubmitButton pending={backupState.status === "submitting"}>{t.twoFactor}</SubmitButton>
+                </form>
+            </AuthCard>
+        </Show>
     );
 };
 

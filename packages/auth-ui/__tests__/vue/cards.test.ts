@@ -16,6 +16,7 @@ import ResetPasswordCard from "../../src/vue/ResetPasswordCard.vue";
 import ResetPasswordOtpCard from "../../src/vue/ResetPasswordOtpCard.vue";
 import SignInCard from "../../src/vue/SignInCard.vue";
 import SignUpCard from "../../src/vue/SignUpCard.vue";
+import TwoFactorCard from "../../src/vue/TwoFactorCard.vue";
 import type { FakeClient } from "../fake-client";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
 
@@ -189,5 +190,50 @@ describe("vue ResetPasswordOtpCard", () => {
         await fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
 
         expect(resetPassword).toHaveBeenCalledWith({ email: "ada@example.com", otp: "123456", password: "hunter2hunter2" });
+    });
+});
+
+describe("vue TwoFactorCard backup-code toggle", () => {
+    it("switches to the backup-code form and submits it instead of the TOTP one", async () => {
+        expect.assertions(2);
+
+        const verifyTotp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const verifyBackupCode = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const fake = {
+            client: { getSession: vi.fn(), twoFactor: { verifyBackupCode, verifyTotp } } as unknown as AuthClient,
+            signInEmail: vi.fn(),
+        };
+
+        renderInProvider(TwoFactorCard, fake, { discover: false, plugins: { twoFactor: true } });
+
+        await fireEvent.click(screen.getByRole("button", { name: "Use a backup code" }));
+        await fireEvent.update(screen.getByLabelText("Backup code"), "abc-def-ghi");
+        await fireEvent.submit(screen.getByRole("button", { name: "Verify" }));
+
+        expect(verifyBackupCode).toHaveBeenCalledWith(expect.objectContaining({ code: "abc-def-ghi" }));
+        expect(verifyTotp).not.toHaveBeenCalled();
+    });
+
+    it("switches back to the authenticator form", async () => {
+        expect.assertions(2);
+
+        const verifyTotp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const verifyBackupCode = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const fake = {
+            client: { getSession: vi.fn(), twoFactor: { verifyBackupCode, verifyTotp } } as unknown as AuthClient,
+            signInEmail: vi.fn(),
+        };
+
+        renderInProvider(TwoFactorCard, fake, { discover: false, plugins: { twoFactor: true } });
+
+        await fireEvent.click(screen.getByRole("button", { name: "Use a backup code" }));
+        await fireEvent.click(screen.getByRole("button", { name: "Use your authenticator app instead" }));
+
+        expect(screen.getByLabelText("Verification code")).toBeDefined();
+
+        await fireEvent.update(screen.getByLabelText("Verification code"), "123456");
+        await fireEvent.submit(screen.getByRole("button", { name: "Verify" }));
+
+        expect(verifyTotp).toHaveBeenCalledWith(expect.objectContaining({ code: "123456" }));
     });
 });
