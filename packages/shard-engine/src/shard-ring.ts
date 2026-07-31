@@ -71,17 +71,25 @@ const FNV_OFFSET_BASIS = 0xcb_f2_9c_e4_84_22_23_25n;
 
 const FNV_PRIME = 0x1_00_00_01_b3n;
 
+/** Jump-consistent-hash LCG multiplier, fixed by the paper. */
+const LCG_MULTIPLIER = 2_862_933_555_777_941_757n;
+
 /* eslint-disable no-bitwise -- FNV-1a and the jump-hash LCG ARE bit
    manipulation; both are fixed published algorithms whose constants and
    shifts define the distribution, so expressing them otherwise would only
    obscure them. */
 const fnv1a64 = (input: string): bigint => {
-    let hash = FNV_OFFSET_BASIS;
-    const bytes = new TextEncoder().encode(input);
+    const bytes: Uint8Array = new TextEncoder().encode(input);
+    let hash: bigint = FNV_OFFSET_BASIS;
 
     for (const byte of bytes) {
-        hash ^= BigInt(byte);
-        hash = BigInt.asUintN(64, hash * FNV_PRIME);
+        // Each step is bound to an explicitly-typed `bigint` rather than folded
+        // into a compound assignment: every operand is then unambiguous to a
+        // reader and to static analysis, neither of which should have to infer
+        // its way through mixed-width arithmetic.
+        const mixed: bigint = hash ^ BigInt(byte);
+
+        hash = BigInt.asUintN(64, mixed * FNV_PRIME);
     }
 
     return hash;
@@ -100,17 +108,24 @@ const jumpConsistentHash = (key: string, buckets: number): number => {
         return 0;
     }
 
-    let hash = fnv1a64(key);
+    let hash: bigint = fnv1a64(key);
     let candidate = -1n;
     let next = 0n;
-    const total = BigInt(buckets);
+    const total: bigint = BigInt(buckets);
 
     while (next < total) {
         candidate = next;
-        // The LCG constant and 31-bit shift are from the paper; they define the
-        // distribution, so they are not tunable.
-        hash = BigInt.asUintN(64, hash * 2_862_933_555_777_941_757n + 1n);
-        next = BigInt(Math.floor((Number(candidate) + 1) * (2 ** 31 / Number((hash >> 33n) + 1n))));
+        // The LCG constant and the 31-bit shift are from the paper; they define
+        // the distribution, so they are not tunable. Each intermediate is bound
+        // and typed so no operand's width has to be inferred.
+        const stepped: bigint = hash * LCG_MULTIPLIER + 1n;
+
+        hash = BigInt.asUintN(64, stepped);
+
+        const high: bigint = (hash >> 33n) + 1n;
+        const scaled: number = (Number(candidate) + 1) * (2 ** 31 / Number(high));
+
+        next = BigInt(Math.floor(scaled));
     }
 
     return Number(candidate);
