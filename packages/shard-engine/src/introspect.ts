@@ -336,6 +336,8 @@ interface AdvisoriesResult {
  * says how much is right, so without it a score cannot be computed at all.
  */
 interface AdvisorProcedure {
+    /** `true` when the feeder could read the handler body statically (inline, or a same-file identifier it resolved); `false` for a genuinely cross-file handler, in which case the behavioural facts below are absent. */
+    analyzableBody?: boolean;
     callsMail?: boolean;
     emitsEvent?: boolean;
     exempt?: boolean;
