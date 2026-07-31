@@ -144,7 +144,18 @@ const WRANGLER = `{
 `;
 
 /** Lines the overlay ensures are present in `.gitignore` (keeps `.env.example` tracked). */
-const GITIGNORE_ADDITIONS = [".wrangler", ".env", ".env.*", "!.env.example", ".lunora/", ".lunora-cache", "lunora/_generated"];
+const GITIGNORE_ADDITIONS = [
+    ".wrangler",
+    ".env",
+    ".env.*",
+    "!.env.example",
+    ".dev.vars",
+    ".dev.vars.*",
+    "!.dev.vars.example",
+    ".lunora/",
+    ".lunora-cache",
+    "lunora/_generated",
+];
 
 /**
  * `.env.example` — documents the one client knob. The entry files read the Vite

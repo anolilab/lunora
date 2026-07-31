@@ -213,6 +213,31 @@ describe("applyLunoraOverlay", () => {
         expect(readFileSync(join(base, ".gitignore"), "utf8")).toContain("lunora/_generated");
     });
 
+    it("gitignores .dev.vars so scaffolded projects can't commit their secrets, and stays idempotent", async () => {
+        expect.assertions(5);
+
+        writeReactBase(base);
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const firstPass = readFileSync(join(base, ".gitignore"), "utf8");
+        const lines = firstPass.split(/\r?\n/);
+
+        // Each of the three entries appears exactly once, and the negation comes
+        // after the glob it exempts (a negation before its glob is a no-op in
+        // .gitignore semantics).
+        expect(lines.filter((line) => line === ".dev.vars")).toHaveLength(1);
+        expect(lines.filter((line) => line === ".dev.vars.*")).toHaveLength(1);
+        expect(lines.filter((line) => line === "!.dev.vars.example")).toHaveLength(1);
+        expect(lines.indexOf("!.dev.vars.example")).toBeGreaterThan(lines.indexOf(".dev.vars.*"));
+
+        // Re-applying the overlay onto the same target must not duplicate entries.
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const secondPass = readFileSync(join(base, ".gitignore"), "utf8");
+
+        expect(secondPass).toBe(firstPass);
+    });
+
     it("wires every framework adapter's entry to its Lunora client API", async () => {
         expect.assertions(4);
 
