@@ -18,6 +18,7 @@
  */
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
+import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
 
@@ -101,7 +102,12 @@ const readShardKey = (url: URL, request: Request): string | undefined => {
  * array), else kept as a string. `shardKey` is reserved for routing and excluded.
  */
 const argsFromQuery = (url: URL): Record<string, unknown> => {
-    const args: Record<string, unknown> = {};
+    // `Object.create(null)` so the result has no prototype chain — a query key
+    // named `__proto__` then assigns a plain own property instead of reparenting
+    // this object (which `args[key] = …` into a `{}` would otherwise allow, since
+    // `__proto__` is an accessor on `Object.prototype`). Matches `v.record`'s
+    // null-proto build for the same reason.
+    const args: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
 
     for (const [key, value] of url.searchParams.entries()) {
         if (key === "shardKey") {
@@ -171,6 +177,12 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
                 // as JSON under the shared size cap, and unparseable JSON is a 400.
                 args = request.body === null ? {} : await readJsonBody(request);
             }
+
+            // `/_lunora/rpc` rejects a non-object `args` at the edge (`parseEnvelope`);
+            // this surface skipped that guard for a POST body that parses to valid
+            // JSON but isn't an object (`null` / `[1, 2]` / a bare scalar) — the same
+            // check applied here, so REST can't forward what RPC would reject.
+            assertArgsObject(args, "REST");
 
             const shardKey = readShardKey(url, request);
 
