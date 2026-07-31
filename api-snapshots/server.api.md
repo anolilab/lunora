@@ -1923,7 +1923,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     global: (options?: {
         backend?: GlobalBackend;
     }) => TableBuilder<Shape>;
-    index: (name: string, fields: ReadonlyArray<string>, options?: {
+    index: (name: string, fields: ReadonlyArray<(keyof Shape & string) | "_creationTime" | "_id">, options?: {
         unique?: boolean;
     }) => TableBuilder<Shape>;
     ownedBy: (field: keyof Shape & string) => TableBuilder<Shape>;
