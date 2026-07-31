@@ -1,6 +1,7 @@
 import type { Validator } from "@lunora/values";
 
 import { validateArgs } from "../functions";
+import { readMaskTag } from "../mask/policy-tag";
 import type { RlsTag } from "../rls/policy-tag";
 import { readRlsTag } from "../rls/policy-tag";
 import type {
@@ -185,6 +186,41 @@ const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): u
 };
 
 /**
+ * Hoist the masked table→column NAMES carried by the chain's `.use(mask(...))`
+ * steps onto the registered function as `fn.maskedTables`. Mirrors `collectRls`
+ * above — see its docblock for the shared rationale. Unlike RLS's tags (which
+ * must stay grouped per middleware so a policy's `auth.can(...)` resolves
+ * against its OWN middleware's role map), a mask tag carries only column
+ * names — no role-scoped decision to keep separate — so every step's columns
+ * are safely flattened into one union per function. Returns `undefined` when
+ * no `mask()` middleware is present, so a non-masking function carries no
+ * `maskedTables` key.
+ */
+const collectMask = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): ReadonlyMap<string, ReadonlySet<string>> | undefined => {
+    const columns = new Map<string, Set<string>>();
+
+    for (const middleware of middlewares) {
+        const tag = readMaskTag(middleware);
+
+        if (!tag) {
+            continue;
+        }
+
+        for (const [table, tableColumns] of tag.columns) {
+            const set = columns.get(table) ?? new Set<string>();
+
+            for (const column of tableColumns) {
+                set.add(column);
+            }
+
+            columns.set(table, set);
+        }
+    }
+
+    return columns.size > 0 ? columns : undefined;
+};
+
+/**
  * Construct a kind-specific builder. The terminal method is keyed by the kind
  * (`query` / `mutation` / `action`) so codegen reads the kind from the call
  * expression's property name without tracing the builder across files.
@@ -204,12 +240,14 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
         [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
             const rls = collectRls(state.middlewares);
+            const maskedTables = collectMask(state.middlewares);
 
             return {
                 args: state.args,
                 ...(state.expose ? { expose: state.expose } : {}),
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output, state.meta),
                 kind,
+                ...(maskedTables ? { maskedTables } : {}),
                 ...(state.meta ? { meta: state.meta } : {}),
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
@@ -234,12 +272,14 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                       }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
                   ) => {
                       const rls = collectRls(state.middlewares);
+                      const maskedTables = collectMask(state.middlewares);
 
                       return {
                           args: state.args,
                           ...(state.expose ? { expose: state.expose } : {}),
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler),
                           kind: "stream" as const,
+                          ...(maskedTables ? { maskedTables } : {}),
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),

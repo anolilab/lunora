@@ -52,6 +52,7 @@ import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
+import { tagMaskMiddleware } from "./policy-tag";
 import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies, Permission, Role } from "./types";
 
 interface QueryPage {
@@ -682,7 +683,7 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
     const perTable = new Map<string, MaskColumns<Context>>(Object.entries(policies));
     const rolePermissions = indexRolePermissions(options.roles);
 
-    return async ({ ctx, next }) => {
+    const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
         const auth = ctx.auth ?? {};
         // eslint-disable-next-line unicorn/no-null -- MaskContext.auth.identity carries `null` for the anonymous/no-resolver case
         const identity = (await auth.getIdentity?.()) ?? null;
@@ -726,6 +727,20 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
 
         return next({ ctx: extension });
     };
+
+    // Surface the masked table→column NAMES on the middleware so the
+    // procedure builder can hoist them onto the registered function
+    // (`fn.maskedTables`) — see `policy-tag.ts` for why nothing downstream of
+    // this tag ever sees the strategies/closures, and why the shape/mask
+    // fail-closed check (plan 208) reads codegen's static discovery instead
+    // of this tag at runtime.
+    const columns = new Map<string, ReadonlySet<string>>();
+
+    for (const [table, strategies] of perTable) {
+        columns.set(table, new Set(Object.keys(strategies)));
+    }
+
+    return tagMaskMiddleware(middleware, { columns });
 };
 
 export { mask };

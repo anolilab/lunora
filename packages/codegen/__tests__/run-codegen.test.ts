@@ -135,6 +135,53 @@ export default defineSchema({
             expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Duplicate deployed name "shared-name"/u);
         });
 
+        it("rejects a defineShape that replicates a table a mask() chain masks a column on (plan 208, fail closed)", () => {
+            expect.assertions(1);
+
+            // A shape runs no procedure, so `.use(mask(...))` never executes for
+            // its membership reads — the fixture's `users` table is masked on
+            // `email` by one procedure and separately replicated whole by a shape.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                export const listUsers = query.use(mask({ users: { email: "redact" } })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const allUsers = defineShape({ table: "users", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/replicates table "users", which masks column\(s\) "email"/u);
+        });
+
+        it("does not throw for a defineShape over a table no mask() chain touches", () => {
+            expect.assertions(1);
+
+            // Same mask as above, but the shape targets a DIFFERENT table
+            // (`messages`) — no collision, so codegen must succeed normally.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                export const listUsers = query.use(mask({ users: { email: "redact" } })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+        });
+
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
             expect.assertions(3);
 

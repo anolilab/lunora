@@ -94,7 +94,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
+import type { AgentIR, ContainerIR, MaskMetadataIR, QueueIR, ShapeIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
@@ -266,6 +266,61 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
                 { status: 500 },
             );
         }
+    }
+};
+
+/**
+ * Fail closed (plan 208, Phase 1) when a `defineShape` replicates a table any
+ * `.use(mask(...))` chain masks a column on. A shape runs no procedure, so
+ * `.use(mask(...))` never executes for its membership reads — without this
+ * check it would replicate a masked column's raw value to every subscribed
+ * client, silently. Masking a shape's replicated rows (Phase 2) isn't built
+ * yet, so the only safe answer today is to refuse the combination outright —
+ * the same secure-by-default posture RLS's `.rls("required")` denial takes
+ * for a policy-less table.
+ *
+ * Cross-checks two ALREADY-discovered, project-wide static facts —
+ * `discoverShapes`' `ShapeIR.table` and `discoverMaskMetadata`'s masked
+ * `(table, column)` pairs — rather than reading any runtime tag/registry, so
+ * this rejects the collision at build time, before a single Durable Object
+ * ships. Runs unconditionally (both inputs are computed regardless of the
+ * `lint` option), because a security invariant must not be optional the way
+ * an advisor lint finding is.
+ *
+ * Known gap (shared with the `mask_uncovered_pii_column` advisor lint and the
+ * studio mask-preview metadata this reuses): a `mask(policies)` call whose
+ * `policies` argument is a variable reference rather than an inline object
+ * literal contributes no columns to `discoverMaskMetadata`, so a collision
+ * hidden behind one is not caught here.
+ */
+const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: MaskMetadataIR): void => {
+    const maskedColumnsByTable = new Map<string, string[]>();
+
+    for (const column of maskMetadata.columns) {
+        const columns = maskedColumnsByTable.get(column.table) ?? [];
+
+        columns.push(column.column);
+        maskedColumnsByTable.set(column.table, columns);
+    }
+
+    for (const shape of shapes) {
+        if (shape.table === undefined) {
+            continue;
+        }
+
+        const maskedColumns = maskedColumnsByTable.get(shape.table);
+
+        if (maskedColumns === undefined) {
+            continue;
+        }
+
+        const columnList = maskedColumns.map((column) => `"${column}"`).join(", ");
+
+        throw new LunoraError(
+            "MASK_UNSUPPORTED",
+            `defineShape "${shape.exportName}" replicates table "${shape.table}", which masks column(s) ${columnList} on at least one procedure. A shape runs no procedure, so \`.use(mask(...))\` never applies to its replicated rows — remove the shape, unmask the table, or wait for shape-masking support.`,
+            { status: 422 },
+        );
     }
 };
 
@@ -529,6 +584,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `maskMetadata()` override. Statically discovered from every
     // `.use(mask(...))` chain — never the masking closure.
     const maskMetadata = discoverMaskMetadata(project, lunoraDirectory);
+
+    // Fail closed (plan 208, Phase 1): a `defineShape` runs no procedure, so
+    // masking never applies to its replicated rows — reject the combination
+    // before it ships rather than replicate a masked column raw. Unconditional
+    // (not gated behind `lint`), unlike the advisories below.
+    assertNoMaskedShapeTable(shapes, maskMetadata);
 
     // Read-only storage access-rule metadata (the studio's access-rules view),
     // statically discovered from every `.use(storageRules(...))` chain and

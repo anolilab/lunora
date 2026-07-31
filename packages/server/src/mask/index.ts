@@ -36,6 +36,17 @@
  * role→permission grants via `mask(policies, { roles })`, then branch a `MaskFn`
  * on `ctx.auth.can(...)`. A privileged class of caller can skip the whole mask
  * via `mask(policies, { bypass: ({ auth }) => auth.can("pii:view") })`.
+ *
+ * **Shapes (local-first replication) are refused over a masked table.** The
+ * `defineShape` sync path runs no procedure, so `.use(mask(...))` never
+ * executes for it — a shape would otherwise replicate a masked column's raw
+ * value to every subscribed client. Rather than leak it, `@lunora/codegen`
+ * fails the build (`MASK_UNSUPPORTED`) when a `defineShape` targets a table
+ * any registered function masks a column on. This is Phase 1 (fail closed);
+ * masking a shape's replicated rows is Phase 2, not yet built. Until then,
+ * remove the shape, unmask the column(s), or wait for shape-masking support.
  */
 export { mask } from "./middleware";
+export type { MaskRegistry } from "./policy-tag";
+export { buildMaskRegistry } from "./policy-tag";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskStrategy } from "./types";
