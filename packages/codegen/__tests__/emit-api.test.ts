@@ -142,6 +142,75 @@ describe("emitApi", () => {
         expect(rendered).not.toContain('import("./_generated/dataModel.js")');
     });
 
+    it("renders a nested `v.optional()` as an optional property, not a required `T | undefined`", () => {
+        expect.assertions(4);
+
+        // A required key typed `T | undefined` obliges a caller to name every
+        // field, so `{...args.patch}` spreads explicit `undefined`s into
+        // `ctx.db.patch` — a partial update that is not partial. The handler
+        // side already had the optionality; only the api emission dropped it.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    // Nested inside v.object(...) — the reported failure.
+                    patch: {
+                        kind: "object",
+                        shape: {
+                            a: { inner: { kind: "string" }, kind: "optional" },
+                            b: { inner: { kind: "number" }, kind: "optional" },
+                            required: { kind: "string" },
+                        },
+                    },
+                    // Top level — already correct, asserted so the two stay in step.
+                    limit: { inner: { kind: "number" }, kind: "optional" },
+                },
+                exportName: "updateSettings",
+                filePath: "settings",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("a?: string");
+        expect(rendered).toContain("b?: number");
+        expect(rendered).toContain("required: string");
+        expect(rendered).toContain("limit?: number");
+    });
+
+    it("renders a `v.optional()` nested inside `v.array(v.object(...))` as an optional property", () => {
+        expect.assertions(2);
+
+        // The same defect reached through an array element, which is how a
+        // batch-insert argument hits it.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    memories: {
+                        inner: {
+                            kind: "object",
+                            shape: {
+                                category: { inner: { kind: "string" }, kind: "optional" },
+                                memory: { kind: "string" },
+                            },
+                        },
+                        kind: "array",
+                    },
+                },
+                exportName: "saveMemoryBatch",
+                filePath: "memory",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("category?: string");
+        expect(rendered).toContain("memory: string");
+    });
+
     it("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
         expect.assertions(1);
 

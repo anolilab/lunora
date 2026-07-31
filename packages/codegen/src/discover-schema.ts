@@ -627,6 +627,52 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
     }
 };
 
+/**
+ * The shadow tables SQLite's FTS5 creates alongside a virtual table `X`. They
+ * are real objects in the schema and their names are reserved, so `CREATE
+ * VIRTUAL TABLE` on a name that collides with one is rejected outright.
+ * @see {@link https://www.sqlite.org/fts5.html}
+ */
+const FTS5_SHADOW_SUFFIXES = ["_config", "_content", "_data", "_docsize", "_idx"] as const;
+
+/**
+ * Reject two search indexes on one table whose generated FTS5 table names
+ * collide through a shadow-table suffix.
+ *
+ * `ftsTableName` renders `&lt;table>__fts_&lt;indexName>`, so `search_prompts` and
+ * `search_prompts_content` on the same table produce `prompts__fts_search_prompts`
+ * and `prompts__fts_search_prompts_content` — and the FIRST index already
+ * reserved the second name as its own `_content` shadow. Creating the second
+ * fails with `object name reserved for internal use: SQLITE_ERROR`.
+ *
+ * This is worth a static check rather than a runtime error because of where the
+ * runtime error lands: `ensureMigrated` throws on the shard's first admin RPC,
+ * so EVERY `.shardBy()` table becomes unreadable and unwritable, the HTTP
+ * response is still a 200, and the cause appears only in the worker log. The
+ * index names are a legal pair; nothing else in the toolchain objects.
+ */
+const assertNoFtsShadowCollision = (expression: Expression, table: string, searchIndexes: ReadonlyArray<SearchIndexIR>): void => {
+    const declared = new Set(searchIndexes.map((index) => index.name));
+
+    for (const index of searchIndexes) {
+        for (const suffix of FTS5_SHADOW_SUFFIXES) {
+            const shadowed = `${index.name}${suffix}`;
+
+            if (!declared.has(shadowed)) {
+                continue;
+            }
+
+            throw diagnosticAt(
+                expression,
+                `table "${table}" declares search indexes "${index.name}" and "${shadowed}", whose generated FTS5 tables collide: ` +
+                    `"${index.name}" reserves "${table}__fts_${shadowed}" as its own "${suffix}" shadow table, so creating "${shadowed}" fails with ` +
+                    `\`object name reserved for internal use: SQLITE_ERROR\` — which aborts the shard migration and leaves every sharded table unreadable. ` +
+                    `Rename one of them so neither ends with another's name plus ${FTS5_SHADOW_SUFFIXES.join(", ")}.`,
+            );
+        }
+    }
+};
+
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
         externallyManaged: false,
@@ -683,6 +729,8 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     if (accumulator.softDelete && !(accumulator.softDelete.field in shape)) {
         shape = { ...shape, [accumulator.softDelete.field]: { inner: { kind: "number" }, kind: "optional" } };
     }
+
+    assertNoFtsShadowCollision(expression, name, accumulator.searchIndexes);
 
     return {
         externallyManaged: accumulator.externallyManaged,

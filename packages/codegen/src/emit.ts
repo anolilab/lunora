@@ -194,8 +194,14 @@ const validatorToType = (validator: ValidatorIR): string => {
                 return "Record<string, unknown>";
             }
 
+            // Same optionality rule `renderArgsType` applies at the top level of
+            // `.input()`. Rendering an optional child as a required key typed
+            // `T | undefined` forced every caller of a partial-update shape to
+            // pass explicit `undefined`s, which a `{...args.patch}` spread then
+            // carried into `ctx.db.patch` — a partial update that is not partial.
             const fields = Object.entries(validator.shape)
-                .map(([key, child]) => `${renderPropertyKey(key)}: ${validatorToType(child)}`)
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: renderShapeEntry re-enters validatorToType for the property's type
+                .map(([key, child]) => renderShapeEntry(key, child))
                 .join("; ");
 
             return `{ ${fields} }`;
@@ -218,6 +224,28 @@ const validatorToType = (validator: ValidatorIR): string => {
     }
 };
 
+/**
+ * Render one `{key: type}` entry of an object shape, mapping `v.optional(T)` to
+ * the optional PROPERTY `key?: T` rather than the required `key: T | undefined`.
+ *
+ * The distinction is not cosmetic: a required key typed `T | undefined` obliges
+ * a caller to name every field, so a partial-update argument stops being
+ * partial. Used at every depth — top-level `.input()` and nested `v.object()`
+ * alike, which is what keeps the two in agreement.
+ */
+const renderShapeEntry = (key: string, validator: ValidatorIR): string => {
+    const propertyKey = renderPropertyKey(key);
+
+    if (validator.kind === "optional") {
+        // Emit `key?: Inner` rather than `key?: Inner | undefined`.
+        const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
+
+        return `${propertyKey}?: ${inner}`;
+    }
+
+    return `${propertyKey}: ${validatorToType(validator)}`;
+};
+
 const renderArgsType = (args: Record<string, ValidatorIR>): string => {
     const entries = Object.entries(args);
 
@@ -225,20 +253,7 @@ const renderArgsType = (args: Record<string, ValidatorIR>): string => {
         return "{}";
     }
 
-    return `{ ${entries
-        .map(([key, validator]) => {
-            const propertyKey = renderPropertyKey(key);
-
-            if (validator.kind === "optional") {
-                // Emit `key?: Inner` rather than `key?: Inner | undefined`.
-                const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
-
-                return `${propertyKey}?: ${inner}`;
-            }
-
-            return `${propertyKey}: ${validatorToType(validator)}`;
-        })
-        .join("; ")} }`;
+    return `{ ${entries.map(([key, validator]) => renderShapeEntry(key, validator)).join("; ")} }`;
 };
 
 /**
@@ -3791,12 +3806,16 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",
+    "ExportRow",
     ...(hasFlags ? ["FlagsResult"] : []),
+    "ImportShardResult",
     "KeyRange",
     "MaskPoliciesResult",
     "MigrationRunResult",
     ...(hasQueues ? ["QueuesResult"] : []),
     "RunShardApplyCdcArgs",
+    "RunShardExportArgs",
+    "RunShardImportArgs",
     "RunShardMigrationArgs",
     "RlsPoliciesResult",
     "RunShardRankBeforeArgs",
@@ -4156,7 +4175,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
@@ -5002,6 +5021,61 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             await writer.patch(args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
+        }
+
+        // The base \`ShardDO\` cannot build a schema-aware writer, so its
+        // \`runShardExport\`/\`runShardImport\` return \`[]\` and \`{inserted:{}}\`.
+        // Those are success-shaped: an empty export is what a correct export of
+        // an empty shard looks like, so a backup of a populated sharded schema
+        // reported success and wrote nothing, and an import reported success and
+        // dropped every row. Overriding both here is what makes the two admin
+        // RPCs real for a \`.shardBy()\` table.
+        protected override async runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table, delta.indexKeys);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            const rows: ExportRow[] = [];
+
+            // \`exportShardRows\` walks in keyset batches so a large table does not
+            // materialize at once inside the generator; the admin RPC's response
+            // is a single array, so it is collected here rather than streamed.
+            for await (const row of exportShardRows(writer, schema as unknown as SchemaLike, { batchSize: args.batchSize, tables: args.tables })) {
+                rows.push(row);
+            }
+
+            return rows;
+        }
+
+        protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table, delta.indexKeys);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            // \`importShardRows\` inserts with \`allowExplicitId\`, so a source
+            // database's \`_id\`s carry across verbatim and every foreign key
+            // referencing them stays valid without a second remapping pass.
+            return importShardRows(writer, schema as unknown as SchemaLike, { rows: args.rows, startLine: args.startLine });
         }
 
         protected override async deleteRowThroughWriter(table: string, id: string): Promise<void> {

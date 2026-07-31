@@ -2264,6 +2264,24 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
     });
 
+    describe("emitShard — admin export/import", () => {
+        it("overrides runShardExport and runShardImport so the base stubs never answer", () => {
+            expect.assertions(4);
+
+            // The base `ShardDO` returns `[]` / `{inserted:{}}` for these two.
+            // Both are success-shaped — indistinguishable from a correct export
+            // of an empty shard — so without the override `lunora backup` on a
+            // sharded schema succeeded and backed up nothing, and an import
+            // reported success and dropped every row.
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+            expect(output).toContain("protected override async runShardExport(");
+            expect(output).toContain("protected override async runShardImport(");
+            expect(output).toContain("exportShardRows(writer, schema as unknown as SchemaLike");
+            expect(output).toContain("importShardRows(writer, schema as unknown as SchemaLike");
+        });
+    });
+
     describe("emitShard — feature flags", () => {
         it("emits no flag overrides when the app wires no flags", () => {
             expect.assertions(3);

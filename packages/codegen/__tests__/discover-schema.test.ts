@@ -164,6 +164,59 @@ describe("discoverSchema", () => {
         });
     });
 
+    it("rejects two search indexes whose FTS5 shadow tables collide", () => {
+        expect.assertions(3);
+
+        // `search_prompts` renders the FTS table `prompts__fts_search_prompts`,
+        // whose `_content` shadow is `prompts__fts_search_prompts_content` —
+        // exactly the table `search_prompts_content` wants. SQLite rejects the
+        // second CREATE, which aborts the shard migration and leaves every
+        // sharded table unreadable, with a 200 on the wire.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                prompts: defineTable({
+                    content: v.string(),
+                    name: v.string(),
+                    userId: v.string(),
+                })
+                    .searchIndex("search_prompts", { field: "name", filterFields: ["userId"] })
+                    .searchIndex("search_prompts_content", { field: "content", filterFields: ["userId"] }),
+            });
+        `);
+
+        let message = "";
+
+        try {
+            discoverSchema(project, schemaPath);
+        } catch (error: unknown) {
+            message = error instanceof Error ? error.message : String(error);
+        }
+
+        expect(message).toContain("search_prompts");
+        expect(message).toContain("prompts__fts_search_prompts_content");
+        expect(message).toContain("_content");
+    });
+
+    it("allows two search indexes whose names do not collide through a shadow suffix", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                prompts: defineTable({ body: v.string(), name: v.string() })
+                    .searchIndex("search_prompts", { field: "name" })
+                    .searchIndex("search_prompt_body", { field: "body" }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.find((table) => table.name === "prompts")?.searchIndexes).toHaveLength(2);
+    });
+
     it("captures searchIndex staged: true", () => {
         expect.assertions(1);
 
