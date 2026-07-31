@@ -171,6 +171,31 @@ describe("ctx-db transaction headroom", () => {
         await expect(codeOf(async () => reader.findMany("notes", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
     });
 
+    it("charges a filtered page by the rows it scanned, not the page it returned", async () => {
+        expect.assertions(1);
+
+        const seed = build({ maxWrittenRows: 100 });
+
+        for (let index = 0; index < 30; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+            await seed.insert("notes", { body: index === 0 ? "keep" : "drop", bucket: "a" });
+        }
+
+        // A filtered page skips the SQL LIMIT, so it scans the whole table to
+        // fill one row — the meter must see the scan, not the page.
+        const reader = build({ maxReadRows: 5 });
+
+        await expect(
+            codeOf(async () =>
+                reader
+                    .query("notes")
+                    .withIndex("by_bucket", (q) => q.eq("bucket", "a"))
+                    .filter((row) => row["body"] === "keep")
+                    .paginate({ numItems: 1 }),
+            ),
+        ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+    });
+
     it("leaves a transaction within its ceilings untouched", async () => {
         expect.assertions(2);
 

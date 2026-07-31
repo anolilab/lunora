@@ -676,7 +676,15 @@ const scoreGeoRow = (record: Record<string, unknown>, geo: GeoStage): { creation
  * Haversine distance (nearest-first) for `.near()`, an inclusive box test
  * (creation-time order) for `.within()`. `.take(n)` is applied AFTER the refine.
  */
-const runGeoFetch = (sql: SqlExec, tableName: string, geo: GeoStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
+const runGeoFetch = (
+    sql: SqlExec,
+    tableName: string,
+    geo: GeoStage,
+    limit: number | undefined,
+    scopeCondition?: SQL,
+    /** Reports the candidate count BEFORE the limit slice — what the read materialized. */
+    onScanned: (count: number) => void = () => undefined,
+): Record<string, unknown>[] => {
     if (!geo.near && !geo.within) {
         throw new LunoraError("INTERNAL", `geo index "${geo.indexName}" on table "${tableName}": call .near(point, radius) or .within(box)`);
     }
@@ -716,6 +724,11 @@ const runGeoFetch = (sql: SqlExec, tableName: string, geo: GeoStage, limit: numb
 
     const docs = scored.map((entry) => entry.doc);
 
+    // Every candidate was decoded and scored before the slice, so the meter must
+    // see all of them — `.take(1)` over a wide radius still materializes the
+    // whole covering set.
+    onScanned(docs.length);
+
     return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
 };
 
@@ -731,6 +744,7 @@ const runGeoTerminal = (
     stage: QueryStage,
     scopeCondition: SQL | undefined,
     limit: number | undefined,
+    onScanned: (count: number) => void = () => undefined,
 ): Record<string, unknown>[] => {
     const { geo } = stage;
 
@@ -739,7 +753,7 @@ const runGeoTerminal = (
     }
 
     const filtered = stage.inMemoryFilters.length > 0;
-    const docs = runGeoFetch(sql, tableName, geo, filtered ? undefined : limit, scopeCondition);
+    const docs = runGeoFetch(sql, tableName, geo, filtered ? undefined : limit, scopeCondition, onScanned);
 
     if (!filtered) {
         return docs;
@@ -960,7 +974,15 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
  * range stays stable under inserts/deletes inside it — the page simply grows or
  * shrinks while its boundaries hold.
  */
-const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, options: PaginationOptions, scopeCondition?: SQL): QueryPage => {
+const paginateStage = (
+    sql: SqlExec,
+    tableName: string,
+    stage: QueryStage,
+    options: PaginationOptions,
+    scopeCondition?: SQL,
+    /** Reports the PRE-filter row count — an unbounded filtered page scans past what it returns. */
+    onScanned: (count: number) => void = () => undefined,
+): QueryPage => {
     const numberItems = Math.max(0, Math.floor(options.numItems));
     const orderKeys = paginateOrderKeys(stage);
     // A cursor is always a non-empty base64 string, so truthiness distinguishes
@@ -988,6 +1010,9 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
     }
 
     const rows = runDrizzle(sql, query).toArray();
+
+    onScanned(rows.length);
+
     const docs = scanDocs(rows, stage.inMemoryFilters, filtered || bounded ? undefined : numberItems);
 
     if (bounded) {
@@ -1214,7 +1239,9 @@ const buildReader = (
             }
 
             if (stage.geo) {
-                return runGeoTerminal(sql, tableName, stage, scopeCondition, limit);
+                return runGeoTerminal(sql, tableName, stage, scopeCondition, limit, (count) => {
+                    scanned = count;
+                });
             }
 
             return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit, (count) => {
@@ -1304,7 +1331,10 @@ const buildReader = (
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             // Neither pagination branch routes through `runFetch`, so stamp
-            // here rather than relying on it.
+            // here rather than relying on it — and keep a local scan counter,
+            // since `runFetch`'s one is not in play on this path.
+            let scanned = 0;
+
             stampTerminal();
 
             if (stage.search) {
@@ -1319,9 +1349,13 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            const page = paginateStage(sql, tableName, stage, options, scopeCondition);
+            const page = paginateStage(sql, tableName, stage, options, scopeCondition, (count) => {
+                scanned = count;
+            });
 
-            meterRows(page.page.length);
+            // Filtered pagination skips the SQL `LIMIT`, so the scan can run well
+            // past the page it returns — charge whichever is larger.
+            meterRows(Math.max(scanned, page.page.length));
 
             return page;
         },
@@ -2916,6 +2950,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (global) {
                 const id = await global.insert(tableName, document, insertOptions);
 
+                // The global branch returns before `onWrite`, which is where the
+                // meter normally charges — so charge here, or a transaction could
+                // write unbounded rows to a `.global()` table without ever
+                // consuming its ceiling.
+                headroom?.recordWrite(document);
+
                 // A `.global()` (D1) write lands in another backend, but live
                 // subscriptions on this DO that read the table still need to be
                 // refreshed — so notify them via the same `broadcast` channel the
@@ -3027,6 +3067,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // re-key every row (thermos HIGH).
                     // eslint-disable-next-line no-await-in-loop -- the D1 global writer has no batch primitive; sequential per row
                     const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
+
+                    // Same reason as the single-insert global branch: this loop
+                    // never reaches `onWrite`, so it must charge the meter itself.
+                    headroom?.recordWrite(document);
 
                     broadcast({
                         key: globalId,
