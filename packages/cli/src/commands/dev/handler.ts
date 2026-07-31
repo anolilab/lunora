@@ -188,7 +188,7 @@ interface DevCommandPlan {
      * Procfile) can own worker supervision while `lunora dev` still provides
      * codegen-watch and Studio. Without it, `lunora dev` insisted on being the
      * process root, which is what blocked running the Lunora worker as one node
-     * in a larger dev graph (LUNORA_ISSUES #16).
+     * in a larger dev graph.
      */
     workerEnabled: boolean;
     workerOrigin: string;

@@ -36,7 +36,7 @@ describe("builder terminal", () => {
 });
 
 describe(".meta()", () => {
-    // LUNORA_ISSUES #6. Expressing per-procedure policy only as
+    // Expressing per-procedure policy only as
     // `.use(rateLimit("pins/create"))` makes it executable but not
     // *enumerable* — you cannot generate a rate-limit registry or docs from a
     // middleware chain. `.meta()` puts the same policy back in data.

@@ -1357,7 +1357,7 @@ export default crons;
             // v.id("users") inside a same-bucket table → `.references(…)`, with the
             // `(): AnySQLiteColumn` return annotation drizzle requires so a
             // self-referential FK is not circular in its own initializer
-            // (LUNORA_ISSUES #2 — TS7022/TS7024 under `noImplicitAny`).
+            // (TS7022/TS7024 under `noImplicitAny`).
             expect(result.generated.drizzleGlobal).toContain('ownerId: text("ownerId").references((): AnySQLiteColumn => users._id).notNull()');
             expect(result.generated.drizzleGlobal).toContain('import type { AnySQLiteColumn } from "@lunora/server/drizzle";');
         });
@@ -1606,7 +1606,7 @@ export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event
         it("emits self-referential FKs and Id-bearing json columns that typecheck under strict TS", () => {
             expect.assertions(5);
 
-            // LUNORA_ISSUES #2/#3, both found by running `tsc --noEmit` over a real
+            // Two defects, both found by running `tsc --noEmit` over a real
             // port's `_generated/`. A folder tree and a supersession chain are the
             // ordinary shapes that hit them, so they land on most non-trivial apps.
             writeFileSync(
@@ -1703,7 +1703,7 @@ export const inline = query.input({}).output(v.object({ title: v.string() })).qu
         it("renders a recovered v.from() type into the emitted api, end to end", () => {
             expect.assertions(2);
 
-            // LUNORA_ISSUES #22, and a lesson about where to test. The unit test
+            // A lesson about where to test, as much as a regression. The unit test
             // in parse-validator-from.test.ts registers the resolver itself and
             // stops at the IR, so it passed while the real pipeline produced
             // `unknown` twice over: the resolver was registered AFTER discovery
@@ -1733,7 +1733,7 @@ export const byEmail = query.input({ email: v.from(emailSchema) }).query(async (
         it("types the reference from .output(), not the handler's inferred return", () => {
             expect.assertions(4);
 
-            // LUNORA_ISSUES #40. `.output()` is what validates at runtime and what
+            // `.output()` is what validates at runtime and what
             // a reader takes as the contract, but the emitted `Return` came from
             // the handler — so a declared union whose handler currently returns
             // one arm typed as JUST that arm, leaving the other unreachable to
@@ -1768,7 +1768,7 @@ export const raw = internalQuery
         it("registers a default-exported procedure as <module>.default", () => {
             expect.assertions(2);
 
-            // LUNORA_ISSUES #27: Convex registers a module's default export as
+            // Convex registers a module's default export as
             // `internal.<module>.default`, so ported files keep that shape. Walking
             // only named exports did not merely lose the entry — the whole module
             // was ABSENT from api.ts, so the caller's error read "Property
@@ -1792,7 +1792,7 @@ export default executeTrigger;
         it("reports an exported procedure the syntactic scan could not see", () => {
             expect.assertions(3);
 
-            // LUNORA_ISSUES #39. Codegen registers an export only when its
+            // Codegen registers an export only when its
             // initializer is literally a builder chain, so a factory-produced
             // procedure exists at runtime and never reaches api.ts — silently,
             // exit 0. The error then surfaced in another package as "Property
@@ -1822,7 +1822,7 @@ export const getUserSettings = makeGetter();
         it("rejects defineTable with a non-literal field map instead of emitting a column-less table", () => {
             expect.assertions(2);
 
-            // LUNORA_ISSUES #39, the worst of the four forms: not a missing
+            // The worst of the four dropped-registration forms: not a missing
             // function but a table that silently loses EVERY column.
             // `defineTable(fieldsIdentifier)` is what anyone writes to share a
             // field map with an `.input()`, and it produced a `Doc_*` with only
@@ -1858,7 +1858,7 @@ export default schema;
         it("names the constraint and the workaround for a nested index path", () => {
             expect.assertions(3);
 
-            // LUNORA_ISSUES #5. `.index("by_state", ["state.kind"])` is a common
+            // `.index("by_state", ["state.kind"])` is a common
             // Convex idiom (discriminated-union column with an indexed `kind`).
             // It used to surface from the drizzle renderer as `drizzle index field
             // is not a valid JS identifier: "state.kind"`, which names neither the
@@ -1897,7 +1897,7 @@ export default schema;
         it("fails before emit when a schema feature's package is not declared", () => {
             expect.assertions(4);
 
-            // LUNORA_ISSUES #9: adding one `.global()` table to a project without
+            // Adding one `.global()` table to a project without
             // @lunora/d1 left codegen succeeding and `tsc` failing with
             // `Cannot find module '@lunora/d1'` inside generated code — far from
             // the `.global()` that caused it. The fixture `users` table is
@@ -1941,7 +1941,7 @@ export default schema;
         it("writes nothing when discovery fails, instead of emitting an empty api", () => {
             expect.assertions(5);
 
-            // LUNORA_ISSUES #13, the costliest defect the first large port hit.
+            // The costliest defect the first large port hit.
             // A failing codegen that still wrote `api.ts` as an empty shell turned
             // one invalid cron into ~600 "Property does not exist on
             // InternalApiTypes" errors spread across every module — each pointing
@@ -2728,7 +2728,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // depend on `@lunora/browser`, so nothing typechecks it against the
             // real `Browser` interface. A member added there and missed here
             // means generated code stops satisfying its own declared type — the
-            // defect class LUNORA_ISSUES #1 was about. This pins the surface;
+            // defect class this test exists for. It pins the surface;
             // widen it deliberately when `Browser` grows.
             const output = emitShard({ hasBrowser: true, schema: { tables: [], vectorIndexes: [] } });
 

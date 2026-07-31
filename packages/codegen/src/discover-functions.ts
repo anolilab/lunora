@@ -631,7 +631,7 @@ const unwrapHandlerReturn = (handler: Node): string => {
  * `unknown` rather than misleading, and a locally-declared type unreachable
  * from `_generated/` is structurally expanded rather than emitted as a bare
  * name that would not resolve. Returns `undefined` when nothing safe can be
- * produced, leaving the caller on `unknown` (LUNORA_ISSUES #22).
+ * produced, leaving the caller on `unknown`.
  */
 const resolveStandardSchemaType = (node: Node): string | undefined => {
     const standard = node.getType().getProperty("~standard");
@@ -1194,7 +1194,7 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
  * Only named exports used to be walked, so a module whose sole registration was
  * a default export did not merely lose that entry — the whole module was absent
  * from `api.ts`, and the caller's error read "Property '&lt;module>' does not
- * exist", pointing at a file that was entirely correct (LUNORA_ISSUES #27).
+ * exist", pointing at a file that was entirely correct.
  *
  * `export = x` is CJS and never a Lunora registration. Non-procedure defaults
  * (`export default cronJobs()`, a workflow registry) classify to `undefined`

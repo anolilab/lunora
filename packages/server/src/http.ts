@@ -23,8 +23,7 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
  * optional: it exists only when the app declared `.scheduler(...)` on the
  * generated app builder. "Receive webhook → enqueue the real work → return 200"
  * is what HTTP actions are for, so omitting it forced every app to hand-roll a
- * hop through a mutation plus a closed allow-list of target strings
- * (LUNORA_ISSUES #28).
+ * hop through a mutation plus a closed allow-list of target strings.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {

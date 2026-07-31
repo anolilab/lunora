@@ -594,7 +594,7 @@ interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream"
  * object — so the documented example (`ctx.runQuery(api.todos.list, args)`,
  * straight out of this package's own JSDoc) did not typecheck. There was no
  * user-side fix short of a cast at every call site; on the first large port it
- * was ~370 errors and the single largest class remaining (LUNORA_ISSUES #23).
+ * was ~370 errors and the single largest class remaining.
  *
  * Overloads rather than a union parameter: `Args` cannot be inferred backwards
  * through `InferArgs<A>`, so the two shapes need separate inference sites. The
@@ -851,8 +851,7 @@ interface TableReader<Row = Record<string, unknown>> {
      * That is what merged/ordered index streams need. Reimplementing Convex's
      * `convex-helpers/server/stream` in userland previously meant materialising
      * each branch with a bounded `.take(1024)` before merging, so asking a
-     * merged stream for ONE row read up to 1,024 rows per branch (LUNORA_GAPS
-     * #6). The k-way merge itself is application code and stays there — only
+     * merged stream for ONE row read up to 1,024 rows per branch. The k-way merge itself is application code and stays there — only
      * the laziness had to come from the database layer.
      *
      * Iteration pages through `.paginate()`, so it follows the same order —

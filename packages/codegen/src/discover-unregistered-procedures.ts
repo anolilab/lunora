@@ -69,7 +69,7 @@ const findingFor = (relativePath: string, exportName: string, typeName: string, 
  * Report exported bindings that ARE procedures by type but never made it into
  * `api.ts`.
  *
- * LUNORA_ISSUES #27/#39: three separate investigations traced back to the same
+ * Three separate investigations traced back to the same
  * defect. `export default someProcedure` (now registered), `export const x =
  * factory(...)`, and `defineWorkflow(config)` all produced a function that
  * exists at runtime and is absent from the generated API — with codegen exiting

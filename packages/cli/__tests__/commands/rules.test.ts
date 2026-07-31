@@ -108,7 +108,7 @@ describe("lunora rules", () => {
     it("installs at the workspace root, not the package subdirectory it was run from", () => {
         expect.assertions(4);
 
-        // LUNORA_ISSUES #20: skills belong to the repo, not to whichever package
+        // Skills belong to the repo, not to whichever package
         // you happened to `cd` into. Running from a subdirectory dropped them in
         // `<pkg>/.agents/skills`, where the coding agent never looks.
         writeFileSync(join(workdir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");

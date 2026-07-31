@@ -5,8 +5,7 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * Exercises `for await (const row of ctx.db.query(t)…)` — LUNORA_GAPS #6.
- *
+ * Exercises `for await (const row of ctx.db.query(t)…)` — *
  * Run against a real SQLite engine rather than the SQL-string fake: the whole
  * point of the iterator is that it pages through the keyset seek, and only a
  * genuine engine gets the cursor boundaries right.
@@ -108,7 +107,7 @@ describe("ctx.db reader — lazy iteration", () => {
 
         // This is the whole reason the iterator exists. A userland merged-index
         // stream needs the HEAD of each branch; materialising with `.take(1024)`
-        // meant one row cost 1,024 reads per branch (LUNORA_GAPS #6).
+        // meant one row cost 1,024 reads per branch.
         const database = setupWriter();
 
         await seed(database, 1000);

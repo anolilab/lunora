@@ -29,7 +29,7 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     // one. Registry manifests pin siblings with `workspace:*` so development
     // resolves to the local checkout, but that protocol is meaningless in a
     // consumer's package.json — printing it raw made the plan look like it was
-    // about to break `pnpm install` (LUNORA_ISSUES #26).
+    // about to break `pnpm install`.
     // `resolveDepRange` resolves the CLI's dist-tag for every bare `workspace:`
     // specifier, so it is memoised across the whole plan rather than re-resolved
     // per dependency line.

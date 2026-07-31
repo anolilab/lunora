@@ -306,7 +306,7 @@ describe("emitApi", () => {
     it("imports FunctionReference only when the body references it", () => {
         expect.assertions(3);
 
-        // LUNORA_ISSUES #1/#13: the import used to be unconditional, so a project
+        // The import used to be unconditional, so a project
         // with no discovered functions — including one where discovery had failed
         // and emitted an empty api — produced `_generated/api.ts` that fails
         // `tsc --noEmit` under `noUnusedLocals` with TS6133. That error points at

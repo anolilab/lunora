@@ -77,7 +77,7 @@ const HEURISTIC_SECRET_KINDS: ReadonlySet<string> = new Set(["hex_secret", "high
 /**
  * Names that make a secret-shaped literal actually look like a secret. Used to
  * gate the heuristic kinds: "long hex string" on its own has a false-positive
- * rate near 1 (LUNORA_ISSUES #37 — ten findings, all of them the W3C Trace
+ * rate near 1 (ten findings, all of them the W3C Trace
  * Context spec's example trace ids that every traceparent implementation tests
  * against).
  */

@@ -138,7 +138,7 @@ const check = (): void => {
 
     type Check16 = Assert<Equal<Awaited<typeof ranBadArgs>, number>>;
 
-    // LUNORA_ISSUES #23: `_generated/api.ts` types every entry as a
+    // `_generated/api.ts` types every entry as a
     // `FunctionReference` — the CLIENT-side handle — but `ctx.run*` only
     // accepted `RegisteredQuery`, the server-side registration object. So the
     // documented example (`ctx.runQuery(api.todos.list, args)`, from this

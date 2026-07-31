@@ -1,6 +1,6 @@
 // Strict typecheck of `lunora/_generated/**` only.
 //
-// LUNORA_ISSUES #1: codegen emitted output that a consumer's own strict config
+// Codegen emitted output that a consumer's own strict config
 // rejected — an unused `FunctionReference` import (TS6133), a self-referential
 // Drizzle FK TypeScript could not infer through (TS7022/TS7024), an `Id<…>`
 // referenced without an import (TS2304), and a `Storage | undefined` fallback

@@ -174,7 +174,7 @@ const validatorToType = (validator: ValidatorIR): string => {
         case "from": {
             // Recovered from the wrapped Standard Schema's `~standard.types.output`
             // by `resolveStandardSchemaType`; `unknown` when it could not be
-            // rendered safely (LUNORA_ISSUES #22). Deliberately NOT in
+            // rendered safely. Deliberately NOT in
             // `SCALAR_TYPE_BY_KIND` — that map short-circuits before this switch,
             // which silently made the recovered type unreachable.
             return validator.tsType ?? "unknown";
@@ -634,7 +634,7 @@ const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =
  * type. `.output()` is what validates at runtime and what a reader takes as the
  * contract, so a caller must be able to handle every branch it permits.
  *
- * Two things went wrong while the handler won (LUNORA_ISSUES #40). A function
+ * Two things went wrong while the handler won. A function
  * declaring a two-arm `v.union` whose handler currently returns only one arm
  * typed as JUST that arm, so the other was unreachable to every consumer even
  * though the validator permits it and the runtime emits it the moment the

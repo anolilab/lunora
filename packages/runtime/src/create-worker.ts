@@ -99,7 +99,7 @@ interface HttpActionContext {
      * named by string and resolved shard-side — and on an endpoint reachable
      * unauthenticated (a platform-signed webhook) a free-form target string is a
      * "call any internal function" primitive, forcing a closed allow-list that
-     * needs an entry per target (LUNORA_ISSUES #28).
+     * needs an entry per target.
      *
      * Talking to the scheduler DO directly avoids all of it. This is no more
      * privileged than the `run*` members beside it: the reference is a literal

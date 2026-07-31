@@ -373,7 +373,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Recovering the type needs the checker plus the generated-file
     // renderability guards, both of which live in `discover-functions`;
     // registered here rather than imported by the parser, which would be a
-    // cycle (LUNORA_ISSUES #22).
+    // cycle.
     setStandardTypeResolver(resolveStandardSchemaType);
 
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
@@ -513,7 +513,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // A binding whose TYPE is a registered procedure but which never reached
     // `api.ts` was dropped by the syntactic scan. Reported alongside the
     // advisor's findings so it travels the same channel to the terminal and the
-    // studio (LUNORA_ISSUES #27/#39).
+    // studio.
     const advisories =
         advisorContext === undefined
             ? []
@@ -632,7 +632,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     // Fail before emit when the schema needs an add-on that is not installed.
     // Emitting first would push the failure into `tsc`, reported inside a
-    // generated file the user did not write (LUNORA_ISSUES #9).
+    // generated file the user did not write.
     assertRequiredPackages(schema, declaredDependencies);
 
     // Boundary between the discovery phase (all `discover*` passes + the inline

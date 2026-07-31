@@ -14,7 +14,7 @@ import type { Lint } from "../../types";
  * Split out from `filter_without_index` because that rule fires on a spectrum —
  * some of its findings are fine, some want an index, and the reader has to
  * decide. Folding an always-wrong case into a sometimes-wrong rule buries it
- * (LUNORA_ISSUES #41: found while reviewing eight `filter_without_index`
+ * (found while reviewing eight `filter_without_index`
  * findings, one of which was this and strictly worse than the rest).
  *
  * Runs only when the codegen feeder supplies query evidence; a runtime caller

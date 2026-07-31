@@ -104,7 +104,7 @@ describe("cronJobs", () => {
     it("points a daily-shaped interval at crons.daily instead of restating the range", () => {
         expect.assertions(6);
 
-        // LUNORA_ISSUES #14. `{ hours: 24 }` is the ordinary Convex idiom for
+        // `{ hours: 24 }` is the ordinary Convex idiom for
         // "once a day"; the old message only said "must be an integer in
         // [1, 23]", so the natural next guess is `{ days: 1 }` — which the
         // "exactly one of" message then rejected without naming the fix either.
@@ -127,7 +127,7 @@ describe("cronJobs", () => {
     it("registers an hourly job at a chosen minute past the hour", () => {
         expect.assertions(2);
 
-        // LUNORA_ISSUES #19: daily/weekly/monthly existed but hourly did not, so
+        // Daily/weekly/monthly existed but hourly did not, so
         // hourly jobs had to go through `interval({ hours: 1 })` — which also
         // pins them to :00, where they stampede.
         const crons = cronJobs();

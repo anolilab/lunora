@@ -346,7 +346,7 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     });
 });
 
-describe("session reuse (LUNORA_ISSUES #38)", () => {
+describe("session reuse", () => {
     /**
      * A browser whose `close()` is observable, so a test can assert the session
      * is (or is not) torn down — that distinction IS the feature.

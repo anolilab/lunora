@@ -290,8 +290,7 @@ export interface Browser {
      * `navigate`, then `click`, then `extract` as three separate action
      * invocations, and the page has to survive between them. With only the
      * per-call lifecycle each step got a fresh browser, so `click` ran against
-     * a blank page — silently, which is the worst shape for that bug
-     * (LUNORA_ISSUES #38).
+     * a blank page — silently, which is the worst shape for that bug.
      */
     connect: <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, options?: { close?: boolean }) => Promise<T>;
 

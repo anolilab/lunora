@@ -47,8 +47,7 @@ const filterWithoutIndex: Lint = {
             // and a query runs inside ONE of them, so this reads a single
             // tenant's rows — not the table. Reporting it identically to a scan
             // of a `.global()` D1 table (which genuinely is unbounded) makes the
-            // two cases that need very different responses look the same
-            // (LUNORA_ISSUES #41).
+            // two cases that need very different responses look the same.
             if (shardKind === "shardBy") {
                 findings.push(
                     emit(filterWithoutIndex, {

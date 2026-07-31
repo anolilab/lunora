@@ -52,7 +52,7 @@ export interface ValidatorIR {
      * rendered as TS source. Recovered through the type checker from
      * `~standard.types.output`, mirroring the runtime's `InferStandardOutput`.
      * Absent when it could not be recovered safely, in which case the emitted
-     * type falls back to `unknown` (LUNORA_ISSUES #22).
+     * type falls back to `unknown`.
      */
     tsType?: string;
     valueType?: ValidatorIR;
@@ -312,8 +312,7 @@ export interface FunctionIR {
      * Takes precedence over {@link FunctionIR.returnType} (the handler's
      * inferred type) for the emitted `FunctionReference`. `.output()` is what
      * validates at runtime and what a reader takes as the contract, so the two
-     * must agree — see the emit-side note for what went wrong when they did not
-     * (LUNORA_ISSUES #40).
+     * must agree — see the emit-side note for what went wrong when they did not.
      */
     output?: ValidatorIR;
 

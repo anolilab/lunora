@@ -53,7 +53,7 @@ const isFoldedConcatenationOperand = (node: TsNode): boolean => {
  * Test files, where a secret-*shaped* literal is nearly always a fixture.
  *
  * Only the heuristic kinds are suppressed here — a real `sk_live_…` in a test is
- * still a leak and still reported (LUNORA_ISSUES #37).
+ * still a leak and still reported.
  */
 const TEST_DIRECTORY_RE = /(?:^|\/)__tests__\//u;
 

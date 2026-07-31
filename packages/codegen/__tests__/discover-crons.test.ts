@@ -60,7 +60,7 @@ describe("discover-crons", () => {
     it("lifts an hourly registration", () => {
         expect.assertions(1);
 
-        // LUNORA_ISSUES #19 — `hourly` is discovered off CRON_SCHEDULE_KINDS like
+        // `hourly` is discovered off CRON_SCHEDULE_KINDS like
         // every other ergonomic method, so this also guards that the runtime set
         // and the compiler stay in step when a kind is added.
         writeSource(

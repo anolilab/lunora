@@ -56,7 +56,7 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
  * `Cannot find module '@lunora/d1'` reported inside `_generated/app.ts` — a
  * file the user did not write, several steps from the `.global()` that caused
  * it. Adding one `.global()` table to a project with no prior global tables is
- * enough to trigger it (LUNORA_ISSUES #9).
+ * enough to trigger it.
  *
  * Throws listing every missing package at once, so a project adding both
  * `.global()` and `.vectorize()` learns about both in one run.

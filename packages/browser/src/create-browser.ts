@@ -500,7 +500,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     /**
      * Re-attach to an existing session. The browser is NOT closed on the way
      * out unless the caller asks — keeping the page alive across separate
-     * action invocations is the entire point (LUNORA_ISSUES #38).
+     * action invocations is the entire point.
      */
     const connect = async <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, connectOptions: { close?: boolean } = {}): Promise<T> => {
         const browser = await requirePeer(options.connect, "connect")(options.binding, sessionId);

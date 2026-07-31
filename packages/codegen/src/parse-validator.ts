@@ -179,8 +179,8 @@ const renderLiteralSource = (node: Node | undefined): string => {
  *
  * Without this, every argument behind a `v.from()` typed as `unknown` in the
  * generated api, which broke `ctx.run*` calls, made handler args implicitly
- * `any` under `noImplicitAny`, and gave generated clients untyped arguments
- * (LUNORA_ISSUES #22). Falls back to a bare `from` node when unrecoverable, so
+ * `any` under `noImplicitAny`, and gave generated clients untyped arguments.
+ * Falls back to a bare `from` node when unrecoverable, so
  * the emitted type is `unknown` exactly as before.
  */
 const parseFrom = (schemaArgument: Node | undefined): ValidatorIR => {

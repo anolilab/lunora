@@ -437,7 +437,7 @@ async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<stri
  * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
  * validates only that the value is a string. So every Convex id — including
  * every `v.id()` foreign key already pointing at one — carries across
- * unchanged, and a plain single-pass import is correct (LUNORA_ISSUES #8).
+ * unchanged, and a plain single-pass import is correct.
  */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* readConvexExport(tables: ReadonlyArray<{ file: string; table: string }>, logger: Logger): AsyncGenerator<string> {

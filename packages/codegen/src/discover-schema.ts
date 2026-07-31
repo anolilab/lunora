@@ -216,7 +216,7 @@ const indexNameOf = (nameArgument: Node | undefined): string =>
  *
  * Without this the failure surfaced from the drizzle renderer as `drizzle index
  * field is not a valid JS identifier: "state.kind"`, which names neither the
- * real constraint nor what to do instead (LUNORA_ISSUES #5).
+ * real constraint nor what to do instead.
  */
 const assertTopLevelIndexField = (element: TsNode, field: string, indexName: string): void => {
     if (!field.includes(".")) {
@@ -661,8 +661,8 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
                 // field map between the schema and an `.input()`. Codegen reads the
                 // shape syntactically, so a non-literal argument silently yielded a
                 // table with NO columns — `Doc_<table>` came out with `_id` and
-                // `_creationTime` and nothing else, with no error anywhere
-                // (LUNORA_ISSUES #39). A column-less table is never intended.
+                // `_creationTime` and nothing else, with no error anywhere.
+                // A column-less table is never intended.
                 throw diagnosticAt(
                     first,
                     `table "${name}" calls defineTable(${JSON.stringify(first.getText())}), but codegen reads the field map syntactically and can only read an object literal. ` +

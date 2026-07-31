@@ -71,7 +71,7 @@ describe("discover-workflows", () => {
     it("resolves a config passed through a local const", () => {
         expect.assertions(3);
 
-        // LUNORA_ISSUES #36: the scan matched only an inline object literal, so
+        // The scan matched only an inline object literal, so
         // passing a typed `WorkflowConfig` variable was rejected — but that is
         // exactly what you reach for once the handlers grow, since putting three
         // 100-line handlers in the registry file is worse code.

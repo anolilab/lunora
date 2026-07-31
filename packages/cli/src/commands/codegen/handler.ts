@@ -121,7 +121,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     // An ERROR advisory says something is broken, not merely untidy — the one
     // that prompted this read "the call throws at runtime". Exiting 0 on those
     // meant three workflows could deploy and fail on first use with a green
-    // build (LUNORA_ISSUES #35). WARN and INFO stay non-blocking.
+    // build. WARN and INFO stay non-blocking.
     const errorAdvisories = commandResult.advisories.filter((advisory) => advisory.level === "ERROR");
 
     if (errorAdvisories.length > 0 && strictAdvisories) {

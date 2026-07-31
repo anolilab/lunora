@@ -59,7 +59,7 @@ describe("v.from() in codegen", () => {
     it("recovers the wrapped schema's inferred type from ~standard.types.output", () => {
         expect.assertions(2);
 
-        // LUNORA_ISSUES #22: `v.from()` is the advertised Standard Schema bridge
+        // `v.from()` is the advertised Standard Schema bridge
         // and works at runtime, but codegen typed every argument behind one as
         // `unknown` — which broke `ctx.run*` calls, made handler args implicitly
         // `any` under noImplicitAny, and gave generated clients untyped

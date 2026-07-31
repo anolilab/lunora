@@ -235,7 +235,7 @@ describe("lunora data-transfer", () => {
         it("imports a Convex export directory, preserving ids and every foreign key", async () => {
             expect.assertions(4);
 
-            // LUNORA_ISSUES #8 asked for a two-pass import: insert with FKs
+            // A two-pass import looks necessary here: insert with FKs
             // nulled, record `convexId -> lunoraId`, then patch the FKs back —
             // needed because Convex ids are opaque and a naive per-table import
             // would break every `v.id()` column, with self-referential cycles

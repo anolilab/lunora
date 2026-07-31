@@ -104,7 +104,7 @@ describe("shipped registry items", () => {
     it("keeps a project's existing binding instead of adding a second under the same name", async () => {
         expect.assertions(4);
 
-        // LUNORA_ISSUES #26: `auth` contributes a `d1_databases` entry bound to
+        // `auth` contributes a `d1_databases` entry bound to
         // DB with placeholder ids. Structural dedupe alone let that sit ALONGSIDE
         // a real DB entry, so wrangler saw two bindings named DB and the app
         // could deploy against `replace-me-db`.

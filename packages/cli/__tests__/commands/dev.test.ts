@@ -45,7 +45,7 @@ describe("lunora dev", () => {
         it("plans an attached run with --no-worker, keeping codegen + studio", () => {
             expect.assertions(4);
 
-            // LUNORA_ISSUES #16: `lunora dev` assumed it owned the dev process,
+            // `lunora dev` assumed it owned the dev process,
             // so a repo whose task runner already supervises seven workers had
             // no way to run the Lunora one as a node in that graph. Attached
             // mode keeps the parts only Lunora can provide and drops the spawn.

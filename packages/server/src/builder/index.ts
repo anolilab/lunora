@@ -46,7 +46,7 @@ interface BuilderState {
  * Seed `ctx.meta` with the procedure's declared `.meta(...)` payload so
  * middleware can read the policy it is supposed to enforce
  * (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each `.use()`
- * site — see the `meta` builder member (LUNORA_ISSUES #6).
+ * site — see the `meta` builder member.
  *
  * A procedure without `.meta(...)` gets the context back untouched, so the
  * no-meta path is byte-identical.

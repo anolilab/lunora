@@ -29,7 +29,7 @@ describe("filter_without_index storage-tier awareness", () => {
     it("drops a shardBy table's unindexed filter to INFO and says it is already scoped", () => {
         expect.assertions(3);
 
-        // LUNORA_ISSUES #41: a `.shardBy()` query runs inside ONE Durable Object,
+        // A `.shardBy()` query runs inside ONE Durable Object,
         // so it reads one tenant's rows, not the table. Reporting it identically
         // to an unbounded D1 scan makes the two cases that need very different
         // responses look the same in the output.

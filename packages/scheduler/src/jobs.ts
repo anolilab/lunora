@@ -55,7 +55,7 @@ interface DailySchedule {
  *
  * `crons.interval({ hours: 1 })` compiles to the same expression, but the
  * asymmetry of having `daily`/`weekly`/`monthly` and no `hourly` is its own
- * papercut (LUNORA_ISSUES #19) — and unlike the interval form this one lets
+ * papercut — and unlike the interval form this one lets
  * the caller place the job off the hour boundary, which is how you stop a
  * dozen hourly jobs from stampeding at `:00`.
  */
@@ -123,8 +123,7 @@ const HOURS_PER_DAY = 24;
  * `{ hours: 24 }` is the ordinary Convex idiom for "once a day", and the
  * natural next guess once it is rejected — `{ days: 1 }` — is not a unit
  * either. An error that only restates the constraint therefore sends people in
- * a circle, so both messages name the method they actually want
- * (LUNORA_ISSUES #14).
+ * a circle, so both messages name the method they actually want.
  */
 const DAILY_SCHEDULE_HINT =
     " For a daily or longer schedule use crons.daily(name, { hourUTC, minuteUTC }, …), crons.weekly(name, { dayOfWeek, hourUTC, minuteUTC }, …) or crons.monthly(name, { day, hourUTC, minuteUTC }, …).";

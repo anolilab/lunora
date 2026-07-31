@@ -1405,7 +1405,7 @@ describe("createWorker — HTTP actions", () => {
     it("c.var.lunora.scheduler.runAfter reaches the scheduler DO", async () => {
         expect.assertions(5);
 
-        // LUNORA_ISSUES #28: "receive webhook → enqueue the real work → return
+        // "receive webhook → enqueue the real work → return
         // 200" is the most common HTTP-action shape, and HttpActionCtx had no
         // scheduler. Apps hopped through a mutation and, because a function
         // reference cannot cross the RPC boundary, named targets by string —

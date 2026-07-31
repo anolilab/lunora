@@ -140,7 +140,7 @@ describe("discoverSecrets", () => {
         expect(discoverSecrets(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
-    // LUNORA_ISSUES #37: `hardcoded_secret` produced ten findings on the first
+    // `hardcoded_secret` produced ten findings on the first
     // large port and all ten were the W3C Trace Context specification's example
     // trace ids in `lib/traceparent.test.ts` — the canonical values every
     // traceparent implementation tests against. Signal-to-noise was zero, and

@@ -275,7 +275,7 @@ const bindingNameOf = (entry: unknown): string | undefined => {
  * Structural dedupe alone let a manifest's placeholder sit ALONGSIDE a real
  * entry under the same name: two `DB` bindings, one pointing at
  * `replace-me-db`. Wrangler then picks one and the app can deploy against a
- * database that does not exist (LUNORA_ISSUES #26). The project's entry wins,
+ * database that does not exist. The project's entry wins,
  * and the skip is reported rather than silent.
  */
 const freshArrayEntries = (existing: ReadonlyArray<unknown>, incoming: ReadonlyArray<unknown>, path: string, logger: Logger): unknown[] => {

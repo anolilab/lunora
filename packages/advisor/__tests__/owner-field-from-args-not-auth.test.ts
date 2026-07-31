@@ -32,7 +32,7 @@ describe("owner_field_from_args_not_auth", () => {
     it("drops an internal procedure's write to INFO and redirects it at the public callers", () => {
         expect.assertions(5);
 
-        // LUNORA_ISSUES #37. The first large port had 9 of these and all 9 were
+        // The first large port had 9 of these and all 9 were
         // `internalMutation`. An internal procedure is not reachable by a caller
         // — that is the entire point of the visibility split — so "any caller can
         // act as any user" is false there, and taking the subject from `args` is

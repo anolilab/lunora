@@ -130,7 +130,7 @@ const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] =
  * Passing a typed `WorkflowConfig` variable is the natural thing to reach for
  * once the handlers grow — putting three 100-line handlers in the registry file
  * is worse code — so the scan resolves `const config = { … };
- * defineWorkflow(config)` rather than rejecting it (LUNORA_ISSUES #36).
+ * defineWorkflow(config)` rather than rejecting it.
  *
  * Deliberately one hop and local-only: the point is to read `name` and the
  * `ctx.step.*` calls statically, and a value assembled across modules or by a

@@ -78,7 +78,7 @@ const PRIMARY_KEY_PREDICATE_RE = /\b[A-Za-z_$][\w$]*\._id\s*===?[^=]/u;
  * `.query("user").filter((d) => d._id === args.userId).first()` is a full scan
  * for a row that is directly addressable by `ctx.db.get` — always wrong, never
  * a judgement call, and invisible to `filter_without_index`, which sees only
- * that a filter has no index (LUNORA_ISSUES #41).
+ * that a filter has no index.
  */
 const filtersPrimaryKeyOf = (queryCall: CallExpression): boolean => {
     let node: TsNode = queryCall;
