@@ -1767,6 +1767,7 @@ interface WranglerWorkflowEntry {
     binding?: string;
     class_name?: string;
     name?: string;
+    script_name?: string;
 }
 ```
 

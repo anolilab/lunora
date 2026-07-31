@@ -64,6 +64,8 @@ interface WranglerWorkflowEntry {
     binding?: string;
     class_name?: string;
     name?: string;
+    /** Present when the class lives in ANOTHER Worker — then it is that script's to export. */
+    script_name?: string;
 }
 
 /** A wrangler `queues.producers[]` entry — a `Queue` binding sending to `queue`. */
@@ -1391,7 +1393,10 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
     }
 
     for (const entry of wrangler.workflows ?? []) {
-        if (typeof entry?.class_name === "string" && entry.class_name.length > 0) {
+        // Same `script_name` carve-out as the durable-object bindings above:
+        // Cloudflare lets a workflow binding target a class in ANOTHER Worker,
+        // which that script exports, not this entry.
+        if (typeof entry?.class_name === "string" && entry.class_name.length > 0 && entry.script_name === undefined) {
             declared.push({ className: entry.class_name, label: "workflows" });
         }
     }

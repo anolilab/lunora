@@ -170,12 +170,25 @@ const CLI_COMMANDS = [
 ];
 
 /**
- * Every registered command's name. A superset of {@link COMMANDS}, which is the
- * user-facing list driving "did you mean …?" suggestions — `advisor` and
- * `introspect` are registered but deliberately absent from it. Exported so the
- * help-rendering guard covers what is actually reachable, not what is advertised.
+ * Every command actually handed to cerebro — the project's own, plus the two
+ * opt-in built-ins. (`help` and the `-h`/`--help` flag are auto-registered by
+ * cerebro itself, so they are not here.)
+ *
+ * One collection, because the brace-escaping pass and the help-rendering guard
+ * must not disagree about what is registered: escaping `CLI_COMMANDS` alone
+ * would leave `version`/`completion` unescaped, and deriving the guard's names
+ * from it would leave them untested.
  */
-const REGISTERED_COMMAND_NAMES: ReadonlyArray<string> = CLI_COMMANDS.map((command) => command.name);
+const REGISTERED_COMMANDS: ReadonlyArray<Command> = [...CLI_COMMANDS, versionCommand, completionCommand];
+
+/**
+ * Every registered command's name. A superset of {@link COMMANDS}, which is the
+ * user-facing list driving "did you mean …?" suggestions — `advisor`,
+ * `introspect`, `version` and `completion` are all reachable but deliberately
+ * absent from it. Exported so the help-rendering guard covers what is actually
+ * reachable, not what is advertised.
+ */
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string> = REGISTERED_COMMANDS.map((command) => command.name);
 
 /**
  * Escape `{` / `}` so cerebro's help renderer prints them literally.
@@ -271,14 +284,9 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         packageVersion: VERSION,
     });
 
-    for (const command of CLI_COMMANDS) {
+    for (const command of REGISTERED_COMMANDS) {
         cli.addCommand(escapeCommandHelpBraces(command));
     }
-
-    // cerebro auto-registers `help` + the `-h`/`--help` flag; `version` and
-    // `completion` (shell autocompletions via @bomb.sh/tab) are opt-in.
-    cli.addCommand(versionCommand);
-    cli.addCommand(completionCommand);
 
     return { cli, exitCode };
 };

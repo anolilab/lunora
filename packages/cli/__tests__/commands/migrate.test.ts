@@ -317,6 +317,25 @@ export const schema = defineSchema({
             expect(content).not.toContain('from "@lunora/server"');
         });
 
+        it("rewrites an existing import written under the other specifier", async () => {
+            expect.assertions(3);
+
+            // A file scaffolded before the project adopted `lunorash` carries the
+            // scoped import. Matching only the specifier we would emit prepended a
+            // SECOND `defineMigration` import beside it, and a duplicate local
+            // binding does not compile.
+            await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "first", table: "messages" });
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "1.0.0-alpha.130" }, name: "app" }), "utf8");
+
+            const result = await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "second", table: "messages" });
+            const content = readFileSync(result.file, "utf8");
+
+            expect(content.match(/import \{ defineMigration \}/gu)).toHaveLength(1);
+            expect(content).toContain('from "lunorash/server"');
+            expect(content).not.toContain('from "@lunora/server"');
+        });
+
         it("appends a second migration without duplicating the import", async () => {
             expect.hasAssertions();
 

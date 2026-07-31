@@ -10,11 +10,18 @@
  * unpatched output**, since a deploy pipeline has no reason to run the project's
  * codegen script first.
  *
- * `postcodegen` is the package-manager-native name: `npm`/`pnpm`/`yarn`/`bun` all
- * run `postX` after `run X` automatically, so a project that invokes `lunora
- * codegen` through its own `codegen` script already gets the hook for free, and
- * this makes the in-process path agree with it rather than inventing a
- * Lunora-specific config key.
+ * `postcodegen` is the package-manager-native name: npm, pnpm and bun all run
+ * `postX` after `run X` automatically, so a project invoking `lunora codegen`
+ * through its own `codegen` script gets the hook for free there, and this makes
+ * the in-process path agree with it rather than inventing a Lunora-specific
+ * config key.
+ *
+ * Yarn Berry (2+) is the exception: it deliberately dropped automatic pre/post
+ * hooks for user-defined scripts, so `yarn codegen` will NOT run `postcodegen`.
+ * That does not affect this function — `prepare`/`deploy` invoke the script
+ * directly, on every manager — but a Yarn project that also wants the hook on
+ * its own `yarn codegen` has to chain it explicitly.
+ * @see {@link https://yarnpkg.com/advanced/lifecycle-scripts}
  *
  * A missing script is not an error — it is the common case.
  */
@@ -24,7 +31,7 @@ import { join } from "@visulima/path";
 
 import { detectPackageManager, runScriptArgsFor } from "./detect-package-manager";
 import type { Logger } from "./logger";
-import type { Spawner } from "./spawn";
+import type { Spawner, SpawnResult } from "./spawn";
 import { defaultSpawner } from "./spawn";
 
 /** The script name a project declares to chain work onto codegen. */
@@ -93,7 +100,18 @@ const runPostCodegenHook = async (options: { cwd: string; logger: Logger; spawne
 
     logger.info(`running \`${POST_CODEGEN_SCRIPT}\``);
 
-    const result = await (options.spawner ?? defaultSpawner)({ args: exec.args, command: exec.command, cwd });
+    let result: SpawnResult;
+
+    try {
+        result = await (options.spawner ?? defaultSpawner)({ args: exec.args, command: exec.command, cwd });
+    } catch (error: unknown) {
+        // A spawner REJECTS when the binary is missing or the process cannot be
+        // started at all — distinct from a non-zero exit. Only the latter was
+        // converted to an error, so a rejection escaped `runPrepareCommand`
+        // as an unhandled exception instead of the `code: 1` result the caller
+        // is written to expect.
+        return { error: `\`${POST_CODEGEN_SCRIPT}\` failed to start: ${error instanceof Error ? error.message : String(error)}`, ran: true };
+    }
 
     if (result.code !== 0) {
         return { error: `\`${POST_CODEGEN_SCRIPT}\` exited ${String(result.code)}`, ran: true };

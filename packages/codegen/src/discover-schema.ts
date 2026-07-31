@@ -668,11 +668,21 @@ const assertNoFtsShadowCollision = (expression: Expression, table: string, searc
                 continue;
             }
 
+            // The consequence differs by suffix, so the message must too.
+            // SQLite's five shadow names are RESERVED: the second `CREATE
+            // VIRTUAL TABLE` is rejected, which aborts the shard migration.
+            // `__vocab` is Lunora's own and is created `IF NOT EXISTS`, so
+            // nothing is rejected — the second index binds to the first's vocab
+            // table and returns wrong results with no error at all.
+            const consequence =
+                suffix === "__vocab"
+                    ? `the \`fts5vocab\` companion for "${shadowed}" is created \`IF NOT EXISTS\`, so it silently resolves to "${index.name}"'s — the second index then reads the wrong vocabulary and returns wrong results, with no error`
+                    : `creating "${shadowed}" is rejected (\`object name reserved for internal use: SQLITE_ERROR\`), which aborts the shard migration and leaves every sharded table unreadable`;
+
             throw diagnosticAt(
                 expression,
                 `table "${table}" declares search indexes "${index.name}" and "${shadowed}", whose generated FTS5 tables collide: ` +
-                    `"${index.name}" reserves "${table}__fts_${shadowed}" as its own "${suffix}" shadow table, so creating "${shadowed}" fails with ` +
-                    `\`object name reserved for internal use: SQLITE_ERROR\` — which aborts the shard migration and leaves every sharded table unreadable. ` +
+                    `"${index.name}" already owns "${table}__fts_${shadowed}" as its "${suffix}" companion, so ${consequence}. ` +
                     `Rename one of them so neither ends with another's name plus ${FTS5_SHADOW_SUFFIXES.join(", ")}.`,
             );
         }

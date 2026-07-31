@@ -113,9 +113,9 @@ does not make a post-step part of a deploy:
 "codegen": "lunora codegen && pnpm run patch-generated"
 ```
 
-Declare it as `postcodegen` instead. Every package manager runs `postX` after
-`run X` automatically, so it still fires for your own script, and `prepare` /
-`deploy` invoke it too:
+Declare it as `postcodegen` instead. `prepare` and `deploy` invoke it directly,
+on every package manager — and npm, pnpm and bun also run `postX` after `run X`
+automatically, so it fires for your own `codegen` script there too:
 
 ```jsonc
 {
@@ -128,6 +128,11 @@ Declare it as `postcodegen` instead. Every package manager runs `postX` after
 
 A non-zero exit fails the run, so a deploy cannot ship output your post-step
 rejected.
+
+<Callout type="warn">
+    **Yarn Berry (2+) does not run automatic `postX` hooks.** `lunora prepare` and `lunora deploy` still invoke `postcodegen` themselves — that part is the
+    CLI's, not the package manager's — but `yarn codegen` will not. Chain it explicitly there: `"codegen": "lunora codegen && yarn postcodegen"`.
+</Callout>
 
 ## See also
 

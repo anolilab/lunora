@@ -228,6 +228,9 @@ const RESERVED_WORDS = new Set([
  * other generated import: umbrella when the project declares it, scoped
  * otherwise.
  */
+/** An already-scaffolded `defineMigration` import, under EITHER supported specifier. */
+const EXISTING_DEFINE_MIGRATION_IMPORT_RE = /^import\s*\{\s*defineMigration\s*\}\s*from\s*["'](?:@lunora\/server|lunorash\/server)["'][^\n]*$/mu;
+
 const defineMigrationImportFor = (projectRoot: string): string => {
     const dependencies = readPackageDependencies(projectRoot);
     const useUmbrella = dependencies?.has("lunorash") ?? false;
@@ -405,7 +408,14 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
 
     if (content.trim() === "") {
         content = `${defineMigrationImport}\n`;
-    } else if (!content.includes(defineMigrationImport)) {
+    } else if (EXISTING_DEFINE_MIGRATION_IMPORT_RE.test(content)) {
+        // An existing scaffold may carry the OTHER specifier — a file written
+        // before the project adopted the `lunorash` umbrella (or after it
+        // dropped it). Matching only the specifier we would emit meant
+        // prepending a second `defineMigration` import beside the first, and a
+        // duplicate local binding does not compile.
+        content = content.replace(EXISTING_DEFINE_MIGRATION_IMPORT_RE, defineMigrationImport);
+    } else {
         content = `${defineMigrationImport}\n${content}`;
     }
 

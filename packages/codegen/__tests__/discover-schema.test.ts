@@ -200,7 +200,7 @@ describe("discoverSchema", () => {
     });
 
     it("rejects a collision with the fts5vocab companion, which fails SILENTLY at runtime", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // `__vocab` is created with `IF NOT EXISTS`, so unlike the reserved
         // SQLite shadows this does not error — the second index binds to the
@@ -224,7 +224,10 @@ describe("discoverSchema", () => {
         }
 
         expect(message).toContain("search_prompts__vocab");
-        expect(message).toContain("__vocab");
+        // The message must NOT promise a SQLITE_ERROR here — `IF NOT EXISTS`
+        // means this collision is silent, which is the whole reason it is worse.
+        expect(message).toContain("with no error");
+        expect(message).not.toContain("SQLITE_ERROR");
     });
 
     it("allows two search indexes whose names do not collide through a shadow suffix", () => {
