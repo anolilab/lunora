@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { COMMANDS, runCli, VERSION } from "../src/cli";
+import { COMMANDS, REGISTERED_COMMAND_NAMES, runCli, VERSION } from "../src/cli";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
@@ -63,6 +63,23 @@ describe("lunora CLI entry", () => {
         for (const command of COMMANDS) {
             expect(output).toContain(command);
         }
+    });
+
+    it.each(REGISTERED_COMMAND_NAMES)("`lunora %s --help` renders and exits 0", async (command) => {
+        expect.assertions(2);
+
+        // `import --help` and `run --help` both died with "Found extraneous } in
+        // template literal": cerebro renders help text through chalk's
+        // tagged-template parser, which reads `{...}` as style syntax, so a
+        // literal brace in ANY description hard-errors that command's help.
+        // The failure is invisible until someone asks for help on that specific
+        // command, which is exactly when they can least afford it — so every
+        // command's help is rendered here rather than spot-checking the two.
+        const { lines, logger } = captureLogger();
+        const code = await runCli({ argv: [command, "--help"], logger });
+
+        expect(code).toBe(0);
+        expect(`${lines.join("\n")}\n${stdout}${stderr}`).not.toContain("extraneous");
     });
 
     it("no args prints usage and exits 0", async () => {

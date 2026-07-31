@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
+import type { Command } from "@visulima/cerebro";
 import { createCerebro } from "@visulima/cerebro";
 import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
@@ -168,6 +169,67 @@ const CLI_COMMANDS = [
     mcpCommand,
 ];
 
+/**
+ * Every registered command's name. A superset of {@link COMMANDS}, which is the
+ * user-facing list driving "did you mean …?" suggestions — `advisor` and
+ * `introspect` are registered but deliberately absent from it. Exported so the
+ * help-rendering guard covers what is actually reachable, not what is advertised.
+ */
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string> = CLI_COMMANDS.map((command) => command.name);
+
+/**
+ * Escape `{` / `}` so cerebro's help renderer prints them literally.
+ *
+ * cerebro renders help text through chalk's tagged-template parser, which reads
+ * `{style ...}` as markup — so a description or example carrying a real brace
+ * (a JSON `--args` sample, or the import line's `table`/`doc` envelope) does not
+ * render wrong, it throws: `Found extraneous } in template literal`, and that
+ * command's help becomes unreachable. `lunora import --help` and `lunora run
+ * --help` both died this way, so the documented shape of the import line had to
+ * be read out of the package's `.d.ts` instead.
+ *
+ * Escaping at registration rather than policing every string keeps help text
+ * written the way it reads, and means a future command carrying a brace cannot
+ * reintroduce the bug. Nothing here uses chalk styling in help text deliberately,
+ * so there is no markup to preserve.
+ *
+ * The same upstream defect breaks `vis sort-package-json --help`.
+ * @see {@link https://github.com/visulima/visulima/issues/741}
+ */
+const escapeHelpBraces = (text: string): string => text.replaceAll("{", String.raw`\{`).replaceAll("}", String.raw`\}`);
+
+/**
+ * Escape a command's `examples`, which cerebro types `string[] | string[][]` —
+ * either a list of bare invocations or a list of `[invocation, caption]` rows.
+ */
+const escapeExamples = (examples: string[] | string[][]): string[] | string[][] => {
+    // The two shapes are homogeneous per cerebro's type, so branch once on the
+    // list rather than per element — which also keeps the callback's return type
+    // singular.
+    if (examples.every((example) => typeof example === "string")) {
+        return examples.map((example) => escapeHelpBraces(example));
+    }
+
+    return examples.map((row) => row.map((part) => escapeHelpBraces(part)));
+};
+
+/** Apply {@link escapeHelpBraces} to every field of a command that reaches the help renderer. */
+const escapeCommandHelpBraces = (command: Command): Command => {
+    return {
+        ...command,
+        ...(command.argument === undefined ? {} : { argument: { ...command.argument, description: escapeHelpBraces(command.argument.description ?? "") } }),
+        ...(command.description === undefined ? {} : { description: escapeHelpBraces(command.description) }),
+        ...(command.examples === undefined ? {} : { examples: escapeExamples(command.examples) }),
+        ...(command.options === undefined
+            ? {}
+            : {
+                  options: command.options.map((option) => {
+                      return { ...option, description: escapeHelpBraces(option.description ?? "") };
+                  }),
+              }),
+    };
+};
+
 interface RunCliOptions {
     argv?: ReadonlyArray<string>;
     cwd?: string;
@@ -209,7 +271,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     for (const command of CLI_COMMANDS) {
-        cli.addCommand(command);
+        cli.addCommand(escapeCommandHelpBraces(command));
     }
 
     // cerebro auto-registers `help` + the `-h`/`--help` flag; `version` and
@@ -279,4 +341,5 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
 };
 
 export type { CommandName, RunCliOptions };
-export { COMMANDS, runCli, VERSION };
+
+export { COMMANDS, REGISTERED_COMMAND_NAMES, runCli, VERSION };
