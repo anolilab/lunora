@@ -9,6 +9,7 @@
  */
 import { dedupeCacheKeys } from "./dedupe-cache-keys";
 import constraintValidator from "./lints/runtime/constraint-validator";
+import errorRateOutlier from "./lints/runtime/error-rate-outlier";
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
 import actionFetchSsrf from "./lints/static/action-fetch-ssrf";
@@ -132,6 +133,7 @@ export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+export type { AdvisorFunctionMetrics } from "./function-metrics";
 export type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHttpHeaderWrite } from "./http-header-writes";
@@ -142,6 +144,7 @@ export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
 export type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 export { default as constraintValidator } from "./lints/runtime/constraint-validator";
+export { default as errorRateOutlier } from "./lints/runtime/error-rate-outlier";
 export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as actionFetchSsrf } from "./lints/static/action-fetch-ssrf";
@@ -395,7 +398,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
  * no-op. Run them with `runAdvisor(ctx, { source: "runtime" })` against a live
  * deployment's aggregated metrics.
  */
-export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, constraintValidator];
+export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, constraintValidator, errorRateOutlier];
 
 /** The default lint set: the static lints, then the runtime lints. A caller filters by `source` to run one tier. */
 export const ALL_LINTS: ReadonlyArray<Lint> = [...STATIC_LINTS, ...RUNTIME_LINTS];
