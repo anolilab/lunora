@@ -180,6 +180,17 @@ const refuseBatch = (): Response =>
     Response.json({ error: "A JSON-RPC batch may not reference a paid MCP tool; send paid tools/call requests individually." }, { status: 400 });
 
 /**
+ * Refuse a POST body this module couldn't parse when any tool is priced. This
+ * module decides "is this a priced `tools/call`?" from its own parse of the
+ * body; on a parse miss it can't tell, and handing the original request to the
+ * SDK transport (which re-reads/re-parses it independently) would let a paid
+ * tool dispatch with no `X-PAYMENT` check. Fail closed instead — mirrors
+ * {@link refuseBatch}'s envelope/status.
+ */
+const refuseUnparseableBody = (): Response =>
+    Response.json({ error: "The request body could not be parsed as JSON; a priced MCP tool is registered, so the call cannot be gated." }, { status: 400 });
+
+/**
  * Create a paid MCP server. Register free tools with `tool()` and priced tools
  * with `paidTool()` (they coexist), then serve `fetchHandler` over HTTP.
  *
@@ -282,6 +293,13 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         // Hand the already-parsed body to the transport so it doesn't re-read the
         // consumed stream; fall back to letting it read `request` on a parse miss.
         const dispatch = (): Promise<Response> => serveStateless(buildServer(), request, parsedBody === undefined ? undefined : { parsedBody });
+
+        // Scoped to POST: GET (SSE stream open) and DELETE (session termination)
+        // carry no body by spec and reach this same handler, so a method-blind
+        // check would 400 every legitimate handshake.
+        if (parsedBody === undefined && prices.size > 0 && request.method === "POST") {
+            return refuseUnparseableBody();
+        }
 
         if (Array.isArray(parsedBody)) {
             return parsedBody.some((message) => prices.has(callToolName(message) ?? "")) ? refuseBatch() : dispatch();
