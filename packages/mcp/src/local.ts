@@ -21,7 +21,7 @@ import { LunoraClient } from "@lunora/client";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-import type { McpTool } from "./compose";
+import type { McpResourceProvider, McpResourceSummary, McpTool } from "./compose";
 import { createToolServer } from "./compose";
 import { createRemoteDocsIndex } from "./docs/remote-index";
 import { docsResources } from "./docs/resources";
@@ -144,6 +144,130 @@ const lazyDeploymentTools = (source: LocalDeploymentSource, allowWrites: boolean
     });
 };
 
+/** URI for the deployment's generated OpenRPC 1.x document (the RPC-native spec: a `methods` array). */
+const OPENRPC_RESOURCE_URI = "lunora-spec:openrpc";
+
+/** URI for the deployment's generated OpenAPI 3.1 document. */
+const OPENAPI_RESOURCE_URI = "lunora-spec:openapi";
+
+/** One deployment spec this server can offer as a resource, and how to fetch it. */
+interface SpecResourceEntry {
+    description: string;
+    fetch: (client: LunoraClient) => Promise<Record<string, unknown>>;
+    name: string;
+    uri: string;
+}
+
+const SPEC_RESOURCE_ENTRIES: ReadonlyArray<SpecResourceEntry> = [
+    {
+        description:
+            "The deployment's generated OpenRPC 1.x document — every RPC function's path, kind, and argument schema in one read, instead of list_functions plus one get_function_schema call per function.",
+        fetch: async (client) => client.fetchOpenRpc(),
+        name: "OpenRPC specification",
+        uri: OPENRPC_RESOURCE_URI,
+    },
+    {
+        description: "The deployment's generated OpenAPI 3.1 document.",
+        fetch: async (client) => client.fetchOpenApi(),
+        name: "OpenAPI specification",
+        uri: OPENAPI_RESOURCE_URI,
+    },
+];
+
+/**
+ * The deployment's generated OpenRPC/OpenAPI spec documents, as MCP resources.
+ *
+ * The narrow `lunora_list_functions` / `lunora_get_function_schema` tools make
+ * an agent discover the deployment's surface one function at a time — a
+ * `list_functions` call plus one `get_function_schema` round trip per
+ * function. The worker already serves the whole surface in one document (the
+ * admin-gated `GET /_lunora/admin/openrpc` / `/openapi` endpoints codegen
+ * emits); publishing it as a resource lets an agent read the entire API in one
+ * request instead.
+ *
+ * Resolved lazily, exactly like {@link lazyDeploymentTools}: the deployment may
+ * not be running yet when this server is built (an editor spawns it before
+ * `lunora dev`), so both `list` and `read` re-resolve the source and re-fetch
+ * on every call rather than caching a spec captured at server-build time.
+ *
+ * A deployment that isn't reachable, has no spec wired, or predates the
+ * openrpc/openapi endpoints (an older worker build) fails the admin fetch;
+ * that entry is simply left out of `list()` and its `read()` returns
+ * `undefined` — resources are meant to be browsed, so one that would always
+ * error on read is worse than one that's silently absent. A worker WITH the
+ * endpoint but no spec configured still resolves 200 with an empty document,
+ * so it stays listed — only a hard failure omits it.
+ */
+const deploymentSpecResources = (source: LocalDeploymentSource, fetchImplementation: typeof fetch | undefined): McpResourceProvider => {
+    const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
+    const clientFor = createClientCache(fetchImplementation);
+
+    /** The live document for `entry`, or `undefined` when the deployment can't serve it. */
+    const fetchEntry = async (entry: SpecResourceEntry): Promise<Record<string, unknown> | undefined> => {
+        const deployment = resolve();
+
+        if (deployment === undefined) {
+            return undefined;
+        }
+
+        try {
+            return await entry.fetch(clientFor(deployment));
+        } catch {
+            return undefined;
+        }
+    };
+
+    return {
+        list: async (): Promise<ReadonlyArray<McpResourceSummary>> => {
+            const summaries = await Promise.all(
+                SPEC_RESOURCE_ENTRIES.map(async (entry): Promise<McpResourceSummary | undefined> => {
+                    const spec = await fetchEntry(entry);
+
+                    return spec === undefined ? undefined : { description: entry.description, mimeType: "application/json", name: entry.name, uri: entry.uri };
+                }),
+            );
+
+            return summaries.filter((summary): summary is McpResourceSummary => summary !== undefined);
+        },
+
+        read: async (uri: string): Promise<{ mimeType?: string; text: string } | undefined> => {
+            const entry = SPEC_RESOURCE_ENTRIES.find((candidate) => candidate.uri === uri);
+
+            if (entry === undefined) {
+                return undefined;
+            }
+
+            const spec = await fetchEntry(entry);
+
+            return spec === undefined ? undefined : { mimeType: "application/json", text: JSON.stringify(spec, undefined, 2) };
+        },
+    };
+};
+
+/** Merge several resource providers into one — `list()` concatenates, `read()` tries each in order. */
+const combineResourceProviders = (providers: ReadonlyArray<McpResourceProvider>): McpResourceProvider => {
+    return {
+        list: async (): Promise<ReadonlyArray<McpResourceSummary>> => {
+            const lists = await Promise.all(providers.map(async (provider) => provider.list()));
+
+            return lists.flat();
+        },
+
+        read: async (uri: string): Promise<{ mimeType?: string; text: string } | undefined> => {
+            for (const provider of providers) {
+                // eslint-disable-next-line no-await-in-loop -- sequential by design: the first provider that recognizes `uri` wins, and providers are few (docs + spec).
+                const found = await provider.read(uri);
+
+                if (found !== undefined) {
+                    return found;
+                }
+            }
+
+            return undefined;
+        },
+    };
+};
+
 /**
  * Assemble the tool list, in the order it is advertised: docs first (the
  * surface that always works), then the caller's extras, then the deployment
@@ -185,10 +309,23 @@ const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
                   ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
               });
 
+    const resourceProviders: McpResourceProvider[] = [];
+
+    if (index !== undefined) {
+        resourceProviders.push(docsResources(index));
+    }
+
+    // Only offer the spec resources when a deployment is configured at all —
+    // mirrors the docs-index check above (the whole surface is opt-in, not a
+    // live probe at server-build time).
+    if (options.deployment !== undefined) {
+        resourceProviders.push(deploymentSpecResources(options.deployment, options.fetch));
+    }
+
     return createToolServer(
         { name: LOCAL_SERVER_NAME, version: options.version ?? "0.0.0" },
         localTools(options),
-        index === undefined ? undefined : docsResources(index),
+        resourceProviders.length === 0 ? undefined : combineResourceProviders(resourceProviders),
     );
 };
 
@@ -206,4 +343,4 @@ const connectLocalStdio = async (options: LocalMcpServerOptions = {}): Promise<S
 };
 
 export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions };
-export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE };
+export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE, OPENAPI_RESOURCE_URI, OPENRPC_RESOURCE_URI };
