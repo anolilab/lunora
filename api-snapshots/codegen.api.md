@@ -1125,6 +1125,7 @@ const emitWranglerCronTriggers: (crons: ReadonlyArray<CronJobIR>) => string[];
 const evaluateSchemaDrift: (options: {
     allowDrift?: boolean;
     baseline: SchemaSnapshot | undefined;
+    command?: string;
     current: SchemaSnapshot;
 }) => SchemaDriftDecision;
 ```

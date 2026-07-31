@@ -142,6 +142,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     const gate = runSchemaDriftGate({
         allowDrift: options.allowSchemaDrift === true,
         codegen,
+        command: "prepare",
         logger: options.logger,
         updateBaseline: options.updateSchemaBaseline === true,
     });

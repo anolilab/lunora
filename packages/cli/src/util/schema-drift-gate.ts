@@ -149,11 +149,19 @@ const blockedDecisionResult = (decision: SchemaDriftDecision, context: GateConte
 const runSchemaDriftGate = (options: {
     allowDrift: boolean;
     codegen: CodegenResult;
+
+    /**
+     * The command running the gate. Threaded through so the blocked-drift
+     * remediation names only the override flags THAT command accepts — it used
+     * to list both unconditionally, and following it verbatim failed on the
+     * command that printed it.
+     */
+    command?: string;
     logger: Logger;
     readOnly?: boolean;
     updateBaseline?: boolean;
 }): SchemaDriftGateResult => {
-    const { allowDrift, codegen, logger, readOnly = false, updateBaseline = false } = options;
+    const { allowDrift, codegen, command, logger, readOnly = false, updateBaseline = false } = options;
     const snapshotPath = codegen.schemaSnapshotPath;
     const baseline = readBaseline(snapshotPath);
     const context: GateContext = {
@@ -170,7 +178,12 @@ const runSchemaDriftGate = (options: {
         return corruptBaselineResult(context);
     }
 
-    const decision = evaluateSchemaDrift({ allowDrift, baseline: baseline.status === "ok" ? baseline.snapshot : undefined, current: codegen.schemaSnapshot });
+    const decision = evaluateSchemaDrift({
+        allowDrift,
+        baseline: baseline.status === "ok" ? baseline.snapshot : undefined,
+        command,
+        current: codegen.schemaSnapshot,
+    });
 
     if (decision.blocked) {
         return blockedDecisionResult(decision, context);

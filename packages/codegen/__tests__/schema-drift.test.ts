@@ -241,6 +241,51 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("overridden by --allow-schema-drift");
         });
 
+        describe("remediation names only the flags the printing command accepts", () => {
+            // The message used to list both flags unconditionally, so following it
+            // verbatim failed: `build` accepts neither and `verify` accepts only
+            // `--allow-schema-drift`. This is the message a first-time deployer
+            // hits, and half its own advice did not work.
+            const breaking = (): ReturnType<typeof buildSchemaSnapshot> => buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+
+            it("offers both flags on deploy", () => {
+                expect.assertions(2);
+
+                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking() });
+
+                expect(reason).toContain("--allow-schema-drift");
+                expect(reason).toContain("--update-schema-baseline");
+            });
+
+            it("offers only --allow-schema-drift on verify, and points at prepare for the other", () => {
+                expect.assertions(3);
+
+                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking() });
+
+                expect(reason).toContain("pass `--allow-schema-drift`");
+                expect(reason).toContain("lunora prepare --update-schema-baseline");
+                expect(reason).toContain("`lunora verify` does not take that flag");
+            });
+
+            it("names prepare on build, which accepts neither flag", () => {
+                expect.assertions(2);
+
+                const { reason } = evaluateSchemaDrift({ baseline, command: "build", current: breaking() });
+
+                expect(reason).toContain("`lunora build` has no override flag");
+                expect(reason).toContain("lunora prepare --allow-schema-drift");
+            });
+
+            it("falls back to listing both when the caller is unknown", () => {
+                expect.assertions(2);
+
+                const { reason } = evaluateSchemaDrift({ baseline, current: breaking() });
+
+                expect(reason).toContain("--allow-schema-drift");
+                expect(reason).toContain("--update-schema-baseline");
+            });
+        });
+
         it("never blocks a first-ever capture (no baseline)", () => {
             expect.assertions(1);
 

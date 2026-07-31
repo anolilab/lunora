@@ -1082,6 +1082,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         const gate = runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
             codegen,
+            command: "deploy",
             logger: options.logger,
             updateBaseline: options.updateSchemaBaseline === true,
         });
