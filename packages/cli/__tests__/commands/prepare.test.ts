@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
 import type { Logger } from "../../src/util/logger";
+import { createRecordingSpawner } from "../../src/util/spawn";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -65,6 +66,69 @@ describe("lunora prepare", () => {
         expect(result.code).toBe(0);
         expect(result.validation.problems).toEqual([]);
         expect(result.error).toBeUndefined();
+    });
+
+    describe("postcodegen hook", () => {
+        // `prepare`/`deploy` invoke codegen in-process rather than through the
+        // project's own `codegen` script, so anything a project chained onto it
+        // was silently skipped — and a deploy would ship output the project
+        // considers unfinished, with nothing else to catch it.
+        it("runs the project's postcodegen script after generating", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "node ./patch.mjs" } }),
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.descriptor.args).toContain("postcodegen");
+        });
+
+        it("fails the run when postcodegen exits non-zero", async () => {
+            expect.assertions(2);
+
+            // Blocking is the point: a green `prepare` over a failed post-step
+            // would put unfinished output on the path to a deploy.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
+                "utf8",
+            );
+
+            const { spawner } = createRecordingSpawner(1);
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(result.error).toContain("postcodegen");
+        });
+
+        it("does not spawn anything when the project declares no postcodegen", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls).toEqual([]);
+        });
     });
 
     it("returns code 1 and surfaces problems when wrangler.jsonc has a stale compatibility_date", async () => {

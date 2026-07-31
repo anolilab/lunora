@@ -102,6 +102,33 @@ For CI, scripts, or a manual refresh, run it directly:
 lunora codegen
 ```
 
+### Running your own step after codegen
+
+`lunora prepare` and `lunora deploy` generate **in-process** — they do not shell
+out to your project's `codegen` script. So wrapping the CLI in your own script
+does not make a post-step part of a deploy:
+
+```jsonc
+// Runs on `pnpm codegen`. Does NOT run on `lunora prepare` / `lunora deploy`.
+"codegen": "lunora codegen && pnpm run patch-generated"
+```
+
+Declare it as `postcodegen` instead. Every package manager runs `postX` after
+`run X` automatically, so it still fires for your own script, and `prepare` /
+`deploy` invoke it too:
+
+```jsonc
+{
+    "scripts": {
+        "codegen": "lunora codegen",
+        "postcodegen": "pnpm run patch-generated",
+    },
+}
+```
+
+A non-zero exit fails the run, so a deploy cannot ship output your post-step
+rejected.
+
 ## See also
 
 - [Schema](/docs/concepts/schema) — `defineSchema` / `defineTable`, the input to codegen.
