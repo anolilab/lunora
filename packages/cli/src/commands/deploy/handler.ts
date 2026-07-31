@@ -585,7 +585,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         return (
             `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
             `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
-            `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : " --prod"}\`), then re-deploy.`
+            `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`), then re-deploy.`
         );
     }
 
@@ -618,7 +618,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
 
     logger.warn(
         `${String(mintable.length)} required secret(s) not set on the target: ${mintable.join(", ")}. ` +
-            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : " --prod"}\`.`,
+            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`.`,
     );
 
     return undefined;

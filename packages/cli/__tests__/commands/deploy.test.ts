@@ -991,6 +991,27 @@ export const backfillNames = defineMigration({
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
             });
+
+            it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(1);
+                expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
+            });
         });
     });
 });
