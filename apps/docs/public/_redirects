@@ -1,3 +1,20 @@
 # Netlify redirects — processed before the TanStack Start SSR catch-all.
 # Short link to the community chat (Discord invite).
 /chat  https://discord.gg/eajEZvk2PG  302
+
+# PostHog reverse proxy. `src/lib/posthog.ts` sets `api_host: "/pr/posthog"` so
+# analytics traffic leaves as first-party requests to lunora.sh rather than to a
+# known tracker host. These two rules are what make that path resolve in
+# production — the matching `server.proxy` entry in `vite.config.ts` only exists
+# in the dev server, so without them every capture() would fall through to the
+# SSR catch-all and be dropped.
+#
+# Two rules, not one: posthog-js loads its remote config and toolbar bundles from
+# the assets host and sends events to the ingestion host. Order matters — the
+# `/static/*` rule must precede the catch-all. 200 = proxy (rewrite), not a
+# redirect; a 30x would break the CORS preflight on ingestion POSTs.
+#
+# Region is EU, matching VITE_PUBLIC_POSTHOG_HOST. On a US project these become
+# us-assets.i.posthog.com / us.i.posthog.com.
+/pr/posthog/static/*  https://eu-assets.i.posthog.com/static/:splat  200
+/pr/posthog/*         https://eu.i.posthog.com/:splat                200

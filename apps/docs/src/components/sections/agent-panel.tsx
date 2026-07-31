@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import type { FC } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import posthog from "@/lib/posthog";
 import { cn } from "@/lib/utils";
 
 /**
@@ -240,20 +241,28 @@ const AgentPanel: FC = () => {
         const id = nextId.current;
 
         setTodos((previous) => [...previous, { creationTime: Date.now(), docId: makeDocumentId(id), done: false, fresh: true, id, text }].slice(-7));
+        posthog.capture("todo_added");
         setValue("");
         settle(id);
     };
 
     const toggleTodo = (id: number) => {
+        const todo = todos.find((item) => item.id === id);
+
+        if (!todo) {
+            return;
+        }
+
         setTodos((previous) =>
-            previous.map((todo) => {
-                if (todo.id !== id) {
-                    return todo;
+            previous.map((item) => {
+                if (item.id !== id) {
+                    return item;
                 }
 
-                return { ...todo, done: !todo.done, fresh: true };
+                return { ...item, done: !item.done, fresh: true };
             }),
         );
+        posthog.capture("todo_toggled", { completed: !todo.done });
         settle(id);
     };
 

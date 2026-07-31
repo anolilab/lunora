@@ -4,6 +4,8 @@ import { Check, Copy } from "lucide-react";
 import type { FC } from "react";
 import { useState } from "react";
 
+import posthog from "@/lib/posthog";
+
 /**
  * Copyable install command for the starter-kits page — mirrors the home hero's
  * `InstallCommand` (click to copy, transient check). Isolated as a client
@@ -15,11 +17,23 @@ const InstallCommand: FC = () => {
     const [copied, setCopied] = useState(false);
 
     const copy = () => {
-        void navigator.clipboard.writeText(COMMAND);
-        setCopied(true);
-        setTimeout(() => {
-            setCopied(false);
-        }, 1500);
+        const run = async () => {
+            try {
+                await navigator.clipboard.writeText(COMMAND);
+            } catch {
+                // Permission denied, or no secure context. Nothing was copied,
+                // so neither the check mark nor the event should claim it was.
+                return;
+            }
+
+            posthog.capture("install_command_copied", { location: "starter_kits" });
+            setCopied(true);
+            setTimeout(() => {
+                setCopied(false);
+            }, 1500);
+        };
+
+        void run();
     };
 
     return (
