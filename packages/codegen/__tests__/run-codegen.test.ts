@@ -1819,6 +1819,38 @@ export const getUserSettings = makeGetter();
             expect(finding?.remediation).toContain("Assign the builder chain directly");
         });
 
+        it("flags a procedure exported by a separate export statement, under its exported name", () => {
+            expect.assertions(4);
+
+            // Discovery asks each variable statement whether it `isExported()`,
+            // which is false when the `export` is its own statement — so the
+            // procedure is dropped exactly like a factory-produced one. This
+            // shape is the nastiest of the family, because the binding it is
+            // dropped from is an ordinary builder chain with nothing to look at.
+            // `export { a as b }` is addressed by callers as `b`, so `b` is what
+            // the finding has to name.
+            writeFileSync(
+                join(workdir, "lunora", "settings.ts"),
+                `import type { RegisteredQuery } from "@lunora/server";
+
+import { query } from "./_generated/server.js";
+
+const listSettings: RegisteredQuery<{}, string> = query.input({}).query(async () => "x");
+
+export { listSettings as listUserSettings };
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+            const finding = result.advisories.find((entry) => entry.name === "procedure_not_registered");
+
+            expect(finding).toBeDefined();
+            expect(finding?.detail).toContain("`listUserSettings`");
+            expect(finding?.detail).toContain("separate `export { … }` statement");
+            // The local name is an implementation detail the caller never types.
+            expect(finding?.metadata?.["exportName"]).toBe("listUserSettings");
+        });
+
         it("rejects defineTable with a non-literal field map instead of emitting a column-less table", () => {
             expect.assertions(2);
 

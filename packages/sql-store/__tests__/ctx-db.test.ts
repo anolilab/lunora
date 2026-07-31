@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -246,6 +247,84 @@ const rankSchema: SchemaLike = {
         },
     },
 } as never;
+
+/** `notes` again, with a search index so `.withSearchIndex()` is reachable. */
+const searchSchema: SchemaLike = {
+    tables: {
+        notes: {
+            indexes: [],
+            searchIndexes: [{ field: "body", name: "by_body" }],
+            shape: { body: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — search iteration terminates like collect()", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const makeSearchWriter = () => createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: searchSchema });
+
+    const seedMatching = async (writer: ReturnType<typeof makeSearchWriter>, count: number): Promise<void> => {
+        for (let index = 0; index < count; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential inserts keep the search companion in step with the row writes
+            await writer.insert("notes", { body: `alpha note ${String(index)}` });
+        }
+    };
+
+    it("yields every match when the result set is under the cap", async () => {
+        expect.assertions(1);
+
+        const writer = makeSearchWriter();
+
+        await seedMatching(writer, 5);
+
+        const seen: unknown[] = [];
+
+        for await (const row of writer.query("notes").withSearchIndex("by_body", (q) => q.search("body", "alpha"))) {
+            seen.push(row);
+        }
+
+        expect(seen).toHaveLength(5);
+    });
+
+    it("raises the cap error rather than stopping silently at the cap", async () => {
+        expect.assertions(2);
+
+        // A search page is capped at MAX_SEARCH_SCAN and `planSearchPage`
+        // refuses any page reaching past it, so a page sized to the cap comes
+        // back full and `isDone` whether there were exactly that many matches
+        // or ten times as many — the probe row that tells them apart cannot be
+        // fetched. Paging here would therefore stop at the cap looking
+        // complete, while `.collect()` on the same query throws. Same query,
+        // same data, two answers is the bug; both must refuse.
+        const writer = makeSearchWriter();
+
+        await seedMatching(writer, MAX_SEARCH_SCAN + 1);
+
+        const iterate = async (): Promise<void> => {
+            for await (const row of writer.query("notes").withSearchIndex("by_body", (q) => q.search("body", "alpha"))) {
+                expect(row).toBeUndefined(); // unreachable — the read refuses before yielding
+            }
+        };
+
+        await expect(iterate()).rejects.toThrow(/documents match this search/u);
+        await expect(
+            writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "alpha"))
+                .collect(),
+        ).rejects.toThrow(/documents match this search/u);
+    });
+});
 
 describe("createSqlCtxDb — rank over node:sqlite", () => {
     let harness: ReturnType<typeof createSqliteHarness>;

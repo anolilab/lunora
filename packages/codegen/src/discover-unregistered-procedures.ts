@@ -49,18 +49,31 @@ const mayHideRegistration = (declaration: VariableDeclaration): boolean => {
     return Node.isCallExpression(initializer) || Node.isIdentifier(initializer) || Node.isPropertyAccessExpression(initializer);
 };
 
-const findingFor = (relativePath: string, exportName: string, typeName: string, line: number): Finding => {
+/** Why codegen could not see this one, and what to write instead. */
+type MissedRegistration = { cause: string; remediation: string };
+
+const INDIRECT_INITIALIZER: MissedRegistration = {
+    cause: "codegen recognises a procedure only when the initializer is a builder chain, and this one is produced by a call or an alias",
+    remediation: "A factory that returns a procedure cannot be read statically — inline it, or export the chain the factory builds.",
+};
+
+const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
+    cause: "the binding is exported by a separate `export { … }` statement, and codegen reads the `export` keyword on the declaration itself",
+    remediation: "Move the keyword onto the declaration and drop the separate export statement.",
+};
+
+const findingFor = (relativePath: string, exportName: string, typeName: string, line: number, missed: MissedRegistration): Finding => {
     return {
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
         categories: ["SCHEMA"],
         description:
-            "Codegen registers an export only when its initializer is literally a builder chain. A procedure produced any other way exists at runtime but never reaches `_generated/api.ts`, so no caller can address it.",
-        detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — codegen recognises a procedure only when the initializer is a builder chain, and this one is produced by a call or an alias.`,
+            "Codegen registers an export only when the declaration carries `export` and its initializer is literally a builder chain. A procedure written any other way exists at runtime but never reaches `_generated/api.ts`, so no caller can address it.",
+        detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
         level: "WARN",
         metadata: { exportName, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
-        remediation: `Assign the builder chain directly: \`export const ${exportName} = query.input({ … }).query(handler);\`. A factory that returns a procedure cannot be read statically — inline it, or export the chain the factory builds.`,
+        remediation: `Assign the builder chain directly: \`export const ${exportName} = query.input({ … }).query(handler);\`. ${missed.remediation}`,
         title: "Procedure exists at runtime but is missing from the generated API",
     };
 };
@@ -94,7 +107,7 @@ const namedExportFindings = (source: SourceFile, relativePath: string, registere
             const typeName = registrationTypeName(declaration);
 
             if (typeName !== undefined) {
-                findings.push(findingFor(relativePath, exportName, typeName, declaration.getStartLineNumber()));
+                findings.push(findingFor(relativePath, exportName, typeName, declaration.getStartLineNumber(), INDIRECT_INITIALIZER));
             }
         }
     }
@@ -119,7 +132,49 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registe
         const typeName = registrationTypeName(assignment.getExpression());
 
         if (typeName !== undefined) {
-            findings.push(findingFor(relativePath, "default", typeName, assignment.getStartLineNumber()));
+            findings.push(findingFor(relativePath, "default", typeName, assignment.getStartLineNumber(), INDIRECT_INITIALIZER));
+        }
+    }
+
+    return findings;
+};
+
+/**
+ * `const handler = query.…; export { handler };` — the export-declaration form.
+ *
+ * Discovery walks variable statements and asks each whether it `isExported()`,
+ * which is false here: the `export` is a separate statement. So the procedure is
+ * dropped from `api.ts` exactly like a factory-produced one, and the binding it
+ * is dropped from looks like a perfectly ordinary builder chain — which is what
+ * makes this shape worse than the ones above rather than merely another of them.
+ *
+ * The exported name is what a caller addresses, so `export { a as b }` is
+ * checked and reported as `b`. Re-exports (`export { x } from "./other"`) are
+ * skipped: the declaration lives in another file, and naming this one would send
+ * the reader to the wrong place.
+ */
+const exportDeclarationFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
+    const findings: Finding[] = [];
+
+    for (const declaration of source.getExportDeclarations().filter((entry) => entry.getModuleSpecifier() === undefined)) {
+        for (const specifier of declaration.getNamedExports()) {
+            const exportName = specifier.getAliasNode()?.getText() ?? specifier.getName();
+
+            if (registered.has(`${relativePath}:${exportName}`)) {
+                continue;
+            }
+
+            const local = specifier.getLocalTargetDeclarations().find((entry): entry is VariableDeclaration => Node.isVariableDeclaration(entry));
+
+            if (local === undefined || !mayHideRegistration(local)) {
+                continue;
+            }
+
+            const typeName = registrationTypeName(local);
+
+            if (typeName !== undefined) {
+                findings.push(findingFor(relativePath, exportName, typeName, specifier.getStartLineNumber(), SEPARATE_EXPORT_STATEMENT));
+            }
         }
     }
 
@@ -129,6 +184,7 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registe
 const fileFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => [
     ...namedExportFindings(source, relativePath, registered),
     ...defaultExportFindings(source, relativePath, registered),
+    ...exportDeclarationFindings(source, relativePath, registered),
 ];
 
 const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR>): Finding[] => {

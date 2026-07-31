@@ -20,7 +20,6 @@ import {
     createSearchAnalyzer,
     createSearchBuilder,
     finishSearchPage,
-    MAX_SEARCH_SCAN,
     planSearchPage,
     resolveSearchScan,
     searchPageScan,
@@ -2711,15 +2710,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const LEGACY_READER_ERROR = "the legacy query()/withIndex() reader is not available on the D1 (global) backend; use findMany";
 
-            // Sized to the search cap on purpose, unlike the shard reader's
-            // smaller page. A relevance-ordered search has to score its whole
-            // window to rank it, and `searchPageScan` grows that window with the
-            // offset — so paging in small steps would re-scan an ever-larger
-            // prefix on every page. The result set is capped at
-            // `MAX_SEARCH_SCAN` anyway, so one page costs exactly what
-            // `.collect()` costs and never more.
-            const ITERATOR_PAGE_SIZE = MAX_SEARCH_SCAN;
-
             // The D1 backend doesn't expose the scan/index reader — `findMany`
             // is the public read surface there. Only `.withSearchIndex()` is
             // supported, so a staged search runs and every other terminal op
@@ -2771,20 +2761,29 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                      */
                     // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
                     async *[Symbol.asyncIterator]() {
-                        let cursor: string | undefined;
-
-                        for (;;) {
-                            // eslint-disable-next-line no-await-in-loop, unicorn/no-null -- sequential by construction (each cursor comes from the previous page); `null` is PaginationOptions' documented first-page sentinel
-                            const page = await reader.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
-
-                            yield* page.page;
-
-                            if (page.isDone || page.continueCursor === null) {
-                                return;
-                            }
-
-                            cursor = page.continueCursor;
+                        if (!stage) {
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
+
+                        // Runs the same unbounded read `.collect()` runs, rather
+                        // than paging.
+                        //
+                        // Paging here could not terminate honestly. A page is
+                        // capped at `MAX_SEARCH_SCAN` and `planSearchPage`
+                        // refuses any page reaching past it, so a first page
+                        // sized to the cap comes back full with `isDone: true`
+                        // whether there were exactly that many matches or ten
+                        // times as many — the probe row that distinguishes them
+                        // cannot be fetched. `for await` would then stop at the
+                        // cap and look complete, while `.collect()` on the same
+                        // query throws. Same query, same data, two answers.
+                        //
+                        // Nothing is given up: the page size was the cap, so
+                        // the old loop already read the whole window in one
+                        // query and a `break` saved nothing. Relevance order is
+                        // why — a scored search has to rank its whole window
+                        // before it knows which row is first.
+                        yield* await runSearch(stage, undefined);
                     },
                     async collect() {
                         if (!stage) {

@@ -916,6 +916,23 @@ const startStudioBestEffort = async (
 };
 
 /**
+ * What `--no-worker` leaves running, named from the flags rather than assumed.
+ *
+ * With `--no-codegen` (or `--no-studio`) alongside `--no-worker` this used to
+ * name a service that was not running, and with all three off it named one
+ * while nothing ran at all.
+ */
+const attachedModeNotice = (plan: DevCommandPlan): string => {
+    const attached = [plan.codegenEnabled ? "codegen watch" : undefined, plan.studioEnabled ? "studio" : undefined].filter(
+        (name): name is string => name !== undefined,
+    );
+
+    const running = attached.length > 0 ? `${attached.join(" + ")} running` : "nothing else to run";
+
+    return `--no-worker: not starting wrangler. ${running}; your task runner owns the worker on ${plan.workerOrigin}.`;
+};
+
+/**
  * For the two-process framework-worker flavor (SvelteKit / Nuxt), regenerate
  * `_generated/*` once up front so the sidecar's `wrangler dev` can bundle
  * `lunora/server.ts` immediately — the framework's own `@lunora/vite` plugin
@@ -1028,12 +1045,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         if (!plan.workerEnabled) {
-            // Attached mode: codegen-watch and Studio are running; an external
-            // runner owns the worker. Park until interrupted so the supervisor
-            // sees a normal long-lived process.
-            logger.info(
-                `--no-worker: not starting wrangler. Codegen watch${plan.studioEnabled ? " + studio" : ""} running; your task runner owns the worker on ${plan.workerOrigin}.`,
-            );
+            // Attached mode: whatever is left after `--no-worker` keeps running
+            // and an external runner owns the worker. Park until interrupted so
+            // the supervisor sees a normal long-lived process.
+            //
+            logger.info(attachedModeNotice(plan));
 
             return { code: await waitForInterrupt(logger), plan };
         }
