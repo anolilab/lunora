@@ -169,6 +169,14 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
                 subscription.keys?.auth ?? null,
                 subscription.token ?? null,
                 subscription.userId ?? null,
+                // A `StoredSubscription.metadata` built via `normalizeRegisterInput`
+                // has already round-tripped through `JSON.stringify` once at
+                // validation time (see `validateMetadata`, NOTIFY-02), so this
+                // re-serialisation of the same pure, unchanged object cannot throw
+                // mid-write for a subscription that reached `register()` — only a
+                // hand-built `StoredSubscription` bypassing normalize (a test, or a
+                // caller writing directly to the store) could still supply a
+                // non-serialisable value here.
                 subscription.metadata === undefined ? null : JSON.stringify(subscription.metadata),
                 subscription.createdAt,
                 subscription.lastSeenAt,
@@ -225,7 +233,19 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
             }
         }
 
+        if (filter?.after !== undefined) {
+            // Keyset pagination cursor: only rows strictly past the last id of the
+            // previous page. Paired with `ORDER BY id ASC` below — see
+            // `SubscriptionFilter.after`.
+            bindings.push(filter.after);
+            clauses.push(`id > ?${bindings.length.toString()}`);
+        }
+
         const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
+        // Deterministic ascending order by `id` is required for `after` to page
+        // correctly (and for parity with the memory store's explicit sort) —
+        // without it, D1/SQLite gives no ordering guarantee across pages.
+        const orderBy = " ORDER BY id ASC";
 
         let limit = "";
 
@@ -237,7 +257,7 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         }
 
         const { results } = await database
-            .prepare(`SELECT * FROM ${table}${where}${limit}`)
+            .prepare(`SELECT * FROM ${table}${where}${orderBy}${limit}`)
             .bind(...bindings)
             .all<Row>();
 

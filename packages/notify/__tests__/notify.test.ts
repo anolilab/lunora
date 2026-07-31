@@ -140,6 +140,130 @@ describe("ctx.push.broadcast", () => {
     });
 });
 
+describe("ctx.push.broadcast pagination (plan 222 / NOTIFY-01)", () => {
+    const pageSize = 5;
+
+    const setupPaged = () => {
+        const store = memorySubscriptionStore();
+        const push = mockPushProvider();
+        const engine = mockEngine({ push: push.provider });
+        const facade = createNotify(baseDefinition(store), {}, { broadcastPageSize: pageSize, engine, silent: true });
+
+        return { ...facade, engine, sends: push.sends, store };
+    };
+
+    it("a broadcast over pageSize + 10 fakes visits every one across >= 2 pages", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setupPaged();
+        const total = pageSize + 10;
+
+        for (let index = 0; index < total; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/bulk/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        const listSpy = vi.spyOn(store, "list");
+        const result = await push.broadcast({ body: "bulk", title: "t" });
+
+        expect(result.total).toBe(total);
+        expect(result.sent).toBe(total);
+        // A single page (pageSize=5) could never cover `total`=15 fakes — proves
+        // the walk spanned multiple pages, not one big unbounded list().
+        expect(listSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("broadcastPage returns one bounded page plus a resumable nextCursor", async () => {
+        expect.hasAssertions();
+
+        const { push } = setupPaged();
+
+        for (let index = 0; index < pageSize + 2; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/page/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        const first = await push.broadcastPage({ body: "p1" });
+
+        expect(first.result.total).toBe(pageSize);
+        expect(first.nextCursor).toBeDefined();
+
+        const second = await push.broadcastPage({ body: "p2" }, { after: first.nextCursor });
+
+        expect(second.result.total).toBe(2);
+        expect(second.nextCursor).toBeUndefined();
+
+        // No overlap between the two pages' delivered subscription ids.
+        const firstIds = new Set(first.result.outcomes.map((outcome) => outcome.id));
+
+        for (const outcome of second.result.outcomes) {
+            expect(firstIds.has(outcome.id)).toBe(false);
+        }
+    });
+
+    it("a job carrying a cursor (job.filter.after) resumes exactly where the previous page left off", async () => {
+        expect.hasAssertions();
+
+        const { push } = setupPaged();
+
+        for (let index = 0; index < pageSize + 3; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/resume/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        const firstPage = await push.broadcastPage({ body: "hi" });
+
+        expect(firstPage.nextCursor).toBeDefined();
+
+        // Simulate a queue job carrying the cursor forward (see `runPushBroadcastJob`).
+        const resumed = await push.broadcastPage({ body: "hi" }, { after: firstPage.nextCursor });
+
+        expect(resumed.result.total).toBe(3);
+        expect(resumed.nextCursor).toBeUndefined();
+    });
+
+    it("a store that ignores `after` (unpaged fallback) terminates and never double-delivers", async () => {
+        expect.hasAssertions();
+
+        const backing = memorySubscriptionStore();
+        // A non-cursoring store: `list` always returns the same (from-the-top)
+        // window regardless of `filter.after` — the documented fallback case.
+        // `broadcastPage`'s defensive re-filter is what has to keep this correct.
+        const nonCursoringStore = {
+            ...backing,
+            list: (filter?: Parameters<typeof backing.list>[0]) => backing.list({ kind: filter?.kind, limit: filter?.limit, userId: filter?.userId }),
+        };
+
+        const providerMock = mockPushProvider();
+        const { push } = createNotify(
+            baseDefinition(nonCursoringStore),
+            {},
+            { broadcastPageSize: pageSize, engine: mockEngine({ push: providerMock.provider }), silent: true },
+        );
+
+        const total = pageSize + 10;
+
+        for (let index = 0; index < total; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/nocursor/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        // Must resolve (not hang/loop forever) — the real assertion is that the
+        // promise settles at all within the test's timeout.
+        const result = await push.broadcast({ body: "hi" });
+
+        // A non-cursoring store can't be trusted to deliver the FULL matched
+        // audience (see `SubscriptionFilter.after`'s documented fallback limit),
+        // but it must never double-deliver: every delivered id is distinct, and
+        // it can't exceed the registered total.
+        const ids = result.outcomes.map((outcome) => outcome.id);
+
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(result.total).toBeGreaterThan(0);
+        expect(result.total).toBeLessThanOrEqual(total);
+    });
+});
+
 describe("ctx.push.broadcast fault-tolerance", () => {
     const webPushSub = (suffix: string) => {
         return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };

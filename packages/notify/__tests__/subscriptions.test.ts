@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
 import { fcmId, isGoneError, legacyFcmId, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId } from "../src/subscriptions/normalize";
-import { fakeD1 } from "./helpers";
+import { compareById, fakeD1 } from "./helpers";
 
 const webPushSub = { endpoint: "https://push.example/abc", keys: { auth: "AUTHKEY", p256dh: "P256KEY" } };
 
@@ -52,6 +52,69 @@ describe("normalizeRegisterInput", () => {
 
         expect(stored).toMatchObject({ id: fcmId("device-token-1"), kind: "fcm", token: "device-token-1" });
         expect(() => normalizeRegisterInput({ kind: "fcm", token: "" })).toThrow(/non-empty `token`/u);
+    });
+});
+
+describe("normalizeRegisterInput metadata validation (NOTIFY-02)", () => {
+    it("round-trips realistic small metadata", () => {
+        expect.hasAssertions();
+
+        const metadata = { deviceName: "Pixel 9", locale: "en-US", topics: ["news", "offers"] };
+        const stored = normalizeRegisterInput({ kind: "fcm", metadata, token: "device-token-1" });
+
+        expect(stored.metadata).toStrictEqual(metadata);
+    });
+
+    it("allows omitted metadata", () => {
+        expect.hasAssertions();
+
+        const stored = normalizeRegisterInput({ kind: "fcm", token: "device-token-1" });
+
+        expect(stored.metadata).toBeUndefined();
+    });
+
+    it("rejects a non-plain-object metadata (array, string, number)", () => {
+        expect.hasAssertions();
+
+        for (const bad of [["x"], "oops", 42, null]) {
+            expect(() => normalizeRegisterInput({ kind: "fcm", metadata: bad as never, token: "t" }), JSON.stringify(bad)).toThrow(/plain object/u);
+        }
+    });
+
+    it("rejects metadata exceeding the byte cap", () => {
+        expect.hasAssertions();
+
+        const metadata = { blob: "x".repeat(10_000) };
+
+        expect(() => normalizeRegisterInput({ kind: "fcm", metadata, token: "t" })).toThrow(/exceeding the .*-byte cap/u);
+    });
+
+    it("rejects non-JSON-serialisable metadata (BigInt)", () => {
+        expect.hasAssertions();
+
+        const metadata = { amount: 10n } as unknown as Record<string, unknown>;
+
+        expect(() => normalizeRegisterInput({ kind: "fcm", metadata, token: "t" })).toThrow(/not JSON-serialisable/u);
+    });
+
+    it("rejects a circular metadata object", () => {
+        expect.hasAssertions();
+
+        const metadata: Record<string, unknown> = { name: "loop" };
+
+        metadata.self = metadata;
+
+        expect(() => normalizeRegisterInput({ kind: "fcm", metadata, token: "t" })).toThrow(/not JSON-serialisable/u);
+    });
+
+    it("applies the same validation to web-push registrations", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput({ metadata: ["bad"] as never, subscription: webPushSub })).toThrow(/plain object/u);
+
+        const stored = normalizeRegisterInput({ metadata: { locale: "de-DE" }, subscription: webPushSub });
+
+        expect(stored.metadata).toStrictEqual({ locale: "de-DE" });
     });
 });
 
@@ -233,6 +296,16 @@ describe("d1SubscriptionStore", () => {
         await expect(store.get(wp.id)).resolves.toBeUndefined();
     });
 
+    it("round-trips validated metadata without the store's own JSON.stringify throwing", async () => {
+        expect.hasAssertions();
+
+        const store = d1SubscriptionStore(fakeD1());
+        const metadata = { deviceName: "Pixel 9", topics: ["news"] };
+        const stored = await store.put(normalizeRegisterInput({ kind: "fcm", metadata, token: "meta-tok" }));
+
+        await expect(store.get(stored.id)).resolves.toMatchObject({ metadata });
+    });
+
     it("rejects an unsafe table name", () => {
         expect.hasAssertions();
 
@@ -301,6 +374,137 @@ describe("legacy-id migration eviction (memory + D1)", () => {
         expect(current.id).toBe(fcmId(token));
         await expect(store.get(legacyId)).resolves.toBeUndefined();
         await expect(store.list()).resolves.toHaveLength(1);
+    });
+});
+
+describe("keyset pagination via `after` (memory + D1 parity)", () => {
+    const stores: ReadonlyArray<readonly [string, () => ReturnType<typeof memorySubscriptionStore>]> = [
+        ["memory", () => memorySubscriptionStore()],
+        ["d1", () => d1SubscriptionStore(fakeD1())],
+    ];
+
+    it.each(stores)("orders ascending by id and pages with an exclusive cursor (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+
+        for (let index = 0; index < 10; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await store.put(
+                normalizeRegisterInput({ subscription: { endpoint: `https://push.example/page/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } }),
+            );
+        }
+
+        const all = await store.list();
+
+        expect(all).toHaveLength(10);
+
+        const expectedIds = all.toSorted(compareById).map((s) => s.id);
+
+        // Walk the whole store in pages of 3, an exclusive `after` cursor each time.
+        const seen: string[] = [];
+        let cursor: string | undefined;
+
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- pages are inherently sequential in this walk
+            const page = await store.list({ after: cursor, limit: 3 });
+
+            if (page.length === 0) {
+                break;
+            }
+
+            // Ascending order within the page.
+            for (let index = 1; index < page.length; index += 1) {
+                const previousId = page[index - 1]?.id as string;
+                const currentId = page[index]?.id as string;
+
+                // eslint-disable-next-line vitest/prefer-comparison-matcher -- `toBeGreaterThan` is typed number|bigint only; these are string ids
+                expect(currentId > previousId).toBe(true);
+            }
+
+            seen.push(...page.map((s) => s.id));
+            cursor = page[page.length - 1]?.id;
+
+            if (page.length < 3) {
+                break;
+            }
+        }
+
+        // Every row visited exactly once, in ascending id order overall — no
+        // skip and no double-delivery across the page boundary.
+        expect(seen).toStrictEqual(expectedIds);
+    });
+
+    it.each(stores)("a cursor is exclusive — the boundary row is not repeated (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+
+        for (let index = 0; index < 4; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await store.put(
+                normalizeRegisterInput({ subscription: { endpoint: `https://push.example/excl/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } }),
+            );
+        }
+
+        const firstPage = await store.list({ limit: 2 });
+        const boundary = firstPage[1]?.id as string;
+        const secondPage = await store.list({ after: boundary, limit: 2 });
+
+        expect(secondPage.map((s) => s.id)).not.toContain(boundary);
+        expect(secondPage.every((s) => s.id > boundary)).toBe(true);
+    });
+
+    it.each(stores)("stays stable under a concurrent register mid-walk — the already-consumed page is unaffected (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const originalIds: string[] = [];
+
+        for (let index = 0; index < 3; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            const stored = await store.put(
+                normalizeRegisterInput({ subscription: { endpoint: `https://push.example/concurrent/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } }),
+            );
+
+            originalIds.push(stored.id);
+        }
+
+        const firstPage = await store.list({ limit: 2 });
+
+        expect(firstPage).toHaveLength(2);
+
+        // A new device registers BETWEEN the first and second page fetch — must
+        // not retroactively appear in a page already walked (firstPage is fixed,
+        // already returned), nor cause an already-seen row to be skipped or
+        // repeated in the next page. Whether the NEW device itself lands before
+        // or after the cursor depends on its id's hash position — both are
+        // correct keyset-pagination outcomes, so this only asserts what's
+        // deterministic: the 3 PRE-EXISTING ids are exactly accounted for once
+        // each, and the new device never causes a duplicate/skip among them.
+        await store.put(normalizeRegisterInput({ subscription: { endpoint: "https://push.example/concurrent/new", keys: { auth: "a", p256dh: "p" } } }));
+
+        const cursor = firstPage[1]?.id as string;
+        const secondPage = await store.list({ after: cursor, limit: 10 });
+
+        const firstIds = new Set(firstPage.map((s) => s.id));
+
+        for (const subscription of secondPage) {
+            // Exclusive cursor: nothing already returned in firstPage reappears.
+            expect(firstIds.has(subscription.id)).toBe(false);
+            // eslint-disable-next-line vitest/prefer-comparison-matcher -- `toBeGreaterThan` is typed number|bigint only; these are string ids
+            expect(subscription.id > cursor).toBe(true);
+        }
+
+        // Every pre-existing id appears in exactly one of the two pages — the
+        // cursor boundary is exclusive and stable regardless of the concurrent
+        // register (the 3rd pre-existing id, being the largest of the original
+        // 3, is guaranteed > cursor and so always surfaces in secondPage).
+        const combinedIds = new Set([...firstPage.map((s) => s.id), ...secondPage.map((s) => s.id)]);
+
+        for (const id of originalIds) {
+            expect(combinedIds.has(id)).toBe(true);
+        }
     });
 });
 

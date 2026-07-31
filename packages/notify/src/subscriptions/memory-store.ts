@@ -1,6 +1,15 @@
 import type { StoredSubscription, SubscriptionFilter, SubscriptionStatus, SubscriptionStore } from "../types";
 import { legacyIdFor } from "./normalize";
 
+/** Ascending `id` comparator — pairs with the D1 store's `ORDER BY id ASC`. */
+const compareById = (a: StoredSubscription, b: StoredSubscription): number => {
+    if (a.id < b.id) {
+        return -1;
+    }
+
+    return a.id > b.id ? 1 : 0;
+};
+
 const matches = (subscription: StoredSubscription, filter?: SubscriptionFilter): boolean => {
     if (filter === undefined) {
         return true;
@@ -42,9 +51,18 @@ const memorySubscriptionStore = (): SubscriptionStore => {
                 }
             }
 
+            // Keyset-paginate: sort ascending by `id` (Map iteration order is
+            // INSERTION order, not `id` order, so this is required for a stable,
+            // deterministic page boundary — see `SubscriptionFilter.after`), then
+            // drop everything at/before the cursor. Mirrors the D1 store's
+            // `ORDER BY id ASC` + `id > ?`.
+            result.sort(compareById);
+
+            const paged = filter?.after === undefined ? result : result.filter((subscription) => subscription.id > (filter.after as string));
+
             // Honor `limit` for parity with the D1 store's `LIMIT` (a non-positive
             // value means "no cap").
-            const capped = filter?.limit !== undefined && filter.limit > 0 ? result.slice(0, Math.trunc(filter.limit)) : result;
+            const capped = filter?.limit !== undefined && filter.limit > 0 ? paged.slice(0, Math.trunc(filter.limit)) : paged;
 
             return Promise.resolve(capped);
         },
