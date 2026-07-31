@@ -1028,7 +1028,7 @@ export default crons;
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js"',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -3201,7 +3201,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
             // The facade import stays minimal (ORM types are always pulled in).
             expect(output).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";',
             );
         });
     });

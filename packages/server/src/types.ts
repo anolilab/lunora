@@ -835,11 +835,29 @@ interface PaginationResult<T = Record<string, unknown>> {
 /**
  * The fluent `ctx.db.query(table)` reader. Generic over the document type
  * `Row` so the generated `ctx.db` can bind it to `Doc&lt;table>` (the chain and
- * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts).
- * Defaults to the untyped `Record&lt;string, unknown>` shape for the base
- * (schema-agnostic) `@lunora/server` reader.
+ * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts),
+ * and over the table's declared index names so `.withIndex()` / `.withSearchIndex()`
+ * / `.withGeoIndex()` reject a name the table does not declare.
+ *
+ * All four default to the untyped shape for the base (schema-agnostic)
+ * `@lunora/server` reader, which is also the wide `(table: string) => TableReader`
+ * overload the generated `ctx.db` intersects in — so a caller holding a runtime
+ * string (e.g. `@lunora/ratelimit`'s `createDbStore`) is unaffected.
+ *
+ * The index-name parameters are what make a stale index name a compile error.
+ * They resolve to `never` for a table that declares none of that kind, so the
+ * only way to satisfy the call is to declare the index. Before this, a renamed
+ * or dropped index left its call sites typechecking, and the query either threw
+ * at runtime or silently degraded to a full table scan — the second being the
+ * worse outcome, since it stays green in tests and surfaces months later as a
+ * latency regression.
  */
-interface TableReader<Row = Record<string, unknown>> {
+interface TableReader<
+    Row = Record<string, unknown>,
+    Indexes extends string = string,
+    SearchIndexes extends string = string,
+    GeoIndexes extends string = string,
+> {
     /**
      * Iterate rows lazily: `for await (const row of ctx.db.query("t").withIndex(…))`.
      *
@@ -862,7 +880,7 @@ interface TableReader<Row = Record<string, unknown>> {
      */
     [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
-    filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
+    filter: (predicate: (document: Row) => boolean) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     first: () => Promise<Row | null>;
 
     /**
@@ -872,7 +890,7 @@ interface TableReader<Row = Record<string, unknown>> {
      * terminal (`collect`/`first`/`take`/`paginate`/`unique`). Mirrors Convex's
      * `.order("asc" | "desc")`.
      */
-    order: (direction: "asc" | "desc") => TableReader<Row>;
+    order: (direction: "asc" | "desc") => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
 
@@ -890,9 +908,15 @@ interface TableReader<Row = Record<string, unknown>> {
      * scan over the index's companion followed by a Haversine refine. Pair with
      * `.take(n)` to cap results (`.paginate()` is not supported on a geo query).
      */
-    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
+    withGeoIndex: (indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
-    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
+    /**
+     * Restrict the query to a declared `.index()`. `indexName` is constrained to
+     * this table's declared index names (`never` when it declares none), so a
+     * renamed, dropped, or mistyped index is a compile error rather than a
+     * runtime throw or a silent full-table scan.
+     */
+    withIndex: (indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
     /**
      * Restrict the query to a declared `.searchIndex()`. The builder's
@@ -901,7 +925,10 @@ interface TableReader<Row = Record<string, unknown>> {
      * field. Results come back ordered by relevance — pair with `.take(n)`
      * (`.paginate()` is not supported on a search query).
      */
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
+    withSearchIndex: (
+        indexName: SearchIndexes,
+        search: (q: SearchFilterBuilder) => SearchFilterBuilder,
+    ) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 
 interface IndexRangeBuilder {

@@ -24,7 +24,7 @@ import type {
     Validator,
 } from "@lunora/server";
 
-import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
+import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
 
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -65,8 +65,17 @@ export type Env = CloudflareBindings;
  * Intersected with the wide `(string) => TableReader` signature so the bound
  * `ctx.db` is still structurally assignable to schema-agnostic consumers that
  * call `db.query(someString)` (e.g. `@lunora/ratelimit`'s `createDbStore`).
+ *
+ * The three index-name unions are what make `.withIndex("by_TYPO")` a compile
+ * error: each resolves to the table's declared names, or `never` when it
+ * declares none of that kind. Without them a renamed or dropped index left
+ * every call site typechecking, and the query either threw at runtime or
+ * degraded silently to a full table scan.
  */
-type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) & ((table: string) => TableReader);
+type TypedTableQuery = (<T extends TableName>(
+    table: T,
+) => TableReader<Doc<T>, IndexNamesByTable[T], SearchIndexNamesByTable[T], GeoIndexNamesByTable[T]>) &
+    ((table: string) => TableReader);
 
 /**
  * The point read `ctx.db.get(id)`, bound to this schema: an `Id<"table">`

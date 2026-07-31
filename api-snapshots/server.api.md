@@ -1955,18 +1955,18 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
 ### `TableReader` (interface)
 
 ```ts
-interface TableReader<Row = Record<string, unknown>> {
+interface TableReader<Row = Record<string, unknown>, Indexes extends string = string, SearchIndexes extends string = string, GeoIndexes extends string = string> {
     [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
-    filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
+    filter: (predicate: (document: Row) => boolean) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     first: () => Promise<Row | null>;
-    order: (direction: "asc" | "desc") => TableReader<Row>;
+    order: (direction: "asc" | "desc") => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
     unique: () => Promise<Row | null>;
-    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
-    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
+    withGeoIndex: (indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withIndex: (indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withSearchIndex: (indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 ```
 
@@ -4891,18 +4891,18 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
 ### `TableReader` (interface)
 
 ```ts
-interface TableReader<Row = Record<string, unknown>> {
+interface TableReader<Row = Record<string, unknown>, Indexes extends string = string, SearchIndexes extends string = string, GeoIndexes extends string = string> {
     [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
-    filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
+    filter: (predicate: (document: Row) => boolean) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     first: () => Promise<Row | null>;
-    order: (direction: "asc" | "desc") => TableReader<Row>;
+    order: (direction: "asc" | "desc") => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
     unique: () => Promise<Row | null>;
-    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
-    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
+    withGeoIndex: (indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withIndex: (indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+    withSearchIndex: (indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 ```
 
