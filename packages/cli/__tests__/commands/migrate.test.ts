@@ -302,6 +302,40 @@ export const schema = defineSchema({
             expect(content).toContain("up: (document) => document,");
         });
 
+        it("emits the umbrella import when the project depends on lunorash", async () => {
+            expect.assertions(2);
+
+            // `@lunora/server` is real but is NOT a declared dependency of an
+            // umbrella project, so the scoped form scaffolded a file that did not
+            // resolve in exactly the setup the docs recommend.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "1.0.0-alpha.130" }, name: "app" }), "utf8");
+
+            const result = await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "backfill", table: "messages" });
+            const content = readFileSync(result.file, "utf8");
+
+            expect(content).toContain('import { defineMigration } from "lunorash/server";');
+            expect(content).not.toContain('from "@lunora/server"');
+        });
+
+        it("rewrites an existing import written under the other specifier", async () => {
+            expect.assertions(3);
+
+            // A file scaffolded before the project adopted `lunorash` carries the
+            // scoped import. Matching only the specifier we would emit prepended a
+            // SECOND `defineMigration` import beside it, and a duplicate local
+            // binding does not compile.
+            await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "first", table: "messages" });
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "1.0.0-alpha.130" }, name: "app" }), "utf8");
+
+            const result = await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "second", table: "messages" });
+            const content = readFileSync(result.file, "utf8");
+
+            expect(content.match(/import \{ defineMigration \}/gu)).toHaveLength(1);
+            expect(content).toContain('from "lunorash/server"');
+            expect(content).not.toContain('from "@lunora/server"');
+        });
+
         it("appends a second migration without duplicating the import", async () => {
             expect.hasAssertions();
 

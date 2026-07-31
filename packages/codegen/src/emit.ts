@@ -194,8 +194,14 @@ const validatorToType = (validator: ValidatorIR): string => {
                 return "Record<string, unknown>";
             }
 
+            // Same optionality rule `renderArgsType` applies at the top level of
+            // `.input()`. Rendering an optional child as a required key typed
+            // `T | undefined` forced every caller of a partial-update shape to
+            // pass explicit `undefined`s, which a `{...args.patch}` spread then
+            // carried into `ctx.db.patch` — a partial update that is not partial.
             const fields = Object.entries(validator.shape)
-                .map(([key, child]) => `${renderPropertyKey(key)}: ${validatorToType(child)}`)
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: renderShapeEntry re-enters validatorToType for the property's type
+                .map(([key, child]) => renderShapeEntry(key, child))
                 .join("; ");
 
             return `{ ${fields} }`;
@@ -218,6 +224,28 @@ const validatorToType = (validator: ValidatorIR): string => {
     }
 };
 
+/**
+ * Render one `{key: type}` entry of an object shape, mapping `v.optional(T)` to
+ * the optional PROPERTY `key?: T` rather than the required `key: T | undefined`.
+ *
+ * The distinction is not cosmetic: a required key typed `T | undefined` obliges
+ * a caller to name every field, so a partial-update argument stops being
+ * partial. Used at every depth — top-level `.input()` and nested `v.object()`
+ * alike, which is what keeps the two in agreement.
+ */
+const renderShapeEntry = (key: string, validator: ValidatorIR): string => {
+    const propertyKey = renderPropertyKey(key);
+
+    if (validator.kind === "optional") {
+        // Emit `key?: Inner` rather than `key?: Inner | undefined`.
+        const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
+
+        return `${propertyKey}?: ${inner}`;
+    }
+
+    return `${propertyKey}: ${validatorToType(validator)}`;
+};
+
 const renderArgsType = (args: Record<string, ValidatorIR>): string => {
     const entries = Object.entries(args);
 
@@ -225,20 +253,7 @@ const renderArgsType = (args: Record<string, ValidatorIR>): string => {
         return "{}";
     }
 
-    return `{ ${entries
-        .map(([key, validator]) => {
-            const propertyKey = renderPropertyKey(key);
-
-            if (validator.kind === "optional") {
-                // Emit `key?: Inner` rather than `key?: Inner | undefined`.
-                const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
-
-                return `${propertyKey}?: ${inner}`;
-            }
-
-            return `${propertyKey}: ${validatorToType(validator)}`;
-        })
-        .join("; ")} }`;
+    return `{ ${entries.map(([key, validator]) => renderShapeEntry(key, validator)).join("; ")} }`;
 };
 
 /**
@@ -595,6 +610,69 @@ const relocateGeneratedImports = (returnType: string): string =>
         return `import("${withExtension}")`;
     });
 
+/** Any relative `import("…")` qualifier — the user's own modules as well as `_generated/*`. */
+const RELATIVE_IMPORT_RE = /import\("(?<spec>\.\.?\/[^"]+)"\)/gu;
+
+/** The leading `./` / `../` run of a relative specifier, stripped before testing for the `_generated/` prefix. */
+const LEADING_RELATIVE_RUN_RE = /^(?:\.\.?\/)+/u;
+
+/** Collapse `a/./b` and `a/b/../c` without touching a leading `../` run. */
+const normalizeRelativePath = (path: string): string => {
+    const segments: string[] = [];
+
+    for (const segment of path.split("/")) {
+        if (segment === "" || segment === ".") {
+            continue;
+        }
+
+        if (segment === ".." && segments.length > 0 && segments.at(-1) !== "..") {
+            segments.pop();
+            continue;
+        }
+
+        segments.push(segment);
+    }
+
+    return segments.join("/");
+};
+
+/**
+ * Rebase a relative `import("…")` qualifier that points at one of the USER's own
+ * modules so it resolves from `_generated/` instead of from the source file.
+ *
+ * The type checker prints a type relative to the module it was read in, so a
+ * handler in `lunora/auth/functions.ts` returning a type from its own
+ * `./lib/types` renders as `import("./lib/types").BetterAuthUser`. Inlined
+ * verbatim into `lunora/_generated/api.ts` that means
+ * `lunora/_generated/lib/types`, which does not exist — TS2307, inside a
+ * generated file, while `lunora codegen` exits 0.
+ *
+ * That combination is why it hides: a build script that filters `_generated`
+ * out of its error report — reasonable, since nobody edits generated files —
+ * sees a clean run while `api.ts` does not compile. It surfaces only when a
+ * SIBLING package builds the same file and has nowhere to hide the errors.
+ *
+ * `_generated/*` qualifiers are handled by {@link relocateGeneratedImports} and
+ * left alone here; absolute specifiers are already correct from any directory.
+ */
+const relocateUserRelativeImports = (returnType: string, filePath: string): string =>
+    returnType.replaceAll(RELATIVE_IMPORT_RE, (match, spec: string) => {
+        if (GENERATED_PREFIX_RE.test(spec.replace(LEADING_RELATIVE_RUN_RE, ""))) {
+            return match;
+        }
+
+        // `filePath` is relative to `lunora/` without an extension, so its
+        // directory is where the checker resolved this specifier from.
+        const sourceDirectory = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : "";
+        const fromLunoraRoot = normalizeRelativePath(`${sourceDirectory}/${spec}`);
+
+        // `_generated/` sits one level under `lunora/`, so climbing out of it
+        // lands on the root the resolved path is expressed from.
+        const rebased = `../${fromLunoraRoot}`;
+
+        return `import("${QUALIFIER_HAS_EXTENSION_RE.test(rebased) ? rebased : `${rebased}.js`}")`;
+    });
+
 /**
  * An `import("@lunora/&lt;base>")` qualifier the type checker rendered into a
  * function's args/return type — e.g. a mutator whose `server` impl returns
@@ -690,7 +768,7 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
                 const argsType = renderArgsType(definition.args);
-                const returnType = relocateGeneratedImports(referenceReturnType(definition));
+                const returnType = relocateGeneratedImports(relocateUserRelativeImports(referenceReturnType(definition), definition.filePath));
 
                 return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
             })
@@ -1107,7 +1185,7 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         .map(([file, list]) => {
             const members = list
                 .map((route) => {
-                    const chunkType = relocateGeneratedImports(route.chunkType ?? "unknown");
+                    const chunkType = relocateGeneratedImports(relocateUserRelativeImports(route.chunkType ?? "unknown", route.filePath));
 
                     return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${renderArgsType(route.searchParams)}, ${renderArgsType(route.params)}>;`;
                 })
@@ -1210,8 +1288,13 @@ ${schedulerReferences.block}${httpStreamsRef.block}`;
     ];
     const clientImportLine = clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${base.client}";\n` : "";
 
+    // `anyApi` comes from the CLIENT package, not the server one. `api.ts` is the
+    // file a sibling package imports (a web app, another Worker), and its only
+    // runtime import should be one that package already depends on — the server
+    // specifier made a browser app resolve the server runtime for a proxy. Both
+    // packages re-export the same shared implementation.
     return relocateBaseQualifiers(
-        `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
+        `${GENERATED_HEADER}import { anyApi } from "${base.client}";
 ${clientImportLine}${schedulerReferences.importLine}${dataModelImportLine}
 ${fileBody}`,
         useUmbrella,
@@ -1553,7 +1636,7 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
                 .map((definition) => {
                     const argsType = renderArgsType(definition.args);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = relocateGeneratedImports(definition.returnType);
+                    const returnType = relocateGeneratedImports(relocateUserRelativeImports(definition.returnType, definition.filePath));
 
                     // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
                     // `callRegistered` awaits the handler, and awaiting a non-thenable
@@ -2018,7 +2101,7 @@ import type {
     Validator,
 } from "${base.server}";
 
-import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
+import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
 ${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -2042,8 +2125,17 @@ export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsType
  * Intersected with the wide \`(string) => TableReader\` signature so the bound
  * \`ctx.db\` is still structurally assignable to schema-agnostic consumers that
  * call \`db.query(someString)\` (e.g. \`@lunora/ratelimit\`'s \`createDbStore\`).
+ *
+ * The three index-name unions are what make \`.withIndex("by_TYPO")\` a compile
+ * error: each resolves to the table's declared names, or \`never\` when it
+ * declares none of that kind. Without them a renamed or dropped index left
+ * every call site typechecking, and the query either threw at runtime or
+ * degraded silently to a full table scan.
  */
-type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) & ((table: string) => TableReader);
+type TypedTableQuery = (<T extends TableName>(
+    table: T,
+) => TableReader<Doc<T>, IndexNamesByTable[T], SearchIndexNamesByTable[T], GeoIndexNamesByTable[T]>) &
+    ((table: string) => TableReader);
 
 /**
  * The point read \`ctx.db.get(id)\`, bound to this schema: an \`Id<"table">\`
@@ -3791,12 +3883,16 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",
+    "ExportRow",
     ...(hasFlags ? ["FlagsResult"] : []),
+    "ImportShardResult",
     "KeyRange",
     "MaskPoliciesResult",
     "MigrationRunResult",
     ...(hasQueues ? ["QueuesResult"] : []),
     "RunShardApplyCdcArgs",
+    "RunShardExportArgs",
+    "RunShardImportArgs",
     "RunShardMigrationArgs",
     "RlsPoliciesResult",
     "RunShardRankBeforeArgs",
@@ -4156,7 +4252,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
@@ -5002,6 +5098,70 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             await writer.patch(args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
+        }
+
+        // The base \`ShardDO\` cannot build a schema-aware writer, so its
+        // \`runShardExport\`/\`runShardImport\` return \`[]\` and \`{inserted:{}}\`.
+        // Those are success-shaped: an empty export is what a correct export of
+        // an empty shard looks like, so a backup of a populated sharded schema
+        // reported success and wrote nothing, and an import reported success and
+        // dropped every row. Overriding both here is what makes the two admin
+        // RPCs real for a \`.shardBy()\` table.
+        //
+        // NOTE: the admin export RPC is not paginated — \`parseExportShardArgs\`
+        // takes \`tables\`/\`batchSize\` but no cursor, and the coordinator issues
+        // one call per shard — so the rows are collected into a single response.
+        // \`batchSize\` bounds the SQLite scan page, not the reply. A shard holding
+        // more rows than fit in the DO's memory budget will therefore fail the
+        // export rather than stream it. That is a loud failure where the bug this
+        // replaces was a silent empty one, but a cursor on the RPC is what makes
+        // this a complete backup path for large shards.
+        protected override async runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table, delta.indexKeys);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            const rows: ExportRow[] = [];
+
+            // \`exportShardRows\` walks in keyset batches so a large table does not
+            // materialize at once inside the generator; the admin RPC's response
+            // is a single array, so it is collected here rather than streamed.
+            for await (const row of exportShardRows(writer, schema as unknown as SchemaLike, { batchSize: args.batchSize, tables: args.tables })) {
+                rows.push(row);
+            }
+
+            return rows;
+        }
+
+        protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table, delta.indexKeys);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            // \`importShardRows\` inserts with \`allowExplicitId\`, so a source
+            // database's \`_id\`s carry across verbatim and every foreign key
+            // referencing them stays valid without a second remapping pass.
+            return importShardRows(writer, schema as unknown as SchemaLike, { rows: args.rows, startLine: args.startLine });
         }
 
         protected override async deleteRowThroughWriter(table: string, id: string): Promise<void> {

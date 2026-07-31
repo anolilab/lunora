@@ -149,6 +149,47 @@ interface SchemaDriftDecision {
     reason: string;
 }
 
+/** The commands that can print the blocked-drift remediation, and which override flags each accepts. */
+const DRIFT_FLAG_SUPPORT: Record<string, { allowDrift: boolean; updateBaseline: boolean }> = {
+    deploy: { allowDrift: true, updateBaseline: true },
+    prepare: { allowDrift: true, updateBaseline: true },
+    verify: { allowDrift: true, updateBaseline: false },
+};
+
+/**
+ * Render only the override flags the command that is printing this actually
+ * accepts, and name the alternative when it accepts none.
+ *
+ * The message used to list both flags unconditionally, so following it verbatim
+ * failed: `build` accepts neither (`Found unknown option "--allow-schema-drift"`)
+ * and `verify` accepts only the first. This is the message a first-time deployer
+ * hits, and half its own advice did not work on the command that printed it.
+ *
+ * Only the three commands that actually run the gate are listed
+ * (`prepare` / `deploy` / `verify`); `build` and `codegen` never reach it, so an
+ * entry for them would describe a message no user can see. An unrecognised
+ * caller falls back to listing both flags — better an over-broad hint than none.
+ */
+const ALLOW_DRIFT_LINE = "  • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.";
+const UPDATE_BASELINE_LINE = "  • To accept the new shape without a migration (you know data is compatible): pass `--update-schema-baseline`.";
+
+const remediationFlagLines = (command: string | undefined): string => {
+    const support = command === undefined ? undefined : DRIFT_FLAG_SUPPORT[command];
+
+    if (command === undefined || support === undefined) {
+        return `${ALLOW_DRIFT_LINE}\n${UPDATE_BASELINE_LINE}\n`;
+    }
+
+    // Every command that runs the gate accepts `--allow-schema-drift`, so that
+    // line is unconditional; only the baseline re-bless varies. (`verify` runs
+    // the gate read-only, so re-blessing from it would be wrong, not missing.)
+    const baselineLine = support.updateBaseline
+        ? UPDATE_BASELINE_LINE
+        : `  • To accept the new shape without a migration, run \`lunora prepare --update-schema-baseline\` — \`lunora ${command}\` does not take that flag.`;
+
+    return `${ALLOW_DRIFT_LINE}\n${baselineLine}\n`;
+};
+
 /**
  * Decide whether breaking schema drift should block a deploy.
  *
@@ -157,8 +198,14 @@ interface SchemaDriftDecision {
  * the baseline, and the `allowDrift` override is not set. Safe-only drift (or
  * breaking drift accompanied by a new migration id) passes.
  */
-const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSnapshot | undefined; current: SchemaSnapshot }): SchemaDriftDecision => {
-    const { allowDrift = false, baseline, current } = options;
+const evaluateSchemaDrift = (options: {
+    allowDrift?: boolean;
+    baseline: SchemaSnapshot | undefined;
+    /** The command printing the remediation, so it names only flags that command accepts. */
+    command?: string;
+    current: SchemaSnapshot;
+}): SchemaDriftDecision => {
+    const { allowDrift = false, baseline, command, current } = options;
     const drift = diffSchemaSnapshots(baseline, current);
     const breaking = drift.changes.filter((change) => change.severity === "breaking");
     const newMigrationIds = current.migrationIds.filter((id) => !(baseline?.migrationIds ?? []).includes(id));
@@ -197,9 +244,7 @@ const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSn
         `To fix:\n` +
         `  • For breaking changes: add a \`defineMigration({ id, table, up })\` in lunora/ for each affected table, ` +
         `then run \`lunora migrate\` (or \`lunora codegen\`) to apply and re-bless the baseline.\n` +
-        `  • For backward-compatible changes (e.g. adding an optional field): pass \`--allow-schema-drift\` to skip the block.\n` +
-        `  • To accept the new shape without a migration (you know data is compatible): pass \`--update-schema-baseline\`.\n` +
-        `Docs: https://lunora.dev/docs/migrations`;
+        `${remediationFlagLines(command)}Docs: https://lunora.dev/docs/migrations`;
 
     if (allowDrift) {
         return { blocked: false, changes: drift.changes, newMigrationIds, reason: `${reason}\n\n(overridden by --allow-schema-drift)` };

@@ -19,13 +19,51 @@ import { LunoraError } from "@lunora/errors";
 export type MigrationDocument = Record<string, unknown>;
 
 /**
+ * The read surface a transform reaches through its `ctx`.
+ *
+ * Read-only by design: the runner accounts for exactly one rewrite per row read,
+ * and a transform writing directly would make that count describe something
+ * other than what happened. Scoped to the shard the runner is walking.
+ */
+export interface MigrationReader {
+    count: (table: string, where?: Record<string, unknown>) => Promise<number>;
+    findFirst: (table: string, args?: Record<string, unknown>) => Promise<MigrationDocument | null>;
+    findMany: (table: string, args?: Record<string, unknown>) => Promise<{ isDone: boolean; page: MigrationDocument[] }>;
+    get: (id: string, expectedTable?: string) => Promise<MigrationDocument | null>;
+}
+
+/** The context handed to a transform alongside the row. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name, matching the `QueryCtx`/`MutationCtx`/`HttpActionCtx` family; renaming would break consumers
+export interface MigrationCtx {
+    db: MigrationReader;
+}
+
+/**
  * Transform applied to one document. Return a new document to rewrite the row,
  * or `undefined` to leave it untouched (skipped, not counted as changed). The
  * runner always preserves the original `_id` and `_creationTime`, so the
  * returned document neither needs to nor should change row identity.
+ *
+ * The second parameter carries a shard-scoped reader. Without it a transform
+ * could only rewrite the row it was handed — enough for a backfill whose new
+ * value is a pure function of the old row (`displayName = name ?? "Anonymous"`),
+ * but not for the shape people actually write: read the parent, copy a field
+ * down onto its children.
+ *
+ * May return a promise, since a cross-table read is asynchronous.
+ *
+ * **A shard key cannot be backfilled this way, even with a reader.** A row whose
+ * shard-key field is unset does not belong to any shard, so a shard-scoped query
+ * will not enumerate it; and writing the key would have to MOVE the row to a
+ * different Durable Object, which a per-shard runner cannot do. Re-keying is an
+ * export → transform → import, not a migration.
  */
-// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a transform with no return statement type-check; `undefined` alone wouldn't accept a `(): void` arrow
-export type MigrationTransform = (document: MigrationDocument) => MigrationDocument | undefined | void;
+export type MigrationTransform = (
+    document: MigrationDocument,
+    // eslint-disable-next-line unicorn/prevent-abbreviations -- reads as `up: (doc, ctx) => …` at every authoring site, matching the procedure handlers' `ctx`
+    ctx: MigrationCtx,
+    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a transform with no return statement type-check; `undefined` alone wouldn't accept a `(): void` arrow
+) => MigrationDocument | Promise<MigrationDocument | undefined | void> | undefined | void;
 
 export interface MigrationDefinition {
     /** Rows fetched and rewritten per batch. Defaults to the runner's batch size when omitted. */

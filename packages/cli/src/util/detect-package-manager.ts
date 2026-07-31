@@ -118,6 +118,20 @@ const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArr
     return { args: ["exec", command, ...args], command: "pnpm" };
 };
 
+/**
+ * The argv that runs a project SCRIPT with `manager` — the counterpart to
+ * {@link execArgsFor}, which runs a BINARY.
+ *
+ * All four managers accept `&lt;manager> run &lt;script>`, so this is uniform. It is a
+ * separate function because reaching for `execArgsFor(manager, "run", [script])`
+ * silently produces something else entirely: `pnpm exec run &lt;script>` fails with
+ * `Command "run" not found`, and `npx -- run &lt;script>` resolves the registry
+ * PACKAGE named `run` and executes it.
+ */
+const runScriptArgsFor = (manager: PackageManager, script: string): { args: string[]; command: string } => {
+    return { args: ["run", script], command: manager };
+};
+
 /** The shell command that runs a project script with `manager` (`pnpm dev`, `npm run dev`, …). */
 const runScriptCommand = (manager: PackageManager, script: string): string => {
     if (manager === "npm") {
@@ -133,4 +147,4 @@ const runScriptCommand = (manager: PackageManager, script: string): string => {
 };
 
 export type { PackageManager, PackageManagerProbe };
-export { detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptCommand };
+export { detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand };

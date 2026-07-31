@@ -7,7 +7,18 @@
  * module's declaration output — which keeps the file `--isolatedDeclarations`-
  * clean without hand-annotating each builder's complex inferred return type.
  */
-import type { ActionCtx, EmptyArgs, Id, Infer, LunoraRouteHandler, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
+import type {
+    ActionCtx,
+    EmptyArgs,
+    Id,
+    Infer,
+    LunoraRouteHandler,
+    QueryCtx,
+    RegisteredQuery,
+    ScheduledFunctionDoc,
+    StorageMetadata,
+    TableReader,
+} from "../src/index";
 import { defineSchema, defineTable, httpRoute, initLunora, v } from "../src/index";
 
 type Assert<T extends true> = T;
@@ -32,6 +43,16 @@ interface FunctionReferenceLike<Kind extends "action" | "mutation" | "query" | "
 
 declare const actionCtx: ActionCtx;
 declare const queryCtx: QueryCtx;
+
+/**
+ * A reader bound the way codegen binds it: the table's declared index names,
+ * not `string`. This is what turns a stale index name into a compile error
+ * instead of a runtime throw or a silent full-table scan.
+ */
+declare const boundReader: TableReader<{ channelId: string; text: string }, "by_channel" | "by_created", "by_text", never>;
+
+/** A reader for a table that declares no indexes of any kind — every name is rejected. */
+declare const unindexedReader: TableReader<{ text: string }, never, never, never>;
 
 const check = (): void => {
     const { mutation, query } = initLunora.dataModel().create();
@@ -174,6 +195,40 @@ const check = (): void => {
 
     type Check17 = Assert<Equal<Awaited<typeof systemScheduled>, ScheduledFunctionDoc[]>>;
     type Check18 = Assert<Equal<Awaited<typeof systemStorageGet>, StorageMetadata | null>>;
+
+    // A declared index name is accepted, and the chain keeps its index binding
+    // so a second `.withIndex()` after `.filter()`/`.order()` is still checked.
+    boundReader.withIndex("by_channel", (q) => q.eq("channelId", "c1"));
+    boundReader
+        .order("desc")
+        .filter(() => true)
+        .withIndex("by_created");
+    boundReader.withSearchIndex("by_text", (q) => q.search("text", "hello"));
+
+    // @ts-expect-error -- "by_TYPO" is not a declared index on this table
+    boundReader.withIndex("by_TYPO");
+
+    // @ts-expect-error -- "by_channel" is an index, not a SEARCH index
+    boundReader.withSearchIndex("by_channel", (q) => q.search("text", "hello"));
+
+    // @ts-expect-error -- the table declares no geo index, so the parameter is `never`
+    boundReader.withGeoIndex("by_location", (q) => q);
+
+    // @ts-expect-error -- a table with no indexes accepts no index name at all
+    unindexedReader.withIndex("by_anything");
+
+    // A BOUND reader must stay assignable to the unbound published type. This is
+    // the compatibility direction the narrowing could silently have broken: a
+    // helper factored as `(reader: TableReader<Doc>) => …` is the obvious way to
+    // share query logic, and it is handed exactly what `ctx.db.query(t)` returns.
+    // It holds only because the three `with*` members are METHOD signatures
+    // (bivariant); as function properties, `strictFunctionTypes` would reject it.
+    const acceptsUnbound = (_reader: TableReader<{ channelId: string; text: string }>): void => {};
+    const acceptsUnboundTextRow = (_reader: TableReader<{ text: string }>): void => {};
+
+    acceptsUnbound(boundReader);
+    // Also holds for the `never` end of the range — a table declaring no indexes.
+    acceptsUnboundTextRow(unindexedReader);
 
     // Reference every compile-time assertion so the unused-local lint can't strip
     // the checks; each `Check*` fails at its definition if the equality regresses.

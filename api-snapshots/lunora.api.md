@@ -409,11 +409,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MigrationDocument` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MigrationReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1580,6 +1588,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `WsTokenProvider` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `anyApi` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -4067,6 +4079,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
+### `RateLimitDbReader` (interface)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
 ### `RateLimitError` (class)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
@@ -4107,6 +4123,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
+### `ReadOnlyDbStoreOptions` (interface)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
 ### `SqlLike` (interface)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
@@ -4128,6 +4148,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 ### `createMemoryStore` (const)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
+### `createReadOnlyDbStore` (const)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
@@ -5471,11 +5495,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MigrationDocument` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MigrationReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

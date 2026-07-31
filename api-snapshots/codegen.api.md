@@ -1125,6 +1125,7 @@ const emitWranglerCronTriggers: (crons: ReadonlyArray<CronJobIR>) => string[];
 const evaluateSchemaDrift: (options: {
     allowDrift?: boolean;
     baseline: SchemaSnapshot | undefined;
+    command?: string;
     current: SchemaSnapshot;
 }) => SchemaDriftDecision;
 ```
@@ -1155,6 +1156,12 @@ const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | und
 
 ```ts
 const platformMatrixIds: () => ReadonlyArray<string>;
+```
+
+### `readPackageDependencies` (const)
+
+```ts
+const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
 ```
 
 ### `readProjectTarget` (const)

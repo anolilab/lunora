@@ -15,7 +15,9 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
+import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
+import type { Spawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { PrepareOptions } from "./index";
 
@@ -26,6 +28,9 @@ interface PrepareCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
+
+    /** Injected process runner for the `postcodegen` hook (tests). Defaults to the real spawner. */
+    spawner?: Spawner;
 
     /**
      * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`.
@@ -136,12 +141,27 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         };
     }
 
+    // Codegen ran in-process, not through the project's own `codegen` script, so
+    // anything the project chained onto it would otherwise be skipped here.
+    const postCodegen = await runPostCodegenHook({ cwd, logger: options.logger, spawner: options.spawner });
+
+    if (postCodegen.error !== undefined) {
+        options.logger.error(postCodegen.error);
+
+        return {
+            code: 1,
+            error: postCodegen.error,
+            validation: { problems: [], wranglerPath: undefined },
+        };
+    }
+
     // Schema-drift gate — block when breaking schema changes ship without a new
     // data migration. CI-friendly: `lunora prepare` is the canonical pre-deploy
     // step, so the gate lives here as well as in `lunora deploy`.
     const gate = runSchemaDriftGate({
         allowDrift: options.allowSchemaDrift === true,
         codegen,
+        command: "prepare",
         logger: options.logger,
         updateBaseline: options.updateSchemaBaseline === true,
     });

@@ -12,11 +12,8 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ### `DbStoreOptions` (interface)
 
 ```ts
-interface DatabaseStoreOptions {
+interface DatabaseStoreOptions extends DatabaseStoreLocation {
     db: RateLimitDatabase;
-    index?: string;
-    keyField?: string;
-    table?: string;
 }
 ```
 
@@ -79,11 +76,10 @@ type RateLimitConfigMap<Names extends string = string> = Record<Names, RateLimit
 ### `RateLimitDb` (interface)
 
 ```ts
-interface RateLimitDatabase {
+interface RateLimitDatabase extends RateLimitDatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
     insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
-    query: (table: string) => RateLimitDatabaseQuery;
 }
 ```
 
@@ -105,6 +101,14 @@ interface RateLimitDatabaseIndexRange {
 interface RateLimitDatabaseQuery {
     first: () => Promise<Record<string, unknown> | null>;
     withIndex: (indexName: string, range: (q: RateLimitDatabaseIndexRange) => RateLimitDatabaseIndexRange) => RateLimitDatabaseQuery;
+}
+```
+
+### `RateLimitDbReader` (interface)
+
+```ts
+interface RateLimitDatabaseReader {
+    query: (table: string) => RateLimitDatabaseQuery;
 }
 ```
 
@@ -215,6 +219,14 @@ interface RatelimitApiContext<Context> {
 }
 ```
 
+### `ReadOnlyDbStoreOptions` (interface)
+
+```ts
+interface ReadOnlyDatabaseStoreOptions extends DatabaseStoreLocation {
+    db: RateLimitDatabaseReader;
+}
+```
+
 ### `SqlLike` (interface)
 
 ```ts
@@ -259,6 +271,12 @@ const createDatabaseStore: (options: DatabaseStoreOptions) => RateLimitStore;
 
 ```ts
 const createMemoryStore: () => RateLimitStore;
+```
+
+### `createReadOnlyDbStore` (const)
+
+```ts
+const createReadOnlyDatabaseStore: (options: ReadOnlyDatabaseStoreOptions) => RateLimitStore;
 ```
 
 ### `createSqlStore` (const)

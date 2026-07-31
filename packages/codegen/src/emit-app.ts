@@ -585,8 +585,12 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
         : []),
     ...(options.hasStorage
         ? [
+              // The admin ops back the studio file browser; \`storage\` is the
+              // app-facing capability, and is what gives an HTTP action a
+              // \`ctx.storage\` without a hop through a scheduled action.
               `        if (this.storageDeclaration) {
             Object.assign(options, this.buildStorageAdmin(env));
+            options.storage = (rawEnv: unknown) => this.resolveStorage(rawEnv as Env);
         }`,
           ]
         : []),

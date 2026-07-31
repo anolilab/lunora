@@ -5,13 +5,8 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+import { anyApi as sharedAnyApi } from "../../../shared/any-api";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
-
-// Cache the namespace proxies and the per-function reference objects so that
-// `api.foo.bar` returns the *same* object on every access. React hooks
-// (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
-// identity per render would re-run effects every render and loop forever.
-const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
 
 /** Map of validators describing a function's args record. Alias of `@lunora/values`' shared {@link ValidatorMap}. */
 type ArgsValidator = ValidatorMap;
@@ -835,11 +830,39 @@ interface PaginationResult<T = Record<string, unknown>> {
 /**
  * The fluent `ctx.db.query(table)` reader. Generic over the document type
  * `Row` so the generated `ctx.db` can bind it to `Doc&lt;table>` (the chain and
- * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts).
- * Defaults to the untyped `Record&lt;string, unknown>` shape for the base
- * (schema-agnostic) `@lunora/server` reader.
+ * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts),
+ * and over the table's declared index names so `.withIndex()` / `.withSearchIndex()`
+ * / `.withGeoIndex()` reject a name the table does not declare.
+ *
+ * All four default to the untyped shape for the base (schema-agnostic)
+ * `@lunora/server` reader, which is also the wide `(table: string) => TableReader`
+ * overload the generated `ctx.db` intersects in — so a caller holding a runtime
+ * string (e.g. `@lunora/ratelimit`'s `createDbStore`) is unaffected.
+ *
+ * The index-name parameters are what make a stale index name a compile error.
+ * They resolve to `never` for a table that declares none of that kind, so the
+ * only way to satisfy the call is to declare the index. Before this, a renamed
+ * or dropped index left its call sites typechecking, and the query either threw
+ * at runtime or silently degraded to a full table scan — the second being the
+ * worse outcome, since it stays green in tests and surfaces months later as a
+ * latency regression.
+ *
+ * **Why `with*` are method signatures and everything else is a property.**
+ * Narrowing a parameter makes the enclosing type contravariant in it, so as
+ * function properties these would make a BOUND reader
+ * (`TableReader&lt;Doc, "by_x">`, what `ctx.db.query(t)` returns) unassignable to
+ * the unbound `TableReader&lt;Doc>` — quietly breaking every helper factored as
+ * `(reader: TableReader&lt;Doc&lt;"users">>) => …`, which is the obvious way to share
+ * query logic. A method signature is bivariant in its parameters, which keeps
+ * that direction working while the narrow parameter still rejects an undeclared
+ * name at the call site. Both directions are pinned in `types.test-d.ts`.
  */
-interface TableReader<Row = Record<string, unknown>> {
+interface TableReader<
+    Row = Record<string, unknown>,
+    Indexes extends string = string,
+    SearchIndexes extends string = string,
+    GeoIndexes extends string = string,
+> {
     /**
      * Iterate rows lazily: `for await (const row of ctx.db.query("t").withIndex(…))`.
      *
@@ -862,7 +885,7 @@ interface TableReader<Row = Record<string, unknown>> {
      */
     [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
-    filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
+    filter: (predicate: (document: Row) => boolean) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     first: () => Promise<Row | null>;
 
     /**
@@ -872,7 +895,7 @@ interface TableReader<Row = Record<string, unknown>> {
      * terminal (`collect`/`first`/`take`/`paginate`/`unique`). Mirrors Convex's
      * `.order("asc" | "desc")`.
      */
-    order: (direction: "asc" | "desc") => TableReader<Row>;
+    order: (direction: "asc" | "desc") => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
 
@@ -890,9 +913,17 @@ interface TableReader<Row = Record<string, unknown>> {
      * scan over the index's companion followed by a Haversine refine. Pair with
      * `.take(n)` to cap results (`.paginate()` is not supported on a geo query).
      */
-    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withGeoIndex(indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
-    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
+    /**
+     * Restrict the query to a declared `.index()`. `indexName` is constrained to
+     * this table's declared index names (`never` when it declares none), so a
+     * renamed, dropped, or mistyped index is a compile error rather than a
+     * runtime throw or a silent full-table scan.
+     */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withIndex(indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
     /**
      * Restrict the query to a declared `.searchIndex()`. The builder's
@@ -901,7 +932,8 @@ interface TableReader<Row = Record<string, unknown>> {
      * field. Results come back ordered by relevance — pair with `.take(n)`
      * (`.paginate()` is not supported on a search query).
      */
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withSearchIndex(indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 
 interface IndexRangeBuilder {
@@ -2180,42 +2212,11 @@ interface ActionCtx {
  */
 type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
 
-const anyApi: AnyApi = new Proxy(
-    {},
-    {
-        get(_target, namespace: PropertyKey) {
-            const cached = namespaceCache.get(namespace);
-
-            if (cached) {
-                return cached;
-            }
-
-            const refCache = new Map<PropertyKey, { __lunoraRef: string }>();
-            const nsProxy = new Proxy(
-                {},
-                {
-                    get(_inner, functionName: PropertyKey) {
-                        const cachedRef = refCache.get(functionName);
-
-                        if (cachedRef) {
-                            return cachedRef;
-                        }
-
-                        const ref = { __lunoraRef: `${String(namespace)}:${String(functionName)}` };
-
-                        refCache.set(functionName, ref);
-
-                        return ref;
-                    },
-                },
-            );
-
-            namespaceCache.set(namespace, nsProxy);
-
-            return nsProxy;
-        },
-    },
-);
+// The proxy itself lives in `shared/any-api.ts` so `@lunora/client` can serve
+// the same value: the generated `api.ts` is what a sibling package imports, and
+// its runtime import should not be the server runtime. Re-exported here
+// unchanged, typed to this package's `AnyApi`.
+const anyApi = sharedAnyApi as unknown as AnyApi;
 
 export { anyApi };
 

@@ -218,7 +218,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         }
 
         const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });
-        const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, logger, readOnly: true });
+        const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 
         if (gate.blocked) {
             errors.push(gate.reason);

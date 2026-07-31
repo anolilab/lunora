@@ -294,6 +294,7 @@ class AppBuilder<Env extends object> {
 
         if (this.storageDeclaration) {
             Object.assign(options, this.buildStorageAdmin(env));
+            options.storage = (rawEnv: unknown) => this.resolveStorage(rawEnv as Env);
         }
 
         options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;

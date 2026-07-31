@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
+import type { Command } from "@visulima/cerebro";
 import { createCerebro } from "@visulima/cerebro";
 import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
@@ -168,6 +169,81 @@ const CLI_COMMANDS = [
     mcpCommand,
 ];
 
+/**
+ * Every command actually handed to cerebro — the project's own, plus the two
+ * opt-in built-ins. (`help` and the `-h`/`--help` flag are auto-registered by
+ * cerebro itself, so they are not here.)
+ *
+ * One collection, because the brace-escaping pass and the help-rendering guard
+ * must not disagree about what is registered: escaping `CLI_COMMANDS` alone
+ * would leave `version`/`completion` unescaped, and deriving the guard's names
+ * from it would leave them untested.
+ */
+const REGISTERED_COMMANDS: ReadonlyArray<Command> = [...CLI_COMMANDS, versionCommand, completionCommand];
+
+/**
+ * Every registered command's name. A superset of {@link COMMANDS}, which is the
+ * user-facing list driving "did you mean …?" suggestions — `advisor`,
+ * `introspect`, `version` and `completion` are all reachable but deliberately
+ * absent from it. Exported so the help-rendering guard covers what is actually
+ * reachable, not what is advertised.
+ */
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string> = REGISTERED_COMMANDS.map((command) => command.name);
+
+/**
+ * Escape `{` / `}` so cerebro's help renderer prints them literally.
+ *
+ * cerebro renders help text through chalk's tagged-template parser, which reads
+ * `{style ...}` as markup — so a description or example carrying a real brace
+ * (a JSON `--args` sample, or the import line's `table`/`doc` envelope) does not
+ * render wrong, it throws: `Found extraneous } in template literal`, and that
+ * command's help becomes unreachable. `lunora import --help` and `lunora run
+ * --help` both died this way, so the documented shape of the import line had to
+ * be read out of the package's `.d.ts` instead.
+ *
+ * Escaping at registration rather than policing every string keeps help text
+ * written the way it reads, and means a future command carrying a brace cannot
+ * reintroduce the bug. Nothing here uses chalk styling in help text deliberately,
+ * so there is no markup to preserve.
+ *
+ * The same upstream defect breaks `vis sort-package-json --help`.
+ * @see {@link https://github.com/visulima/visulima/issues/741}
+ */
+const escapeHelpBraces = (text: string): string => text.replaceAll("{", String.raw`\{`).replaceAll("}", String.raw`\}`);
+
+/**
+ * Escape a command's `examples`, which cerebro types `string[] | string[][]` —
+ * either a list of bare invocations or a list of `[invocation, caption]` rows.
+ */
+const escapeExamples = (examples: string[] | string[][]): string[] | string[][] => {
+    // Branch per element, not once on the list. cerebro's type says the array is
+    // homogeneous, but this runs at CLI construction for every command on every
+    // invocation — a mixed array would throw `row.map is not a function` and take
+    // down the whole CLI, not just that command's help.
+    if (examples.every((example) => typeof example === "string")) {
+        return examples.map((example) => escapeHelpBraces(example));
+    }
+
+    return examples.map((row) => (typeof row === "string" ? [escapeHelpBraces(row)] : row.map((part) => escapeHelpBraces(part))));
+};
+
+/** Apply {@link escapeHelpBraces} to every field of a command that reaches the help renderer. */
+const escapeCommandHelpBraces = (command: Command): Command => {
+    return {
+        ...command,
+        ...(command.argument === undefined ? {} : { argument: { ...command.argument, description: escapeHelpBraces(command.argument.description ?? "") } }),
+        ...(command.description === undefined ? {} : { description: escapeHelpBraces(command.description) }),
+        ...(command.examples === undefined ? {} : { examples: escapeExamples(command.examples) }),
+        ...(command.options === undefined
+            ? {}
+            : {
+                  options: command.options.map((option) => {
+                      return { ...option, description: escapeHelpBraces(option.description ?? "") };
+                  }),
+              }),
+    };
+};
+
 interface RunCliOptions {
     argv?: ReadonlyArray<string>;
     cwd?: string;
@@ -208,14 +284,9 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         packageVersion: VERSION,
     });
 
-    for (const command of CLI_COMMANDS) {
-        cli.addCommand(command);
+    for (const command of REGISTERED_COMMANDS) {
+        cli.addCommand(escapeCommandHelpBraces(command));
     }
-
-    // cerebro auto-registers `help` + the `-h`/`--help` flag; `version` and
-    // `completion` (shell autocompletions via @bomb.sh/tab) are opt-in.
-    cli.addCommand(versionCommand);
-    cli.addCommand(completionCommand);
 
     return { cli, exitCode };
 };
@@ -279,4 +350,5 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
 };
 
 export type { CommandName, RunCliOptions };
-export { COMMANDS, runCli, VERSION };
+
+export { COMMANDS, REGISTERED_COMMAND_NAMES, runCli, VERSION };

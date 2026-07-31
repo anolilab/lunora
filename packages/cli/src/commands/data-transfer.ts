@@ -480,6 +480,32 @@ const resolveImportSource = async (
 };
 
 /**
+ * Print an import run's diagnostics and summary.
+ *
+ * `received` versus the inserted total is what distinguishes "wrote nothing
+ * because there was nothing" from "wrote nothing because I could not" — the
+ * distinction the endpoint's success-shaped empty response used to hide.
+ */
+const reportImportOutcome = (
+    logger: Logger,
+    outcome: { conflicts: number; errorCount: number; insertedTotal: number; received: number; warnings: ReadonlyArray<string> },
+): void => {
+    for (const warning of outcome.warnings) {
+        logger.warn(warning);
+    }
+
+    const unaccounted = outcome.received - outcome.insertedTotal - outcome.conflicts - outcome.errorCount;
+
+    if (unaccounted > 0) {
+        logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, conflicted, nor reported as errors`);
+    }
+
+    logger.success(
+        `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`,
+    );
+};
+
+/**
  * Stream an NDJSON file — or a `npx convex export --path &lt;dir>` directory — in
  * chunks, POSTing each batch to `/_lunora/admin/import`. The line buffer stays
  * bounded by `batchSize`, so a multi-GiB source imports without buffering
@@ -518,9 +544,38 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
+    let received = 0;
+    const warnings: string[] = [];
     let buffer = "";
     let batch: string[] = [];
     let lineNumber = 0;
+
+    /** Fold one admin-import response into the run's running totals. */
+    const mergeImportResponse = (json: {
+        conflicts?: number;
+        errors?: { code: string; line: number; message: string; table: string }[];
+        inserted?: Record<string, number>;
+        received?: number;
+        warnings?: string[];
+    }): void => {
+        for (const [table, count] of Object.entries(json.inserted ?? {})) {
+            inserted[table] = (inserted[table] ?? 0) + count;
+        }
+
+        errors.push(...(json.errors ?? []));
+        conflicts += json.conflicts ?? 0;
+        received += json.received ?? 0;
+
+        // The endpoint's own diagnostics — e.g. "no `resolveTableSharding` is
+        // configured, so every row was routed to the default shard". Dropping
+        // these would leave the operator with a success line over a silently
+        // misplaced import, which is the failure they report.
+        for (const warning of json.warnings ?? []) {
+            if (!warnings.includes(warning)) {
+                warnings.push(warning);
+            }
+        }
+    };
 
     const flush = async (): Promise<void> => {
         if (batch.length === 0) {
@@ -551,21 +606,11 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             conflicts?: number;
             errors?: { code: string; line: number; message: string; table: string }[];
             inserted?: Record<string, number>;
+            received?: number;
+            warnings?: string[];
         };
 
-        if (json.inserted) {
-            for (const [table, count] of Object.entries(json.inserted)) {
-                inserted[table] = (inserted[table] ?? 0) + count;
-            }
-        }
-
-        if (Array.isArray(json.errors)) {
-            errors.push(...json.errors);
-        }
-
-        if (typeof json.conflicts === "number") {
-            conflicts += json.conflicts;
-        }
+        mergeImportResponse(json);
     };
 
     const processLine = (line: string): void => {
@@ -630,10 +675,10 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     await flush();
 
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
-    const body = { conflicts, errors, inserted };
+    const body = { conflicts, errors, inserted, received, ...(warnings.length > 0 ? { warnings } : {}) };
 
     options.logger.info(JSON.stringify(body, undefined, 2));
-    options.logger.success(`imported ${String(insertedTotal)} rows (${String(conflicts)} conflicts, ${String(errors.length)} errors)`);
+    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, insertedTotal, received, warnings });
 
     return { body, code: errors.length > 0 ? 1 : 0, inserted: insertedTotal };
 };

@@ -68,12 +68,39 @@ type MigrationStatus = "completed" | "failed" | "in_progress";
 type DataMigrationDocument = Record<string, unknown>;
 
 /**
+ * The read surface a transform reaches through its `ctx`.
+ *
+ * Read-only by design: the runner's accounting is "one row rewritten per row
+ * read", and a transform that wrote directly would leave that count describing
+ * something other than what happened. It is also scoped to THIS shard, which is
+ * the honest boundary — a shard-scoped query cannot enumerate rows belonging to
+ * another Durable Object.
+ */
+type DataMigrationReader = Pick<DatabaseWriterLike, "count" | "findFirst" | "findMany" | "get">;
+
+/** The context handed to a transform alongside the row. */
+interface DataMigrationContext {
+    db: DataMigrationReader;
+}
+
+/**
  * Transform applied to one document. Return a new document to rewrite the row,
  * or `undefined` to leave it untouched (counted as processed, not changed). The
  * runner always re-applies the original `_id`/`_creationTime`, so the returned
  * document neither needs to nor should change row identity.
+ *
+ * The second parameter carries a shard-scoped READER. Without it a transform
+ * could only rewrite the row it was handed, which covers a backfill whose new
+ * value is a pure function of the old row but not the one people actually write
+ * — denormalising a parent's field onto its children, which needs a cross-table
+ * read.
+ *
+ * May return a promise, since a cross-table read is asynchronous.
  */
-type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined;
+type DataMigrationTransform = (
+    document: DataMigrationDocument,
+    context: DataMigrationContext,
+) => DataMigrationDocument | Promise<DataMigrationDocument | undefined> | undefined;
 
 /**
  * Structural projection of `@lunora/server`'s `RegisteredMigration` the runner
@@ -383,6 +410,19 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
         throw new LunoraError("INTERNAL", `data migration "${migration.id}" has no \`${direction}\` transform`);
     }
 
+    // Only the reads, bound off the same writer the rewrites go through — so a
+    // transform sees this shard's live state, including rows this run already
+    // rewrote. Handing over the writer itself would let a transform write
+    // outside the runner's accounting.
+    const migrationContext: DataMigrationContext = {
+        db: {
+            count: writer.count.bind(writer),
+            findFirst: writer.findFirst.bind(writer),
+            findMany: writer.findMany.bind(writer),
+            get: writer.get.bind(writer),
+        },
+    };
+
     // eslint-disable-next-line unicorn/no-null -- keyset cursor: null is the "start of table" sentinel and the value bound to the SQLite cursor column
     let cursor: null | string = null;
     let processed = 0;
@@ -457,7 +497,8 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             for (const document of batch.page) {
                 processed += 1;
 
-                const next = transform(document);
+                // eslint-disable-next-line no-await-in-loop -- rows share one SQLite handle; a transform's cross-table read must complete before the next row's rewrite
+                const next = await transform(document, migrationContext);
 
                 if (next !== undefined) {
                     changed += 1;
@@ -564,8 +605,10 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
 
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration };
 export type {
+    DataMigrationContext,
     DataMigrationDocument,
     DataMigrationLike,
+    DataMigrationReader,
     DataMigrationTransform,
     MigrationDirection,
     MigrationRunResult,

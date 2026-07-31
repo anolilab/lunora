@@ -909,4 +909,8 @@ const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
 };
 
 export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
-export { inferLunoraBindings, packageNamesFromBindings };
+// `resolveWorkerEntry` + `isTypeOnlyExportEntry` are shared with the wrangler
+// validator's exported-class check, which answers the same question
+// ("which classes does the entry export as runtime values?") synchronously.
+// Exported rather than copied — the copy that existed drifted immediately.
+export { inferLunoraBindings, isTypeOnlyExportEntry, packageNamesFromBindings, resolveWorkerEntry, WORKER_ENTRY_FALLBACKS };

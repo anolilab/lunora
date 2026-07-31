@@ -1,5 +1,6 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
 
+import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
@@ -106,6 +107,19 @@ interface HttpActionContext {
      * from the app's own source, never caller-supplied.
      */
     scheduler?: SchedulerContext;
+
+    /**
+     * Object storage, present only when the app declared a `.storage(...)`.
+     *
+     * R2 is a worker binding, so an HTTP handler reaches it in the same place an
+     * action does — the previous omission was incidental rather than principled.
+     * (`db` stays absent, which is not the same category: an HTTP handler is not
+     * transactional.)
+     *
+     * Typed `unknown` so the runtime stays free of a `@lunora/storage`
+     * dependency; the server side narrows it to the real `Storage`.
+     */
+    storage?: unknown;
 }
 
 /**
@@ -1126,6 +1140,24 @@ interface WorkerOptions {
 
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
+
+    /**
+     * Resolve the app-facing storage capability from the worker `env` — the same
+     * `createStorage(...)` / `createBucketStorage(...)` result the shard DO
+     * receives, built over the same R2 bindings.
+     *
+     * This is what backs `ctx.storage` on an HTTP action. R2 is a worker binding,
+     * so an HTTP handler can reach it directly and needs no shard hop; omitting
+     * it left `HttpActionCtx` without storage, so a handler could not store an
+     * upload or mint a presigned URL. The requirement then propagated outward:
+     * any helper the ctx was threaded into had to be typed for the worst case,
+     * which barred every HTTP caller from the helper entirely — even on the
+     * branches that never touch storage.
+     *
+     * Distinct from the `storage*` options below, which are the admin-gated
+     * studio file-browser ops, not the app surface.
+     */
+    storage?: (env: unknown) => unknown;
 
     /**
      * Names of the storage buckets the studio's file browser offers in its bucket
@@ -3061,6 +3093,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runMutation: run,
             runQuery: run,
             ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
+            // Built over the worker's own R2 bindings — an HTTP handler runs
+            // where an action does, so this needs no shard hop. Absent (rather
+            // than a throwing stub) when the app declared no `.storage()`, which
+            // is what makes the optional `storage` on `HttpActionCtx` honest.
+            ...(options.storage === undefined ? {} : { storage: asBucketStorage(options.storage(env)) }),
         };
     };
 

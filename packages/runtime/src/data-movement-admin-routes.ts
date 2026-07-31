@@ -117,7 +117,13 @@ interface DataMovementAdminRouteDeps {
     streamingImport: (
         request: Request,
         headers: Record<string, string>,
-    ) => Promise<{ conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> }>;
+    ) => Promise<{
+        conflicts: number;
+        errors: ReadonlyArray<ImportRowError>;
+        inserted: Record<string, number>;
+        received: number;
+        warnings?: ReadonlyArray<string>;
+    }>;
     /** Read a page of `.global()` (D1) CDC changes; absent when no global plane is configured. */
     syncGlobals?: (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
 }

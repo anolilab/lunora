@@ -39,6 +39,7 @@ import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -734,13 +735,15 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
  * success (the deploy needs its schema snapshot for the drift gate), or an
  * `{ error }` message on failure.
  */
-const runCodegenStep = (
+const runCodegenStep = async (
     cwd: string,
     interactive: boolean,
     logger: Logger,
     apiSpec: ApiSpec | undefined,
     target: string,
-): { error?: string; result?: CodegenResult } => {
+    spawner: Spawner | undefined,
+    jsonOutput: boolean,
+): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
     if (interactive) {
@@ -756,6 +759,18 @@ const runCodegenStep = (
 
         if (!codegenSpinner) {
             logger.success("codegen complete");
+        }
+
+        // Codegen ran in-process, not through the project's own `codegen`
+        // script. Without this a deploy would ship output the project considers
+        // unfinished, and the deploy pipeline has no reason to run that script
+        // first, so nothing else would catch it.
+        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
+
+        if (postCodegen.error !== undefined) {
+            logger.error(postCodegen.error);
+
+            return { error: postCodegen.error };
         }
 
         return { result };
@@ -1052,7 +1067,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     let codegen: CodegenResult | undefined;
 
     if (!options.skipCodegen) {
-        const codegenStep = runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target);
+        const codegenStep = await runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target, options.spawner, isJsonFormat(options.format));
 
         if (codegenStep.error !== undefined) {
             return {
@@ -1082,6 +1097,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         const gate = runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
             codegen,
+            command: "deploy",
             logger: options.logger,
             updateBaseline: options.updateSchemaBaseline === true,
         });

@@ -11,9 +11,10 @@
  * the project's schema, and returns the existing
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
@@ -30,6 +31,8 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 interface WranglerDurableObjectBinding {
     class_name?: string;
     name?: string;
+    /** Present when the class lives in ANOTHER Worker — then it is that script's to export, not this entry's. */
+    script_name?: string;
 }
 
 /**
@@ -61,6 +64,8 @@ interface WranglerWorkflowEntry {
     binding?: string;
     class_name?: string;
     name?: string;
+    /** Present when the class lives in ANOTHER Worker — then it is that script's to export. */
+    script_name?: string;
 }
 
 /** A wrangler `queues.producers[]` entry — a `Queue` binding sending to `queue`. */
@@ -125,6 +130,9 @@ interface WranglerConfig {
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
     // Cloudflare Logpush toggle (jobs are created out-of-band via dashboard/API).
     logpush?: boolean;
+    // The worker entry, relative to the config file. Read to check that every
+    // declared Durable Object / Workflow class is actually exported by it.
+    main?: string;
     migrations?: ReadonlyArray<{ new_classes?: ReadonlyArray<string>; new_sqlite_classes?: ReadonlyArray<string> } | null | undefined>;
     // mTLS client-certificate bindings (`Fetcher` that presents a client cert on
     // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
@@ -1152,6 +1160,258 @@ const collectContainerImageErrors = (
     return errors;
 };
 
+/** Resolve the worker entry: `wrangler.main` (relative to the config file) if it exists, else the conventional fallbacks. */
+const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, wranglerPath: string): string | undefined => {
+    if (typeof main === "string" && main.length > 0) {
+        const resolved = join(dirname(wranglerPath), main);
+
+        return existsSync(resolved) ? resolved : undefined;
+    }
+
+    return WORKER_ENTRY_FALLBACKS.map((fallback) => join(projectRoot, fallback)).find((candidate) => existsSync(candidate));
+};
+
+/**
+ * Blank out comments and string/template literals, preserving offsets.
+ *
+ * Without this, a commented-out export or a class named in prose reads as a real
+ * export — and a worker entry that discusses its Durable Objects in comments is
+ * the normal case, so the check would silently pass on exactly the tree it
+ * exists to catch. Replacing with spaces rather than deleting keeps every offset
+ * and line intact.
+ *
+ * Deliberately coarse on escapes (`"a\"b"` blanks only up to the inner quote):
+ * the goal is that quoted text cannot pass for code, and blanking slightly less
+ * of a string never turns a real export into a missing one.
+ */
+const COMMENT_OR_STRING_RE = /\/\/[^\n]*|\/\*.*?\*\/|"[^"\n]*"|'[^'\n]*'|`[^`]*`/gsu;
+
+const blankCommentsAndStrings = (code: string): string =>
+    // The alternation is scanned positionally, so a `//` inside a string literal
+    // is consumed as part of that string rather than starting a comment.
+    code.replaceAll(COMMENT_OR_STRING_RE, (match) => match.replaceAll(/[^\n]/gu, " "));
+
+/**
+ * A star re-export (`export * from "./lunora/_generated/workflows"`) forwards
+ * names no per-name scan can see. When the entry has one, absence of a class
+ * name proves nothing, so the check is skipped entirely — a false error on a
+ * correctly-wired project is worse than a missed one, because it blocks a deploy
+ * that would have worked.
+ */
+const STAR_REEXPORT_RE = /\bexport\s*\*\s*(?:as\s+\w+\s*)?from\b/u;
+
+/** Every `export` keyword position in the blanked source. */
+const EXPORT_KEYWORD_RE = /\bexport\b/gu;
+
+/** Modifiers that may sit between `export` and the declaration keyword. */
+const EXPORT_MODIFIERS_RE = /^\s*(?:(?:abstract|async|declare|default)\s+)*/u;
+
+/** A declaration-form export, once its modifiers are stripped (`class X`, `const X`, `function X`). */
+const EXPORT_DECLARATION_RE = /^(?:class|const|function|let|var)\s+(?<name>[$A-Z_a-z][\w$]*)/u;
+
+/**
+ * A destructuring export — `export const { ShardDO, SessionDO } = app;`.
+ *
+ * This is the generated app builder's OWN pattern, so it is not an exotic form:
+ * `apps/playground/src/server/index.ts` ships exactly this. A scanner that only
+ * understood `export const &lt;identifier&gt;` reported the repo's own playground as
+ * missing `ShardDO`.
+ */
+const EXPORT_DESTRUCTURE_RE = /^\s*(?:const|let|var)\s*\{/u;
+
+/**
+ * The names the worker entry exports as runtime VALUES.
+ *
+ * Deliberately a small scanner over export CLAUSES rather than a proximity
+ * regex. The proximity form (`export…[^\n;]*Name`) gets two realistic cases
+ * wrong, and both fail CLOSED — reporting a correctly-wired project as broken,
+ * which blocks a deploy that would have worked:
+ *
+ * A brace clause wrapped across lines — how prettier formats three or more
+ * exports — cannot be matched by a bound that stops at the newline. And a
+ * type-only export ANYWHERE in the file suppressed the real value export of the
+ * same name (`export type { ShardDO as T }` beside `export { ShardDO }`),
+ * because the type check was whole-file rather than per clause.
+ *
+ * `es-module-lexer` would be the right tool and is a dependency, but its WASM
+ * entry needs an awaited `init` (this validator is synchronous) and its pure-JS
+ * entry emits a V8 asm.js warning to stderr on load, which would appear on every
+ * `prepare` / `verify` / `deploy`.
+ *
+ * For `export { Local as Exported }` the EXPORTED name is what wrangler binds,
+ * so that is what is collected.
+ */
+/** The leading identifier of a binding, after any `:` rename. */
+const LEADING_IDENTIFIER_RE = /^[$A-Z_a-z][\w$]*/u;
+
+/** `export type …` — the whole clause compiles away. */
+const TYPE_CLAUSE_RE = /^type\b/u;
+
+/** Split one export specifier into its words, so `X as Y` and `type X` are separable. */
+const SPECIFIER_WORDS_RE = /\s+/u;
+
+/**
+ * Names bound by a named-export clause body (`A, B as C, type D`).
+ *
+ * For `A as B` the EXPORTED name is `B`, which is what wrangler binds. A leading
+ * `type` marks that one specifier type-only — scoped per specifier, because a
+ * whole-file check let an unrelated `export type { X as … }` suppress a real
+ * `export { X }`.
+ */
+const namedClauseExports = (clauseBody: string): string[] => {
+    const names: string[] = [];
+
+    for (const specifier of clauseBody.split(",")) {
+        const words = specifier.trim().split(SPECIFIER_WORDS_RE).filter(Boolean);
+        const last = words.at(-1);
+
+        if (last !== undefined && words[0] !== "type") {
+            names.push(last);
+        }
+    }
+
+    return names;
+};
+
+/**
+ * Names bound by a destructuring export body (`A, B: C`).
+ *
+ * `export const { ShardDO } = app;` is the generated app builder's own pattern,
+ * so this is not an exotic form — the repo's playground ships exactly it.
+ */
+const destructuredExports = (patternBody: string): string[] => {
+    const names: string[] = [];
+
+    for (const binding of patternBody.split(",")) {
+        const bound = binding.includes(":") ? binding.slice(binding.indexOf(":") + 1) : binding;
+        const identifier = LEADING_IDENTIFIER_RE.exec(bound.trim());
+
+        if (identifier) {
+            names.push(identifier[0]);
+        }
+    }
+
+    return names;
+};
+
+/** The body of the first `{…}` at the start of `source`, or `undefined`. */
+const braceBody = (source: string): string | undefined => {
+    const open = source.indexOf("{");
+    const close = source.indexOf("}", open);
+
+    return open === -1 || close === -1 ? undefined : source.slice(open + 1, close);
+};
+
+/** Names one `export` keyword contributes as runtime values. */
+const exportNamesAt = (after: string): string[] => {
+    const trimmed = after.trimStart();
+
+    if (TYPE_CLAUSE_RE.test(trimmed)) {
+        return [];
+    }
+
+    if (trimmed.startsWith("{")) {
+        const body = braceBody(trimmed);
+
+        return body === undefined ? [] : namedClauseExports(body);
+    }
+
+    if (EXPORT_DESTRUCTURE_RE.test(after)) {
+        const body = braceBody(after);
+
+        return body === undefined ? [] : destructuredExports(body);
+    }
+
+    const declaration = EXPORT_DECLARATION_RE.exec(after.replace(EXPORT_MODIFIERS_RE, ""));
+
+    return declaration?.groups?.["name"] === undefined ? [] : [declaration.groups["name"]];
+};
+
+const collectValueExportNames = (code: string): Set<string> => {
+    const names = new Set<string>();
+
+    for (const match of code.matchAll(EXPORT_KEYWORD_RE)) {
+        for (const name of exportNamesAt(code.slice(match.index + "export".length))) {
+            names.add(name);
+        }
+    }
+
+    return names;
+};
+
+/**
+ * Report every `durable_objects.bindings[].class_name` and
+ * `workflows[].class_name` the worker entry does not export.
+ *
+ * `.scheduler(...)` and `.workflow(...)` on the generated app builder write the
+ * binding and the migration entry but cannot add the `export { SchedulerDO }`
+ * the entry needs, so the wiring is only half done — and wrangler refuses to
+ * bundle the result: "Your Worker depends on the following Durable Objects,
+ * which are not exported in your entrypoint file".
+ *
+ * The reason this belongs in the validator rather than being left to `wrangler
+ * deploy` is what `verify` and `doctor` were reporting in the meantime. Both
+ * printed a clean bill of health on a tree that could not deploy, and `verify`'s
+ * own description is "validate wrangler.jsonc + codegen dry-run + tsc" — the
+ * thing that is invalid IS the relationship between `wrangler.jsonc` and the
+ * entry. Only `lunora build`, which shells out to `wrangler deploy --dry-run`,
+ * caught it.
+ *
+ * Both files are already parsed here, so this is a string-set comparison.
+ */
+const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: string, wranglerPath: string): string[] => {
+    const entryPath = resolveWorkerEntryPath(wrangler.main, projectRoot, wranglerPath);
+
+    if (entryPath === undefined) {
+        return [];
+    }
+
+    let source: string;
+
+    try {
+        source = readFileSync(entryPath, "utf8");
+    } catch {
+        return [];
+    }
+
+    // Comments and strings are blanked first, so a commented-out export or a
+    // class name mentioned in prose cannot pass for a real one.
+    const code = blankCommentsAndStrings(source);
+
+    if (STAR_REEXPORT_RE.test(code)) {
+        return [];
+    }
+
+    const declared: { className: string; label: string }[] = [];
+
+    for (const binding of objectBindingEntries(wrangler.durable_objects?.bindings)) {
+        // A binding naming a class in ANOTHER script is that script's to export;
+        // only same-script bindings constrain this entry.
+        if (typeof binding.class_name === "string" && binding.class_name.length > 0 && binding.script_name === undefined) {
+            declared.push({ className: binding.class_name, label: "durable_objects.bindings" });
+        }
+    }
+
+    for (const entry of wrangler.workflows ?? []) {
+        // Same `script_name` carve-out as the durable-object bindings above:
+        // Cloudflare lets a workflow binding target a class in ANOTHER Worker,
+        // which that script exports, not this entry.
+        if (typeof entry?.class_name === "string" && entry.class_name.length > 0 && entry.script_name === undefined) {
+            declared.push({ className: entry.class_name, label: "workflows" });
+        }
+    }
+
+    const exported = collectValueExportNames(code);
+    const missing = declared.filter((entry) => !exported.has(entry.className));
+
+    return missing.map(
+        (entry) =>
+            `${entry.label} declares class "${entry.className}" but the worker entry (${entryPath}) does not export it — ` +
+            `wrangler refuses to bundle a Worker whose Durable Object classes are not exported. ` +
+            `Add \`export { ${entry.className} } from "…";\` to the entry.`,
+    );
+};
+
 /**
  * File-system aware variant: reads `wrangler.jsonc`/`wrangler.json` from
  * the given project root, discovers the schema (if any), and delegates to
@@ -1199,6 +1459,22 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     const configDirectory = dirname(wranglerPath);
 
     report.errors.push(...collectContainerImageErrors(wrangler.containers ?? [], configDirectory, wranglerPath));
+
+    // FS-aware: every declared Durable Object / Workflow class must be exported
+    // by the worker entry, or wrangler refuses to bundle.
+    //
+    // A WARNING, not an error, and deliberately so. `collectValueExportNames` is
+    // a scanner, not a parser, and every form it does not know fails CLOSED —
+    // reporting a correctly-wired project as broken, which blocks `prepare` /
+    // `deploy` and stops `lunora dev` from starting. Two such forms (a
+    // prettier-wrapped clause, and the generated app builder's own
+    // `export const { ShardDO } = app`) were found in a single review pass, which
+    // is enough evidence that more exist.
+    //
+    // Warning still closes the reported gap: `verify` and `doctor` used to print
+    // a clean bill of health on a tree that cannot deploy, and now they say so.
+    // The authoritative check remains wrangler's own, which `lunora build` runs.
+    report.warnings.push(...collectUnexportedClassErrors(wrangler, options.projectRoot, wranglerPath));
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*

@@ -192,7 +192,7 @@ export default defineSchema({
 
             expect(result.generated.server).toContain('from "@lunora/server"');
             expect(result.generated.dataModel).toContain('from "@lunora/server/data-model"');
-            expect(result.generated.api).toContain('from "@lunora/server/types"');
+            expect(result.generated.api).toContain('import { anyApi } from "@lunora/client";');
             expect(result.generated.api).toContain('from "@lunora/client"');
             expect(result.generated.shard).toContain('from "@lunora/do"');
             expect(result.generated.drizzleShard).toContain('from "@lunora/server/drizzle"');
@@ -208,7 +208,7 @@ export default defineSchema({
             // Base surface routed through the umbrella…
             expect(result.generated.server).toContain('from "lunorash/server"');
             expect(result.generated.dataModel).toContain('from "lunorash/server/data-model"');
-            expect(result.generated.api).toContain('from "lunorash/server/types"');
+            expect(result.generated.api).toContain('import { anyApi } from "lunorash/client";');
             expect(result.generated.api).toContain('from "lunorash/client"');
             expect(result.generated.shard).toContain('from "lunorash/do"');
             expect(result.generated.drizzleShard).toContain('from "lunorash/server/drizzle"');
@@ -1028,7 +1028,7 @@ export default crons;
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js"',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -2264,6 +2264,24 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
     });
 
+    describe("emitShard — admin export/import", () => {
+        it("overrides runShardExport and runShardImport so the base stubs never answer", () => {
+            expect.assertions(4);
+
+            // The base `ShardDO` returns `[]` / `{inserted:{}}` for these two.
+            // Both are success-shaped — indistinguishable from a correct export
+            // of an empty shard — so without the override `lunora backup` on a
+            // sharded schema succeeded and backed up nothing, and an import
+            // reported success and dropped every row.
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+            expect(output).toContain("protected override async runShardExport(");
+            expect(output).toContain("protected override async runShardImport(");
+            expect(output).toContain("exportShardRows(writer, schema as unknown as SchemaLike");
+            expect(output).toContain("importShardRows(writer, schema as unknown as SchemaLike");
+        });
+    });
+
     describe("emitShard — feature flags", () => {
         it("emits no flag overrides when the app wires no flags", () => {
             expect.assertions(3);
@@ -3183,7 +3201,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
             // The facade import stays minimal (ORM types are always pulled in).
             expect(output).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";',
             );
         });
     });

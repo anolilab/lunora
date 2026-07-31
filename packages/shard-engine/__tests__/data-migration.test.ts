@@ -94,6 +94,46 @@ describe("runDataMigration", () => {
             expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
+        it("gives the transform a reader, so a backfill can denormalise a parent's field", async () => {
+            expect.assertions(2);
+
+            // The shape people actually write: read the parent, copy a field
+            // down. A transform that only receives the row cannot express it at
+            // all — e.g. reading `threads` to stamp `userId` onto its children.
+            const schemaWithTeams: SchemaLike = {
+                tables: {
+                    members: { indexes: [], shape: { name: { kind: "string" }, teamId: { kind: "string" }, teamName: { kind: "optional" } } },
+                    teams: { indexes: [], shape: { name: { kind: "string" } } },
+                },
+            };
+
+            runShardMigrations(harness.sql, schemaWithTeams);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithTeams, sql: harness.sql });
+
+            await writer.insert("teams", { _id: "t1", name: "Platform" }, { allowExplicitId: true });
+            await writer.insert("members", { _id: "m1", name: "ada", teamId: "t1" }, { allowExplicitId: true });
+            await writer.insert("members", { _id: "m2", name: "grace", teamId: "t1" }, { allowExplicitId: true });
+
+            const denormaliseTeamName: DataMigrationLike = {
+                id: "denormalise-team-name",
+                table: "members",
+                up: async (document, context) => {
+                    const team = await context.db.get(String(document["teamId"]), "teams");
+
+                    return team ? { ...document, teamName: team["name"] } : undefined;
+                },
+            };
+
+            const result = await runDataMigration({ migration: denormaliseTeamName, sql: harness.sql, writer });
+
+            expect(result).toMatchObject({ changed: 2, processed: 2, status: "completed" });
+
+            const members = await writer.findMany("members", { orderBy: [{ _id: "asc" }] });
+
+            expect(members.page.map((document) => document["teamName"])).toEqual(["Platform", "Platform"]);
+        });
+
         it("counts a row whose transform returns undefined as processed but not changed", async () => {
             expect.assertions(3);
 

@@ -9,7 +9,7 @@ import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
-import type { ExecutionContextLike, GlobalIntrospector, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import schema from "../schema.js";
@@ -85,6 +85,7 @@ class AppBuilder<Env extends object> {
     private authDeclaration?: AuthDeclaration<Env>;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
+    private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
     private schedulerDeclaration?: SchedulerDeclaration<Env>;
     private readonly shardExtras: Partial<ShardConfig> = {};
@@ -141,6 +142,13 @@ class AppBuilder<Env extends object> {
     /** Cloudflare Email Routing entry — exposes the top-level `email` handler. */
     public onEmail(handler: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>): this {
         this.emailHandler = handler;
+
+        return this;
+    }
+
+    /** Mount a whole HTTP app (`httpRouter()` from `@lunora/server`, or anything with a `fetch`) ahead of Lunora's own routes. Use this for a multi-endpoint hono app with its own CORS + error handling; `.route()` is for one-off endpoints. */
+    public httpRouter(app: HttpRouterLike): this {
+        this.httpRouterApp = app;
 
         return this;
     }
@@ -334,7 +342,12 @@ class AppBuilder<Env extends object> {
 
         const make = (bucket: R2BucketLike): Storage =>
             createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
-        const buckets: Record<string, Storage> = { default: make(defaultBucket) };
+        // Held separately from the map so `pick`'s fallback is a plain binding:
+        // under `noUncheckedIndexedAccess` a `Record<string, Storage>` lookup —
+        // including `buckets.default` — widens to `Storage | undefined`, which
+        // would not satisfy `pick`'s declared `Storage` return.
+        const fallbackStorage = make(defaultBucket);
+        const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
@@ -344,7 +357,7 @@ class AppBuilder<Env extends object> {
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? buckets.default;
+        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
@@ -364,6 +377,7 @@ class AppBuilder<Env extends object> {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
             openApiSpec,
+            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
@@ -387,6 +401,7 @@ class AppBuilder<Env extends object> {
 
         if (this.storageDeclaration) {
             Object.assign(options, this.buildStorageAdmin(env));
+            options.storage = (rawEnv: unknown) => this.resolveStorage(rawEnv as Env);
         }
 
         options.logArchive = resolveLogArchiveFromEnv(env);

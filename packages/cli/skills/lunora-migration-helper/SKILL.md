@@ -130,6 +130,40 @@ export default defineMigration({
 The transform must preserve row identity — the runner always keeps the original
 `_id` / `_creationTime`, so do not change them.
 
+### Reading another table
+
+The transform's second argument is a **shard-scoped reader** (`ctx.db` with
+`get` / `findFirst` / `findMany` / `count`), so the common backfill — read the
+parent, copy a field down onto its children — is expressible. It may be `async`.
+
+```ts
+up: async (doc, ctx) => {
+    const thread = await ctx.db.get(String(doc.threadId), "threads");
+
+    return thread ? { ...doc, userId: thread.userId } : undefined;
+},
+```
+
+It is a reader, not a writer: the runner accounts for exactly one rewrite per
+row read, and a transform writing directly would make that count describe
+something other than what happened. To touch a second table, run a second
+migration over that table.
+
+### A shard key cannot be backfilled by a migration
+
+If the field you are backfilling **is** the table's `.shardBy()` key, this is the
+wrong tool, and no amount of reader access fixes it:
+
+- a row whose shard key is unset does not belong to any shard, so a shard-scoped
+  query will never enumerate it; and
+- writing the key would have to **move the row to a different Durable Object**,
+  which a per-shard runner has no way to do.
+
+Re-keying is an export → transform → import (`lunora export`, rewrite the NDJSON,
+`lunora import` — ids are preserved, so foreign keys survive), not a migration.
+So the rule elsewhere in this skill that a data backfill is always an online
+`defineMigration` has this one exception.
+
 ### Run it
 
 ```bash

@@ -807,6 +807,42 @@ export const backfillNames = defineMigration({
                 expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBe(false);
             });
 
+            it("routes a postcodegen script's stdout to stderr in json mode", async () => {
+                expect.assertions(4);
+
+                // Same reservation as wrangler's output above: in `--format json`
+                // stdout carries one JSON document, so a `postcodegen` script that
+                // prints anything would interleave with and corrupt it.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "node ./patch.mjs" } }),
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
+                });
+
+                const hookCall = calls.find((call) => call.descriptor.args.includes("postcodegen"));
+
+                expect(hookCall).toBeDefined();
+                expect(hookCall?.descriptor.stdoutToStderr).toBe(true);
+
+                // Pretty mode leaves the script's output on stdout, where the user reads it.
+                const pretty = createRecordingSpawner();
+
+                await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner: pretty.spawner });
+
+                const prettyHookCall = pretty.calls.find((call) => call.descriptor.args.includes("postcodegen"));
+
+                expect(prettyHookCall).toBeDefined();
+                expect(prettyHookCall?.descriptor.stdoutToStderr).toBe(false);
+            });
+
             it("serializes the error into the JSON document when validation fails", async () => {
                 expect.assertions(2);
 

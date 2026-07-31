@@ -7,8 +7,9 @@ import type {
     RateLimitDb as RateLimitDatabase,
     RateLimitDbIndexRange as RateLimitDatabaseIndexRange,
     RateLimitDbQuery as RateLimitDatabaseQuery,
+    RateLimitDbReader as RateLimitDatabaseReader,
 } from "../src/store";
-import { createDbStore as createDatabaseStore } from "../src/store";
+import { createDbStore as createDatabaseStore, createReadOnlyDbStore as createReadOnlyDatabaseStore } from "../src/store";
 
 /**
  * A faithful in-memory stand-in for the Lunora ORM writer: real row storage and
@@ -141,5 +142,45 @@ describe("db store", () => {
         const writer = null as unknown as DatabaseWriter;
 
         expect(accept(writer)).toBe(writer);
+    });
+
+    describe("createReadOnlyDbStore", () => {
+        // "How many requests does this user have left" is a pure read, but the
+        // store demanded insert/patch/delete — so it could not be answered from a
+        // query context, and every remaining-quota display cast instead.
+        it("reads a stored value through a query-context reader", async () => {
+            expect.assertions(2);
+
+            const database = createFakeDatabase();
+            const clock = { now: 0 };
+            const config = { send: { kind: "token bucket", period: 1000, rate: 3 } } as const;
+
+            const writing = new RateLimiter({ config, now: () => clock.now, store: createDatabaseStore({ db: database }) });
+
+            await writing.limit("send", { count: 2, key: "u1" });
+
+            // A reader exposes `query` and nothing else — the shape of a QueryCtx's db.
+            const reader: RateLimitDatabaseReader = { query: database.query.bind(database) };
+            const reading = new RateLimiter({ config, now: () => clock.now, store: createReadOnlyDatabaseStore({ db: reader }) });
+
+            // The exact figure the writing store would report: 3 minus the 2 taken.
+            await expect(reading.getValue("send", { key: "u1" })).resolves.toMatchObject({ value: 1 });
+            await expect(reading.check("send", { key: "u1" })).resolves.toMatchObject({ ok: true });
+        });
+
+        it("throws rather than silently not consuming budget on a write", async () => {
+            expect.assertions(2);
+
+            // Failing loudly beats appearing to consume budget and not doing so.
+            const database = createFakeDatabase();
+            const reader: RateLimitDatabaseReader = { query: database.query.bind(database) };
+            const limiter = new RateLimiter({
+                config: { send: { kind: "token bucket", period: 1000, rate: 3 } },
+                store: createReadOnlyDatabaseStore({ db: reader }),
+            });
+
+            await expect(limiter.limit("send", { key: "u1" })).rejects.toThrow(/createReadOnlyDbStore/u);
+            await expect(limiter.reset("send", { key: "u1" })).rejects.toThrow(/createReadOnlyDbStore/u);
+        });
     });
 });

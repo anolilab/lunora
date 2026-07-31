@@ -3,7 +3,7 @@
 
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
-import type { ExecutionContextLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
@@ -46,6 +46,7 @@ class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
+    private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
 
@@ -92,6 +93,13 @@ class AppBuilder<Env extends object> {
     /** Cloudflare Email Routing entry — exposes the top-level `email` handler. */
     public onEmail(handler: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>): this {
         this.emailHandler = handler;
+
+        return this;
+    }
+
+    /** Mount a whole HTTP app (`httpRouter()` from `@lunora/server`, or anything with a `fetch`) ahead of Lunora's own routes. Use this for a multi-endpoint hono app with its own CORS + error handling; `.route()` is for one-off endpoints. */
+    public httpRouter(app: HttpRouterLike): this {
+        this.httpRouterApp = app;
 
         return this;
     }
@@ -183,6 +191,7 @@ class AppBuilder<Env extends object> {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
             openApiSpec,
+            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
