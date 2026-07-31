@@ -8,6 +8,8 @@ import { AuthUIProvider, OrganizationsCard, TwoFactorSetupCard } from "../../src
 
 const ok = <T,>(data: T = null as T): Promise<AuthResponse<T>> => Promise.resolve({ data, error: null });
 
+const OTPAUTH_URI_PATTERN = /^otpauth:\/\//u;
+
 const stubClient = (overrides: Partial<Record<string, unknown>> = {}): AuthClient =>
     ({
         organization: {
@@ -23,7 +25,8 @@ const stubClient = (overrides: Partial<Record<string, unknown>> = {}): AuthClien
         },
         twoFactor: {
             disable: vi.fn(() => ok()),
-            enable: vi.fn(() => ok({ backupCodes: ["aaa"], totpURI: "otpauth://totp/x" })),
+            // eslint-disable-next-line no-secrets/no-secrets -- a fake TOTP secret for the setup-card fixture, not a real credential
+            enable: vi.fn(() => ok({ backupCodes: ["aaa"], totpURI: "otpauth://totp/Acme:ada?secret=JBSWY3DPEHPK3PXP&issuer=Acme" })),
             verifyTotp: vi.fn(() => ok()),
         },
         ...overrides,
@@ -61,7 +64,7 @@ describe("organizationsCard", () => {
 });
 
 describe("twoFactorSetupCard", () => {
-    it("enables 2FA, then shows the URI + backup codes on the verify step", async () => {
+    it("enables 2FA, then shows the setup key + backup codes on the verify step", async () => {
         const client = stubClient();
         renderWith(client, <TwoFactorSetupCard />);
 
@@ -69,7 +72,10 @@ describe("twoFactorSetupCard", () => {
         fireEvent.click(screen.getByRole("button", { name: "Enable 2FA" }));
 
         await waitFor(() => {
-            expect(screen.getByText("otpauth://totp/x")).toBeDefined();
+            // The setup key, not the raw otpauth:// URI: this package ships no
+            // QR encoder, so the key is the only reliably-workable path.
+            expect(screen.getByText("JBSWY3DPEHPK3PXP")).toBeDefined();
+            expect(screen.queryByText(OTPAUTH_URI_PATTERN)).toBeNull();
             expect(screen.getByText("aaa")).toBeDefined();
         });
     });

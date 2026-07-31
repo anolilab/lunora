@@ -74,12 +74,11 @@ const TwoFactorSetupCard = (): ReactElement | null => {
         return (
             <AuthCard description={t.twoFactorScan} title={t.twoFactorSetup}>
                 <FormBanner error={state.error} />
-                {state.totpUri === undefined ? null : <code className="lunora-auth-code">{state.totpUri}</code>}
                 {/*
-                 * The key on its own, because the URI is not a substitute for
-                 * it: most authenticators reject a pasted `otpauth://…` string,
-                 * and anyone on a desktop app or without a working camera has
-                 * no other way in.
+                 * The setup key, not the raw `otpauth://…` URI: this package
+                 * ships no QR encoder, so there is nothing to scan, and most
+                 * authenticators reject a pasted `otpauth://…` string anyway —
+                 * the key is the only path that reliably works.
                  */}
                 {totpSecret(state.totpUri) === undefined ? null : (
                     <>
