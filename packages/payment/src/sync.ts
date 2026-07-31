@@ -5,6 +5,7 @@
  * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, not by the
  * caller.
  */
+import { LunoraPaymentError } from "./errors";
 import { addMoney, compareMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -219,6 +220,17 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
 const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver): Promise<ApplyResult> => {
     if (action.type === "unhandled") {
         return { applied: false, reason: "unhandled" };
+    }
+
+    // A blank/whitespace event id must never reach the dedupe store: `markEventProcessed` would
+    // claim the same key (e.g. `creem:""`) once and permanently, so every SUBSEQUENT event with a
+    // missing id — from any adapter, present or future — would be misclassified "duplicate" and
+    // dropped with no state change. Throwing here returns non-2xx, so the provider retries instead
+    // of the webhook silently going dark. Guarded against a falsy (not just empty-string) id too:
+    // `WebhookAction.eventId` is typed `string`, but an adapter reading a missing field defensively
+    // (rather than coalescing to `""`) could still hand this an `undefined` at runtime.
+    if (!action.eventId || action.eventId.trim() === "") {
+        throw new LunoraPaymentError("WEBHOOK_EVENT_ID_MISSING", `webhook event id is missing or blank for provider "${action.provider}"`);
     }
 
     const fresh = await store.markEventProcessed(action.provider, action.eventId);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
@@ -349,5 +350,34 @@ describe("applyWebhookAction", () => {
             applied: false,
             reason: "unhandled",
         });
+    });
+
+    it("rejects a blank event id before it ever reaches the dedupe store (no poison pill)", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await expect(applyWebhookAction(store, captureEvent(""))).rejects.toMatchObject({
+            code: "WEBHOOK_EVENT_ID_MISSING",
+        });
+
+        // The blank id must never have been claimed — otherwise every SUBSEQUENT event with a blank
+        // id (e.g. from a provider whose id field name drifted) would be misclassified "duplicate".
+        await expect(applyWebhookAction(store, captureEvent(""))).rejects.toBeInstanceOf(LunoraPaymentError);
+
+        // A whitespace-only id is rejected the same way as an empty one.
+        await expect(applyWebhookAction(store, captureEvent("   "))).rejects.toMatchObject({
+            code: "WEBHOOK_EVENT_ID_MISSING",
+        });
+    });
+
+    it("still applies a normal event exactly once after a blank-id event was rejected", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await expect(applyWebhookAction(store, captureEvent(""))).rejects.toMatchObject({ code: "WEBHOOK_EVENT_ID_MISSING" });
+
+        await expect(applyWebhookAction(store, captureEvent("evt_1"))).resolves.toEqual({ applied: true, reason: "ok" });
     });
 });

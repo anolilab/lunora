@@ -370,4 +370,34 @@ describe("creem adapter", () => {
             code: "WEBHOOK_SIGNATURE_INVALID",
         });
     });
+
+    it("reads the event id from event_id when id is absent (field-casing drift)", async () => {
+        expect.assertions(1);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            event_id: "evt_casing",
+            eventType: "checkout.completed",
+            object: { id: "ch_1", metadata: { referenceId: "user_1" }, order: { amount: 2500, currency: "EUR", status: "paid" } },
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
+
+        expect(action.eventId).toBe("evt_casing");
+    });
+
+    it("maps a payload with no id field at all to a blank eventId for the central guard to reject", async () => {
+        expect.assertions(1);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            eventType: "checkout.completed",
+            object: { id: "ch_1", metadata: { referenceId: "user_1" }, order: { amount: 2500, currency: "EUR", status: "paid" } },
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
+
+        // parseWebhook itself does not throw — it hands back a blank eventId, which
+        // applyWebhookAction's central guard (sync.ts) is responsible for rejecting before the
+        // dedupe store is ever touched.
+        expect(action.eventId).toBe("");
+    });
 });
