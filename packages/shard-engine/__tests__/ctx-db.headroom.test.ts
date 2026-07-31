@@ -45,6 +45,21 @@ const schema: SchemaLike = {
     },
 };
 
+/**
+ * Narrow the writer's optional batch primitive. It is optional on the interface
+ * because the global/D1 twin has no batch path; the shard writer always
+ * implements it. Lives out here so the guard is not a conditional inside a test.
+ */
+const batchInsert = (writer: DatabaseWriterLike): NonNullable<DatabaseWriterLike["insertManyUnsafe"]> => {
+    const { insertManyUnsafe } = writer;
+
+    if (!insertManyUnsafe) {
+        throw new Error("expected the shard writer to implement insertManyUnsafe");
+    }
+
+    return insertManyUnsafe;
+};
+
 /** The error code from awaiting `act`, or undefined when it resolved. */
 const codeOf = async (act: () => Promise<unknown>): Promise<string | undefined> => {
     try {
@@ -136,15 +151,7 @@ describe("ctx-db transaction headroom", () => {
             return { body: "b", bucket: "a" };
         });
 
-        const { insertManyUnsafe } = writer;
-
-        // Optional on the writer interface (the global/D1 twin has no batch
-        // primitive); the shard writer always implements it.
-        if (!insertManyUnsafe) {
-            throw new Error("expected the shard writer to implement insertManyUnsafe");
-        }
-
-        await expect(insertManyUnsafe("notes", rows)).resolves.toHaveLength(5);
+        await expect(batchInsert(writer)("notes", rows)).resolves.toHaveLength(5);
     });
 
     it("charges a full-table scan by the rows it materialized", async () => {
