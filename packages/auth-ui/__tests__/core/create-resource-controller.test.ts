@@ -46,7 +46,9 @@ describe("createResourceController", () => {
     it("nests a returned `extra` patch under `state.extra` instead of clobbering the store root", async () => {
         expect.assertions(2);
 
-        const load = vi.fn(async () => ({ extra: { total: 42 }, items: [] }));
+        const load = vi.fn(async () => {
+            return { extra: { total: 42 }, items: [] };
+        });
 
         const controller = createResourceController<never, { total?: number }>(makeContext(), load, { autoLoad: false, initialExtra: {} });
 
@@ -62,7 +64,9 @@ describe("createResourceController", () => {
     it("preserves existing extra keys a load's patch does not mention", async () => {
         expect.assertions(1);
 
-        const load = vi.fn(async () => ({ extra: { total: 5 }, items: [] }));
+        const load = vi.fn(async () => {
+            return { extra: { total: 5 }, items: [] };
+        });
 
         const controller = createResourceController<never, { search: string; total?: number }>(makeContext(), load, {
             autoLoad: false,
