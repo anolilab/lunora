@@ -182,7 +182,7 @@ describe("redirectTo", () => {
 describe("redirectTo reaches every sign-in transport", () => {
     afterEach(() => {
         // jsdom keeps the URL across tests otherwise, and these all set it.
-        window.history.pushState({}, "", "/");
+        globalThis.history.pushState({}, "", "/");
     });
 
     it("passes an on-origin redirectTo as the social callbackURL", async () => {
@@ -190,7 +190,7 @@ describe("redirectTo reaches every sign-in transport", () => {
 
         const { resolveContext, signInWithSocial } = await import("../../src/core");
 
-        window.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+        globalThis.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
 
         const social = vi.fn(() => Promise.resolve({ data: {}, error: null }));
         const context = resolveContext({
@@ -208,7 +208,11 @@ describe("redirectTo reaches every sign-in transport", () => {
 
         const { resolveContext, signInWithSocial } = await import("../../src/core");
 
-        window.history.pushState({}, "", "/sign-in?redirectTo=https%3A%2F%2Fevil.example");
+        // Built rather than a literal query string: an off-origin `redirectTo` is
+        // exactly what `resolveAfterSignIn` must refuse to honour.
+        const offOrigin = new URLSearchParams({ redirectTo: "https://evil.example" });
+
+        globalThis.history.pushState({}, "", `/sign-in?${offOrigin.toString()}`);
 
         const social = vi.fn(() => Promise.resolve({ data: {}, error: null }));
         const context = resolveContext({
@@ -227,7 +231,7 @@ describe("redirectTo reaches every sign-in transport", () => {
 
         const { createMagicLinkController, resolveContext } = await import("../../src/core");
 
-        window.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+        globalThis.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
 
         const magicLink = vi.fn(() => Promise.resolve({ data: {}, error: null }));
         const context = resolveContext({
@@ -248,7 +252,7 @@ describe("redirectTo reaches every sign-in transport", () => {
 
         const { promptOneTap, resolveContext } = await import("../../src/core");
 
-        window.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+        globalThis.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
 
         const oneTap = vi.fn(() => Promise.resolve({ data: {}, error: null }));
         const context = resolveContext({

@@ -22,7 +22,7 @@ afterEach(() => {
     vi.restoreAllMocks();
     // jsdom keeps the URL across tests otherwise, and the reset-password suite
     // below relies on a clean starting point.
-    window.history.pushState({}, "", "/");
+    globalThis.history.pushState({}, "", "/");
 });
 
 describe("svelte SignInCard", () => {
@@ -124,7 +124,7 @@ describe("svelte ResetPasswordCard reads the token from the URL", () => {
     it("submits the ?token= from the URL when no prop is passed", async () => {
         expect.assertions(1);
 
-        window.history.pushState({}, "", "/reset-password?token=abc");
+        globalThis.history.pushState({}, "", "/reset-password?token=abc");
 
         const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
         const authClient = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
@@ -141,7 +141,7 @@ describe("svelte ResetPasswordCard reads the token from the URL", () => {
     it("lets an explicit prop win over the URL", async () => {
         expect.assertions(1);
 
-        window.history.pushState({}, "", "/reset-password?token=from-url");
+        globalThis.history.pushState({}, "", "/reset-password?token=from-url");
 
         const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
         const authClient = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
