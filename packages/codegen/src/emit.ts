@@ -4571,15 +4571,6 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
 
             const shardKey = this.currentShardKey();
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
 
             let clients = sourceClientCache.get(this);
 
@@ -4626,14 +4617,31 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                             // Logs panel and stamp \`polledAt\` so a persistent misconfig backs
                             // off to \`refresh.everyMs\` instead of retrying every alarm tick.
                             this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`));
-                        } else if (source.mode === "incremental") {
-                            // Incremental (plan 136): pull only rows past the durable
-                            // watermark (or a full-pull seed/reconcile), upsert-only.
-                            // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; sequential keeps the writer transaction simple
-                            await pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client, table, source, shardKey, now);
                         } else {
-                            // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
-                            await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                            // A FRESH tracker per TABLE, not one shared across the whole
+                            // loop: one table's runaway pull must not spend a budget a
+                            // sibling table needs, and a limit hit here must not block
+                            // that sibling from getting its own full budget this tick.
+                            const writer = createShardCtxDb({
+                                broadcast: (delta) => {
+                                    this.recordChangedTable(delta.table, delta.indexKeys);
+                                },
+                                cdc: config.cdc ?? false,
+                                headroom: this.alarmHeadroom(),
+                                scheduler,
+                                schema: schema as unknown as SchemaLike,
+                                sql: this.sql as SqlExec,
+                            });
+
+                            if (source.mode === "incremental") {
+                                // Incremental (plan 136): pull only rows past the durable
+                                // watermark (or a full-pull seed/reconcile), upsert-only.
+                                // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; sequential keeps the writer transaction simple
+                                await pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client, table, source, shardKey, now);
+                            } else {
+                                // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
+                                await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                            }
                         }
 
                         // Timestamp AFTER the poll finishes, not the batch-start \`now\` — a
@@ -4641,6 +4649,33 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                         // stale-immediate and re-arm the alarm in a hammering loop.
                         polledAt.set(table, Date.now());
                     } catch (error) {
+                        if (error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED") {
+                            // Batch full, not a genuine failure. Incremental mode only
+                            // persists its watermark AFTER a full apply (see
+                            // \`pullExternalSourceIncrementalTick\`), so this throw left it
+                            // untouched — the next tick safely re-pulls/re-applies the
+                            // SAME slice (idempotent upsert). Full-pull mode (and an
+                            // incremental source's own occasional full-pull/reconcile
+                            // sweep) has no resumable cursor at all — deliberately not
+                            // inventing one here; a retry just redoes the whole pull,
+                            // safe if wasteful. Either way: warn instead of
+                            // \`recordExternalSourceError\`, and leave \`polledAt\`
+                            // UNCHANGED (skip the stamp below via \`continue\`) so this
+                            // table stays "due" and \`nextPollAlarmTarget\`'s existing
+                            // due-now floor re-arms the shared alarm promptly — not a
+                            // fresh \`setAlarm(now)\`.
+                            this.logs.push({
+                                functionPath: \`source:\${table}\`,
+                                level: "warn",
+                                message: \`external-source poll for "\${table}" hit the transaction limit mid-batch; resuming next tick: \${error.message}\`,
+                                timestamp: Date.now(),
+                            });
+
+                            nextDueAt = nextDueAt === undefined ? now : Math.min(nextDueAt, now);
+
+                            continue;
+                        }
+
                         this.recordExternalSourceError(table, error);
                         // Stamp on failure too, so a persistently failing source throttles
                         // to \`refresh.everyMs\` rather than being hammered every tick.
@@ -4889,7 +4924,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
     class extends ShardDOBase {${sourceConstructorOverride}
         private migrated = false;
 
-        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             // Internal functions are reachable server-side only: via \`ctx.run*\`
@@ -4902,7 +4937,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             this.ensureMigrated();
 
-            const ctx = this.buildCtx({ functionPath });
+            // \`headroom\`, when the caller supplied one, is threaded straight
+            // through to \`buildCtx\` — bypassing its \`this.transactionHeadroom()\`
+            // fallback (the racy shared-field read) entirely for THIS dispatch.
+            // The main \`/rpc\` path always supplies one; \`dispatchLifecycle\` /
+            // \`handleRunAs\` don't mint their own and omit it, so they keep the
+            // prior fallback behavior unchanged.
+            const ctx = this.buildCtx({ functionPath, headroom });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -5164,7 +5205,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             return importShardRows(writer, schema as unknown as SchemaLike, { rows: args.rows, startLine: args.startLine });
         }
 
-        protected override async deleteRowThroughWriter(table: string, id: string): Promise<void> {
+        protected override async deleteRowThroughWriter(table: string, id: string, headroom?: TransactionHeadroomTracker): Promise<void> {
             const definition = (schema as unknown as SchemaLike).tables[table];
 
             if (!definition) {
@@ -5186,6 +5227,13 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // \`runShardBulkDelete\` (a normal \`/rpc\` dispatch) calls this with no
+                // explicit \`headroom\`, so it falls back to \`this.transactionHeadroom()\`
+                // — the SAME per-dispatch meter every other write goes through, mirroring
+                // \`buildCtx\`'s \`options.headroom ?? this.transactionHeadroom()\`. The TTL
+                // sweep (an alarm work item, no dispatch in flight) passes its own
+                // by-value tracker explicitly instead.
+                headroom: headroom ?? this.transactionHeadroom(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,

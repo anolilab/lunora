@@ -1494,8 +1494,22 @@ abstract class ShardDO {
         return this.withTriggerTrace("alarm", async () => this.runner.handleAlarm());
     }
 
-    /** Subclasses implement function dispatch. */
-    public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
+    /**
+     * Subclasses implement function dispatch.
+     *
+     * `headroom` is an optional BY-VALUE override, mirroring
+     * {@link ShardDO.deleteRowThroughWriter}'s pattern: the main `/rpc` dispatch
+     * (`handleFetchCloudflare`) captures its freshly-minted tracker in a LOCAL and
+     * passes it here explicitly, so the ctx this dispatch builds never depends on
+     * `this.currentTransactionHeadroom` still holding the right value by the time
+     * the (possibly `await`-interleaved) handler runs — a concurrent dispatch's
+     * `finally` clearing that shared field could otherwise leave this one
+     * unmetered mid-flight. Callers that dispatch through here without minting
+     * their own tracker (`dispatchLifecycle`, `handleRunAs`) omit it and the
+     * codegen subclass falls back to `this.transactionHeadroom()`, unchanged from
+     * before this parameter existed.
+     */
+    public abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
 
     /**
      * The registered function paths to dispatch when a socket connects/disconnects.
@@ -2154,9 +2168,15 @@ abstract class ShardDO {
      * The base class can't build a writer without the user's `schema.ts`, so it
      * reports the table as unknown; the codegen-generated subclass overrides
      * this to call `writer.delete(id)` on a live `createShardCtxDb(...)` writer.
+     *
+     * `headroom` is an optional BY-VALUE override: {@link ShardDO.runShardBulkDelete}
+     * (a normal `/rpc` dispatch) omits it, so the override falls back to
+     * `this.transactionHeadroom()` — the per-dispatch meter every other write
+     * already uses. {@link ShardDO.pollTtlSweeps} (an alarm work item, no dispatch
+     * in flight) passes its own fresh tracker explicitly instead.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected deleteRowThroughWriter(_table: string, _id: string): Promise<void> {
+    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void> {
         return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${_table}`, { status: 404 }));
     }
 
@@ -3032,6 +3052,17 @@ abstract class ShardDO {
      * cadence, so freshly-written rows expire within a bounded window) while any
      * TTL table exists, or `undefined` when there are none — so a DO with no TTL
      * table never arms this tier.
+     *
+     * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
+     * spec, every batch) — not per-row or per-spec — because the ceiling exists to
+     * bound one alarm tick's total isolate cost, not any single table's. A
+     * `TRANSACTION_LIMIT_EXCEEDED` mid-batch is "batch full", not a genuine
+     * failure: `selectExpiredIds` never re-selects an already-deleted row, so
+     * deletion IS the resumable checkpoint here — no separate cursor is needed.
+     * The sweep stops immediately, logs a `warn` (not `recordShapeError`, which
+     * would surface as a genuine failure), and returns `Date.now()` so the shared
+     * alarm re-arms promptly via `nextPollAlarmTarget`'s existing due-now floor,
+     * rather than waiting out the full `TTL_SWEEP_INTERVAL_MS` cadence.
      */
     protected async pollTtlSweeps(): Promise<number | undefined> {
         const specs = this.ttlSweeps();
@@ -3042,6 +3073,7 @@ abstract class ShardDO {
 
         const sql = this.sql as SqlExec;
         const now = Date.now();
+        const headroom = this.alarmHeadroom();
 
         for (const spec of specs) {
             let batches = 0;
@@ -3051,10 +3083,12 @@ abstract class ShardDO {
                 const page = selectExpiredIds(sql, spec, now, TTL_SWEEP_BATCH);
 
                 for (const id of page.ids) {
-                    // Sequential: serialise writes to avoid OCC contention on this DO
-                    // (same reasoning as `runShardBulkDelete`).
-                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
-                    await this.deleteRowThroughWriter(spec.table, id);
+                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkDelete`)
+                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom);
+
+                    if (limitHit) {
+                        return Date.now();
+                    }
                 }
 
                 hasMore = page.hasMore;
@@ -3312,6 +3346,23 @@ abstract class ShardDO {
      * drain would take the refresh branch and lose its own ceiling entirely.
      */
     protected subscriptionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
+    }
+
+    /**
+     * A fresh budget for one alarm-driven work item — one external-source
+     * table's tick, or one TTL sweep pass.
+     *
+     * Alarm work runs with no client waiting and no `/rpc` dispatch in flight,
+     * so `transactionHeadroom()`'s per-dispatch tracker is `undefined` there —
+     * leaving external-source ingest and TTL sweeps completely unmetered, the
+     * exact isolate-exhaustion class the meter exists to bound. Handed to the
+     * writer BY VALUE, the same pattern as `subscriptionHeadroom()` and for the
+     * same reason: an ambient instance-field flag would race a concurrently
+     * in-flight `/rpc` dispatch, or a sibling alarm work item, clearing or
+     * substituting the wrong tracker mid-flight.
+     */
+    protected alarmHeadroom(): TransactionHeadroomTracker {
         return new TransactionHeadroomTracker(this.transactionLimits());
     }
 
@@ -4078,7 +4129,18 @@ abstract class ShardDO {
         // ctx-db read hook) so `recordFunctionCall` can persist the causal
         // attribution. Fresh per request; drained below.
         this.currentScannedTables = new Set<string>();
-        this.currentTransactionHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+
+        // Captured in a LOCAL, not just the instance field: `handleRpc` below
+        // receives it BY VALUE (see its docstring), so this dispatch's ctx-build
+        // never depends on `this.currentTransactionHeadroom` still pointing at
+        // THIS tracker by the time an `await`-interleaved concurrent dispatch's
+        // `finally` clears it. Still assigned to the field too — the fallback
+        // `dispatchLifecycle`/`handleRunAs` (which mint no tracker of their own)
+        // and any other reader of `transactionHeadroom()` keep working exactly as
+        // before this parameter existed.
+        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+
+        this.currentTransactionHeadroom = dispatchHeadroom;
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the
@@ -4148,7 +4210,7 @@ abstract class ShardDO {
             // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
             // values. `payload.args` stays in wire form for the request log/metrics
             // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
-            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>);
+            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
@@ -4298,7 +4360,17 @@ abstract class ShardDO {
             this.currentRequestSystem = false;
             this.currentRequestTraceparent = undefined;
             this.currentScannedTables = undefined;
-            this.currentTransactionHeadroom = undefined;
+            // Identity-guarded, not an unconditional clear: `handleRpc` above is
+            // already value-threaded with `dispatchHeadroom` for the ctx-build
+            // itself, but the field is still the fallback `dispatchLifecycle` /
+            // `handleRunAs` (and `transactionHeadroom()` readers generally) use.
+            // An unconditional clear here would let THIS dispatch's `finally` wipe
+            // a DIFFERENT, still-in-flight dispatch's tracker out from under it —
+            // the exact shared-field race this whole mechanism exists to avoid.
+            // Only clear it if it still points at the tracker THIS dispatch set.
+            if (this.currentTransactionHeadroom === dispatchHeadroom) {
+                this.currentTransactionHeadroom = undefined;
+            }
             this.currentIndexHits = undefined;
             this.currentRequestReadTables = undefined;
             this.currentRequestCacheHit = undefined;
@@ -8019,6 +8091,36 @@ abstract class ShardDO {
         } catch {
             // A failed arm clears the flag so a later seed/tick retries.
             this.globalPollScheduled = false;
+        }
+    }
+
+    /**
+     * Delete one expired row through {@link ShardDO.deleteRowThroughWriter},
+     * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
+     * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
+     * that method's own complexity down. Returns `true` when the limit was hit
+     * (the caller must stop the sweep pass) and logs a `warn` recording it; `false`
+     * on an ordinary successful delete. Any OTHER thrown error still propagates —
+     * only the meter's own signal is contained here.
+     */
+    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker): Promise<boolean> {
+        try {
+            await this.deleteRowThroughWriter(table, id, headroom);
+
+            return false;
+        } catch (error) {
+            if (error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED") {
+                this.logs.push({
+                    functionPath: "ttl:sweep",
+                    level: "warn",
+                    message: `TTL sweep for "${table}" hit the transaction limit mid-batch; resuming next tick: ${error.message}`,
+                    timestamp: Date.now(),
+                });
+
+                return true;
+            }
+
+            throw error;
         }
     }
 
