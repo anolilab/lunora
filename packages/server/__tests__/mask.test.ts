@@ -79,6 +79,8 @@ interface FakeDatabase {
         ) => Promise<{ patched: number }>;
         query: (tableName: string) => FakeReader;
         rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
+        /** Optional — mirrors `@lunora/do`'s D1 twin, which omits `rankBefore`. Enabled per-test via `enableRankBefore`. */
+        rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
         rankPage: (
             tableName: string,
             indexName: string,
@@ -197,6 +199,16 @@ const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknow
         const row = byId.get(id);
 
         return row ? { row, tableName: row.table } : null;
+    };
+};
+
+/** Enable the optional `rankBefore` seam (mirrors `@lunora/do`'s writer; the D1 twin omits it). */
+const enableRankBefore = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
+    // eslint-disable-next-line no-param-reassign -- the helper installs the seam on the caller's fake writer
+    database.writer.rankBefore = async (tableName, _indexName, options) => {
+        database.calls.push({ args: options, method: "rankBefore", tableOrId: tableName });
+
+        return { before: 0, total: rows.filter((row) => row.table === tableName).length };
     };
 };
 
@@ -833,6 +845,159 @@ describe("mask — value oracle via index readers fails closed (regression)", ()
         expect(rows[0]?.["email"]).toBeNull();
         expect(rows[1]?.["email"]).toBeNull();
         expect(rows[0]?.["name"]).toBe("Ann");
+    });
+});
+
+describe("mask — value oracle via rank reads fails closed (plan 209)", () => {
+    it("rank() with a where on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db.rank("users", "by_ssn", {
+                row: "u1",
+                where: { ssn: { eq: "123-45-6789" } },
+            }),
+        );
+
+        // rank() returns no column value, but a masked-column `where` is a
+        // presence oracle the same way it is on findMany/count — combined with
+        // the returned ordinal it lets a caller binary-search the hidden value.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "rank")).toBe(false);
+    });
+
+    it("rank() with a baseWhere on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db.rank("users", "by_ssn", {
+                baseWhere: { ssn: { eq: "123-45-6789" } },
+                row: "u1",
+            }),
+        );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("rank() with a where on a NON-masked column of a masked table passes through", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", status: "active", table: "users" }]);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db.rank("users", "by_status", {
+                row: "u1",
+                where: { status: { eq: "active" } },
+            }),
+        );
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result).toStrictEqual({ position: 1, total: 1 });
+        expect(database.calls.some((call) => call.method === "rank")).toBe(true);
+    });
+
+    it("rankPage() with a where on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("users", "by_ssn", { where: { ssn: { eq: "123-45-6789" } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "rankPage")).toBe(false);
+    });
+
+    it("rankPage() with a baseWhere on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("users", "by_ssn", { baseWhere: { ssn: { eq: "123-45-6789" } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("rankPage() with a where on a NON-masked column of a masked table still works and masks output", async () => {
+        expect.assertions(3);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", status: "active", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("users", "by_status", { where: { status: { eq: "active" } } }));
+
+        const result = (await handler.handler(makeContext(database, "u1"), {})) as Page;
+
+        expect(database.calls.some((call) => call.method === "rankPage")).toBe(true);
+        expect(result.page[0]?.["ssn"]).toBeNull();
+        expect(result.page[0]?.["status"]).toBe("active");
+    });
+
+    it("rankBefore() with a where on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "u1", ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankBefore(database, rows);
+
+        // `@lunora/do`'s real `RankBeforeOptions` carries no `where`/`baseWhere`
+        // (a rankBefore call is keyed by `rowId`/`sortValues`/`partitionKey`, not
+        // a filter) — this guard is defense-in-depth against a caller/future
+        // shape that adds one, exercised here via the loosely-typed `options:
+        // unknown` seam. The real rankBefore oracle is `sortValues` naming a
+        // masked-sorted index, which needs schema access this middleware does
+        // not have (see the module docblock).
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db.rankBefore?.("users", "by_ssn", { rowId: "u1", where: { ssn: { eq: "123-45-6789" } } }),
+            );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "rankBefore")).toBe(false);
+    });
+
+    it("rankBefore() with a where on a NON-masked column of a masked table passes through", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "u1", ssn: "123-45-6789", status: "active", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankBefore(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db.rankBefore?.("users", "by_status", { rowId: "u1", where: { status: { eq: "active" } } }),
+            );
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result).toStrictEqual({ before: 0, total: 1 });
+        expect(database.calls.some((call) => call.method === "rankBefore")).toBe(true);
+    });
+
+    it("does not surface rankBefore() at all when the underlying writer omits it (D1 twin)", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(({ ctx }) => typeof (ctx as unknown as TestContext).db.rankBefore);
+
+        // No `enableRankBefore` call: the fake writer never carries the method,
+        // so the wrapper — mirroring `../rls/middleware`'s own optional-method
+        // handling — must not synthesize one either.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe("undefined");
     });
 });
 

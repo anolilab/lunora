@@ -25,9 +25,29 @@
  * 2. **Analytical reductions fail closed** — `aggregate` / `groupBy` over a
  * masked column throw `LunoraError("MASK_UNSUPPORTED")`: a group key *is* the
  * raw value and an aggregate is computed *from* it, so neither can be served
- * without leaking what the mask hides. `count` / `rank` / `rankBefore` return
- * counts-of-rows (no column value), so they pass through. `rankPage` returns
- * rows, so its page is masked like `findMany`.
+ * without leaking what the mask hides. `count` / `rank` / `rankBefore` /
+ * `rankPage` return no column value, but a caller-reachable `where`/`baseWhere`
+ * on any of them is a presence oracle the same way it is on a read, so all four
+ * are guarded like `findMany` before delegating. `rankPage` additionally masks
+ * its returned page like `findMany`.
+ *
+ * **Residual read-position oracles (no column value, but ordinal/sort leaks the
+ * hidden value) — three classes, closed to different degrees:**
+ * - A masked-column `where`/`baseWhere` filter on ANY read (including
+ * `rank`/`rankBefore`/`rankPage` above) is closed.
+ * - An index RANGE/SEARCH callback (`withIndex(name, q => …)`/
+ * `withSearchIndex(...)`) referencing a masked column is closed
+ * (`assertIndexFieldsAllowed`).
+ * - **Still open:** a BARE `withIndex(name)` scan (no range callback) over an
+ * index whose DECLARED fields include a masked column, and a
+ * `rank`/`rankBefore` read over a rank index whose declared `sortBy` names a
+ * masked column (`rankBefore`'s oracle is its `sortValues` argument, not
+ * `where` — its real options carry no `where`/`baseWhere` at all). Both need
+ * the index's declared fields, which requires threading schema/index
+ * metadata into this middleware — a design change this module doesn't make
+ * today. An index/rank read the caller cannot otherwise name a masked column
+ * on is not closed by this middleware; do not rely on it for a table with a
+ * masked-sorted index until this ships.
  *
  * 3. **Writes pass through untouched** — `insert` / `patch` / `replace` /
  * `delete` are never wrapped, so masking can't corrupt stored data. Masking is
@@ -322,6 +342,12 @@ const isFacadeEntry = (value: unknown): boolean => {
  * `MaskDatabase`. Fresh closure per request so each `MaskFn` sees the live ctx.
  */
 const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskColumns<Context>>, context: MaskContext<Context>): MaskDatabase => {
+    // `rankBefore` is the one optional method (the D1 twin omits it) — captured
+    // here (mirrors `../rls/middleware`'s `baseRankBefore`) so the conditional
+    // override below can call it without re-narrowing `base.rankBefore` inside
+    // the nested closure.
+    const baseRankBefore = base.rankBefore;
+
     /**
      * Wrap a `query()` reader so every terminal read (`collect` / `first` /
      * `unique` / `take` / `paginate`) masks its rows, and every chainable
@@ -533,6 +559,32 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         }
     };
 
+    /**
+     * Narrow a `rank`/`rankBefore`/`rankPage` `options` argument (typed `unknown`
+     * on `MaskDatabase` so the wrapper stays interchangeable across writers) to a
+     * plain record, or `undefined` for anything else — mirrors `count`'s wrapper
+     * narrowing above.
+     */
+    const asOptionsRecord = (value: unknown): Record<string, unknown> | undefined =>
+        value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
+    /**
+     * SECURITY (value/presence oracle on rank reads): `rank`/`rankBefore`/
+     * `rankPage` return no column value, but `where`/`baseWhere` are
+     * caller-reachable on their options the same way they are on `findMany` —
+     * `rank(table, index, { where: { ssn: { eq: guess } } })` is a presence
+     * oracle, and combined with the returned ordinal it lets a caller binary-
+     * search the hidden value's position among the masked-sorted set. Fail
+     * closed exactly like `assertWhereAllowed` does for reads, before
+     * delegating to `base`.
+     */
+    const assertRankWhereAllowed = (tableName: string, options: unknown, method: string): void => {
+        const wrapper = asOptionsRecord(options);
+
+        assertWhereAllowed(tableName, wrapper?.["where"], method);
+        assertWhereAllowed(tableName, wrapper?.["baseWhere"], method);
+    };
+
     const wrapped: MaskDatabase = {
         ...base,
 
@@ -641,12 +693,33 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             return columns ? wrapReader(reader, columns, tableName) : reader;
         },
 
+        async rank(tableName, indexName, options) {
+            assertRankWhereAllowed(tableName, options, "rank");
+
+            return base.rank(tableName, indexName, options);
+        },
+
         async rankPage(tableName, indexName, options) {
+            assertRankWhereAllowed(tableName, options, "rankPage");
+
             const page = await base.rankPage(tableName, indexName, options);
             const columns = perTable.get(tableName);
 
             return columns ? maskPage(page, columns, context) : page;
         },
+
+        // `rankBefore` is the one optional method (the D1 twin omits it) — only
+        // override it when `base` actually carries one, mirroring the `...base`
+        // spread's own pass-through for a writer that doesn't.
+        ...(baseRankBefore
+            ? {
+                  rankBefore(tableName: string, indexName: string, options: unknown) {
+                      assertRankWhereAllowed(tableName, options, "rankBefore");
+
+                      return baseRankBefore(tableName, indexName, options);
+                  },
+              }
+            : {}),
     };
 
     // SECURITY: the generated runtime glues a per-table facade
