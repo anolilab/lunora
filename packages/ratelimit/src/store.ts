@@ -117,27 +117,50 @@ interface RateLimitDatabaseQuery {
 }
 
 /**
+ * The READ slice — everything the store needs to answer `RateLimiter.getValue`
+ * and `check`, which the docs describe as projecting the stored value forward to
+ * the current clock. A `QueryCtx`'s `ctx.db` is a reader and satisfies this.
+ *
+ * Split out because requiring the writer for a pure read meant "how many
+ * requests does this user have left" could not be answered from a query context
+ * at all — every remaining-quota display had to cast, and a cast that appears
+ * often enough stops carrying information. The distinction was already in the
+ * methods: `getValue`/`check` read, `limit`/`reset` write.
+ */
+interface RateLimitDatabaseReader {
+    query: (table: string) => RateLimitDatabaseQuery;
+}
+
+/**
  * The slice of the Lunora ORM writer (`ctx.db` on a mutation/action) the store
  * needs. The real `DatabaseWriter` is structurally assignable, so pass `ctx.db`
  * directly — declared here (rather than imported) to keep `@lunora/ratelimit`
  * free of a runtime dependency on `@lunora/server`.
  */
-interface RateLimitDatabase {
+interface RateLimitDatabase extends RateLimitDatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
     insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
-    query: (table: string) => RateLimitDatabaseQuery;
 }
 
-interface DatabaseStoreOptions {
-    /** The Lunora ORM writer — `ctx.db` inside a mutation or action. */
-    db: RateLimitDatabase;
+/** The table/column/index knobs shared by the read-only and read-write stores. */
+interface DatabaseStoreLocation {
     /** Index that resolves a row by its key column. Defaults to `by_key`. */
     index?: string;
     /** Column storing the opaque key. Defaults to `key`. */
     keyField?: string;
     /** Table holding one row per `(name, key)` pair. Defaults to `rateLimits`. */
     table?: string;
+}
+
+interface DatabaseStoreOptions extends DatabaseStoreLocation {
+    /** The Lunora ORM writer — `ctx.db` inside a mutation or action. */
+    db: RateLimitDatabase;
+}
+
+interface ReadOnlyDatabaseStoreOptions extends DatabaseStoreLocation {
+    /** The Lunora ORM reader — `ctx.db` inside a query. */
+    db: RateLimitDatabaseReader;
 }
 
 /**
@@ -239,12 +262,52 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     };
 };
 
+/**
+ * Read-only counterpart to {@link createDatabaseStore}, for a query context.
+ *
+ * `get` behaves identically — same table, index and key column — so
+ * `RateLimiter.getValue` / `check` report exactly what the writing store would.
+ * `set` and `delete` are the only difference: they throw rather than silently
+ * doing nothing, because a limiter that appears to consume budget and does not
+ * is worse than one that refuses.
+ *
+ * This mirrors the split Lunora already makes for `ctx.storage`, which is a
+ * `ReadOnlyStorage` in a query and a full `Storage` in an action — the
+ * capability difference is visible in the type instead of discovered at runtime.
+ */
+const createReadOnlyDatabaseStore = (options: ReadOnlyDatabaseStoreOptions): RateLimitStore => {
+    const reject = (operation: string): never => {
+        throw new Error(
+            `@lunora/ratelimit: \`${operation}\` needs a writable \`ctx.db\`, but this store was created with \`createReadOnlyDbStore\` (a query context). ` +
+                `Use \`createDbStore\` from a mutation or action; a query can only call \`getValue\`/\`check\`.`,
+        );
+    };
+
+    const readable = createDatabaseStore({
+        ...options,
+        db: {
+            delete: () => reject("delete"),
+            insert: () => reject("insert"),
+            patch: () => reject("patch"),
+            query: options.db.query.bind(options.db),
+        },
+    });
+
+    return {
+        delete: () => reject("reset"),
+        get: readable.get,
+        set: () => reject("limit"),
+    };
+};
+
 export type {
     DatabaseStoreOptions as DbStoreOptions,
     RateLimitDatabase as RateLimitDb,
     RateLimitDatabaseIndexRange as RateLimitDbIndexRange,
     RateLimitDatabaseQuery as RateLimitDbQuery,
+    RateLimitDatabaseReader as RateLimitDbReader,
+    ReadOnlyDatabaseStoreOptions as ReadOnlyDbStoreOptions,
     SqlLike,
     SqlStoreOptions,
 };
-export { createDatabaseStore as createDbStore, createMemoryStore, createSqlStore };
+export { createDatabaseStore as createDbStore, createMemoryStore, createReadOnlyDatabaseStore as createReadOnlyDbStore, createSqlStore };

@@ -4067,6 +4067,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
+### `RateLimitDbReader` (interface)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
 ### `RateLimitError` (class)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
@@ -4107,6 +4111,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
+### `ReadOnlyDbStoreOptions` (interface)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
 ### `SqlLike` (interface)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
@@ -4128,6 +4136,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 ### `createMemoryStore` (const)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
+### `createReadOnlyDbStore` (const)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 

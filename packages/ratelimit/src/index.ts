@@ -8,8 +8,17 @@ export type { RatelimitApiContext } from "./plugin";
 export { ratelimitPlugin } from "./plugin";
 export type { RateLimiterOptions } from "./rate-limiter";
 export { RateLimiter } from "./rate-limiter";
-export type { DbStoreOptions, RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, SqlLike, SqlStoreOptions } from "./store";
-export { createDbStore, createMemoryStore, createSqlStore } from "./store";
+export type {
+    DbStoreOptions,
+    RateLimitDb,
+    RateLimitDbIndexRange,
+    RateLimitDbQuery,
+    RateLimitDbReader,
+    ReadOnlyDbStoreOptions,
+    SqlLike,
+    SqlStoreOptions,
+} from "./store";
+export { createDbStore, createMemoryStore, createReadOnlyDbStore, createSqlStore } from "./store";
 export type {
     RateLimitArgs,
     RateLimitConfig,
