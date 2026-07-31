@@ -604,7 +604,14 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     if (
         await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
     ) {
-        await pushMintableSecrets(cwd, options, mintable, target);
+        // `pushMintableSecrets` returns `false` the moment any `secret put` fails
+        // (e.g. auth expired mid-push). Discarding that result used to deploy
+        // anyway, shipping a worker still missing the secret it just failed to
+        // set — the exact outcome the non-interactive branch above refuses to
+        // risk.
+        if (!(await pushMintableSecrets(cwd, options, mintable, target))) {
+            return "failed to push required secret(s) — set them manually and re-deploy";
+        }
 
         return undefined;
     }

@@ -908,6 +908,31 @@ export const backfillNames = defineMigration({
                 expect(argv.some((line) => line.includes("wrangler deploy"))).toBe(true);
             });
 
+            it("aborts an interactive deploy when the confirmed secret push fails instead of deploying anyway", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // Every spawn (including the confirmed `wrangler secret put`) fails.
+                const { calls, spawner } = createRecordingSpawner(1);
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(1);
+                // Never reached the wrangler deploy spawn — a failed secret push must
+                // not fall through to shipping a worker still missing that secret.
+                expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
+                expect(errors.some((line) => line.includes("failed to push required secret"))).toBe(true);
+            });
+
             it("launches wrangler through npx (secret-push + deploy) when the project declares npm", async () => {
                 expect.assertions(5);
 
