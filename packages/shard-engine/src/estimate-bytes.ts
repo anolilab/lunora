@@ -9,6 +9,12 @@
  *
  * A value that cannot be serialized (a cycle) is charged `fallback`, so the
  * caller fails on its own terms rather than silently costing nothing.
+ *
+ * NOTE the unit: `String.length` counts UTF-16 code units, not UTF-8 bytes, so a
+ * CJK- or emoji-heavy document costs up to ~3x more on the wire than it is
+ * charged here. Both callers' caps are set well below the resource they protect,
+ * which absorbs the skew — but a caller needing true byte accuracy must not use
+ * this.
  */
 const estimateBytes = (value: unknown, fallback: number): number => {
     try {

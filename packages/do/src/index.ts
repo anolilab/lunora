@@ -58,6 +58,7 @@ export type {
     RunDataMigrationOptions,
 } from "@lunora/shard-engine";
 export type { IndexKeyEntry, KeyRange } from "@lunora/shard-engine";
+export type { TransactionHeadroomTracker } from "@lunora/shard-engine";
 export type { ExternalSourceDiffResult } from "@lunora/shard-engine";
 export type { IncrementalMaterializeResult, MaterializeResult } from "@lunora/shard-engine";
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "@lunora/shard-engine";

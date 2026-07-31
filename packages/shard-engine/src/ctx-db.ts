@@ -774,6 +774,8 @@ const runPlainFetch = (
     scopeCondition: SQL | undefined,
     orderClause: SQL,
     limit: number | undefined,
+    /** Reports the PRE-filter row count — what the read actually materialized. */
+    onScanned: (count: number) => void = () => undefined,
 ): Record<string, unknown>[] => {
     const whereClauses: SQL[] = [];
 
@@ -798,6 +800,9 @@ const runPlainFetch = (
     }
 
     const rows = runDrizzle(sql, query).toArray();
+
+    onScanned(rows.length);
+
     const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
@@ -1090,6 +1095,9 @@ const buildReader = (
         sqlConditions: [],
     };
 
+    /** Pre-filter window of the last search terminal — see `runFetch`'s metering. */
+    let searchScanned = 0;
+
     const runSearchFetch = (limit: number | undefined): Record<string, unknown>[] => {
         const { search } = stage;
 
@@ -1125,6 +1133,8 @@ const buildReader = (
         }
 
         const result: Record<string, unknown>[] = [];
+
+        searchScanned = docs.length;
 
         for (const record of docs) {
             if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
@@ -1190,20 +1200,29 @@ const buildReader = (
 
         // The fluent reader stamps ONE range dep for the whole read rather than
         // a dep per row, so the read-hook meter cannot see its size — charge
-        // the rows here instead.
+        // the rows here instead. `runPlainFetch` applies `.filter()` predicates
+        // in memory, so the returned length is the SURVIVORS; the meter must be
+        // charged the window that was actually materialized.
+        let scanned = 0;
         const rows = ((): Record<string, unknown>[] => {
             if (stage.search) {
-                return runSearchFetch(limit);
+                const found = runSearchFetch(limit);
+
+                scanned = searchScanned;
+
+                return found;
             }
 
             if (stage.geo) {
                 return runGeoTerminal(sql, tableName, stage, scopeCondition, limit);
             }
 
-            return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit);
+            return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit, (count) => {
+                scanned = count;
+            });
         })();
 
-        meterRows(rows.length);
+        meterRows(Math.max(scanned, rows.length));
 
         return rows;
     };
@@ -2635,6 +2654,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             const rows = runDrizzle(sql, query).toArray();
+
+            // A full scan stamps ONE `*scan` dep instead of a dep per row, so the
+            // read meter — which counts concrete-id stamps — would never see the
+            // rows this call materialized. Charge them here. Predicated reads are
+            // charged by their per-row stamps below, so they must not be charged
+            // twice.
+            if (isFullScan) {
+                headroom?.recordRead(rows.length);
+            }
+
             const docs: Record<string, unknown>[] = [];
 
             for (const row of rows) {
@@ -2893,8 +2922,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // local path uses (the DO maps it to `recordChangedTable`). Without
                 // this, `ctx.db.insert("<global>", …)` would never push a delta to
                 // subscribers of that global table's query.
+                //
+                // Deliberately NO `indexKeys`: the global writer applied its own
+                // defaults and `_creationTime` on the far side, so the image here
+                // is not the row that was stored. An index covering a defaulted
+                // field would encode a position the row does not occupy, which
+                // could prove a write outside a slice that actually contains it —
+                // suppressing an invalidation. Omitting them falls back to
+                // whole-table, which is always sound.
                 broadcast({
-                    indexKeys: rowIndexKeys(tableName, { ...document, _id: id }),
                     key: id,
                     op: "insert",
                     row: { ...document, _id: id },
@@ -2993,7 +3029,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
 
                     broadcast({
-                        indexKeys: rowIndexKeys(tableName, { ...document, _id: globalId }),
                         key: globalId,
                         op: "insert",
                         row: { ...document, _id: globalId },
@@ -3054,8 +3089,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // correct — only the validator + trigger pipeline is skipped.
             for (const { document, id } of rows) {
                 syncCompanionsForInsert(tableName, id, document);
+                // The batch was already charged to the meter BEFORE the insert, so
+                // notify through the raw hook — `onWrite` is the metering wrapper
+                // and would charge every row a second time, halving the effective
+                // ceiling for this path.
                 // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
-                await onWrite({ doc: document, id, op: "insert", table: tableName });
+                await reportWrite({ doc: document, id, op: "insert", table: tableName });
             }
 
             return rows.map((row) => row.id);

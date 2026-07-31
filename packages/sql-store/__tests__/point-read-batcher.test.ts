@@ -89,6 +89,17 @@ describe("createPointReadBatcher", () => {
         expect(calls.map((call) => call.ids.length)).toStrictEqual([2, 2, 1]);
     });
 
+    it("ignores a non-positive batch cap instead of looping forever", async () => {
+        expect.assertions(1);
+
+        // Regression: `offset += maxBatch` never advanced, so the chunk loop
+        // span forever holding every caller's promise open.
+        const { fetchMany } = stubFetch({ a: "A" });
+        const batcher = createPointReadBatcher(fetchMany, { maxBatch: 0 });
+
+        await expect(batcher.load("users", "a")).resolves.toStrictEqual({ id: "a", name: "A" });
+    });
+
     it("fails every id in a batch when the fetch throws", async () => {
         expect.assertions(1);
 

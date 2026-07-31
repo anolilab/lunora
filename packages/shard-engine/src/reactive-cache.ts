@@ -181,7 +181,9 @@ class ReactiveCache {
         // Evaluated AFTER the callback: like `deps`, the read's footprint is
         // only complete once the handler has actually run.
         const readRanges = ranges();
-        const bytes = estimateBytes(result, DEFAULT_MAX_BYTES);
+        // Charge against THIS instance's cap — `evict()` compares against it, so
+        // using the module default would undercharge a cache built with a larger one.
+        const bytes = estimateBytes(result, this.maxBytes);
         const entry: CacheEntry = {
             bytes,
             deps,

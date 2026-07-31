@@ -61,7 +61,10 @@ interface PointReadBatcher<Row> {
  * done had they all failed.
  */
 const createPointReadBatcher = <Row>(fetchMany: FetchMany<Row>, options: PointReadBatcherOptions = {}): PointReadBatcher<Row> => {
-    const maxBatch = options.maxBatch ?? DEFAULT_MAX_BATCH;
+    // A non-positive size would leave the chunk loop's `offset += maxBatch`
+    // never advancing — an infinite loop holding every caller's promise open.
+    const requested = options.maxBatch ?? DEFAULT_MAX_BATCH;
+    const maxBatch = Number.isInteger(requested) && requested > 0 ? requested : DEFAULT_MAX_BATCH;
 
     /** Ids awaiting the next flush, per table. Several callers may want the same id. */
     const pending = new Map<string, Map<string, PendingRead<Row>[]>>();

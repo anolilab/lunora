@@ -125,6 +125,37 @@ describe("ctx-db transaction headroom", () => {
         expect(code).toBe("TRANSACTION_LIMIT_EXCEEDED");
     });
 
+    it("charges a batch insert once, not once per meter hook", async () => {
+        expect.assertions(1);
+
+        // Regression: the batch is pre-charged before the multi-row INSERT, and
+        // the per-row `onWrite` fan-out used to charge it a SECOND time —
+        // halving the effective ceiling and failing legitimate batches.
+        const writer = build({ maxWrittenRows: 6 });
+        const rows = Array.from({ length: 5 }, () => {
+            return { body: "b", bucket: "a" };
+        });
+
+        await expect(writer.insertManyUnsafe("notes", rows)).resolves.toHaveLength(5);
+    });
+
+    it("charges a full-table scan by the rows it materialized", async () => {
+        expect.assertions(1);
+
+        const seed = build({ maxWrittenRows: 100 });
+
+        for (let index = 0; index < 20; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+            await seed.insert("notes", { body: "b", bucket: "a" });
+        }
+
+        // A full scan stamps ONE `*scan` dep rather than a dep per row, so a
+        // meter counting dependency stamps would see nothing at all here.
+        const reader = build({ maxReadRows: 5 });
+
+        await expect(codeOf(async () => reader.findMany("notes", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+    });
+
     it("leaves a transaction within its ceilings untouched", async () => {
         expect.assertions(2);
 

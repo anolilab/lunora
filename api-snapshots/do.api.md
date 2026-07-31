@@ -841,6 +841,7 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
+    protected subscriptionHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor): void;
@@ -1060,6 +1061,10 @@ interface TelemetrySink {
     };
 }
 ```
+
+### `TransactionHeadroomTracker` (class)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `TransactionSqlLike` (interface)
 

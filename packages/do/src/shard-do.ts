@@ -1263,9 +1263,6 @@ abstract class ShardDO {
      */
     private currentTransactionHeadroom: TransactionHeadroomTracker | undefined;
 
-    /** True while {@link ShardDO.drainSubscriptionRefreshes} is running — see {@link ShardDO.transactionHeadroom}. */
-    private refreshingSubscriptions = false;
-
     /**
      * Read-tables + cache-hit captured for the current `/rpc` dispatch, so the
      * dispatch site can fold them into the durable request log
@@ -3223,16 +3220,27 @@ abstract class ShardDO {
      * leaves `ctx.db` unmetered — the legacy behaviour.
      */
     protected transactionHeadroom(): TransactionHeadroomTracker | undefined {
-        // A subscription re-run is dispatched from inside the WRITING request's
-        // `try` (and may outlive it via `waitUntil`), so handing it the
-        // mutation's tracker would meter reader work against writer budget —
-        // and a trip would surface as `refreshOne`'s swallowed catch, silently
-        // dropping a live update. Each re-run gets its own bounded budget.
-        if (this.refreshingSubscriptions) {
-            return new TransactionHeadroomTracker(this.transactionLimits());
-        }
-
         return this.currentTransactionHeadroom;
+    }
+
+    /**
+     * A fresh budget for one deferred subscription re-run.
+     *
+     * The re-run is dispatched from inside the WRITING request's `try` and may
+     * outlive it via `waitUntil`, so it must not spend the mutation's budget:
+     * metering reader work against writer budget would trip the ceiling and
+     * surface as `refreshOne`'s swallowed catch, silently dropping a live
+     * update.
+     *
+     * Handed to `buildCtx` BY VALUE from the generated `executeSubscription`,
+     * the same way {@link SubscriptionIdentity} is threaded — deliberately not
+     * signalled through an instance flag. A flag would say "a refresh is in
+     * flight", not "this caller is the refresh", and the drain runs in the
+     * background: a concurrent `/rpc` dispatch building its `ctx.db` during the
+     * drain would take the refresh branch and lose its own ceiling entirely.
+     */
+    protected subscriptionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
     }
 
     /**
@@ -7057,7 +7065,6 @@ abstract class ShardDO {
         }
 
         this.refreshInFlight = true;
-        this.refreshingSubscriptions = true;
 
         try {
             let batch = this.pendingRefreshTables;
@@ -7085,7 +7092,6 @@ abstract class ShardDO {
             }
         } finally {
             this.refreshInFlight = false;
-            this.refreshingSubscriptions = false;
         }
     }
 

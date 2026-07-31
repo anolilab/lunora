@@ -63,13 +63,13 @@ interface VnodeDirectory {
 /**
  * 64-bit FNV-1a. Chosen for being tiny, dependency-free, and identical across
  * every runtime the framework targets — placement must not vary by host.
- * Computed in `BigInt` because the 64-bit multiply overflows a JS number.
+ * Computed in `BigInt` because the 64-bit multiply overflows a JS number, and
+ * truncated with `BigInt.asUintN` rather than a mask constant so the 64-bit
+ * wrap-around is explicit at every use site.
  */
 const FNV_OFFSET_BASIS = 0xcb_f2_9c_e4_84_22_23_25n;
 
 const FNV_PRIME = 0x1_00_00_01_b3n;
-
-const U64_MASK = 0xff_ff_ff_ff_ff_ff_ff_ffn;
 
 /* eslint-disable no-bitwise -- FNV-1a and the jump-hash LCG ARE bit
    manipulation; both are fixed published algorithms whose constants and
@@ -81,7 +81,7 @@ const fnv1a64 = (input: string): bigint => {
 
     for (const byte of bytes) {
         hash ^= BigInt(byte);
-        hash = (hash * FNV_PRIME) & U64_MASK;
+        hash = BigInt.asUintN(64, hash * FNV_PRIME);
     }
 
     return hash;
@@ -109,7 +109,7 @@ const jumpConsistentHash = (key: string, buckets: number): number => {
         candidate = next;
         // The LCG constant and 31-bit shift are from the paper; they define the
         // distribution, so they are not tunable.
-        hash = (hash * 2_862_933_555_777_941_757n + 1n) & U64_MASK;
+        hash = BigInt.asUintN(64, hash * 2_862_933_555_777_941_757n + 1n);
         next = BigInt(Math.floor((Number(candidate) + 1) * (2 ** 31 / Number((hash >> 33n) + 1n))));
     }
 

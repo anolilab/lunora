@@ -3792,7 +3792,6 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "DatabaseWriterLike",
     "DataMigrationLike",
     ...(hasFlags ? ["FlagsResult"] : []),
-    "IndexKeyEntry",
     "KeyRange",
     "MaskPoliciesResult",
     "MigrationRunResult",
@@ -3805,6 +3804,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "RunShardWriteArgs",
     "RunShardWriteResult",
     "SchedulerLike",
+    "TransactionHeadroomTracker",
     "SchemaLike",
     "ShardDOState",
     "ShardRankPageResult",
@@ -4341,7 +4341,7 @@ const vectorsStub: VectorSearchLike = {
                 },
                 cdc: config.cdc ?? false,
                 enforceRls: true,
-                headroom: this.transactionHeadroom(),
+                headroom: options.headroom ?? this.transactionHeadroom(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onReadRange: options.onReadRange,
@@ -4357,7 +4357,7 @@ const vectorsStub: VectorSearchLike = {
                 },
                 cdc: config.cdc ?? false,
                 enforceRls: true,
-                headroom: this.transactionHeadroom(),
+                headroom: options.headroom ?? this.transactionHeadroom(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onReadRange: options.onReadRange,
@@ -4847,7 +4847,7 @@ ${relationFanout.override}
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
             const result = await registered.handler(ctx, args);
 
             // Ranges come from THIS run's reads, never a shared field on the DO:
@@ -5125,7 +5125,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
