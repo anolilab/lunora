@@ -33,6 +33,33 @@ const touches = (conditions: StagedCondition[], row: Record<string, unknown>): b
     return rangeContains(built, keyFor(row));
 };
 
+/**
+ * Like {@link range}, but throws instead of returning `undefined` — for tests
+ * that need the {@link KeyRange} object itself (not just `touches`) over a
+ * custom index/fields shape, kept out of the `it()` body so an unprovable
+ * range fails as a setup error rather than a conditional test assertion.
+ */
+const mustBuildRange = (table: string, index: string, fields: ReadonlyArray<string>, conditions: StagedCondition[]): KeyRange => {
+    const built = buildIndexRange(table, index, fields, conditions, serializeSqlValue);
+
+    if (!built) {
+        throw new Error("expected the conditions to form a provable range");
+    }
+
+    return built;
+};
+
+/** The index position a row occupies under an arbitrary `index`/`fields` pair. */
+const keyForIndex = (index: string, fields: ReadonlyArray<string>, row: Record<string, unknown>): IndexKeyEntry => {
+    const [entry] = indexKeysForRow([{ fields, name: index }], row, serializeSqlValue);
+
+    if (!entry) {
+        throw new Error("expected the row to have an encodable index key");
+    }
+
+    return entry;
+};
+
 describe("buildIndexRange", () => {
     it("confines an equality prefix to its own partition", () => {
         expect.assertions(3);
@@ -66,6 +93,42 @@ describe("buildIndexRange", () => {
 
         expect(touches(afterFive, { channelId: "A", ts: 5 })).toBe(false);
         expect(touches(afterFive, { channelId: "A", ts: 6 })).toBe(true);
+    });
+
+    it("admits a string value that extends an exclusive lower bound as a prefix", () => {
+        expect.assertions(4);
+
+        const nameFields = ["name"];
+        const nameIndex = "by_name";
+        const built = mustBuildRange("users", nameIndex, nameFields, [{ comparator: ">", field: "name", value: "Al" }]);
+        const keyForName = (row: Record<string, unknown>): IndexKeyEntry => keyForIndex(nameIndex, nameFields, row);
+
+        // "Alice" EXTENDS the bound "Al" as a prefix — SQLite's BINARY order
+        // puts it INSIDE gt("name", "Al"), so an exclusive-bound encoding that
+        // merely excludes everything sorting above the bare bound would drop
+        // it and leave a write to this row permanently unmatched.
+        expect(rangeContains(built, keyForName({ name: "Alice" }))).toBe(true);
+        // The bound itself is excluded (`>`, not `>=`).
+        expect(rangeContains(built, keyForName({ name: "Al" }))).toBe(false);
+        // Lexicographically below the bound.
+        expect(rangeContains(built, keyForName({ name: "Aa" }))).toBe(false);
+        // Sanity: something clearly above the bound.
+        expect(rangeContains(built, keyForName({ name: "Bob" }))).toBe(true);
+    });
+
+    it("admits a compound row whose trailing field extends an exclusive bound as a prefix", () => {
+        expect.assertions(2);
+
+        const compoundFields = ["channelId", "name"];
+        const compoundIndex = "by_channel_name";
+        const built = mustBuildRange("members", compoundIndex, compoundFields, [
+            { comparator: "=", field: "channelId", value: "A" },
+            { comparator: ">", field: "name", value: "Al" },
+        ]);
+        const keyForCompound = (row: Record<string, unknown>): IndexKeyEntry => keyForIndex(compoundIndex, compoundFields, row);
+
+        expect(rangeContains(built, keyForCompound({ channelId: "A", name: "Alice" }))).toBe(true);
+        expect(rangeContains(built, keyForCompound({ channelId: "A", name: "Al" }))).toBe(false);
     });
 
     it("admits rows exactly at an inclusive bound", () => {

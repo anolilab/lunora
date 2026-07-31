@@ -92,6 +92,7 @@ import type {
     QueueMetadata,
     QueuesResult,
     ReactiveCacheOptions,
+    ReadFootprint,
     RelayHost,
     RelayMember,
     ResolvedShape,
@@ -134,6 +135,7 @@ import {
     ConflictError,
     createDependencyTracker,
     createFanoutCounters,
+    createReadFootprint,
     createRelayLink,
     DATA_MIGRATION_STATE_TABLE,
     DEFAULT_MAX_RELAYS,
@@ -700,6 +702,14 @@ const MAX_HELD_SPANS_PER_TRACE = 500;
 const WIDE_EVENT_NAME = "lunora.dispatch";
 
 /**
+ * Flatten a {@link ReadFootprint.ranges} snapshot into the flat array
+ * `ReactiveCache.run`'s `ranges` thunk expects. `undefined` (nothing
+ * narrowable) becomes `[]` — the thunk's own default — rather than a special
+ * case the caller has to know about.
+ */
+const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRange[] => (byTable ? [...byTable.values()].flat() : []);
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement `handleRpc` and may emit deltas via
@@ -1232,6 +1242,17 @@ abstract class ShardDO {
      * call so a leaked tracker can never bleed into a sibling RPC.
      */
     private currentTracker: DependencyTracker | undefined;
+
+    /**
+     * In-flight range footprint (the `onReadRange` channel) for the
+     * currently-executing cached query. Set by `runCachedQuery` alongside
+     * `currentTracker` so `getCtxDbReadRangeHook` — and the range-marking half
+     * of `getCtxDbReadHook` — can stamp it without threading it explicitly
+     * through every generated handler signature. `ReactiveCache.run`'s ranges
+     * thunk reads it lazily, AFTER the handler resolves, so it always sees the
+     * footprint's final state. Cleared in the same `finally` as `currentTracker`.
+     */
+    private currentReadFootprint: ReadFootprint | undefined;
 
     /**
      * Tables the in-flight dispatch full-scanned (read via `SCAN_DEP`, no index
@@ -3096,6 +3117,19 @@ abstract class ShardDO {
      * with empty dep sets, so writes never invalidate them and stale
      * results stick around — the {@link ReactiveCache} class is contract-
      * neutral about who fills `deps`.
+     *
+     * Also allocates a fresh {@link ReadFootprint} alongside the tracker,
+     * stored on `this.currentReadFootprint` so `getCtxDbReadRangeHook()` —
+     * and the range-marking half of `getCtxDbReadHook()` — can stamp it. Its
+     * `ranges()` is handed to `reactiveCache.run` as a LAZY 4th argument (a
+     * thunk, evaluated only after `run()` resolves), the same deferral
+     * `deps` already relies on: the footprint is only complete once the
+     * handler has actually run. Subclasses that also want range-precise
+     * invalidation should pass `getCtxDbReadRangeHook()` as `onReadRange` on
+     * the same `createShardCtxDb(...)` call — mirroring `onRead` above. A
+     * subclass that only wires `onRead` still works: `ranges()` degrades to
+     * `undefined` and every read is treated as a whole-table dependency, per
+     * `ReactiveCache.run`'s own default.
      */
     protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
         if (!this.reactiveCache) {
@@ -3113,6 +3147,13 @@ abstract class ShardDO {
         const tracker = createDependencyTracker();
 
         this.currentTracker = tracker;
+
+        // Same snapshot/restore discipline as `currentTracker` above, for the
+        // ranges channel.
+        const previousFootprint = this.currentReadFootprint;
+        const footprint = createReadFootprint();
+
+        this.currentReadFootprint = footprint;
 
         // Detect a cache hit cheaply by diffing the cache's lifetime hit
         // counter across the `run` call — a hit means the callback (and thus
@@ -3139,7 +3180,9 @@ abstract class ShardDO {
                   stableStringify({ claims: claims ?? null, userId: userId ?? null });
 
         try {
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), run);
+            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), run, () =>
+                flattenReadRanges(footprint.ranges()),
+            );
 
             this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
             this.currentRequestReadTables = tablesFromDeps(tracker.collect());
@@ -3147,6 +3190,7 @@ abstract class ShardDO {
             return result;
         } finally {
             this.currentTracker = previous;
+            this.currentReadFootprint = previousFootprint;
         }
     }
 
@@ -3163,10 +3207,21 @@ abstract class ShardDO {
      * full-scan attribution — and unlike the tracker, it's collected even when
      * the reactive cache is off, since the causal signal is independent of
      * caching.
+     *
+     * It ALSO marks the table unnarrowable on {@link currentReadFootprint},
+     * mirroring `executeSubscription`'s wiring (which hands a single
+     * `ReadFootprint`'s `onRead`/`onReadRange` pair straight to `buildCtx`).
+     * `ctx-db.ts`'s reader calls this `onRead` and `onReadRange` mutually
+     * exclusively per read — a provable index slice fires ONLY `onReadRange`,
+     * everything else (by-id, scan, an unprovable slice) fires ONLY this
+     * `onRead` — so folding the footprint's `onRead` in here is exactly the
+     * "read this table outside a range" signal {@link ReadFootprint.ranges}
+     * needs to drop that table from the narrowed set.
      */
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
         return (table, idOrScan) => {
             this.currentTracker?.recordRead(table, idOrScan ?? SCAN_DEP);
+            this.currentReadFootprint?.onRead(table, idOrScan ?? SCAN_DEP);
 
             // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
             // predicated (indexed) `findMany` calls `onRead(table)` with no id
@@ -3179,6 +3234,23 @@ abstract class ShardDO {
             if (idOrScan === SCAN_DEP) {
                 this.currentScannedTables?.add(table);
             }
+        };
+    }
+
+    /**
+     * Returns an `onReadRange` callback suitable to hand to
+     * `createShardCtxDb`'s `onReadRange` option, alongside `getCtxDbReadHook()`
+     * as `onRead` on the same call — the pairing `executeSubscription` already
+     * uses via `ReadFootprint`. Stamps the in-flight footprint (set by
+     * `runCachedQuery`) when one exists and is a no-op otherwise, so subclasses
+     * can wire this hook unconditionally regardless of whether the cache is
+     * enabled. Without this wiring `runCachedQuery`'s ranges thunk always
+     * observes an empty footprint and every cached query degrades to the prior
+     * whole-table dependency — safe, just not range-precise.
+     */
+    protected getCtxDbReadRangeHook(): (range: KeyRange) => void {
+        return (range) => {
+            this.currentReadFootprint?.onReadRange(range);
         };
     }
 
