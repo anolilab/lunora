@@ -587,6 +587,68 @@ const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemp
     return { exempt: false, exemptReason: "" };
 };
 
+/**
+ * The `handler` argument node of a procedure registration call — the config
+ * object's `handler` key for the bare-factory form (`mutation({ handler })`), or
+ * the sole argument to the terminal builder-chain call (`.mutation(handler)`).
+ * `undefined` when the shape doesn't match either (e.g. no `handler` key).
+ */
+const handlerArgumentOf = (initializer: CallExpression): TsNode | undefined => {
+    const [firstArgument] = initializer.getArguments();
+
+    if (!firstArgument) {
+        return undefined;
+    }
+
+    if (Node.isObjectLiteralExpression(firstArgument)) {
+        const handlerProperty = firstArgument.getProperty("handler");
+
+        return handlerProperty && Node.isPropertyAssignment(handlerProperty) ? handlerProperty.getInitializer() : undefined;
+    }
+
+    return firstArgument;
+};
+
+/**
+ * Resolve a procedure's handler to the node whose body the behavioural facts
+ * should be read from, or `undefined` when it can't be read statically.
+ *
+ * An inline function expression/arrow IS the analyzable body — scanning the whole
+ * `declaration` (which already contains it) is unchanged from before. A same-file
+ * identifier handler (`handler: createHandler`) is resolved to its declaration by
+ * NAME, the same idiom {@link resolveUseArgumentCall} uses for a `.use(...)`
+ * alias: a `const`/`function` initialized to a function expression/arrow resolves
+ * and stays analyzable. An imported identifier, a call expression, or anything
+ * else is genuinely cross-file or opaque and returns `undefined` — the caller
+ * then leaves every behavioural fact `undefined` rather than silently reporting
+ * "no writes, no fan-out, no events" for a handler nothing was actually read.
+ */
+const analyzableBehaviourRoot = (declaration: VariableDeclaration, initializer: CallExpression): TsNode | undefined => {
+    const handlerArgument = handlerArgumentOf(initializer);
+
+    if (!handlerArgument) {
+        return undefined;
+    }
+
+    if (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument)) {
+        return declaration;
+    }
+
+    if (!Node.isIdentifier(handlerArgument)) {
+        return undefined;
+    }
+
+    const sourceFile = handlerArgument.getSourceFile();
+    const name = handlerArgument.getText();
+    const variableInitializer = sourceFile.getVariableDeclaration(name)?.getInitializer();
+
+    if (variableInitializer && (Node.isArrowFunction(variableInitializer) || Node.isFunctionExpression(variableInitializer))) {
+        return variableInitializer;
+    }
+
+    return sourceFile.getFunction(name);
+};
+
 /** Behavioural facts read from the procedure declaration body. */
 const behaviourOf = (
     declaration: TsNode,
@@ -668,12 +730,17 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         ? protectionsInChain(classified.receiver)
         : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
 
+    const behaviourRoot = analyzableBehaviourRoot(declaration, initializer);
+
     // Every key of both fact bags is an IR field, so spreading keeps this in step
-    // automatically when either gains one.
+    // automatically when either gains one. `behaviourRoot === undefined` (a
+    // genuinely cross-file handler) spreads nothing, leaving every behavioural
+    // fact `undefined` rather than a false "not observed".
     return {
-        ...behaviourOf(declaration),
+        ...(behaviourRoot ? behaviourOf(behaviourRoot) : {}),
         ...exemptionOf(declaration),
         ...protections,
+        analyzableBody: behaviourRoot !== undefined,
         exportName: declaration.getName(),
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),

@@ -111,6 +111,16 @@ describe("user_creating_mutation_without_captcha", () => {
 
         expect(userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
     });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (writesUserTable/callsMail undefined)", () => {
+        expect.assertions(1);
+
+        // A genuinely cross-file handler reports `undefined`, not `false` — an
+        // accidental fail-open here is worse than the lint over-firing.
+        const procedures = [procedure({ callsMail: undefined, writesUserTable: undefined })];
+
+        expect(userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
+    });
 });
 
 describe("signup_mutation_without_disposable_gating", () => {
@@ -162,6 +172,16 @@ describe("signup_mutation_without_disposable_gating", () => {
                 schema: schema(),
             }),
         ).toHaveLength(0);
+    });
+
+    it("still flags when the feeder couldn't read the handler body (writesUserTable undefined)", () => {
+        expect.assertions(1);
+
+        // A genuinely cross-file handler reports `undefined`, not `false` — an
+        // accidental fail-open here is worse than the lint over-firing.
+        const procedures = [procedure({ writesUserTable: undefined })];
+
+        expect(signupMutationWithoutDisposableGating.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
     });
 
     it("flags nothing when the codegen feeder supplies no protection evidence", () => {
@@ -525,6 +545,14 @@ describe("privileged_fanout_from_public_procedure", () => {
 
         expect(privilegedFanoutFromPublicProcedure.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
     });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (fanOut undefined)", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "enqueue", fanOut: undefined })];
+
+        expect(privilegedFanoutFromPublicProcedure.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
+    });
 });
 
 describe("insert_many_unsafe_user_data", () => {
@@ -546,6 +574,14 @@ describe("insert_many_unsafe_user_data", () => {
         const procedures = [procedure({ exportName: "a", usesInsertManyUnsafe: true, visibility: "internal" }), procedure({ exportName: "b" })];
 
         expect(insertManyUnsafeUserData.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (usesInsertManyUnsafe undefined)", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "importRows", usesInsertManyUnsafe: undefined })];
+
+        expect(insertManyUnsafeUserData.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
     });
 });
 
@@ -572,6 +608,14 @@ describe("ai_unbounded_generation_public", () => {
         const procedures = [procedure({ exportName: "a", unboundedAiGeneration: true, visibility: "internal" }), procedure({ exportName: "b" })];
 
         expect(aiUnboundedGenerationPublic.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (unboundedAiGeneration undefined)", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "summarize", unboundedAiGeneration: undefined })];
+
+        expect(aiUnboundedGenerationPublic.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
     });
 });
 

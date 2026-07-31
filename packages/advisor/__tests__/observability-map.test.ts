@@ -221,6 +221,22 @@ describe("sensitivity", () => {
         expect(plain.procedures[0]?.sensitivity).toStrictEqual({ level: "none", reasons: [] });
     });
 
+    it("stays fail-closed for a procedure whose behavioural facts are undefined (unreadable handler body)", () => {
+        expect.assertions(2);
+
+        // `undefined` means the feeder couldn't read the handler body (a
+        // cross-file handler) — classified as sensitive, not "none", since an
+        // unreadable handler might well touch identity or send mail.
+        const map = scoreAdvisor(
+            [procedure({ exportName: "extracted", file: "auth", writesUserTable: undefined })],
+            [],
+            { generatedAt: STAMP },
+        );
+
+        expect(map.procedures[0]?.sensitivity.level).toBe("high");
+        expect(map.procedures[0]?.sensitivity.reasons).toContain("writes an identity table");
+    });
+
     it("weights a sensitive handler above an equally-visible plain one", () => {
         expect.assertions(2);
 

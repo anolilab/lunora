@@ -43,7 +43,11 @@ const signupMutationWithoutDisposableGating: Lint = {
         const findings = [];
 
         for (const procedure of context.procedureProtections) {
-            if (!isPublicWrite(procedure) || !procedure.writesUserTable || procedure.usesEmailGate) {
+            // `writesUserTable === false` is a provable "no" from an analyzable
+            // handler; `undefined` means the feeder couldn't read the handler body
+            // (a cross-file handler) and stays fail-closed — treated the same as
+            // `true` rather than cleared.
+            if (!isPublicWrite(procedure) || procedure.writesUserTable === false || procedure.usesEmailGate) {
                 continue;
             }
 

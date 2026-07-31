@@ -1059,23 +1059,32 @@ export interface HttpRouteIR {
  * pass straight through to the advisor without conversion.
  */
 export interface ProcedureMiddlewareIR {
-    /** `true` when the handler (or a helper inside it) references `ctx.mail` / `ctx.email`. */
-    callsMail: boolean;
+    /**
+     * `true` when the handler body could be read statically — an inline function
+     * expression/arrow, or a same-file identifier resolved to one. `false` for a
+     * genuinely cross-file handler (an imported function, or an identifier that
+     * doesn't resolve in this file), in which case every behavioural fact below
+     * is `undefined` rather than a false "not observed" — the feeder never saw
+     * the body, so it has nothing to report.
+     */
+    analyzableBody: boolean;
+    /** `true` when the handler (or a helper inside it) references `ctx.mail` / `ctx.email`. `undefined` when `analyzableBody` is `false`. */
+    callsMail?: boolean;
     /** `true` when the handler emits a structured observability event (`ctx.log` / `ctx.span` / `ctx.trace`). */
-    emitsEvent: boolean;
+    emitsEvent?: boolean;
     /** `true` when a `// lunora-advisor-exempt` directive sits above the export. */
     exempt: boolean;
     /** The `-- reason` from that directive, or `""`. */
     exemptReason: string;
     /** Export binding name of the procedure (e.g. `signUp`). */
     exportName: string;
-    /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
-    fanOut: boolean;
+    /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. `undefined` when `analyzableBody` is `false`. */
+    fanOut?: boolean;
 
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** `true` when the handler wraps work in `try`/`catch`. */
-    handlesErrors: boolean;
+    handlesErrors?: boolean;
 
     /**
      * `true` when the procedure declares an email-shaped argument (`email`,
@@ -1090,19 +1099,19 @@ export interface ProcedureMiddlewareIR {
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
-    reachesOutbound: boolean;
+    reachesOutbound?: boolean;
     /** `true` when the handler runs any AI generation, bounded or not. */
-    runsAiGeneration: boolean;
+    runsAiGeneration?: boolean;
     /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */
-    throwsBareError: boolean;
-    /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */
-    unboundedAiGeneration: boolean;
+    throwsBareError?: boolean;
+    /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. `undefined` when `analyzableBody` is `false`. */
+    unboundedAiGeneration?: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
     /** `true` when the chain carries `.use(emailGateMiddleware(...))` (`@lunora/auth`). Feeds the `signup_mutation_without_disposable_gating` lint. */
     usesEmailGate: boolean;
-    /** `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, bypassing validators and triggers. Feeds the `insert_many_unsafe_user_data` lint. */
-    usesInsertManyUnsafe: boolean;
+    /** `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, bypassing validators and triggers. Feeds the `insert_many_unsafe_user_data` lint. `undefined` when `analyzableBody` is `false`. */
+    usesInsertManyUnsafe?: boolean;
     /** `true` when the chain carries `.use(mask(...))`. */
     usesMask: boolean;
     /** `true` when the chain carries `.use(rateLimit(...))` or a `protectPublic({ rateLimit })` bundle. */
@@ -1111,8 +1120,8 @@ export interface ProcedureMiddlewareIR {
     usesRls: boolean;
     /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
     visibility: "internal" | "public";
-    /** `true` when the handler inserts into a user/session/account-shaped table. */
-    writesUserTable: boolean;
+    /** `true` when the handler inserts into a user/session/account-shaped table. `undefined` when `analyzableBody` is `false`. */
+    writesUserTable?: boolean;
 }
 
 /**

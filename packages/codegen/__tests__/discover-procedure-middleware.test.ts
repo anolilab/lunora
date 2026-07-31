@@ -327,6 +327,45 @@ const ALIASED_RATE_LIMITED = `${PREAMBLE}
         });
 `;
 
+/** A bare-factory public mutation whose handler is extracted to a same-file `const` — `handler: createHandler` instead of an inline function. */
+const SAME_FILE_EXTRACTED_HANDLER = `
+    import { mutation } from "@lunora/server";
+
+    const createHandler = async (ctx) => {
+        await ctx.db.insert("users", {});
+    };
+
+    export const signUp = mutation({
+        args: {},
+        handler: createHandler,
+    });
+`;
+
+/** A bare-factory public mutation whose handler is a same-file `function` declaration, not a `const` arrow. */
+const SAME_FILE_FUNCTION_DECLARATION_HANDLER = `
+    import { mutation } from "@lunora/server";
+
+    async function createHandler(ctx) {
+        await ctx.db.insert("users", {});
+    }
+
+    export const signUp = mutation({
+        args: {},
+        handler: createHandler,
+    });
+`;
+
+/** A bare-factory public mutation whose handler is imported from another file — genuinely unanalyzable. */
+const CROSS_FILE_HANDLER = `
+    import { mutation } from "@lunora/server";
+    import { createHandler } from "./shared-handlers";
+
+    export const signUp = mutation({
+        args: {},
+        handler: createHandler,
+    });
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -609,5 +648,45 @@ describe("discoverProcedureMiddleware", () => {
             usesRateLimit: true,
             writesUserTable: true,
         });
+    });
+
+    it("resolves a same-file `handler: createHandler` const to its declaration and reads its body", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), SAME_FILE_EXTRACTED_HANDLER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzableBody: true, exportName: "signUp", writesUserTable: true });
+    });
+
+    it("resolves a same-file `handler: createHandler` function declaration to its body", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), SAME_FILE_FUNCTION_DECLARATION_HANDLER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzableBody: true, exportName: "signUp", writesUserTable: true });
+    });
+
+    it("leaves every behavioural fact undefined for a genuinely cross-file handler, rather than reporting false", () => {
+        expect.assertions(11);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), CROSS_FILE_HANDLER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzableBody: false, exportName: "signUp" });
+        expect(found[0]?.callsMail).toBeUndefined();
+        expect(found[0]?.emitsEvent).toBeUndefined();
+        expect(found[0]?.fanOut).toBeUndefined();
+        expect(found[0]?.handlesErrors).toBeUndefined();
+        expect(found[0]?.reachesOutbound).toBeUndefined();
+        expect(found[0]?.runsAiGeneration).toBeUndefined();
+        expect(found[0]?.throwsBareError).toBeUndefined();
+        expect(found[0]?.unboundedAiGeneration).toBeUndefined();
+        expect(found[0]?.usesInsertManyUnsafe).toBeUndefined();
+        expect(found[0]?.writesUserTable).toBeUndefined();
     });
 });

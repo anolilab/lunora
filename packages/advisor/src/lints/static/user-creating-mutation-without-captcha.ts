@@ -35,13 +35,23 @@ const userCreatingMutationWithoutCaptcha: Lint = {
         const findings = [];
 
         for (const procedure of context.procedureProtections) {
-            const sensitive = procedure.writesUserTable || procedure.callsMail;
+            // `undefined` means the feeder couldn't read the handler body (a
+            // cross-file handler) — stays fail-closed, treated as "might write a
+            // user table" / "might send mail" rather than cleared.
+            const sensitive = procedure.writesUserTable !== false || procedure.callsMail !== false;
 
             if (!isPublicWrite(procedure) || !sensitive || procedure.usesCaptcha) {
                 continue;
             }
 
-            const reason = procedure.writesUserTable ? "writes a user/session table" : "sends mail";
+            // Reaching here, `sensitive` is true, so at least one of the two facts
+            // below is `true` or `undefined` (never both provably `false`).
+            const reason =
+                procedure.writesUserTable === true
+                    ? "writes a user/session table"
+                    : procedure.callsMail === true
+                      ? "sends mail"
+                      : "may write a user/session table or send mail — its handler body could not be read";
 
             findings.push(
                 emit(userCreatingMutationWithoutCaptcha, {

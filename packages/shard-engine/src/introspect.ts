@@ -336,12 +336,12 @@ interface AdvisoriesResult {
  * says how much is right, so without it a score cannot be computed at all.
  */
 interface AdvisorProcedure {
-    callsMail: boolean;
+    callsMail?: boolean;
     emitsEvent?: boolean;
     exempt?: boolean;
     exemptReason?: string;
     exportName: string;
-    fanOut: boolean;
+    fanOut?: boolean;
     file: string;
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
@@ -349,15 +349,15 @@ interface AdvisorProcedure {
     reachesOutbound?: boolean;
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
-    unboundedAiGeneration: boolean;
+    unboundedAiGeneration?: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
-    usesInsertManyUnsafe: boolean;
+    usesInsertManyUnsafe?: boolean;
     usesMask: boolean;
     usesRateLimit: boolean;
     usesRls: boolean;
     visibility: "internal" | "public";
-    writesUserTable: boolean;
+    writesUserTable?: boolean;
 }
 
 /** Payload of a `__lunora_admin__:getAdvisorProcedures` call: every declared procedure. */
