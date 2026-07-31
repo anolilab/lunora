@@ -368,6 +368,137 @@ const referencesContextMember = (declaration: TsNode, members: ReadonlySet<strin
         return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
     });
 
+/** Syntax kinds that bound "the same function" for the enclosing-`try` walk below — climbing stops here. */
+const FUNCTION_BOUNDARY_KINDS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.ArrowFunction,
+    SyntaxKind.FunctionExpression,
+    SyntaxKind.FunctionDeclaration,
+    SyntaxKind.MethodDeclaration,
+    SyntaxKind.GetAccessor,
+    SyntaxKind.SetAccessor,
+]);
+
+/**
+ * True when `call` sits inside a `try` block WITHIN the same function — climbing
+ * stops at the nearest enclosing function boundary, so a `try` wrapping a
+ * different, outer function (e.g. one that merely invokes a callback containing
+ * `call`) does not count. This is what makes an unrelated `try` elsewhere in the
+ * handler stop clearing a genuinely-unguarded outbound call.
+ */
+const hasEnclosingTry = (call: TsNode): boolean => {
+    let current: TsNode | undefined = call.getParent();
+
+    while (current) {
+        if (Node.isTryStatement(current)) {
+            const tryBlock = current.getTryBlock();
+
+            if (call.getPos() >= tryBlock.getPos() && call.getEnd() <= tryBlock.getEnd()) {
+                return true;
+            }
+        }
+
+        if (FUNCTION_BOUNDARY_KINDS.has(current.getKind())) {
+            return false;
+        }
+
+        current = current.getParent();
+    }
+
+    return false;
+};
+
+/** True when `call` is the receiver of a `.catch(...)` — directly, or at the end of a `.then(...)`/`.finally(...)` chain. */
+const isCatchGuarded = (call: CallExpression): boolean => {
+    let node: TsNode = call;
+
+    while (true) {
+        const parent = node.getParent();
+
+        if (!Node.isPropertyAccessExpression(parent) || parent.getExpression() !== node) {
+            return false;
+        }
+
+        if (parent.getName() === "catch") {
+            return true;
+        }
+
+        if (parent.getName() !== "then" && parent.getName() !== "finally") {
+            return false;
+        }
+
+        const grandparent = parent.getParent();
+
+        if (!Node.isCallExpression(grandparent) || grandparent.getExpression() !== parent) {
+            return false;
+        }
+
+        node = grandparent;
+    }
+};
+
+/**
+ * Resolve `access` (a `ctx.&lt;member>` property access) to the call expression it
+ * is directly invoked through — `ctx.fetch(...)` resolves `ctx.fetch` itself;
+ * `ctx.mail.send(...)` resolves `ctx.mail` by walking the fluent chain one more
+ * property-access hop. Returns `undefined` when `access` is referenced without
+ * ever being called (e.g. `const m = ctx.mail;`) — nothing to guard there.
+ */
+const outboundCallSite = (access: TsNode): CallExpression | undefined => {
+    let node: TsNode = access;
+
+    while (true) {
+        const parent = node.getParent();
+
+        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {
+            node = parent;
+            continue;
+        }
+
+        return Node.isCallExpression(parent) && parent.getExpression() === node ? parent : undefined;
+    }
+};
+
+/**
+ * Per-outbound-call-site error-handling facts: `reachesOutbound` is `true` when
+ * `declaration` invokes at least one `ctx.&lt;OUTBOUND_MEMBERS>` surface;
+ * `handlesErrors` is `true` only when EVERY such call site is guarded — wrapped in
+ * a `try` within the same function, or the receiver of a `.catch(...)`.
+ *
+ * Replaces a whole-declaration "is there a `try` anywhere" scan, which a
+ * `.catch()`-only handler failed (zero `TryStatement` nodes) and an unrelated
+ * `try` elsewhere in the body passed (clearing a genuinely-unguarded call).
+ */
+const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boolean; reachesOutbound: boolean } => {
+    let reachesOutbound = false;
+    let allGuarded = true;
+
+    for (const access of declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+        if (!OUTBOUND_MEMBERS.has(access.getName())) {
+            continue;
+        }
+
+        const receiver = access.getExpression();
+
+        if (!Node.isIdentifier(receiver) || receiver.getText() !== "ctx") {
+            continue;
+        }
+
+        const call = outboundCallSite(access);
+
+        if (!call) {
+            continue;
+        }
+
+        reachesOutbound = true;
+
+        if (!hasEnclosingTry(call) && !isCatchGuarded(call)) {
+            allGuarded = false;
+        }
+    }
+
+    return { handlesErrors: reachesOutbound && allGuarded, reachesOutbound };
+};
+
 /**
  * True when the body throws a bare `new Error(...)`.
  *
@@ -503,12 +634,14 @@ const behaviourOf = (
         }
     }
 
+    const { handlesErrors, reachesOutbound } = outboundErrorHandlingFacts(declaration);
+
     return {
         callsMail: referencesContextMember(declaration, MAIL_MEMBERS),
         emitsEvent: referencesContextMember(declaration, EVENT_MEMBERS),
         fanOut,
-        handlesErrors: declaration.getDescendantsOfKind(SyntaxKind.TryStatement).length > 0,
-        reachesOutbound: referencesContextMember(declaration, OUTBOUND_MEMBERS),
+        handlesErrors,
+        reachesOutbound,
         runsAiGeneration: runsAiGeneration || referencesContextMember(declaration, AI_MEMBERS),
         throwsBareError: throwsBareError(declaration),
         unboundedAiGeneration,

@@ -227,6 +227,52 @@ const SPREAD_AI = `
     });
 `;
 
+/** A bare-factory public action whose only outbound call is guarded by `.catch(...)`, not a `try` — the old whole-declaration `try` scan flagged this. */
+const CATCH_GUARDED_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => {
+            return ctx.fetch("https://example.com/hook").catch((error) => ({ ok: false, error }));
+        },
+    });
+`;
+
+/** A bare-factory public action with an unrelated `try` elsewhere and a genuinely-unguarded outbound call — the old scan let the unrelated `try` clear the finding. */
+const UNRELATED_TRY_UNGUARDED_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => {
+            try {
+                JSON.parse("{}");
+            } catch {
+                // unrelated to the outbound call below
+            }
+
+            return ctx.fetch("https://example.com/hook");
+        },
+    });
+`;
+
+/** A bare-factory public action whose outbound call sits inside a `try` that actually wraps it — still recognized as guarded. */
+const TRY_GUARDED_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => {
+            try {
+                return await ctx.fetch("https://example.com/hook");
+            } catch (error) {
+                return { ok: false, error };
+            }
+        },
+    });
+`;
+
 /** A builder-form mutation guarded by `.use(rateLimit())`. */
 const RATE_LIMITED = `${PREAMBLE}
     export const send = c.mutation
@@ -477,6 +523,36 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "summarize", unboundedAiGeneration: false });
+    });
+
+    it("treats a `.catch(...)`-guarded outbound call as error-handled", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), CATCH_GUARDED_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("does not let an unrelated `try` elsewhere clear a genuinely-unguarded outbound call", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), UNRELATED_TRY_UNGUARDED_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: false, reachesOutbound: true });
+    });
+
+    it("recognizes an outbound call actually wrapped in `try`/`catch` as guarded", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), TRY_GUARDED_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
     });
 
     it("records a `.use(rateLimit())` builder chain as rate-limited", () => {
