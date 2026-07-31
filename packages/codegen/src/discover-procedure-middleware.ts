@@ -21,8 +21,42 @@ const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMa
     verifyTurnstileMiddleware: "usesCaptcha",
 };
 
-/** Tables whose insert marks a procedure as user/session-creating (captcha-expected). */
-const USER_TABLE_RE = /account|credential|member|passkey|session|user/iu;
+/** Terminal words that mark a table as user/session-creating (captcha-expected). */
+const USER_TABLE_WORDS: ReadonlySet<string> = new Set(["account", "credential", "member", "passkey", "session", "user"]);
+
+/**
+ * Split a table name into its camelCase / snake_case / kebab-case words, lowercased
+ * (`"userPreferences"` -> `["user", "preferences"]`, `"account_credentials"` ->
+ * `["account", "credentials"]`).
+ */
+const wordsOf = (name: string): string[] =>
+    name
+        .replaceAll(/[-_]/gu, " ")
+        .replaceAll(/([a-z0-9])([A-Z])/gu, "$1 $2")
+        .split(" ")
+        .filter(Boolean)
+        .map((word) => word.toLowerCase());
+
+/**
+ * True when a table name's TERMINAL word is (a singular or simple plural of) one of
+ * {@link USER_TABLE_WORDS} — `"users"` and `"account_credentials"` match,
+ * `"userPreferences"` and `"sessionReplay"` do not, because `user`/`session` sit
+ * there as a modifier on a different terminal word, not naming the table itself.
+ * Mirrors the terminal-word matching in {@link isEmailArgumentName} rather than a
+ * bare substring test, which the modifier cases used to false-positive on.
+ */
+const isUserTableName = (name: string): boolean => {
+    const words = wordsOf(name);
+    const last = words.at(-1);
+
+    if (!last) {
+        return false;
+    }
+
+    const singular = last.endsWith("s") ? last.slice(0, -1) : last;
+
+    return USER_TABLE_WORDS.has(last) || USER_TABLE_WORDS.has(singular);
+};
 
 /**
  * True for an argument name that carries an email **address**.
@@ -195,11 +229,14 @@ const protectionsInChain = (receiver: TsNode): Protections => {
     return protections;
 };
 
-/** True when `call` is a `ctx.db.insert("table", …)` / `db.insert("table", …)` write into a user-shaped table. */
+/** `ctx.db` write methods that create/replace a row wholesale — the ones a user/session-creating write can arrive through. */
+const USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "replace"]);
+
+/** True when `call` is a `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
 const isUserTableInsert = (call: CallExpression): boolean => {
     const callee = call.getExpression();
 
-    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "insert") {
+    if (!Node.isPropertyAccessExpression(callee) || !USER_TABLE_INSERT_METHODS.has(callee.getName())) {
         return false;
     }
 
@@ -212,7 +249,7 @@ const isUserTableInsert = (call: CallExpression): boolean => {
 
     const tableArgument = call.getArguments()[0];
 
-    return Boolean(tableArgument && Node.isStringLiteral(tableArgument) && USER_TABLE_RE.test(tableArgument.getLiteralText()));
+    return Boolean(tableArgument && Node.isStringLiteral(tableArgument) && isUserTableName(tableArgument.getLiteralText()));
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */

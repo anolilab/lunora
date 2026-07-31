@@ -116,6 +116,54 @@ const BARE_SIGNUP = `
     });
 `;
 
+/** A bare-factory public mutation that bulk-inserts into a user table via `insertMany` — a write shape `isUserTableInsert` used to miss. */
+const INSERT_MANY_USER_TABLE = `
+    import { mutation } from "@lunora/server";
+
+    export const importUsers = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insertMany("users", []);
+        },
+    });
+`;
+
+/** A bare-factory public mutation writing a `replace` into a user table — also covered by the broadened method list. */
+const REPLACE_USER_TABLE = `
+    import { mutation } from "@lunora/server";
+
+    export const restoreUser = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.replace("users", { id: "u1" });
+        },
+    });
+`;
+
+/** A bare-factory public mutation writing into "userPreferences" — "user" is a modifier, not the table's terminal word, so this must NOT be treated as a user-table write. */
+const USER_PREFERENCES_TABLE = `
+    import { mutation } from "@lunora/server";
+
+    export const savePreferences = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insert("userPreferences", {});
+        },
+    });
+`;
+
+/** A bare-factory public mutation writing into "sessionReplay" — same modifier shape as "userPreferences", the other false-positive the old substring match hit. */
+const SESSION_REPLAY_TABLE = `
+    import { mutation } from "@lunora/server";
+
+    export const logReplay = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insert("sessionReplay", {});
+        },
+    });
+`;
+
 /** A bare-factory public mutation that fans out to the scheduler — no rate limit. */
 const FANOUT = `
     import { mutation } from "@lunora/server";
@@ -343,6 +391,46 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "add", hasEmailArg: false, writesUserTable: true });
+    });
+
+    it("recognizes an `insertMany` bulk write into a user table", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "import.ts"), INSERT_MANY_USER_TABLE, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "importUsers", writesUserTable: true });
+    });
+
+    it("recognizes a `replace` write into a user table", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "restore.ts"), REPLACE_USER_TABLE, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "restoreUser", writesUserTable: true });
+    });
+
+    it('does not treat "userPreferences" as a user table — "user" is a modifier, not the terminal word', () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "preferences.ts"), USER_PREFERENCES_TABLE, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "savePreferences", writesUserTable: false });
+    });
+
+    it('does not treat "sessionReplay" as a user table', () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "replay.ts"), SESSION_REPLAY_TABLE, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "logReplay", writesUserTable: false });
     });
 
     it("records a scheduler fan-out from a public mutation", () => {
