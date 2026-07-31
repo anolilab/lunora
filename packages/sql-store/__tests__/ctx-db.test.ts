@@ -39,6 +39,33 @@ const sqlAffinityForKind = (kind: string | undefined): string => {
 };
 
 /** A minimal reference SQLite dialect, mirroring `@lunora/d1`'s sqliteDialect (kept local so sql-store has no dependency on a downstream package). */
+/**
+ * Does this runtime's `node:sqlite` have the FTS5 module compiled in?
+ *
+ * It is a property of the RUNTIME, not of the dialect: Node 24 bundles a SQLite
+ * with FTS5, Node 22 does not. Hard-coding `supportsFts5: true` made these
+ * tests pass on one CI matrix leg and fail on the other with
+ * `no such module: fts5`.
+ *
+ * Probing keeps both legs meaningful rather than skipping: where FTS5 exists
+ * the suite exercises the `fts5` search layout, and where it does not it
+ * exercises the portable `inverted` layout — which is exactly the split the
+ * store already models for backends without FTS5.
+ */
+const RUNTIME_HAS_FTS5 = ((): boolean => {
+    const probe = new DatabaseSync(":memory:");
+
+    try {
+        probe.exec("CREATE VIRTUAL TABLE __fts5_probe USING fts5(x)");
+
+        return true;
+    } catch {
+        return false;
+    } finally {
+        probe.close();
+    }
+})();
+
 const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDialect => {
     return {
         columnType: (kind) => sqlAffinityForKind(kind),
@@ -57,7 +84,7 @@ const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDialect => {
         ],
         isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
         name,
-        supportsFts5: true,
+        supportsFts5: RUNTIME_HAS_FTS5,
         supportsReturning: true,
         tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
     };
