@@ -655,6 +655,20 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
         return { child, isOptional: child.kind === "optional", key } as const;
     });
 
+    // A declared `__proto__` field can't be written back with a plain `out[key] =
+    // …` assignment below — `__proto__` is an accessor on `Object.prototype`, so
+    // the assignment would invoke its setter (reparenting `out`, or no-op'ing for
+    // a non-object value) instead of creating a data property, silently dropping
+    // the field. Building `out` as a null-proto object would dodge that, but it
+    // would also change the prototype of EVERY parsed object (not just ones with
+    // this field) — a schema this rare isn't worth that blast radius (it would
+    // desync `@lunora/codegen`'s AOT-compiled fast path, which emits plain object
+    // literals, from this interpreted oracle). Reject it here instead, at
+    // construction time, same tier as `v.union`'s empty-members guard above.
+    if (entries.some(({ key }) => key === "__proto__")) {
+        throw new LunoraError("INTERNAL", 'v.object: "__proto__" cannot be a declared field name — it collides with the Object.prototype accessor');
+    }
+
     return asColumn(
         createValidator<ObjectShapeType<S>>(
             "object",
