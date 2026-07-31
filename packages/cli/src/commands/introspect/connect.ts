@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 
+import { addArgsFor, detectPackageManager } from "../../util/detect-package-manager";
 import type { SqlDialect } from "./model";
 import type { SqlExecutor } from "./read-database";
 
@@ -40,6 +41,22 @@ interface MysqlConnectionLike {
 const LEADING_SLASH = /^\//;
 
 /**
+ * The copy-pastable dev-dependency install command for `cwd`'s project —
+ * `detectPackageManager` is itself best-effort (no lock file / `packageManager`
+ * field, an unrecognized launching agent, nothing on `PATH`), so a failed
+ * detection falls back to a manager-neutral placeholder rather than a guess.
+ */
+const installHint = (cwd: string, packageName: string): string => {
+    try {
+        const { args, command } = addArgsFor(detectPackageManager(cwd), [packageName], { dev: true });
+
+        return `${command} ${args.join(" ")}`;
+    } catch {
+        return `<your-package-manager> add -D ${packageName}`;
+    }
+};
+
+/**
  * Load an optional driver by name, resolved from the USER'S project rather than
  * the CLI's own `node_modules` — `pg` / `mysql2` are things they install, and the
  * CLI is frequently run through a global binary that could never see them.
@@ -59,7 +76,7 @@ const loadDriver = (specifier: string, install: string, cwd: string): Record<str
     } catch {
         throw new LunoraError(
             "INTERNAL",
-            `\`lunora introspect\` needs the \`${install}\` driver to read this database, and it isn't installed.\n\nInstall it in your project:\n\n    pnpm add -D ${install}`,
+            `\`lunora introspect\` needs the \`${install}\` driver to read this database, and it isn't installed.\n\nInstall it in your project:\n\n    ${installHint(cwd, install)}`,
         );
     }
 

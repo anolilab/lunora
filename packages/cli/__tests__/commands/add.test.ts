@@ -350,6 +350,23 @@ describe("lunora add", () => {
         });
     });
 
+    describe("install hint", () => {
+        it("names the detected manager's own install command, not a hardcoded pnpm", async () => {
+            expect.assertions(1);
+
+            // `packageManager` is the strongest of `detectPackageManager`'s
+            // signals — deterministic regardless of what happens to be
+            // installed on the machine running the suite.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo", packageManager: "yarn@4.0.0" }, null, 4), "utf8");
+
+            const { lines, logger } = makeLogger();
+
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["ratelimit"], yes: true });
+
+            expect(lines.join("\n")).toContain("yarn install  # install newly-added dependencies");
+        });
+    });
+
     describe("requires resolution", () => {
         it("installs transitive dependencies before the dependent", async () => {
             expect.assertions(3);

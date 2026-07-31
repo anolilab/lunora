@@ -75,6 +75,25 @@ describe("update-notifier helpers", () => {
         // The advice must keep the user on their own channel.
         expect(formatUpdateNotice("1.0.0-alpha.1", "1.0.0-alpha.2", "alpha")).toContain("@lunora/cli@alpha");
     });
+
+    it("formatUpdateNotice names the detected manager's own add-dependency command", () => {
+        expect.assertions(3);
+
+        // A yarn project must not be told to run a pnpm command it may not
+        // even have installed.
+        expect(formatUpdateNotice("1.0.0", "2.0.0", "latest", "yarn")).toContain("yarn add -D @lunora/cli@latest");
+        expect(formatUpdateNotice("1.0.0", "2.0.0", "latest", "npm")).toContain("npm install --save-dev @lunora/cli@latest");
+        expect(formatUpdateNotice("1.0.0", "2.0.0", "latest", "bun")).toContain("bun add -d @lunora/cli@latest");
+    });
+
+    it("formatUpdateNotice stays manager-neutral when detection failed", () => {
+        expect.assertions(1);
+
+        // No manager could be resolved: naming a specific command would be a
+        // guess, not a signal — the whole point of this being package-manager
+        // aware in the first place.
+        expect(formatUpdateNotice("1.0.0", "2.0.0")).not.toMatch(/\b(?:pnpm|npm|yarn|bun)\b/u);
+    });
 });
 
 describe("maybeNotifyUpdate", () => {

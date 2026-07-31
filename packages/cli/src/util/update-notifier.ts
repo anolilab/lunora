@@ -16,6 +16,8 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { PackageManager } from "./detect-package-manager";
+import { addArgsFor } from "./detect-package-manager";
 import type { Logger } from "./logger";
 
 /** Registry endpoint resolving one dist-tag of `@lunora/cli`. */
@@ -157,9 +159,23 @@ const isNewer = (current: string, latest: string): boolean => compareVersions(la
 /** A cache entry is fresh while it is within the TTL of `nowMs`. */
 const isCacheFresh = (checkedAt: number, nowMs: number, ttlMs: number): boolean => nowMs - checkedAt < ttlMs;
 
-/** The one-line notice shown when an update exists. */
-const formatUpdateNotice = (current: string, latest: string, tag = "latest"): string =>
-    `Update available for @lunora/cli: ${current} → ${latest} — run \`pnpm add -D @lunora/cli@${tag}\``;
+/**
+ * The one-line notice shown when an update exists. `manager` is the caller's
+ * best-effort detection (undefined when it could not be resolved) — with one,
+ * the notice names the exact copy-pastable command; without one, it stays
+ * manager-neutral rather than guessing a wrong (or merely unavailable) tool.
+ */
+const formatUpdateNotice = (current: string, latest: string, tag = "latest", manager?: PackageManager): string => {
+    const header = `Update available for @lunora/cli: ${current} → ${latest}`;
+
+    if (manager === undefined) {
+        return `${header} — add @lunora/cli@${tag} as a dev dependency to update`;
+    }
+
+    const { args, command } = addArgsFor(manager, [`@lunora/cli@${tag}`], { dev: true });
+
+    return `${header} — run \`${command} ${args.join(" ")}\``;
+};
 
 const cacheFilePath = (cacheDirectory: string): string => join(cacheDirectory, "lunora-cli-update.json");
 
@@ -260,6 +276,8 @@ interface NotifyUpdateDeps {
     /** Whether stdout is a TTY (injected in tests). Defaults to `process.stdout.isTTY`. */
     isTTY?: boolean;
     logger: Logger;
+    /** The caller's best-effort `detectPackageManager` result — undefined when detection failed or was skipped. */
+    manager?: PackageManager;
     /** Clock (injected in tests). Defaults to `Date.now`. */
     now?: () => number;
     /** Cache TTL override (ms). */
@@ -311,7 +329,7 @@ const maybeNotifyUpdate = async (deps: NotifyUpdateDeps): Promise<void> => {
     }
 
     if (latest !== undefined && isNewer(deps.current, latest)) {
-        deps.logger.warn(formatUpdateNotice(deps.current, latest, tag));
+        deps.logger.warn(formatUpdateNotice(deps.current, latest, tag, deps.manager));
     }
 };
 

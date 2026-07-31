@@ -78,11 +78,15 @@ const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<stri
     }
 
     const detail = missing.map((entry) => `  - ${entry.name} — ${entry.reason}`).join("\n");
-    const install = missing.map((entry) => entry.name).join(" ");
 
+    // No `pnpm add …` line: `@lunora/codegen` has no package-manager knowledge
+    // (that lives in `@lunora/cli`, a package downstream of this one), and a
+    // hardcoded pnpm command is wrong for the other three managers' projects.
+    // The package names above are already copy-pastable into whichever `add`
+    // command the project actually uses.
     throw new LunoraError(
         "INTERNAL",
-        `@lunora/codegen: this schema's generated code imports packages the project does not declare:\n${detail}\n\nInstall them, then re-run codegen:\n\n  pnpm add ${install}\n`,
+        `@lunora/codegen: this schema's generated code imports packages the project does not declare:\n${detail}\n\nInstall them with your package manager, then re-run codegen.`,
     );
 };
 
