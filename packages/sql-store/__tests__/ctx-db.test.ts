@@ -39,6 +39,7 @@ const sqlAffinityForKind = (kind: string | undefined): string => {
 };
 
 /** A minimal reference SQLite dialect, mirroring `@lunora/d1`'s sqliteDialect (kept local so sql-store has no dependency on a downstream package). */
+
 /**
  * Does this runtime's `node:sqlite` have the FTS5 module compiled in?
  *
