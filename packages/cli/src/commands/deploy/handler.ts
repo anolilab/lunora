@@ -742,6 +742,7 @@ const runCodegenStep = async (
     apiSpec: ApiSpec | undefined,
     target: string,
     spawner: Spawner | undefined,
+    jsonOutput: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -764,7 +765,7 @@ const runCodegenStep = async (
         // script. Without this a deploy would ship output the project considers
         // unfinished, and the deploy pipeline has no reason to run that script
         // first, so nothing else would catch it.
-        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner });
+        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
 
         if (postCodegen.error !== undefined) {
             logger.error(postCodegen.error);
@@ -1066,7 +1067,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     let codegen: CodegenResult | undefined;
 
     if (!options.skipCodegen) {
-        const codegenStep = await runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target, options.spawner);
+        const codegenStep = await runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target, options.spawner, isJsonFormat(options.format));
 
         if (codegenStep.error !== undefined) {
             return {

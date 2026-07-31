@@ -77,7 +77,18 @@ interface PostCodegenHookResult {
  * the project considers unfinished.
  * @returns whether the hook ran, and its error message when it failed.
  */
-const runPostCodegenHook = async (options: { cwd: string; logger: Logger; spawner?: Spawner }): Promise<PostCodegenHookResult> => {
+const runPostCodegenHook = async (options: {
+    cwd: string;
+    logger: Logger;
+    spawner?: Spawner;
+
+    /**
+     * Route the script's stdout to stderr. Set in `--format json` mode, where
+     * stdout is reserved for the single JSON document — a `postcodegen` script
+     * that prints anything would otherwise interleave with and corrupt it.
+     */
+    stdoutToStderr?: boolean;
+}): Promise<PostCodegenHookResult> => {
     const { cwd, logger } = options;
 
     if (!hasPostCodegenScript(cwd)) {
@@ -103,7 +114,7 @@ const runPostCodegenHook = async (options: { cwd: string; logger: Logger; spawne
     let result: SpawnResult;
 
     try {
-        result = await (options.spawner ?? defaultSpawner)({ args: exec.args, command: exec.command, cwd });
+        result = await (options.spawner ?? defaultSpawner)({ args: exec.args, command: exec.command, cwd, stdoutToStderr: options.stdoutToStderr });
     } catch (error: unknown) {
         // A spawner REJECTS when the binary is missing or the process cannot be
         // started at all — distinct from a non-zero exit. Only the latter was
