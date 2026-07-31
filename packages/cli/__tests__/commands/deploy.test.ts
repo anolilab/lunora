@@ -877,7 +877,10 @@ export const backfillNames = defineMigration({
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 // `detectPackageManager` reads the nearest package.json's `packageManager`.
-                writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+                // The manifest must also declare the fixture's add-ons: this schema has
+                // `.global()` tables, and codegen's required-package gate reads a manifest
+                // that exists as authoritative ("declares nothing"), not as "cannot tell".
+                writeFileSync(join(workdir, "package.json"), `{ "dependencies": { "@lunora/d1": "*" }, "packageManager": "npm@10.9.0" }\n`, "utf8");
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();

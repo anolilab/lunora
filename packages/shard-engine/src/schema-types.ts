@@ -1,3 +1,4 @@
+import type { IndexKeyEntry } from "./read-write-set";
 import type { SystemDatabaseReader } from "./system-reader";
 import type { WhereInput } from "./where-types";
 
@@ -396,6 +397,14 @@ export interface LifecycleDispatchInfo {
 
 /** Per-row change notification emitted by the CDC layer. */
 export interface MutationDelta {
+    /**
+     * Index positions the written row occupies, unioned across its BEFORE and
+     * AFTER images. Computed once on the write path (which is the only place
+     * that still holds the before-image) so consumers never re-derive it —
+     * a consumer working from `row` alone sees only the destination, and would
+     * miss a subscriber watching the slice the row just LEFT.
+     */
+    indexKeys?: ReadonlyArray<IndexKeyEntry>;
     key: string;
     op: "insert" | "update" | "delete";
     row?: Record<string, unknown>;

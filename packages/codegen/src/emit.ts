@@ -3792,6 +3792,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "DatabaseWriterLike",
     "DataMigrationLike",
     ...(hasFlags ? ["FlagsResult"] : []),
+    "KeyRange",
     "MaskPoliciesResult",
     "MigrationRunResult",
     ...(hasQueues ? ["QueuesResult"] : []),
@@ -3803,6 +3804,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "RunShardWriteArgs",
     "RunShardWriteResult",
     "SchedulerLike",
+    "TransactionHeadroomTracker",
     "SchemaLike",
     "ShardDOState",
     "ShardRankPageResult",
@@ -4154,7 +4156,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
@@ -4335,12 +4337,14 @@ const vectorsStub: VectorSearchLike = {
     const databaseOptions = hasVectors
         ? `{${authField}
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 enforceRls: true,
+                headroom: options.headroom ?? this.transactionHeadroom(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
+                onReadRange: options.onReadRange,
                 onWrite,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
@@ -4349,12 +4353,14 @@ const vectorsStub: VectorSearchLike = {
             }`
         : `{${authField}
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 enforceRls: true,
+                headroom: options.headroom ?? this.transactionHeadroom(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
+                onReadRange: options.onReadRange,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -4471,7 +4477,7 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -4828,7 +4834,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return registered.handler(ctx, args);
         }
 ${relationFanout.override}
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -4837,14 +4843,16 @@ ${relationFanout.override}
 
             this.ensureMigrated();
 
-            const tables = new Set<string>();
+            const footprint = createReadFootprint();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, identity, onRead: (table) => tables.add(table) });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
             const result = await registered.handler(ctx, args);
 
-            return { result, tables };
+            // Ranges come from THIS run's reads, never a shared field on the DO:
+            // a deferred re-run interleaves with unrelated dispatches.
+            return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
         protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
@@ -4922,7 +4930,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -4965,7 +4973,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -5015,7 +5023,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -5036,7 +5044,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -5064,7 +5072,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -5095,7 +5103,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table);
+                    this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
                 scheduler,
@@ -5117,7 +5125,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by

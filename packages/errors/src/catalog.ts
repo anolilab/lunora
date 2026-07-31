@@ -107,6 +107,17 @@ export const ERROR_CATALOG = {
     },
 
     RUN_DEPTH_EXCEEDED: { internal: true, status: 500, title: "Run depth exceeded" },
+    TRANSACTION_LIMIT_EXCEEDED: {
+        hint: [
+            "A single mutation may only read and write a bounded amount before it is stopped.",
+            "",
+            "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
+            "",
+            "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.",
+        ],
+        status: 413,
+        title: "Transaction limit exceeded",
+    },
     MIGRATION_NOT_FOUND: { status: 404, title: "Data migration not found" },
     UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
     GLOBAL_TABLE_NOT_EDITABLE: { status: 400, title: "Global table is not editable" },

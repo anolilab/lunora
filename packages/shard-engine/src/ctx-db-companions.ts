@@ -112,7 +112,21 @@ interface CompanionSyncDeps {
     /** Broadcast a write delta to live (hibernated) WebSocket subscribers. */
     broadcast: (delta: MutationDelta) => void;
     /** Invalidate reactive-cache entries that read `(table, id)` / the table's scan bucket. */
-    invalidateCache: (table: string, id: string) => void;
+
+    /**
+     * Index positions a row occupies. Supplied by `ctx-db` (the only layer that
+     * knows the schema's indexes) so the broadcast delta carries the same keys
+     * the cache invalidation used, and no consumer re-derives them.
+     */
+    indexKeysFor: (table: string, document?: Record<string, unknown>) => ReadonlyArray<{ index: string; key: string }> | undefined;
+
+    /**
+     * `document` is the row's post-write image, used to derive the index
+     * positions it occupies so only the range dependencies covering those
+     * positions are invalidated. Omit it and every range on the table is
+     * dropped (the conservative default).
+     */
+    invalidateCache: (table: string, id: string, document?: Record<string, unknown>) => void;
     /** Append a post-image to the CDC changelog when CDC is enabled; a no-op otherwise. */
     recordCdc: (table: string, id: string, op: "delete" | "insert" | "update", doc?: Record<string, unknown>) => void;
     /** The DO writer's schema view. */
@@ -156,7 +170,7 @@ interface CompanionSync {
  * backfill set held here is the single "rebuilt this instance?" source of truth.
  */
 const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
-    const { broadcast, invalidateCache, recordCdc, schema, sql } = deps;
+    const { broadcast, indexKeysFor, invalidateCache, recordCdc, schema, sql } = deps;
 
     // Tracks which (table, aggregateIndex) pairs this ctx-db has already rebuilt
     // so the lazy backfill runs exactly once per index per ctx-db instance.
@@ -648,9 +662,9 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         syncGeo(tableName, id, document);
         syncAggregates(tableName, undefined, document);
         syncRanks(tableName, id, undefined, document);
-        invalidateCache(tableName, id);
+        invalidateCache(tableName, id, document);
         recordCdc(tableName, id, "insert", document);
-        broadcast({ key: id, op: "insert", row: document, table: tableName });
+        broadcast({ indexKeys: indexKeysFor(tableName, document), key: id, op: "insert", row: document, table: tableName });
     };
 
     return {

@@ -81,6 +81,8 @@ import type {
     FunctionCallStat,
     FunctionStatsResult,
     ImportShardResult,
+    IndexKeyEntry,
+    KeyRange,
     LifecycleDispatchInfo,
     LifecycleEvent,
     MaskPoliciesResult,
@@ -110,6 +112,7 @@ import type {
     SubscriptionQuery,
     SubscriptionsResult,
     TableIndexInfo,
+    TransactionLimits,
     TransactionSqlLike,
     TtlSweepSpec,
     WorkflowInstanceStatusResult,
@@ -146,6 +149,7 @@ import {
     listTables,
     MAIL_TABLE,
     MAX_PAGE_SIZE,
+    mergeChangedKeys,
     migrateClientWatermark,
     minCdcSeq,
     parseExportShardArgs,
@@ -168,6 +172,7 @@ import {
     readQueueMessages,
     readTablePage,
     recordCapturedMail,
+    recordChangedKeys,
     recordFanoutPass,
     recordQueueMessages,
     RELATION_FUNCTION_PREFIX,
@@ -184,10 +189,12 @@ import {
     subscriptionListDeltas,
     summarizeFanoutTopics,
     summarizeSubscriptions,
+    TransactionHeadroomTracker,
     trimIdempotent,
     trySendFrame,
     writeGlobalShapeSnapshot,
     writeIdempotent,
+    writeTouchesMemo,
 } from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
@@ -525,6 +532,12 @@ interface HibernatableWebSocket {
  * hook) — the shard uses it to decide which writes should trigger a re-run.
  */
 interface SubscriptionOutcome {
+    /**
+     * Index slices the run was provably confined to, per table — see
+     * {@link SubscriptionMemo.ranges}. Absent when the run reported no
+     * narrowable read.
+     */
+    ranges?: Map<string, KeyRange[]>;
     result: unknown;
     tables: Set<string>;
 }
@@ -576,6 +589,15 @@ interface ShardDOOptions {
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
     lastJson: string;
+
+    /**
+     * Index slices this subscription's reads were provably confined to, keyed
+     * by table. A table present here was read ONLY through the listed ranges,
+     * so a write landing outside all of them cannot change the result. A table
+     * in {@link SubscriptionMemo.tables} but absent here was read in some
+     * unnarrowable way (a scan, a search, a join) and always re-runs.
+     */
+    ranges?: Map<string, KeyRange[]>;
     tables: Set<string>;
 }
 
@@ -1037,6 +1059,17 @@ abstract class ShardDO {
     private pendingChangedTables: Set<string> | undefined = undefined;
 
     /**
+     * Index positions written during the current RPC, keyed by table. A value of
+     * `undefined` means at least one write to that table had no derivable
+     * position, so the table cannot be narrowed for this batch. Drained
+     * alongside {@link ShardDO.pendingChangedTables}.
+     */
+    private pendingChangedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined = undefined;
+
+    /** Coalesced twin of {@link ShardDO.pendingChangedKeys} for the in-flight refresh pass. */
+    private pendingRefreshKeys: Map<string, IndexKeyEntry[] | undefined> | undefined = undefined;
+
+    /**
      * Coalesced set of tables awaiting a subscription-refresh pass, merged
      * across every {@link ShardDO.flushChangedTables} call that lands while a
      * pass is already draining. The single drain loop
@@ -1220,6 +1253,15 @@ abstract class ShardDO {
      * the scan attribution. Stamped by `getCtxDbIndexUseHook`.
      */
     private currentIndexHits: Set<string> | undefined;
+
+    /**
+     * Resource meter for the in-flight dispatch. Created per request alongside
+     * the scanned-table capture and handed to `createShardCtxDb` by the codegen
+     * subclass, so one runaway mutation fails with a
+     * `TRANSACTION_LIMIT_EXCEEDED` instead of taking the whole shard's isolate
+     * down with it.
+     */
+    private currentTransactionHeadroom: TransactionHeadroomTracker | undefined;
 
     /**
      * Read-tables + cache-hit captured for the current `/rpc` dispatch, so the
@@ -3163,13 +3205,53 @@ abstract class ShardDO {
     }
 
     /**
+     * Ceilings for one transaction. The base class uses the engine defaults
+     * (sized for a 128 MiB Durable Object isolate); a subclass overrides this
+     * to raise them for a deployment that genuinely needs bigger transactions.
+     */
+    // eslint-disable-next-line class-methods-use-this -- override seam; the base answer is deliberately constant
+    protected transactionLimits(): Partial<TransactionLimits> {
+        return {};
+    }
+
+    /**
+     * The in-flight dispatch's resource meter, passed to `createShardCtxDb` by
+     * the generated subclass. Returns `undefined` outside a dispatch, which
+     * leaves `ctx.db` unmetered — the legacy behaviour.
+     */
+    protected transactionHeadroom(): TransactionHeadroomTracker | undefined {
+        return this.currentTransactionHeadroom;
+    }
+
+    /**
+     * A fresh budget for one deferred subscription re-run.
+     *
+     * The re-run is dispatched from inside the WRITING request's `try` and may
+     * outlive it via `waitUntil`, so it must not spend the mutation's budget:
+     * metering reader work against writer budget would trip the ceiling and
+     * surface as `refreshOne`'s swallowed catch, silently dropping a live
+     * update.
+     *
+     * Handed to `buildCtx` BY VALUE from the generated `executeSubscription`,
+     * the same way {@link SubscriptionIdentity} is threaded — deliberately not
+     * signalled through an instance flag. A flag would say "a refresh is in
+     * flight", not "this caller is the refresh", and the drain runs in the
+     * background: a concurrent `/rpc` dispatch building its `ctx.db` during the
+     * drain would take the refresh branch and lose its own ceiling entirely.
+     */
+    protected subscriptionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
+    }
+
+    /**
      * Record that `table` was written during the current RPC. Wired into the
      * db adapter's `broadcast` callback by the generated subclass so that
      * `flushChangedTables` can re-run only the affected subscriptions.
      */
-    protected recordChangedTable(table: string): void {
+    protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void {
         this.pendingChangedTables ??= new Set<string>();
         this.pendingChangedTables.add(table);
+        this.pendingChangedKeys = recordChangedKeys(this.pendingChangedKeys, table, indexKeys);
     }
 
     /**
@@ -3924,6 +4006,7 @@ abstract class ShardDO {
         // ctx-db read hook) so `recordFunctionCall` can persist the causal
         // attribution. Fresh per request; drained below.
         this.currentScannedTables = new Set<string>();
+        this.currentTransactionHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the
@@ -4143,6 +4226,7 @@ abstract class ShardDO {
             this.currentRequestSystem = false;
             this.currentRequestTraceparent = undefined;
             this.currentScannedTables = undefined;
+            this.currentTransactionHeadroom = undefined;
             this.currentIndexHits = undefined;
             this.currentRequestReadTables = undefined;
             this.currentRequestCacheHit = undefined;
@@ -6696,6 +6780,12 @@ abstract class ShardDO {
             return result === null ? null : { result, tables: new Set([ADMIN_WILDCARD]) };
         }
 
+        // Ranges ride on the outcome, reported by the subscription's OWN read
+        // (the generated `executeSubscription` collects them through a
+        // `ReadFootprint`). They deliberately do NOT come from a per-request
+        // field on `this`: a deferred subscription re-run interleaves with
+        // unrelated RPC dispatches, so a shared field would stamp one request's
+        // slices onto another subscriber's memo and suppress its invalidations.
         return this.executeSubscription(functionPath, args, identity);
     }
 
@@ -6898,8 +6988,10 @@ abstract class ShardDO {
      */
     private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
+        const changedKeys = this.pendingChangedKeys;
 
         this.pendingChangedTables = undefined;
+        this.pendingChangedKeys = undefined;
 
         if (!changed || changed.size === 0) {
             return;
@@ -6913,6 +7005,8 @@ abstract class ShardDO {
         } else {
             this.pendingRefreshTables = changed;
         }
+
+        this.pendingRefreshKeys = mergeChangedKeys(this.pendingRefreshKeys, changedKeys, changed);
 
         // Single-waiter coalescing: if a refresh pass is already draining, it
         // will observe the tables we just merged before it finishes, so a burst
@@ -6974,9 +7068,11 @@ abstract class ShardDO {
 
         try {
             let batch = this.pendingRefreshTables;
+            let batchKeys = this.pendingRefreshKeys;
 
             while (batch && batch.size > 0) {
                 this.pendingRefreshTables = undefined;
+                this.pendingRefreshKeys = undefined;
 
                 // Resolve the post-write cut once per coalesced batch; it covers
                 // every write merged into this batch. Run the legacy refresh and
@@ -6986,12 +7082,13 @@ abstract class ShardDO {
 
                 // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
                 await Promise.all([
-                    this.refreshSubscriptions(batch),
+                    this.refreshSubscriptions(batch, batchKeys),
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
                     this.relay?.onFlush(batch, frameCursor ?? 0),
                 ]);
 
                 batch = this.pendingRefreshTables;
+                batchKeys = this.pendingRefreshKeys;
             }
         } finally {
             this.refreshInFlight = false;
@@ -7053,7 +7150,7 @@ abstract class ShardDO {
      * high-fanout shards rather than bolt a second, semantically-divergent dedup
      * into this loop.
      */
-    private async refreshSubscriptions(changed: Set<string>): Promise<void> {
+    private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
         const sockets = [...this.runner.sockets()];
 
         // The post-write high-watermark is the same for every sub flushed in
@@ -7098,6 +7195,16 @@ abstract class ShardDO {
                 // to be safe. A memo carrying the admin wildcard always re-runs
                 // (its value isn't bound to any single table).
                 if (memo && !memo.tables.has(ADMIN_WILDCARD) && !setsIntersect(memo.tables, changed)) {
+                    continue;
+                }
+
+                // Range-precise second gate: the table matched, but if every
+                // table this subscription reads was read through index slices,
+                // and none of the positions written in this batch fall inside
+                // them, the result cannot have changed. Any table the memo did
+                // not narrow — or any write whose position was unknown — makes
+                // `writeTouchesMemo` return true and the re-run proceeds.
+                if (memo && !memo.tables.has(ADMIN_WILDCARD) && !writeTouchesMemo(memo, changed, changedKeys)) {
                     continue;
                 }
 
@@ -8042,7 +8149,7 @@ abstract class ShardDO {
         }
 
         // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-        memos.set(subId, { lastJson: JSON.stringify(encodeWire(outcome.result ?? null)), tables: outcome.tables });
+        memos.set(subId, { lastJson: JSON.stringify(encodeWire(outcome.result ?? null)), ranges: outcome.ranges, tables: outcome.tables });
     }
 
     /**
@@ -8131,7 +8238,7 @@ abstract class ShardDO {
                 ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`)
                 : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix);
 
-        memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), tables: outcome.tables });
+        memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), ranges: outcome.ranges, tables: outcome.tables });
     }
 
     /**

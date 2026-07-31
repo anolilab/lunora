@@ -137,6 +137,17 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Run depth exceeded";
     };
+    readonly TRANSACTION_LIMIT_EXCEEDED: {
+        readonly hint: readonly [
+            "A single mutation may only read and write a bounded amount before it is stopped.",
+            "",
+            "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
+            "",
+            "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class."
+        ];
+        readonly status: 413;
+        readonly title: "Transaction limit exceeded";
+    };
     readonly MIGRATION_NOT_FOUND: {
         readonly status: 404;
         readonly title: "Data migration not found";

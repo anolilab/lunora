@@ -205,6 +205,10 @@ export { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, rea
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
+export type { ReadFootprint } from "./read-footprint";
+export { createReadFootprint } from "./read-footprint";
+export type { IndexKeyEntry, KeyRange } from "./read-write-set";
+export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
     assertFlatPredicate,
@@ -300,6 +304,8 @@ export type { SqlLintResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export { lintReadonlySql } from "./sql-console";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
+export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";
 export type {
     ScheduledFunctionDoc,
     SystemDatabaseReader,
@@ -315,6 +321,8 @@ export { createSystemReader } from "./system-reader";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
+export type { TransactionHeadroom, TransactionLimits } from "./transaction-headroom";
+export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transaction-headroom";
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";

@@ -270,7 +270,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `IndexKeyEntry` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `IndexRangeBuilderLike` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `KeyRange` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -831,7 +839,10 @@ abstract class ShardDO {
     protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R>;
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
-    protected recordChangedTable(table: string): void;
+    protected transactionLimits(): Partial<TransactionLimits>;
+    protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
+    protected subscriptionHeadroom(): TransactionHeadroomTracker;
+    protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
@@ -964,6 +975,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface SubscriptionOutcome {
+    ranges?: Map<string, KeyRange[]>;
     result: unknown;
     tables: Set<string>;
 }
@@ -1049,6 +1061,10 @@ interface TelemetrySink {
     };
 }
 ```
+
+### `TransactionHeadroomTracker` (class)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `TransactionSqlLike` (interface)
 
@@ -1203,6 +1219,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `createDependencyTracker` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `createReadFootprint` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
