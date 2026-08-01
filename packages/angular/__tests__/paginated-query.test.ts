@@ -123,6 +123,55 @@ describe(paginatedQuery, () => {
     });
 });
 
+// Plan 285 — converge on `stableWireKey` for page keys instead of raw
+// `JSON.stringify`.
+//
+// Open Question 1 (answered by reading `usePaginatedCore`): `narrowedArgs`
+// (the base args `buildPageArgs` spreads under `paginationOpts`) is a `const`
+// captured once per `paginatedQuery`/`infiniteQuery` call and never rebuilt —
+// so within a SINGLE engine instance, `buildPageKey`'s output is deterministic
+// and property order never drifts across the calls this file makes (the args
+// come from one fixed object every time). The plan's headline "duplicate
+// subscriptions" / "result-carry miss" consequences are about TWO SEPARATE
+// component instances whose args are structurally equal but built with
+// different property order — that collapses (or doesn't) at the underlying
+// `client.subscribe` / `SubscriptionRegistry` dedup layer, which already uses
+// `stableWireKey` (per plan 285 §1) and is external to this adapter's own
+// bookkeeping; this package's fake `LunoraClient` doesn't model that dedup, so
+// there is no reachable pre/post-fix difference to assert for the
+// permutation/result-carry scenarios via this file's harness (Test plan items
+// 1–2's own downgrade allowance). The wire-typed-arg test below is the
+// reachable, demonstrably pre/post-fix-differentiating case.
+describe("paginatedQuery — stableWireKey page keys (plan 285)", () => {
+    const bigintArgFn = { __lunoraRef: "messages:list" } as FunctionReference<"query", { since: bigint }>;
+    const permutableArgFn = { __lunoraRef: "messages:list" } as FunctionReference<"query", { a: number; b: number }>;
+
+    it("accepts a bigint in the query args without throwing (wire-typed arg)", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        // Pre-fix, `buildPageKey` used raw `JSON.stringify`, which throws
+        // `TypeError: Do not know how to serialize a BigInt` the instant a
+        // page's args carry a `bigint` — this call would never complete.
+        // Post-fix, `stableWireKey` tokenizes it deterministically instead.
+        expect(() => {
+            paginatedQuery(bigintArgFn, { since: 10n }, { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
+        }).not.toThrow();
+
+        expect(fake.subscriptions).toHaveLength(1);
+    });
+
+    it("subscribes normally when caller args are not in canonical key order", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const { status } = paginatedQuery(permutableArgFn, { a: 2, b: 1 }, { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
+
+        expect(fake.subscriptions).toHaveLength(1);
+        expect(status()).toBe("LoadingFirstPage");
+    });
+});
+
 /**
  * A `LunoraClient` stand-in whose `subscribe` replays a preseeded cached value
  * to the new subscriber SYNCHRONOUSLY — the callback fires before `subscribe`
