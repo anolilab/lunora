@@ -74,6 +74,59 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
         expect(sqliteDecode("2026-06-20", "date")).toBe("2026-06-20");
         expect(sqliteDecode(7, "number")).toBe(7);
     });
+
+    describe("bytes (plan 265)", () => {
+        // `v.bytes()` validates `value instanceof ArrayBuffer` — a BLOB read back
+        // as any other view (node:sqlite `Uint8Array`, pg/mysql2 `Buffer`) fails
+        // re-validation without this branch. Pre-fix: `sqliteDecode` had no
+        // `"bytes"` case, so the switch's `default` returned the view unconverted.
+        it("passes a genuine ArrayBuffer through unchanged", () => {
+            expect.assertions(1);
+
+            const { buffer } = new Uint8Array([1, 2, 3, 4]);
+
+            expect(sqliteDecode(buffer, "bytes")).toBe(buffer);
+        });
+
+        it("converts a Uint8Array view to an ArrayBuffer with the same bytes", () => {
+            expect.assertions(2);
+
+            const view = new Uint8Array([9, 8, 7, 6]);
+            const decoded = sqliteDecode(view, "bytes");
+
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([9, 8, 7, 6]));
+        });
+
+        it("slices to the view's own window — a Buffer-pool view does not leak neighboring bytes", () => {
+            expect.assertions(3);
+
+            // A single larger backing pool, with a 4-byte view starting at offset 8 —
+            // mirrors how Node's Buffer allocator shares one backing ArrayBuffer
+            // across several small Buffers.
+            const pool = new ArrayBuffer(16);
+            const poolBytes = new Uint8Array(pool);
+
+            poolBytes.set([255, 255, 255, 255, 255, 255, 255, 255, 11, 22, 33, 44, 255, 255, 255, 255]);
+
+            const view = new Uint8Array(pool, 8, 4);
+            const decoded = sqliteDecode(view, "bytes");
+
+            // Pre-fix (no "bytes" case): `decoded` is the original view object
+            // itself, not a genuine ArrayBuffer — this is the assertion that
+            // actually distinguishes pre-fix from post-fix; byteLength/contents
+            // alone happen to already match since the view was already windowed.
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect((decoded as ArrayBuffer).byteLength).toBe(4);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([11, 22, 33, 44]));
+        });
+
+        it("null stays null", () => {
+            expect.assertions(1);
+
+            expect(sqliteDecode(null, "bytes")).toBeNull();
+        });
+    });
 });
 
 describe("decodeBigint / tryJsonParse edge cases", () => {
@@ -110,5 +163,11 @@ describe("effectiveColumnKind", () => {
         expect.assertions(1);
 
         expect(effectiveColumnKind(validator("optional", validator("optional", validator("object"))))).toBe("object");
+    });
+
+    it('unwraps v.optional(v.bytes()) to "bytes" (plan 265)', () => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind(validator("optional", validator("bytes")))).toBe("bytes");
     });
 });
