@@ -7180,20 +7180,25 @@ abstract class ShardDO {
      *
      * `lastTelemetrySink` (not a threaded `sink`) because both flush workers run
      * with no `ctx` — the same stand-in `flushTelemetry` uses.
+     *
+     * `error` is a caught INTERNAL failure surfaced from a background
+     * refresh/poke pass, not a value a developer chose to log via `ctx.log` —
+     * so `recordUserLog`'s "args are not redacted" contract (see its
+     * docstring) does not apply here: a thrown value can carry an arbitrary
+     * `cause`, stack, or custom own property (a handler can `throw
+     * Object.assign(new Error(...), { row })`), and `args` rides raw into any
+     * `sink.onLog` an operator has configured. Route it through the same
+     * `toErrorBody` envelope every other error-crossing boundary in this file
+     * uses (see `errorToResponse`, the shape-seed catches above) so only a
+     * bounded `{ code, message }` — not the raw error — reaches the sink.
      */
     private recordSubscriptionRefreshError(functionPath: string, error: unknown, fields: Record<string, unknown>): void {
         this.metrics.subscriptionRefreshErrors += 1;
 
         try {
-            this.recordUserLog(
-                functionPath,
-                "error",
-                [error],
-                error instanceof Error ? error.message : String(error),
-                fields,
-                this.lastTelemetrySink,
-                "subscriptionRefreshError",
-            );
+            const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+            this.recordUserLog(functionPath, "error", [body], body.message, fields, this.lastTelemetrySink, "subscriptionRefreshError");
         } catch {
             // Best-effort, matching every other telemetry call on this path.
         }
@@ -7656,9 +7661,10 @@ abstract class ShardDO {
      * the results into the poke parts to send and the per-shape memo advances. A
      * `.global()` shape (driven by the alarm poll loop, not this flush) and a shape
      * whose table didn't change are skipped; a shape whose resolve/diff throws is
-     * logged and skipped with its memo unadvanced so a later flush retries. Empty
-     * diffs advance unconditionally; part-bearing shapes advance only once the
-     * caller confirms the poke was delivered.
+     * counted and logged via `recordSubscriptionRefreshError` (DO-01) and skipped
+     * with its memo unadvanced so a later flush retries. Empty diffs advance
+     * unconditionally; part-bearing shapes advance only once the caller confirms
+     * the poke was delivered.
      */
     private collectShapePokeParts(
         ws: ShardSocketLike,
@@ -7691,7 +7697,13 @@ abstract class ShardDO {
                     emptyAdvanced.push(subId);
                 }
             } catch (error) {
-                this.recordShapeError(`shape:poke:${subId}`, error);
+                // Counted and logged like the socket-level catch in the caller
+                // (see `recordSubscriptionRefreshError`) so a resolve/diff
+                // failure contained to one shape still shows up on
+                // `metrics.subscriptionRefreshErrors` and the structured
+                // telemetry event — not just the socket-level failures that
+                // escape this loop entirely.
+                this.recordSubscriptionRefreshError(`${ADMIN_FUNCTION_PREFIX}pokeShapeSubscribers`, error, { subId });
             }
         }
 
