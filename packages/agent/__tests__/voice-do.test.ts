@@ -79,8 +79,10 @@ const env: Record<string, unknown> = {
     },
 };
 
-/** Subclass overriding the AI seams so a turn completes without a real Workers AI binding, and counts how many utterances actually reached transcription. */
+/** Subclass overriding the AI seams so a turn completes without a real Workers AI binding, and counts how many utterances/synthesis calls actually reached the seam (i.e. how many times a turn — including a greeting — actually spoke). */
 class TestVoiceDO extends VoiceSessionDO {
+    public synthesizeCalls = 0;
+
     public transcribedPcmLengths: number[] = [];
 
     protected override async transcribe(pcm: Uint8Array): Promise<string> {
@@ -89,8 +91,9 @@ class TestVoiceDO extends VoiceSessionDO {
         return "test utterance";
     }
 
-    // eslint-disable-next-line class-methods-use-this -- structural override matching the base class's instance-method signature; this test double needs no instance state
     protected override async synthesize(_text: string): Promise<VoiceAudioSource> {
+        this.synthesizeCalls += 1;
+
         return new Uint8Array([1]);
     }
 }
@@ -182,6 +185,155 @@ describe("voice session credential expiry", () => {
 
             expect(attachment?.["expiresAt"]).toBe(exp);
             expect(attachment?.["userId"]).toBe("user-1");
+        });
+    });
+
+    describe("checked at upgrade (before ready/greeting)", () => {
+        it("drops an already-expired credential at upgrade, before ready and before the greeting ever runs", async () => {
+            const now = Date.now();
+
+            vi.setSystemTime(now);
+
+            // A greeting is configured, so — pre-fix — `fetch()` would
+            // unconditionally schedule `speakGreeting` via `waitUntil` after
+            // sending `ready`, running a full LLM+TTS turn under an already-lapsed
+            // credential.
+            const greetingAgent = defineAgent({
+                instructions: "Be brief.",
+                model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                voice: { greeting: "Hello! How can I help you today?" },
+            });
+
+            const waited: Promise<unknown>[] = [];
+            const state = {
+                acceptWebSocket: () => {
+                    /* no-op: the fake socket needs no host-side registration */
+                },
+                getWebSockets: () => [],
+                waitUntil: (promise: Promise<unknown>) => {
+                    waited.push(promise);
+                },
+            };
+
+            const instance = new TestVoiceDO(state, env, greetingAgent, "support");
+
+            const sent: unknown[] = [];
+            let closed: { code?: number; reason?: string } | undefined;
+            const server = {
+                close: (code?: number, reason?: string) => {
+                    closed = { code, reason };
+                },
+                send: (data: unknown) => {
+                    sent.push(data);
+                },
+                serializeAttachment: () => {
+                    throw new Error("must not stamp an attachment for a credential already expired at upgrade");
+                },
+            };
+
+            const globalWithPair = globalThis as { WebSocketPair?: unknown };
+            const original = globalWithPair.WebSocketPair;
+
+            globalWithPair.WebSocketPair = function WebSocketPair() {
+                return { 0: {}, 1: server } as unknown;
+            };
+
+            try {
+                instance.fetch(
+                    new Request("https://do.internal/?threadKey=t1", {
+                        headers: new Headers({ Upgrade: "websocket", "x-lunora-identity-exp": String(now - 1) }),
+                    }),
+                );
+            } catch (error) {
+                if (!(error instanceof RangeError)) {
+                    throw error;
+                }
+            } finally {
+                globalWithPair.WebSocketPair = original;
+            }
+
+            // Only the TOKEN_EXPIRED frame was sent — never `ready`, never a greeting frame.
+            expect(sent).toHaveLength(1);
+            expect(JSON.parse(sent[0] as string)).toStrictEqual({
+                code: "TOKEN_EXPIRED",
+                error: { code: "TOKEN_EXPIRED", message: "authentication token expired" },
+                type: "error",
+            });
+            expect(closed).toStrictEqual({ code: 4001, reason: "token_expired" });
+
+            // The greeting was never scheduled at all (no `waitUntil` call), so no
+            // LLM/TTS turn ran and no thread write was ever attempted.
+            expect(waited).toHaveLength(0);
+            expect(instance.synthesizeCalls).toBe(0);
+            expect(instance.transcribedPcmLengths).toStrictEqual([]);
+        });
+
+        it("still sends ready and schedules the greeting for a non-expired credential (no regression)", async () => {
+            const now = Date.now();
+
+            vi.setSystemTime(now);
+
+            const greetingAgent = defineAgent({
+                instructions: "Be brief.",
+                model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                voice: { greeting: "Hello! How can I help you today?" },
+            });
+
+            const waited: Promise<unknown>[] = [];
+            const state = {
+                acceptWebSocket: () => {
+                    /* no-op: the fake socket needs no host-side registration */
+                },
+                getWebSockets: () => [],
+                waitUntil: (promise: Promise<unknown>) => {
+                    waited.push(promise);
+                },
+            };
+
+            const instance = new TestVoiceDO(state, env, greetingAgent, "support");
+
+            const sent: unknown[] = [];
+            const server = {
+                close: () => {
+                    /* not expected to be called */
+                },
+                send: (data: unknown) => {
+                    sent.push(data);
+                },
+                serializeAttachment: () => {
+                    /* stamped — irrelevant to this assertion */
+                },
+            };
+
+            const globalWithPair = globalThis as { WebSocketPair?: unknown };
+            const original = globalWithPair.WebSocketPair;
+
+            globalWithPair.WebSocketPair = function WebSocketPair() {
+                return { 0: {}, 1: server } as unknown;
+            };
+
+            try {
+                instance.fetch(
+                    new Request("https://do.internal/?threadKey=t1", {
+                        headers: new Headers({ Upgrade: "websocket", "x-lunora-identity-exp": String(now + 60_000) }),
+                    }),
+                );
+            } catch (error) {
+                if (!(error instanceof RangeError)) {
+                    throw error;
+                }
+            } finally {
+                globalWithPair.WebSocketPair = original;
+            }
+
+            expect(sent).toHaveLength(1);
+            expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "ready" });
+            expect(waited).toHaveLength(1);
+
+            // Let the scheduled greeting settle before asserting on it — it dispatches
+            // through the real `run` seam, which has no bindings in this test env and
+            // is expected to fail; only that it was ATTEMPTED matters here.
+            await Promise.allSettled(waited);
         });
     });
 

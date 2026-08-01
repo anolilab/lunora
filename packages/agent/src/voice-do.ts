@@ -151,6 +151,21 @@ class VoiceSessionDO {
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
 
+        // A credential that was ALREADY expired before the upgrade completed
+        // (the runtime forwards `x-lunora-identity-exp` but does not itself
+        // reject a lapsed one — enforcing `exp` is this DO's job) must never
+        // reach `ready`/a greeting: `webSocketMessage`'s check only gates
+        // frames the CLIENT sends, but `speakGreeting` below runs unconditionally
+        // from this handler, so without this check an already-expired socket
+        // still buys one full LLM+TTS greeting turn — billed, and written to
+        // the caller's thread — before any inbound frame could trip it.
+        if (isIdentityExpired(expiresAt)) {
+            dropExpiredCredentialSocket(server);
+
+            // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
+            return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
+        }
+
         (server as unknown as HibernatableWebSocket).serializeAttachment?.({
             connectionId,
             threadKey,
