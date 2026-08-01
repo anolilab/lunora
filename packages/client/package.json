@@ -96,6 +96,7 @@
         "esbuild": "catalog:build",
         "fake-indexeddb": "catalog:test",
         "fallow": "catalog:lint",
+        "ts-morph": "catalog:tooling",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"

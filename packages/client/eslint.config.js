@@ -109,6 +109,11 @@ export default createConfig(
             "@typescript-eslint/require-await": "off",
             "e18e/prefer-static-regex": "off",
             "import/no-extraneous-dependencies": "off",
+            // The repo's named-only-export convention (AGENTS.md: "Never mix a
+            // default export with named exports") applies to test helpers too —
+            // a single-export file like __tests__/lib/named-exports.ts stays a
+            // named export, not the default this rule otherwise wants.
+            "import/prefer-default-export": "off",
             "max-classes-per-file": "off",
             "n/no-unsupported-features/node-builtins": "off",
             "sonarjs/deprecation": "off",
