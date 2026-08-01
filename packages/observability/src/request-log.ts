@@ -4,9 +4,13 @@
  * A reserved, append-only table that records every lunora-function dispatch
  * with the app-level context Cloudflare structurally cannot attribute: the
  * `&lt;file>:&lt;function>` path, the shard key (the DO id name), the acting user /
- * identity, the (redacted) call args, the outcome + error message, the handler
- * execution time, the tables the handler read and wrote, whether the result
- * came from the reactive cache, and how many subscriptions the write re-ran.
+ * identity, the (redacted) call args, the outcome + (redacted) error message,
+ * the handler execution time, the tables the handler read and wrote, whether
+ * the result came from the reactive cache, and how many subscriptions the
+ * write re-ran. The error-grouping fingerprint hash is captured from the RAW
+ * message at write time (before redaction) and stored alongside the row, so
+ * masking PII in the message can't change which Issue a row groups into — see
+ * {@link appendRequestLogEntry} and {@link readErrorIssues}.
  *
  * Modelled exactly on `audit-log.ts` (the CDC-log helpers in `ctx-db.ts`
  * `migrateCdcLog`/`appendCdcChange`/`readCdcChanges`/`trimCdcChanges` and the
@@ -49,7 +53,7 @@ interface RequestLogEntry {
     cacheHit?: boolean;
     /** Handler wall-clock duration in milliseconds (before the subscription write-flush, matching the per-function metrics). */
     durationMs: number;
-    /** Error message when `outcome === "error"`; absent on success. */
+    /** Error message when `outcome === "error"`, redacted like args/identity; absent on success. */
     errorMessage?: string;
     /** The `&lt;file>:&lt;function>` identifier dispatched, e.g. `messages:list`. */
     functionPath: string;
@@ -138,11 +142,17 @@ interface ErrorIssue {
     culprit: string;
     /** Wall-clock millis of the oldest folded row. */
     firstSeen: number;
-    /** Stable 16-char grouping hash over `functionPath :: bucket(message)`. */
+
+    /**
+     * Stable 16-char grouping hash over `functionPath :: bucket(message)`,
+     * computed from the RAW (pre-redaction) message at write time and stored on
+     * the row — see {@link appendRequestLogEntry} — so redacting `sampleMessage`
+     * below can't change the grouping.
+     */
     hash: string;
     /** Wall-clock millis of the newest folded row. */
     lastSeen: number;
-    /** A representative raw error message — taken from the most recent folded row. */
+    /** A representative error message (redacted, like the durable row) — taken from the most recent folded row. */
     sampleMessage: string;
     /** Developer-tagged severity from the persisted triage state; absent when untriaged. */
     severity?: IssueSeverity;
@@ -198,13 +208,18 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
  * passwords and bearer/auth material. Unlike a blunt type-tag stamp this masks
  * sensitive values by PATTERN (not just by key name) while leaving benign values
  * readable, so the studio's args/identity columns stay useful. `null` /
- * `undefined` pass through unchanged.
+ * `undefined` pass through unchanged. Works on a plain string too (`redact`
+ * traverses whatever value it's handed), which is how {@link appendRequestLogEntry}
+ * and {@link emitRequestLogEvent} reuse this for `errorMessage` — a validation
+ * error echoes the offending value, a constraint error quotes the conflicting
+ * row, so the error message is at least as PII-dense as args and gets the same
+ * treatment.
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
  * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can
- * see real arg/identity values; production always redacts. The dev decision is
- * made at the call site from the deployment env, never inferred here — so a real
- * deploy that omits the env var stays redacted.
+ * see real arg/identity/error values; production always redacts. The dev
+ * decision is made at the call site from the deployment env, never inferred
+ * here — so a real deploy that omits the env var stays redacted.
  */
 const redactArgs = (value: unknown, captureRaw = false): unknown => {
     if (captureRaw || value === null || value === undefined) {
@@ -220,6 +235,15 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
  * `args`/`identity`/`tables_read`/`tables_written` columns hold JSON and are
  * `NULL`/empty when none was recorded. Idempotent, so read and write paths can
  * call it defensively.
+ *
+ * `error_fingerprint` is the {@link fingerprintError} grouping hash captured
+ * from the RAW `error_message` at write time, before {@link appendRequestLogEntry}
+ * redacts it — see that function's docstring. It is added via a guarded
+ * `ALTER TABLE` rather than baked into the `CREATE`, mirroring
+ * `function-metrics.ts`'s `ensureFunctionMetricsTables`, so a shard whose
+ * `__lunora_reqlog__` predates this column gains it on the next call without a
+ * migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column
+ * error from a re-run (or the freshly-created schema above) is swallowed.
  */
 const ensureRequestLogTable = (sql: SqlExec): void => {
     runSql(
@@ -234,6 +258,7 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             args TEXT,
             outcome TEXT NOT NULL,
             error_message TEXT,
+            error_fingerprint TEXT,
             duration_ms REAL NOT NULL,
             tables_read TEXT NOT NULL DEFAULT '[]',
             tables_written TEXT NOT NULL DEFAULT '[]',
@@ -241,6 +266,12 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             subscriptions_rerun INTEGER NOT NULL DEFAULT 0
         )`,
     );
+
+    try {
+        runSql(sql, `ALTER TABLE "${REQUEST_LOG_TABLE}" ADD COLUMN error_fingerprint TEXT`);
+    } catch {
+        // Column already exists — no-op.
+    }
 };
 
 /** Serialise a table list to a sorted, de-duplicated JSON array so the `LIKE` table-touched filter matches deterministically. */
@@ -262,10 +293,19 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
 /**
  * Append one dispatch to the request log, then trim the log back to the most
  * recent `retention` rows (default {@link REQUEST_LOG_RETENTION}). Creates the
- * table first so callers needn't. Args/identity are redacted here so a raw value
- * never reaches the durable table — callers pass the unredacted entry and rely on
- * this, unless `captureRaw` (dev only) is set. `retention` is the operator's
- * `LUNORA_REQUEST_LOG_RETENTION` override, threaded in by the dispatch site.
+ * table first so callers needn't. Args/identity/error message are redacted here
+ * so a raw value never reaches the durable table — callers pass the unredacted
+ * entry and rely on this, unless `captureRaw` (dev only) is set. `retention` is
+ * the operator's `LUNORA_REQUEST_LOG_RETENTION` override, threaded in by the
+ * dispatch site.
+ *
+ * The error-grouping fingerprint is computed from `entry.errorMessage` BEFORE
+ * it's redacted below, and the resulting hash is persisted in
+ * `error_fingerprint`. `readErrorIssues` groups off that stored hash instead of
+ * recomputing `fingerprintError` from the (redacted) `error_message` column, so
+ * masking a PII-bearing value — e.g. two different `&lt;n>`-bucketed IDs that
+ * redact to two different tag lengths (`&lt;DL>` vs `&lt;BANKACC>`) — can't split an
+ * existing Issue or change its identity.
  */
 const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
     ensureRequestLogTable(sql);
@@ -273,11 +313,19 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     const captureRaw = options.captureRaw ?? false;
     const retention = options.retention ?? REQUEST_LOG_RETENTION;
 
+    // Fingerprint the RAW message — `fingerprintError` is pure/synchronous and
+    // cheap, so this costs nothing on the (rare) error path. `undefined` on a
+    // success row: `readErrorIssues` only ever reads `outcome = 'error'` rows.
+    const errorFingerprint =
+        entry.outcome === "error" && entry.errorMessage !== undefined
+            ? fingerprintError({ functionPath: entry.functionPath, message: entry.errorMessage }).hash
+            : undefined;
+
     runSql(
         sql,
         `INSERT INTO "${REQUEST_LOG_TABLE}"
-            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         entry.ts,
         entry.functionPath,
         // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for a request with no shard key / anonymous caller / absent field.
@@ -294,8 +342,10 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
         entry.redactedArgs === undefined ? null : JSON.stringify(redactArgs(entry.redactedArgs, captureRaw)),
         entry.outcome,
-        // eslint-disable-next-line unicorn/no-null -- success path: no error message.
-        entry.errorMessage ?? null,
+        // eslint-disable-next-line unicorn/no-null -- success path: no error message. Redacted like args/identity — see the module docstring on `redactArgs`.
+        entry.errorMessage === undefined ? null : redactArgs(entry.errorMessage, captureRaw),
+        // eslint-disable-next-line unicorn/no-null -- success path, or a legacy row appended before this column existed.
+        errorFingerprint ?? null,
         entry.durationMs,
         encodeTables(entry.tablesRead),
         encodeTables(entry.tablesWritten),
@@ -314,8 +364,8 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
  * NOT reimplement a transport: it produces a richer, lunora-attributed event and
  * lets CF's existing trace-log pipe ship it. The event mirrors the durable
  * `__lunora_reqlog__` row (function path, shard, user, outcome, duration, tables
- * read/written, cache hit), with `args` AND `identity` redacted exactly like the
- * durable write so no raw PII/secret reaches the log pipeline.
+ * read/written, cache hit), with `args`, `identity`, AND `error` redacted
+ * exactly like the durable write so no raw PII/secret reaches the log pipeline.
  *
  * An `error` outcome goes to `console.error` (surfacing at error level in the
  * trace so a SIEM can alert on it); everything else to `console.log`. The
@@ -330,7 +380,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs, captureRaw),
         cacheHit: entry.cacheHit,
         durationMs: entry.durationMs,
-        error: entry.errorMessage,
+        error: entry.errorMessage === undefined ? undefined : redactArgs(entry.errorMessage, captureRaw),
         function: entry.functionPath,
         identity: entry.identity === undefined ? undefined : redactArgs(entry.identity, captureRaw),
         outcome: entry.outcome,
@@ -446,13 +496,22 @@ const parseLogArgs = (args: unknown[], boundFields?: LogFields): { fields?: LogF
  *
  * Structured `fields` (plus `traceId`/`spanId` for correlation) ARE emitted here
  * — they are intentional metadata a log pipeline filters on, unlike raw `args`.
- * A field value that can't be serialised (a circular object) would make
- * `JSON.stringify` throw and drop the whole line, so serialisation falls back to
- * a fields-free line rather than losing the event.
+ * Unlike `args`, `fields` IS redacted before it rides this console line — a
+ * developer can attach anything to a fields bag (`ctx.log.info("charged",
+ * { email, cardLast4 })`), and this is the one line that's told to a SIEM as
+ * trustworthy, exactly like the request-log `args`/`identity`/`error` columns.
+ * `options.captureRaw` (dev only) skips it, mirroring every other redaction
+ * point in this module; the sole current caller (`ShardDO.recordUserLog`)
+ * doesn't yet thread a dev flag through, so `fields` redacts unconditionally
+ * there today — a conservative default, never a correctness gap. A field value
+ * that can't be serialised (a circular object) would make `JSON.stringify`
+ * throw and drop the whole line, so serialisation falls back to a fields-free
+ * line rather than losing the event.
  */
-const emitLogEvent = (input: LogEventInput): void => {
+const emitLogEvent = (input: LogEventInput, options: RequestLogWriteOptions = {}): void => {
+    const captureRaw = options.captureRaw ?? false;
     const payload = {
-        fields: input.fields,
+        fields: input.fields === undefined ? undefined : redactArgs(input.fields, captureRaw),
         function: input.functionPath,
         level: input.level,
         message: input.message,
@@ -617,29 +676,45 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 /**
  * Group the recent `error`-outcome request-log rows into stable **Issues**.
  *
- * A pure read-side aggregation over the bounded readout — no new storage, no
- * transport (see the module docstring): it reads the recent `error` rows via
- * {@link readRequestLog} and folds them with `@lunora/fingerprint`'s
- * `fingerprintError`, whose canonical hash is `functionPath :: bucket(message)`.
- * That collapses per-occurrence noise — a route-scanner sweep (`/wp-admin`,
- * `/.env`), a per-request id in the message (`user 12345 not found`) — onto one
- * Issue, and matches the grouping a cloud Incident uses. Container crashes fold
- * in too, since they land as `error` rows under `functionPath: "container:&lt;name>"`.
+ * A pure read-side aggregation over the bounded readout — no new storage beyond
+ * the `error_fingerprint` column, no transport (see the module docstring): it
+ * reads the recent `error` rows and folds them by grouping hash, matching the
+ * grouping a cloud Incident uses. `@lunora/fingerprint`'s `fingerprintError`
+ * canonical hash is `functionPath :: bucket(message)`, which collapses
+ * per-occurrence noise — a route-scanner sweep (`/wp-admin`, `/.env`), a
+ * per-request id in the message (`user 12345 not found`) — onto one Issue.
+ * Container crashes fold in too, since they land as `error` rows under
+ * `functionPath: "container:&lt;name>"`.
+ *
+ * The grouping hash used per row is `row.error_fingerprint` when present —
+ * computed by {@link appendRequestLogEntry} from the RAW message, before
+ * redaction, at write time — falling back to recomputing `fingerprintError`
+ * from the stored (redacted) `error_message` only for a row written before that
+ * column existed. `title`/`culprit` are always (re)computed from the stored
+ * message here, so they track whatever `sampleMessage` shows (redacted, for a
+ * post-migration row). A pre-migration fallback row's stored `error_message` is
+ * itself still the original raw text (this redaction fix and the
+ * `error_fingerprint` column ship together, so no row has a redacted message
+ * without also having a stored hash), so its recomputed hash matches history —
+ * it doesn't actually re-bucket in practice, but even if some future change
+ * broke that invariant the blast radius is bounded: `__lunora_reqlog__` caps at
+ * `REQUEST_LOG_RETENTION` rows per shard and ages out fast.
  *
  * Rows come back in `seq` (insert) order, which is NOT `ts` order: a container
  * lifecycle row carries the caller's envelope `ts`, so an out-of-order or
  * clock-skewed push can land an older-`ts` row at a higher `seq`. The
  * representative `title`/`sampleMessage` are therefore tracked by maximum `ts`,
  * not by first sighting, so they always describe the same occurrence `lastSeen`
- * points at. `culprit` needs no such tracking — it is `functionPath`, which is
- * an input to the hash and so is invariant across a group. Result is ordered
+ * points at. `culprit` needs no such tracking — it is derived from
+ * `functionPath` alone, which is invariant across a group. Result is ordered
  * most-recently-active first.
  *
- * This projects only the three columns grouping needs (`function_path`,
- * `error_message`, `ts`) instead of going through {@link readRequestLog}'s full
- * 14-column hydrate + per-row `JSON.parse` of args/identity/tables — none of
- * which the fold reads. The `getIssues` subscription carries the admin wildcard,
- * so it re-runs on every write-flush; keeping this read lean matters.
+ * This projects only the four columns grouping needs (`function_path`,
+ * `error_message`, `error_fingerprint`, `ts`) instead of going through
+ * {@link readRequestLog}'s full 14-column hydrate + per-row `JSON.parse` of
+ * args/identity/tables — none of which the fold reads. The `getIssues`
+ * subscription carries the admin wildcard, so it re-runs on every write-flush;
+ * keeping this read lean matters.
  */
 
 /**
@@ -698,9 +773,9 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
 
     parameters.push(limit);
 
-    const rows = runSql<{ error_message: null | string; function_path: string; ts: number }>(
+    const rows = runSql<{ error_fingerprint: null | string; error_message: null | string; function_path: string; ts: number }>(
         sql,
-        `SELECT function_path, error_message, ts
+        `SELECT function_path, error_message, error_fingerprint, ts
          FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
         ...parameters,
     ).toArray();
@@ -711,7 +786,13 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
 
     for (const row of rows) {
         const message = row.error_message ?? "";
-        const { culprit, hash, title } = fingerprintError({ functionPath: row.function_path, message });
+        // `culprit`/`title` always come from the stored (possibly redacted)
+        // message, so they stay consistent with `sampleMessage`; the grouping
+        // `hash` prefers the write-time value captured from the RAW message
+        // (see the docstring above) and only falls back to this recomputation
+        // for a row with no stored fingerprint.
+        const { culprit, hash: computedHash, title } = fingerprintError({ functionPath: row.function_path, message });
+        const hash = row.error_fingerprint ?? computedHash;
         const existing = issues.get(hash);
 
         if (existing === undefined) {
