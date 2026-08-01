@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverMaskMetadata } from "../src/discover-mask-procedures";
+import { discoverMaskHasNonLiteralPolicy, discoverMaskMetadata } from "../src/discover-mask-procedures";
 
 // A self-contained branded builder + mask DSL — the same shape the
 // discover-mask-procedures test uses. `.use` returns the same builder so the
@@ -106,5 +106,55 @@ describe("discoverMaskMetadata", () => {
 
         // Only the masked columns are listed; `peek` contributes none.
         expect(columns.every((column) => column.table === "users")).toBe(true);
+    });
+});
+
+describe("discoverMaskHasNonLiteralPolicy", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-mask-nonliteral-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("is false when every mask() policies argument is an inline object literal", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "users.ts"), USERS, "utf8");
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(false);
+    });
+
+    it("is true when a mask() call's policies argument is a hoisted reference, not an object literal", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const sharedPolicies = { users: { email: "redact" } };
+
+    export const list = c.query.use(mask(sharedPolicies)).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is false for a project with no mask() calls at all", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    export const peek = query({ args: {}, handler: () => null });
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(false);
     });
 });
