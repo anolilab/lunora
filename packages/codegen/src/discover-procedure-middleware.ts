@@ -249,7 +249,15 @@ const isUserTableInsert = (call: CallExpression): boolean => {
 
     const tableArgument = call.getArguments()[0];
 
-    return Boolean(tableArgument && Node.isStringLiteral(tableArgument) && isUserTableName(tableArgument.getLiteralText()));
+    // A no-substitution template literal (`` `users` ``) is a usable table-name
+    // argument too, not just a string literal — both expose `getLiteralText()`.
+    // Missing this let `ctx.db.insert(\`users\`, row)` read as `writesUserTable:
+    // false`, clearing the security feeders as if the write wasn't there.
+    if (!tableArgument || !(Node.isStringLiteral(tableArgument) || Node.isNoSubstitutionTemplateLiteral(tableArgument))) {
+        return false;
+    }
+
+    return isUserTableName(tableArgument.getLiteralText());
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */
@@ -371,10 +379,10 @@ const referencesContextMember = (declaration: TsNode, members: ReadonlySet<strin
 /** Syntax kinds that bound "the same function" for the enclosing-`try` walk below — climbing stops here. */
 const FUNCTION_BOUNDARY_KINDS: ReadonlySet<SyntaxKind> = new Set([
     SyntaxKind.ArrowFunction,
-    SyntaxKind.FunctionExpression,
     SyntaxKind.FunctionDeclaration,
-    SyntaxKind.MethodDeclaration,
+    SyntaxKind.FunctionExpression,
     SyntaxKind.GetAccessor,
+    SyntaxKind.MethodDeclaration,
     SyntaxKind.SetAccessor,
 ]);
 
@@ -650,6 +658,11 @@ const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemp
  * object's `handler` key for the bare-factory form (`mutation({ handler })`), or
  * the sole argument to the terminal builder-chain call (`.mutation(handler)`).
  * `undefined` when the shape doesn't match either (e.g. no `handler` key).
+ *
+ * The config object's `handler` key can be written three ways — an explicit
+ * assignment (`{ handler: fn }`), a shorthand property (`{ handler }`), or an
+ * object-literal method (`{ handler() { ... } }`) — and all three are readable
+ * in the same file, so all three resolve here rather than only the first.
  */
 const handlerArgumentOf = (initializer: CallExpression): TsNode | undefined => {
     const [firstArgument] = initializer.getArguments();
@@ -661,7 +674,22 @@ const handlerArgumentOf = (initializer: CallExpression): TsNode | undefined => {
     if (Node.isObjectLiteralExpression(firstArgument)) {
         const handlerProperty = firstArgument.getProperty("handler");
 
-        return handlerProperty && Node.isPropertyAssignment(handlerProperty) ? handlerProperty.getInitializer() : undefined;
+        if (!handlerProperty) {
+            return undefined;
+        }
+
+        if (Node.isPropertyAssignment(handlerProperty)) {
+            return handlerProperty.getInitializer();
+        }
+
+        // `{ handler }` — the name node resolves through the same same-file
+        // identifier lookup `analyzableBehaviourRoot` already does below.
+        if (Node.isShorthandPropertyAssignment(handlerProperty)) {
+            return handlerProperty.getNameNode();
+        }
+
+        // `{ handler() { ... } }` — the method itself is the analyzable body.
+        return Node.isMethodDeclaration(handlerProperty) ? handlerProperty : undefined;
     }
 
     return firstArgument;
@@ -688,7 +716,7 @@ const analyzableBehaviourRoot = (declaration: VariableDeclaration, initializer: 
         return undefined;
     }
 
-    if (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument)) {
+    if (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument) || Node.isMethodDeclaration(handlerArgument)) {
         return declaration;
     }
 

@@ -483,6 +483,7 @@ interface AdvisorPrivilegedDispatch {
 
 ```ts
 interface AdvisorProcedureProtection {
+    analyzableBody?: boolean;
     callsMail?: boolean;
     emitsEvent?: boolean;
     exempt?: boolean;

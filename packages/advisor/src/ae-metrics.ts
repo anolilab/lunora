@@ -15,8 +15,11 @@
  * It never shipped a writer: nothing in the runtime calls
  * `ctx.analytics.track("lunora.index.hit" | "lunora.shard.request" |
  * "lunora.table.scan", …)`, so the `{@link AE_METRIC_EVENTS}` this reader queries
- * for are never populated, and `loadAnalyticsRuntimeMetrics` always returns three
- * empty arrays against a live AE dataset. The one caller shaped to consume it —
+ * for are never populated, and `loadAnalyticsRuntimeMetrics` always returns
+ * `shardTraffic` and `tableScans` empty against a live AE dataset. `indexHits`
+ * is empty too UNLESS the caller passes `options.declaredIndexes` — then it's
+ * every declared index with `reads: 0` (a real "zero reads observed" fact, not
+ * a stand-in for "no data"). The one caller shaped to consume it —
  * the studio's `deriveRuntimeAdvisories` (`analyticsMetrics` input) — never
  * actually supplies it either. Silently wiring this as-is would disable the
  * dead-index half of `index_utilization` (an AE array that's merely empty reads
@@ -229,10 +232,14 @@ const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsM
  * partially-misconfigured read path still returns what it can.
  *
  * QUARANTINED — not exported from `@lunora/advisor`'s package root. No writer
- * ever calls `ctx.analytics.track` with the events this reads, so every call
- * today returns three empty arrays against a real dataset. Wiring this in as-is
- * would silently disable `index_utilization`'s dead-index check (empty reads as
- * "nothing dead", not "no data"). See the module doc for the full rationale;
+ * ever calls `ctx.analytics.track` with the events this reads, so `shardTraffic`
+ * and `tableScans` are always empty against a real dataset. `indexHits` is
+ * empty too unless `options.declaredIndexes` is supplied, in which case it's
+ * every declared index reported with `reads: 0` — that's real zero-read
+ * evidence, not an absence-of-data placeholder. Wiring this in as-is would
+ * silently disable `index_utilization`'s dead-index check for a caller that
+ * omits `declaredIndexes` (empty reads as "nothing dead", not "no data"). See
+ * the module doc for the full rationale;
  * import from `./ae-metrics` directly if you're doing the follow-up work that
  * adds the writer.
  *

@@ -140,6 +140,18 @@ const REPLACE_USER_TABLE = `
     });
 `;
 
+/** A bare-factory public mutation writing a user table via a no-substitution template literal table name — `isUserTableInsert` used to only match a string literal. */
+const TEMPLATE_LITERAL_USER_TABLE = `
+    import { mutation } from "@lunora/server";
+
+    export const signUpFromTemplate = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insert(\`users\`, { name: "x" });
+        },
+    });
+`;
+
 /** A bare-factory public mutation writing into "userPreferences" — "user" is a modifier, not the table's terminal word, so this must NOT be treated as a user-table write. */
 const USER_PREFERENCES_TABLE = `
     import { mutation } from "@lunora/server";
@@ -400,6 +412,32 @@ const SAME_FILE_FUNCTION_DECLARATION_HANDLER = `
     });
 `;
 
+/** A bare-factory public mutation using the `{ handler }` shorthand for a same-file `const` — a ShorthandPropertyAssignment, not a PropertyAssignment. */
+const SHORTHAND_HANDLER_PROPERTY = `
+    import { mutation } from "@lunora/server";
+
+    const handler = async (ctx) => {
+        await ctx.db.insert("users", {});
+    };
+
+    export const signUp = mutation({
+        args: {},
+        handler,
+    });
+`;
+
+/** A bare-factory public mutation declaring `handler` as an object-literal method — a MethodDeclaration, not a PropertyAssignment. */
+const METHOD_HANDLER_PROPERTY = `
+    import { mutation } from "@lunora/server";
+
+    export const signUp = mutation({
+        args: {},
+        async handler(ctx) {
+            await ctx.db.insert("users", {});
+        },
+    });
+`;
+
 /** A bare-factory public mutation whose handler is imported from another file — genuinely unanalyzable. */
 const CROSS_FILE_HANDLER = `
     import { mutation } from "@lunora/server";
@@ -541,6 +579,16 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "restoreUser", writesUserTable: true });
+    });
+
+    it("recognizes a user-table write whose table name is a no-substitution template literal", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "template.ts"), TEMPLATE_LITERAL_USER_TABLE, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUpFromTemplate", writesUserTable: true });
     });
 
     it('does not treat "userPreferences" as a user table — "user" is a modifier, not the terminal word', () => {
@@ -729,6 +777,26 @@ describe("discoverProcedureMiddleware", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "signup.ts"), SAME_FILE_FUNCTION_DECLARATION_HANDLER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzableBody: true, exportName: "signUp", writesUserTable: true });
+    });
+
+    it("resolves a `{ handler }` shorthand property to its same-file declaration and reads its body", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), SHORTHAND_HANDLER_PROPERTY, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzableBody: true, exportName: "signUp", writesUserTable: true });
+    });
+
+    it("resolves a `{ handler() { ... } }` object-literal method and reads its body", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), METHOD_HANDLER_PROPERTY, "utf8");
 
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 

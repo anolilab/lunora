@@ -9,6 +9,12 @@ import { isPublicWrite } from "../helpers";
  * facts that decide `sensitive` below. Reached only once `sensitive` is known
  * true, so at least one of `writesUserTable` / `callsMail` is `true` or
  * `undefined` — never both provably `false`.
+ *
+ * The fallback text only claims "the handler body could not be read" when
+ * `analyzableBody` proves that — `writesUserTable` and `callsMail` are each
+ * optional independently, so a proven `false` on one paired with `undefined`
+ * on the other (a partial payload) does not mean the body was unreadable, and
+ * asserting that would misattribute the cause.
  */
 const reasonFor = (procedure: AdvisorProcedureProtection): string => {
     if (procedure.writesUserTable === true) {
@@ -19,7 +25,11 @@ const reasonFor = (procedure: AdvisorProcedureProtection): string => {
         return "sends mail";
     }
 
-    return "may write a user/session table or send mail — its handler body could not be read";
+    if (procedure.analyzableBody === false) {
+        return "may write a user/session table or send mail — its handler body could not be read";
+    }
+
+    return "may write a user/session table or send mail — at least one could not be determined";
 };
 
 /**

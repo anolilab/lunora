@@ -113,13 +113,28 @@ describe("user_creating_mutation_without_captcha", () => {
     });
 
     it("stays fail-closed when the feeder couldn't read the handler body (writesUserTable/callsMail undefined)", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         // A genuinely cross-file handler reports `undefined`, not `false` — an
         // accidental fail-open here is worse than the lint over-firing.
-        const procedures = [procedure({ callsMail: undefined, writesUserTable: undefined })];
+        const procedures = [procedure({ analyzableBody: false, callsMail: undefined, writesUserTable: undefined })];
+        const findings = userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() });
 
-        expect(userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).toContain("its handler body could not be read");
+    });
+
+    it("does not claim the handler body was unreadable for a partial payload (one fact proven false, the other undefined)", () => {
+        expect.assertions(2);
+
+        // `writesUserTable` is proven `false` here — the handler body WAS read
+        // for that fact, so the fallback must not blame an unreadable body for
+        // the still-undefined `callsMail`.
+        const procedures = [procedure({ analyzableBody: true, callsMail: undefined, writesUserTable: false })];
+        const findings = userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).not.toContain("its handler body could not be read");
     });
 });
 

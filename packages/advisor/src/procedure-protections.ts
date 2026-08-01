@@ -9,6 +9,16 @@
  */
 export interface AdvisorProcedureProtection {
     /**
+     * `true` when the feeder could read the handler body statically (an inline
+     * function expression/arrow, or a same-file identifier resolved to one);
+     * `false` for a genuinely cross-file handler, in which case every
+     * behavioural fact below is `undefined` rather than a proven "not observed".
+     * Optional so a feeder predating this field (or a runtime caller) is treated
+     * as "unknown" rather than asserting the handler was readable.
+     */
+    analyzableBody?: boolean;
+
+    /**
      * `true` when the handler references `ctx.mail` / `ctx.email` (sends mail),
      * `undefined` when the feeder couldn't read the handler body (a genuinely
      * cross-file handler). `user_creating_mutation_without_captcha` treats
@@ -30,6 +40,7 @@ export interface AdvisorProcedureProtection {
     exemptReason?: string;
     /** The exported binding name of the procedure (e.g. `signUp`). */
     exportName: string;
+
     /**
      * `true` when the handler fans work out to a privileged, cost-bearing dispatch
      * surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow
@@ -56,12 +67,13 @@ export interface AdvisorProcedureProtection {
     hasEmailArg?: boolean;
     /** Registration kind — `query` is read-only; `mutation`/`action` are write-shaped. */
     kind: "action" | "mutation" | "query";
-    /** `true` when the handler runs any AI generation, bounded or not. */
-    runsAiGeneration?: boolean;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound?: boolean;
+    /** `true` when the handler runs any AI generation, bounded or not. */
+    runsAiGeneration?: boolean;
     /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */
     throwsBareError?: boolean;
+
     /**
      * `true` when the handler runs an AI generation (`generateText`/`streamText`/
      * `generateObject`/`streamObject`) with no `maxOutputTokens` bound. Read by
@@ -76,6 +88,7 @@ export interface AdvisorProcedureProtection {
     usesCaptcha: boolean;
     /** `true` when the chain carries `.use(emailGateMiddleware(...))` from `@lunora/auth`. Read by the `signup_mutation_without_disposable_gating` lint (paired with public visibility + a user-table write). */
     usesEmailGate: boolean;
+
     /**
      * `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, which bypasses
      * validators and triggers. Read by the `insert_many_unsafe_user_data` lint
@@ -91,6 +104,7 @@ export interface AdvisorProcedureProtection {
     usesRls: boolean;
     /** `"internal"` when the procedure uses `internalQuery` / `internalMutation` / `internalAction`. */
     visibility: "internal" | "public";
+
     /**
      * `true` when the handler inserts into a user/session/account-shaped table,
      * `undefined` when the feeder couldn't read the handler body (a genuinely
