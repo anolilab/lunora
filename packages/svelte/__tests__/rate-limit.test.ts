@@ -72,4 +72,41 @@ describe("rateLimit (Svelte)", () => {
 
         handle.teardown();
     });
+
+    // NOTE (plan 282, SSR guard for `startIntervalIfThrottled()`'s creation-time
+    // call): the plan's audit assumed a handle could start "already throttled"
+    // at creation and modeled a dedicated SSR test on that premise. It cannot:
+    // `evaluate()` throws ("requested count N exceeds the limiter capacity C")
+    // whenever the read-only status check's implicit `count: 1` would exceed
+    // the config's own capacity, and a fresh (unconsumed) bucket is *always*
+    // fully available for any non-throwing config — every algorithm variant
+    // documents this ("a fresh key starts full"). So a freshly constructed
+    // handle can never be `disabled` before its first `consume()`, in the
+    // browser or during SSR; the guarded creation-time call is unreachable
+    // today. The guard is kept anyway (harmless, and matches the "no eager
+    // side effects during SSR" convention used by every other primitive in
+    // this family) but there is no reachable pre/post-fix behavioural
+    // difference to assert here — recorded for the plan's Open Questions
+    // rather than asserted as a test.
+    it("consume() still arms the auto-tick interval during SSR once it drains the bucket (unguarded by design)", () => {
+        vi.useFakeTimers();
+
+        // No browser `window` (this file's default vitest env has none). Per
+        // the design decision (plan 282 §4): `consume()`'s own call to
+        // `startIntervalIfThrottled()` stays unguarded — a caller invoking
+        // `consume()` is actively using the handle, so the auto-recover ticker
+        // is still expected to arm even server-side.
+        const clock = { now: 0 };
+        const handle = rateLimit({ kind: "token bucket", period: 1000, rate: 2 }, { now: () => clock.now });
+
+        expect(vi.getTimerCount()).toBe(0);
+
+        handle.consume();
+        handle.consume();
+
+        expect(get(handle.disabled)).toBe(true);
+        expect(vi.getTimerCount()).toBe(1);
+
+        handle.teardown();
+    });
 });

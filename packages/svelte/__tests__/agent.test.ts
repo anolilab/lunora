@@ -1,6 +1,6 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { get } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentApi } from "../src/agent";
 import { agent } from "../src/agent";
@@ -59,7 +59,22 @@ const createFakeClient = () => {
     };
 };
 
+// Solid (`createEffect`/`onMount`) and Angular (`shouldOpenSubscription`/
+// `PLATFORM_ID`) are SSR-safe by construction — do not port this guard there
+// (plan 282 §1/§8).
 describe(agent, () => {
+    beforeEach(() => {
+        // `agent` gates its thread subscription on a browser `window`
+        // (SVELTE-01); the vitest env is `node` (no `window`), so define one
+        // for these client-path tests. The SSR test below removes it to
+        // exercise the guard, mirroring `presence.test.ts`.
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("subscribes to the thread channel and flows live status through", () => {
         const fake = createFakeClient();
         const handle = agent(fake.client, {
@@ -147,5 +162,34 @@ describe(agent, () => {
         expect(fake.mutationSpy).not.toHaveBeenCalled();
 
         handle.teardown();
+    });
+
+    it("does not open the thread subscription during SSR (no window) (SVELTE-01)", () => {
+        const fake = createFakeClient();
+
+        // Simulate the server render: no browser `window` (this package pairs
+        // with `@lunora/nuxt`'s server rendering, where a component's init runs
+        // inside `renderToString` with no `window`). Opening a live WS
+        // subscription there fires during `renderToString` with no
+        // corresponding `onDestroy` to close it — every server render would
+        // leak a subscription.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = agent(fake.client, {
+            api: buildApi(),
+            cancel: makeRef(CANCEL_REF) as FunctionReference<"mutation">,
+            run: makeRef(RUN_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(get(handle.status)).toBeUndefined();
+        expect(get(handle.thread)).toBeUndefined();
+
+        // Teardown itself must not throw with nothing live to unsubscribe.
+        expect(() => {
+            handle.teardown();
+        }).not.toThrow();
+        expect(fake.unsubscribeSpy).not.toHaveBeenCalled();
     });
 });

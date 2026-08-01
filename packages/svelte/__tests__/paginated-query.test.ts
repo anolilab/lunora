@@ -524,3 +524,57 @@ describe("infiniteQuery (Svelte)", () => {
         stopPages();
     });
 });
+
+// Plan 285 — converge on `stableWireKey` for page keys instead of raw
+// `JSON.stringify`.
+//
+// Open Question 1 (answered by reading `createPaginatedEngine`):
+// `currentBaseArgs` is a `const` captured once per engine and never rebuilt —
+// so within a SINGLE engine instance, `buildPageKey`'s output is deterministic
+// and property order never drifts across the calls this file makes. The
+// plan's headline "duplicate subscriptions" / "result-carry miss"
+// consequences are about TWO SEPARATE component instances whose args are
+// structurally equal but built with different property order — that
+// collapses (or doesn't) at the underlying `client.subscribe` /
+// `SubscriptionRegistry` dedup layer, which already uses `stableWireKey` (per
+// plan 285 §1) and is external to this adapter's own bookkeeping; this file's
+// hand-rolled fake `subscribe` doesn't model that dedup, so there is no
+// reachable pre/post-fix difference to assert for the permutation/
+// result-carry scenarios via this file's harness (Test plan items 1–2's own
+// downgrade allowance). The wire-typed-arg test below is the reachable,
+// demonstrably pre/post-fix-differentiating case.
+describe("paginatedQuery — stableWireKey page keys (plan 285)", () => {
+    it("accepts a bigint in the query args without throwing (wire-typed arg)", () => {
+        const fake = createFakePaginatedClient();
+
+        // Pre-fix, `buildPageKey` used raw `JSON.stringify`, which throws
+        // `TypeError: Do not know how to serialize a BigInt` the instant the
+        // lazy readable's first subscriber opens the page subscription and
+        // computes the key. Post-fix, `stableWireKey` tokenizes it
+        // deterministically instead.
+        const { results } = paginatedQuery(fake.client, fn, { since: 10n }, { initialNumItems: NUM_ITEMS });
+
+        expect(() => {
+            const stop = results.subscribe(() => {});
+
+            stop();
+        }).not.toThrow();
+
+        expect(fake.subscribeCalls).toHaveLength(1);
+    });
+
+    it("subscribes normally when caller args are not in canonical key order", () => {
+        const fake = createFakePaginatedClient();
+
+        const { results, status } = paginatedQuery(fake.client, fn, { b: 1, a: 2 }, { initialNumItems: NUM_ITEMS });
+
+        const stopStatus = status.subscribe(() => {});
+        const stopResults = results.subscribe(() => {});
+
+        expect(fake.subscribeCalls).toHaveLength(1);
+        expect(get(status)).toBe("LoadingFirstPage");
+
+        stopStatus();
+        stopResults();
+    });
+});

@@ -4,6 +4,7 @@ import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/clien
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 
+import { stableWireKey } from "../../../shared/wire-key";
 import { resolveLunoraClient } from "./client";
 import { shouldOpenSubscription } from "./platform";
 
@@ -21,7 +22,12 @@ type ReturnTypeOf<F extends FunctionReference> = F extends FunctionReference<"qu
 
 // ── Page key helpers ────────────────────────────────────────────────────────
 
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${JSON.stringify(pageArgs)}`;
+// Key pages with the repo's canonical `stableWireKey` (keys sorted at every
+// depth, wire-typed args tokenized) rather than raw `JSON.stringify`, so two
+// structurally-equal arg records built with a different key order collapse to
+// one key instead of opening a duplicate subscription — matching the client's
+// own `SubscriptionRegistry.key`.
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableWireKey(pageArgs)}`;
 
 const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<string, unknown> => {
     return {

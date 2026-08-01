@@ -4,6 +4,7 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { onScopeDispose, shallowRef, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 
@@ -220,6 +221,15 @@ const usePaginatedCore = <T>(
     watch(
         () => stableWireKey(toValue(args)),
         () => {
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onScopeDispose(teardownAll)`
+            // (see `use-presence.ts`'s guard rationale) — skip opening page
+            // subscriptions server-side and leave `pages`/`pageResults` at their
+            // inert initial values.
+            if (!isBrowser()) {
+                return;
+            }
+
             const current = toValue(args);
 
             teardownAll();

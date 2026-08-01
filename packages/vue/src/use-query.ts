@@ -3,6 +3,7 @@ import { createQuerySubscription } from "@lunora/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 
@@ -34,22 +35,27 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
     // mutated in place, so deep reactivity would only add overhead.
     const data = shallowRef<T | undefined>(options.seed) as Ref<T | undefined>;
 
-    const unsubscribe: Unsubscribe = client.subscribe(
-        function_,
-        args,
-        (value) => {
-            data.value = value as T;
-        },
-        { shardKey: options.shardKey },
-    );
-
-    if (getCurrentScope()) {
-        onScopeDispose(unsubscribe);
-    } else if (process.env.NODE_ENV !== "production") {
-        console.warn(
-            "[@lunora/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
-                "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
+    // Client-only: called during SSR this would open a live subscription that
+    // never tears down (see `use-presence.ts`'s guard rationale). The seed
+    // above already gives SSR HTML its value; skip the subscription server-side.
+    if (isBrowser()) {
+        const unsubscribe: Unsubscribe = client.subscribe(
+            function_,
+            args,
+            (value) => {
+                data.value = value as T;
+            },
+            { shardKey: options.shardKey },
         );
+
+        if (getCurrentScope()) {
+            onScopeDispose(unsubscribe);
+        } else if (process.env.NODE_ENV !== "production") {
+            console.warn(
+                "[@lunora/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
+                    "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
+            );
+        }
     }
 
     return data;
@@ -88,6 +94,14 @@ export const useQuery = <F extends FunctionReference>(
     watch(
         () => toValue(args),
         (current, _previous, onCleanup) => {
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onCleanup` (see
+            // `use-presence.ts`'s guard rationale) — skip the subscription
+            // server-side and leave `data` at its inert initial value.
+            if (!isBrowser()) {
+                return;
+            }
+
             const unsubscribe = createQuerySubscription(
                 client,
                 function_,
