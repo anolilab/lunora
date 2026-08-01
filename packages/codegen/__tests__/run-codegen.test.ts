@@ -2685,9 +2685,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // cross-tenant leak this plan closes). `ROOT_SHARD_NAME` maps the
             // single-DO sentinel back to `undefined` so a root-mode write on the
             // same schema (a mixed app) still stays namespace-less.
+            expect(output).toContain("ROOT_SHARD_NAME, ");
+            expect(output).toContain("const vectorShardKey = this.currentShardKey();");
             expect(output).toContain(
-                "import { applyCdcChanges, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ROOT_SHARD_NAME, runDataMigration",
+                "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
+            expect(output).toContain("vectors,");
+            expect(output).toContain("onWrite,");
+        });
+
+        it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is indexed via a standalone defineVectorIndex (Shape B), not inline .vectorize()", () => {
+            expect.assertions(5);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "docs",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { body: { kind: "string" } },
+                        shardMode: { field: "tenantId", kind: "shardBy" },
+                        // Shape B: the table itself carries no vector indexes — a standalone
+                        // `defineVectorIndex(...)` never gets hoisted onto `table.vectorIndexes`
+                        // (that only happens for inline `.vectorize()`, Shape A). The index is
+                        // discoverable only via the schema-level `vectorIndexes` array below,
+                        // keyed back to its owner through `VectorIndexIR.table`.
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [{ name: "by_body", table: "docs" }],
+            };
+
+            const output = emitShard({ schema });
+
+            // Gating on `table.vectorIndexes.length > 0` alone would miss this schema
+            // entirely (it's empty for `docs`) and silently skip the namespace scoping,
+            // reintroducing the cross-tenant leak for standalone-indexed sharded tables.
+            expect(output).toContain("ROOT_SHARD_NAME, ");
             expect(output).toContain("const vectorShardKey = this.currentShardKey();");
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
