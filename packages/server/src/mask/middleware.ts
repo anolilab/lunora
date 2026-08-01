@@ -39,18 +39,28 @@
  * `withSearchIndex(...)`) referencing a masked column is closed
  * (`assertIndexFieldsAllowed`).
  * - A BARE `withIndex(name)` scan (no range callback) over an index whose
- * DECLARED fields include a masked column, and a `rank`/`rankBefore`/
- * `rankPage` read over a rank index whose declared `sortBy`/`partitionBy`
- * names a masked column (`rankBefore`'s oracle is its `sortValues` argument,
- * not `where` — its real options carry no `where`/`baseWhere` at all), are
- * closed by `assertIndexDeclarationAllowed` **when the caller supplies
+ * DECLARED fields include a masked column, a `rank`/`rankBefore`/`rankPage`
+ * read over a rank index whose declared `sortBy`/`partitionBy` names a masked
+ * column (`rankBefore`'s oracle is its `sortValues` argument, not `where` —
+ * its real options carry no `where`/`baseWhere` at all), and a `withGeoIndex`
+ * read over a geo index whose declared field is masked (its `near`/`within`
+ * builder exposes no column name to a callback recorder, but the returned
+ * rows are sorted by distance from the caller's own query point, which lets a
+ * point/radius sweep trilaterate the hidden coordinate — the same shape of
+ * oracle, over a `v.geoPoint()` column instead of a scalar), are all closed
+ * by `assertIndexDeclarationAllowed` **when the caller supplies
  * `MaskOptions.indexFields`** (build it with the exported
  * `indexFieldsFromSchema(schema)`: `mask(policies, { indexFields:
  * indexFieldsFromSchema(schema) })`). This is OPT-IN and additive —
  * `indexFields` is optional, so a caller that doesn't pass it gets exactly
  * today's (un)protected behaviour; the oracle stays open until it does. Do
- * not rely on this closing for a table with a masked-sorted index unless the
- * mask actually supplies `indexFields`.
+ * not rely on this closing for a table with a masked-sorted or masked-geo
+ * index unless the mask actually supplies `indexFields`.
+ * - `vectorIndexes` and `aggregateIndexes` are deliberately NOT part of this:
+ * vector search isn't reachable through the masked reader (`TableReaderLike`
+ * has no vector-search method), and an aggregate reduction is already guarded
+ * column-by-column by `assertReductionAllowed` above. Neither is an ordinal
+ * oracle this guard needs to cover.
  *
  * 3. **Writes pass through untouched** — `insert` / `patch` / `replace` /
  * `delete` are never wrapped, so masking can't corrupt stored data. Masking is
@@ -367,7 +377,9 @@ const wrapDatabase = <Context>(
      * key is a masked column, the ordinal position of every returned row leaks the
      * hidden value (one known plaintext neighbour bounds the rest). The same
      * oracle applies directly to `rank`/`rankPage`/`rankBefore`, which return the
-     * row's ordinal.
+     * row's ordinal, and to `withGeoIndex`, which returns rows sorted by distance
+     * from the caller's own query point — an attacker sweeping that point/radius
+     * trilaterates a masked `v.geoPoint()` column to geohash precision.
      *
      * Unlike `assertIndexFieldsAllowed`, this guards the index's DECLARED fields —
      * it needs `indexFields`, the per-table index→fields map an app supplies via
@@ -396,7 +408,7 @@ const wrapDatabase = <Context>(
         if (offending !== undefined) {
             throw new LunoraError(
                 "MASK_UNSUPPORTED",
-                `${method}() reading "${tableName}" via index "${indexName}" would order rows by masked column "${offending}" — add a range callback over unmasked fields, or unmask the column`,
+                `${method}() reading "${tableName}" via index "${indexName}" would order rows by masked column "${offending}" — use an index whose declared fields are all unmasked, or unmask the column`,
             );
         }
     };
@@ -464,8 +476,19 @@ const wrapDatabase = <Context>(
                 return wrapReader(reader.withSearchIndex(indexName, search), columns, tableName);
             },
             // A geo query's builder (`.near`/`.within`) exposes no column name, so
-            // there's no masked-column value oracle to guard — just mask the output.
-            withGeoIndex: (indexName, build) => wrapReader(reader.withGeoIndex(indexName, build), columns, tableName),
+            // there's no masked-column VALUE oracle to guard here. But it IS a
+            // POSITION oracle: `withGeoIndex(name, q => q.near(point, radius))`
+            // returns rows sorted by distance from the caller's own point, and a
+            // geo index has no unmasked-prefix escape the way a multi-column
+            // index does — so the same `assertIndexDeclarationAllowed` guard that
+            // closes the bare-`withIndex`/rank position oracle applies here too,
+            // keyed off the geo index's declared field (see
+            // `indexFieldsFromSchema`).
+            withGeoIndex: (indexName, build) => {
+                assertIndexDeclarationAllowed(tableName, indexName, "withGeoIndex");
+
+                return wrapReader(reader.withGeoIndex(indexName, build), columns, tableName);
+            },
         };
     };
 

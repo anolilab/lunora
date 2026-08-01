@@ -90,21 +90,22 @@ export type MaskPolicies<Context = unknown> = Record<string, MaskColumns<Context
  * mask is skipped (the caller sees raw values). Use it for a privileged
  * viewer — `bypass: ({ auth }) => auth.can("pii:view")`. Prefer this over
  * branching every column when an entire class of caller should see clear data.
- * - `indexFields` closes the bare-index-scan / rank position oracle (see the
- * `mask/middleware` module docblock's "Residual read-position oracles" section).
+ * - `indexFields` closes the bare-index-scan / rank / geo position oracle (see
+ * the `mask/middleware` module docblock's "Residual read-position oracles" section).
  */
 export interface MaskOptions<Context = unknown> {
     readonly bypass?: (context: MaskContext<Context>) => boolean;
 
     /**
      * Per-table index→declared-fields map (regular index `fields`; rank index
-     * `sortBy` ∪ `partitionBy`). Supplied to close the bare-index-scan / rank
-     * position oracle: a `withIndex(name)` with no range callback, or a
-     * `rank`/`rankPage`/`rankBefore` read, over an index whose DECLARED fields
-     * intersect a masked column, is rejected. OPTIONAL and additive — omit it
-     * and behaviour is unchanged (the oracle stays open, exactly as before
-     * this option existed). Build it with `indexFieldsFromSchema` (exported
-     * from `@lunora/server`): `mask(policies, { indexFields:
+     * `sortBy` ∪ `partitionBy`; geo index `field`). Supplied to close the
+     * bare-index-scan / rank / geo position oracle: a `withIndex(name)` with no
+     * range callback, a `rank`/`rankPage`/`rankBefore` read, or a
+     * `withGeoIndex` read, over an index whose DECLARED fields intersect a
+     * masked column, is rejected. OPTIONAL and additive — omit it and
+     * behaviour is unchanged (the oracle stays open, exactly as before this
+     * option existed). Build it with `indexFieldsFromSchema` (exported from
+     * `@lunora/server`): `mask(policies, { indexFields:
      * indexFieldsFromSchema(schema) })`.
      */
     readonly indexFields?: IndexFieldsByTable;

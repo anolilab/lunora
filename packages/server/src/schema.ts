@@ -881,15 +881,24 @@ type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, Readon
 
 /**
  * Distill a schema's declared index fields into an {@link IndexFieldsByTable}
- * map — regular index `fields`; rank index `sortBy[].field` ∪ `partitionBy`.
- * Built to close the `mask()` bare-index-scan / rank position oracle: pass the
- * result as `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
- * so the middleware can reject a bare `withIndex`/`rank` read over an index
- * whose DECLARED fields include a masked column — a range/search CALLBACK
- * referencing a masked field is already caught by `assertIndexFieldsAllowed`,
- * but a bare `withIndex(name)` (no callback) and a `rank`/`rankPage`/
- * `rankBefore` read give the recorder nothing to observe, so the guard needs
- * the index's *declaration* instead (see `./mask/middleware`).
+ * map — regular index `fields`; rank index `sortBy[].field` ∪ `partitionBy`;
+ * geo index `field` (its single geospatial column). Built to close the
+ * `mask()` bare-index-scan / rank / geo position oracle: pass the result as
+ * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })` so the
+ * middleware can reject a bare `withIndex`/`rank`/`withGeoIndex` read over an
+ * index whose DECLARED fields include a masked column — a range/search
+ * CALLBACK referencing a masked field is already caught by
+ * `assertIndexFieldsAllowed`, but a bare `withIndex(name)` (no callback), a
+ * `rank`/`rankPage`/`rankBefore` read, and every `withGeoIndex` read (its
+ * `near`/`within` callback carries no column name at all) give the recorder
+ * nothing to observe, so the guard needs the index's *declaration* instead
+ * (see `./mask/middleware`).
+ *
+ * Deliberately does NOT emit `vectorIndexes` or `aggregateIndexes`: vector
+ * search isn't reachable through `TableReaderLike` (the masked reader), and
+ * aggregate reads are already guarded column-by-column by
+ * `assertReductionAllowed`, so neither is an ordinal oracle this map needs to
+ * cover.
  *
  * Pure and side-effect free; takes anything carrying `tables` (a `Schema`, an
  * `ExtendableSchema`, or a plugin-merged schema), so it works whether called
@@ -913,6 +922,10 @@ const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
             }
 
             perIndex[rankIndex.name] = [...fields];
+        }
+
+        for (const geoIndex of table.geoIndexes) {
+            perIndex[geoIndex.name] = [geoIndex.field];
         }
 
         if (Object.keys(perIndex).length > 0) {

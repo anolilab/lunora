@@ -45,6 +45,12 @@ interface FakeSearchBuilder {
     search: (field: string, query: string) => FakeSearchBuilder;
 }
 
+/** Geo-filter builder passed to `.withGeoIndex(name, q => …)` — mirrors `@lunora/do`'s `GeoFilterBuilder` (`near`/`within`). */
+interface FakeGeoBuilder {
+    near: (point: { lat: number; lng: number }, radiusMeters: number) => FakeGeoBuilder;
+    within: (box: { ne: { lat: number; lng: number }; sw: { lat: number; lng: number } }) => FakeGeoBuilder;
+}
+
 interface FakeReader {
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => FakeReader;
@@ -53,6 +59,7 @@ interface FakeReader {
     paginate: () => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
     unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: FakeGeoBuilder) => FakeGeoBuilder) => FakeReader;
     withIndex: (indexName?: string, range?: (q: FakeIndexBuilder) => FakeIndexBuilder) => FakeReader;
     withSearchIndex: (indexName: string, search: (q: FakeSearchBuilder) => FakeSearchBuilder) => FakeReader;
 }
@@ -253,6 +260,19 @@ const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown
                 };
 
                 search(builder);
+
+                return makeReader(list);
+            },
+            // Same shape as `withIndex`: run the builder against a chainable
+            // no-op (mirrors `@lunora/do`'s geo reader), so the reader still
+            // works end-to-end for a geo read the declaration guard lets through.
+            withGeoIndex: (_indexName, build) => {
+                const builder: FakeGeoBuilder = {
+                    near: () => builder,
+                    within: () => builder,
+                };
+
+                build(builder);
 
                 return makeReader(list);
             },
@@ -1206,6 +1226,80 @@ describe("mask — bare-index-scan / rank declaration oracle fails closed (plan 
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("users", "by_ssn_rank", { row: "u1" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ position: 1, total: 1 });
+    });
+});
+
+describe("mask — withGeoIndex position oracle fails closed (plan 250 follow-up)", () => {
+    it("withGeoIndex over a geo index whose declared field is masked throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", homeLocation: { lat: 40.7128, lng: -74.006 }, table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { homeLocation: "redact" } }, { indexFields: { users: { by_location: ["homeLocation"] } } }))
+            // A caller sweeping `point`/`radiusMeters` here gets rows sorted by
+            // distance from an arbitrary point of their own choosing — the same
+            // shape of ordinal leak as the bare-`withIndex` oracle, but over a
+            // `v.geoPoint()` column instead of a scalar. There is no unmasked
+            // range/prefix escape for a geo index (unlike a multi-column
+            // `withIndex`), so this must fail closed unconditionally.
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withGeoIndex("by_location", (q) => q.near({ lat: 40.7, lng: -74 }, 5000))
+                    .collect(),
+            );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("withGeoIndex over a geo index whose declared field is NOT masked still scans and masks other output (no over-fire)", async () => {
+        expect.assertions(2);
+
+        const seed = [{ _id: "u1", email: "a@x.com", homeLocation: { lat: 40.7128, lng: -74.006 }, table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }, { indexFields: { users: { by_location: ["homeLocation"] } } }))
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withGeoIndex("by_location", (q) => q.near({ lat: 40.7, lng: -74 }, 5000))
+                    .collect(),
+            );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
+        // The geo column itself isn't masked here, so the read must go through
+        // (proving the declaration guard doesn't over-fire on an unmasked geo
+        // index) while the actually-masked column is still redacted.
+        expect(rows[0]?.["email"]).toBeNull();
+    });
+
+    it("regression: with `indexFields` omitted, withGeoIndex over a masked-field geo index behaves exactly as before this option existed (no throw from the declaration guard)", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", homeLocation: { lat: 40.7128, lng: -74.006 }, table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { homeLocation: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db
+                .query("users")
+                .withGeoIndex("by_location", (q) => q.near({ lat: 40.7, lng: -74 }, 5000))
+                .collect(),
+        );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
     });
 });
 

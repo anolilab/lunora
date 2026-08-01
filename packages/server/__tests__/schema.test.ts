@@ -361,6 +361,39 @@ describe("indexFieldsFromSchema (plan 250 — mask() bare-index-scan / rank orac
 
         expect(indexFieldsFromSchema(schema)).toStrictEqual({ messages: { byTime: ["createdAt"] } });
     });
+
+    it("maps a geo index's declared `field` (closes the withGeoIndex position oracle)", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            users: defineTable({ homeLocation: v.geoPoint(), name: v.string() }).geoIndex("by_location", { field: "homeLocation" }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({
+            users: {
+                by_location: ["homeLocation"],
+            },
+        });
+    });
+
+    it("does NOT include vectorIndexes or aggregateIndexes fields — neither is a reachable ordinal oracle through the masked reader", () => {
+        expect.assertions(1);
+
+        const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];
+        const schema = defineSchema(
+            { docs: defineTable({ body: v.string(), ssn: v.string() }).aggregateIndex("byCount") },
+            {
+                byEmbedding: defineVectorIndex({
+                    dimensions: 3,
+                    embed,
+                    metric: "cosine",
+                    source: { select: (row) => String(row.body), table: "docs" },
+                }),
+            },
+        );
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({});
+    });
 });
 
 describe("defineSchema().jurisdiction()", () => {
