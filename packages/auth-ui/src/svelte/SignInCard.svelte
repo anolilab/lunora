@@ -90,6 +90,8 @@
         </form>
     {/if}
     {#snippet footer()}
-        <AuthLink href={signUpHref}>{t.noAccount}</AuthLink>
+        {#if context.signUp}
+            <AuthLink href={signUpHref}>{t.noAccount}</AuthLink>
+        {/if}
     {/snippet}
 </AuthCard>
