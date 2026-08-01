@@ -390,3 +390,75 @@ all-`native`-or-`emulated` Cloudflare matrix, which never took the
   none ([Finding 9](#finding-9-zero-new-engine-coupling-gaps-229-generalizes)), so there is nothing to file there. The two host-bugs found in
   the _reference host_ ([#5](#finding-5-host-bug-the-reference-hosts-durableattachments-map-is-dead-code), [#6](#finding-6-host-bug-class-the-reference-hosts-readwrite-heuristic-is-weaker-than-necessary)) and the `ShardDirectory.jurisdiction` architecture gap
   ([#2](#finding-2-contract-under-specification-shard-directoryjurisdiction-has-zero-real-callers)) are real but sized for their own follow-up plans, not this one.
+
+---
+
+# Update — durability hardening (commit `ae75f844`)
+
+The spike's ratings above are superseded for four features. Everything the
+spike _discovered_ stands; what changed is that three of the gaps it recorded
+as inherent turned out to be missing code rather than missing platform.
+
+## What closed, and why the original reasoning was wrong
+
+[Finding 3](#finding-3-contract-under-specification-durable-does-not-say-durable-against-what) argued that persisting an alarm timestamp without a
+host-level daemon to re-deliver it would be _worse_ than not persisting —
+because a caller reading `get()` after a restart would see a pending alarm that
+never fires. That is true of persistence alone, and it quietly assumed the
+re-arm had to come from outside the process. It doesn't: the next construction
+of a host over the same database file is itself the wake, and reading the row
+back there is the whole fix. The same argument had been copied into the
+scheduler, which is why that contract was implemented entirely in memory.
+
+| Feature                | Was                                                     | Now      | What changed                                                                                                 |
+| ---------------------- | ------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `shardAlarms`          | emulated, "nothing re-arms it on restart"               | emulated | Re-armed on construction; an elapsed alarm fires late rather than never; delivery via a new `onAlarm` option |
+| `scheduler`            | emulated, "not durable, no dynamic cron"                | emulated | SQLite job table re-armed on construction, retry backoff, dead-letter, and runtime `cron`                    |
+| `websocketHibernation` | emulated, "survives a simulated recycle, not a restart" | emulated | Attachments and tags in `_lunora_sockets`; survives a real restart                                           |
+| `globalTables`         | unsupported                                             | emulated | The `@lunora/sql-store` core on its own SQLite file via the reference `sqliteDialect`                        |
+
+The levels mostly did not move, and that is the matrix's definition working as
+intended: `native` means the _platform_ provides the feature, and Node provides
+none of these. The notes carry the real information, and three of them had
+become false.
+
+`crossShardFanout` and the deploy driver remain as recorded.
+
+## Finding 10 (layering): the reference SQLite dialect lives in `@lunora/d1`
+
+`sqliteDialect` is the reference `SqlDialect` the store core was written
+against, and every SQLite-backed target needs it — but it lives in
+`packages/d1/src/sqlite-dialect.ts`, so `@lunora/platform-node` now depends on
+a package called `d1` to get it. Nothing about it is Cloudflare-bound
+(`@lunora/d1`'s dependencies are `errors`, `platform`, `shard-engine`,
+`sql-store`, `drizzle-orm`; the `@cloudflare/workers-types` reference is
+type-only), so this is a naming smell rather than a layering violation — but it
+is the second consumer, and `@lunora/sql-store`'s own tests already keep a
+third, hand-rolled copy specifically to avoid depending on a downstream
+package.
+
+**Proposed fix**: move `sqliteDialect` into `@lunora/sql-store` beside the
+`SqlDialect` contract, re-exporting from `@lunora/d1` for its existing callers.
+Not done here because it also requires moving `sqlAffinityForKind` out of
+`@lunora/d1`'s `dialect.ts`, which the CLI migration emitter imports — a
+three-package refactor unrelated to this target.
+
+## Finding 11 (host-bug-class): TypeScript narrows `database.open` across an `await`
+
+The scheduler's delivery path guards every statement on `database.open`,
+because a timer can outlive a `close()` and a statement on a closed
+better-sqlite3 connection throws synchronously inside the timer callback, where
+no caller's `try`/`catch` can reach it.
+
+After an early `if (!database.open) { return; }`, TypeScript narrows the
+property to `true` for the rest of the function — and then
+`@typescript-eslint/no-unnecessary-condition` reports every later check as
+redundant. It is exactly wrong: an `await` sits in between, and the caller may
+have closed the connection during it. Taking the lint at face value would have
+deleted the guards that make the timer safe.
+
+The fix is a one-line `const isOpen = (): boolean => database.open;` so each
+check stays a real runtime read. Worth knowing generally: any `readonly boolean`
+liveness flag re-checked after an `await` will attract the same false positive,
+and `@lunora/platform-cloudflare` has the same shape in `execSql`'s call-time
+probing.
