@@ -61,11 +61,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const { recordHistory, updateQuerySql } = library;
     const draft = activeTab.sql;
     const { activeId } = activeTab;
-    const { chart: inferredChart, error, failed: failedRun, result } = output;
+    const { chart: inferredChart, error, failed: failedRun, result, running } = output;
     const tab = output.pane;
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [running, setRunning] = useState<boolean>(false);
     // Editor↔results layout: stacked (default) or side-by-side, persisted across reloads.
     const [splitView, setSplitView] = usePersistedValue<boolean>(SPLIT_VIEW_KEY, false);
 
@@ -107,23 +106,34 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
             return;
         }
 
-        setRunning(true);
+        // `patchActiveOutput` closes over the tab that's active AT THIS CALL —
+        // the same closure used below to land the result, even if the operator
+        // switches to a different tab while this query is in flight. That's what
+        // keeps `running` (and the result it guards) scoped to the tab that
+        // actually ran the query, not whichever tab happens to be active when the
+        // response lands.
+        patchActiveOutput({ running: true });
         const sql = mode === "explain" ? `EXPLAIN QUERY PLAN ${draft}` : draft;
 
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
 
-            patchActiveOutput({ chart: undefined, error: null, failed: undefined, pane: mode, result: next });
+            patchActiveOutput({ chart: undefined, error: null, failed: undefined, pane: mode, result: next, running: false });
             recordShard(shardKey);
             recordHistory(sql);
         } catch (error_: unknown) {
             // Capture the statement that actually failed. "Fix this" previously
             // read the live draft, so any edit after the failure asked the model
             // to repair text that never ran, against an error it never produced.
-            patchActiveOutput({ chart: undefined, error: errorMessage(error_), failed: { error: errorMessage(error_), sql }, pane: mode, result: null });
+            patchActiveOutput({
+                chart: undefined,
+                error: errorMessage(error_),
+                failed: { error: errorMessage(error_), sql },
+                pane: mode,
+                result: null,
+                running: false,
+            });
         }
-
-        setRunning(false);
     };
 
     const onRun = (): void => {

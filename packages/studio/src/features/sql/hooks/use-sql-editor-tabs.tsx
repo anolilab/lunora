@@ -27,10 +27,18 @@ interface TabOutput {
     readonly failed?: { error: string; sql: string };
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
+
+    /**
+     * Whether THIS tab has a query in flight. Per-tab (not panel-wide) for the
+     * same reason as `failed`/`chart`: a slow query in tab A must not disable or
+     * spin tab B's Run button, and A's own spinner must clear when A's query
+     * lands — not whenever the panel's active tab happens to change.
+     */
+    readonly running: boolean;
 }
 
 /** A tab's output before it has run anything. */
-const DEFAULT_TAB_OUTPUT: TabOutput = { error: null, pane: "results", result: null };
+const DEFAULT_TAB_OUTPUT: TabOutput = { error: null, pane: "results", result: null, running: false };
 
 /** The right-clicked tab's context menu: the target tab id + cursor position. */
 interface TabMenu {

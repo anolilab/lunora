@@ -483,4 +483,76 @@ describe("sqlEditorPanel", () => {
 
         expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
     });
+
+    it("keeps `running` scoped per tab: a slow query in one tab never disables/spins another tab's Run button (STUDIO-11)", async () => {
+        expect.assertions(4);
+
+        let resolveSlow: ((value: SqlConsoleResult) => void) | undefined;
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.runSql) {
+                    return { columns: [], rowCount: 0, rows: [], truncated: false };
+                }
+
+                const { sql } = args as { sql: string };
+
+                // Tab A's query never resolves on its own — held open until the test
+                // calls `resolveSlow` explicitly, so it can assert on the state while
+                // it's still in flight.
+                if (sql.includes("SLOW")) {
+                    return new Promise<SqlConsoleResult>((resolve) => {
+                        resolveSlow = resolve;
+                    });
+                }
+
+                return { columns: ["name"], rowCount: 1, rows: [{ name: "fast" }], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // Tab A: start the slow query.
+        typeInEditor("SELECT 'SLOW'");
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        await waitFor(() => {
+            if (!screen.getByTestId<HTMLButtonElement>("sql-run").disabled) {
+                throw new Error("tab A hasn't started running yet");
+            }
+        });
+
+        // Open a second tab — it becomes active. Tab A stays first in the strip
+        // (`addTab` appends), so its id is captured before switching away.
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+
+        const tabAId =
+            (within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement).dataset.testid?.replace(
+                "sql-tab-select-",
+                "",
+            ) ?? "";
+
+        // Tab B's Run is enabled — tab A's in-flight query hasn't disabled/spun it,
+        // the way a single panel-level `running` flag used to.
+        expect(screen.getByTestId<HTMLButtonElement>("sql-run").disabled).toBe(false);
+        expect(screen.getByTestId("sql-run").textContent).not.toContain("Running");
+
+        // Land tab A's query while tab B is still the active tab.
+        resolveSlow?.({ columns: ["name"], rowCount: 1, rows: [{ name: "slow-result" }], truncated: false });
+
+        // Tab B is unaffected by tab A's query landing.
+        expect(screen.getByTestId<HTMLButtonElement>("sql-run").disabled).toBe(false);
+
+        // Switch back to tab A: its own spinner cleared (not tab B's), and its
+        // result is the one that landed while it was in the background.
+        fireEvent.click(screen.getByTestId(`sql-tab-select-${tabAId}`));
+
+        await waitFor(() => {
+            if (screen.getByTestId<HTMLButtonElement>("sql-run").disabled) {
+                throw new Error("tab A's running flag never cleared");
+            }
+        });
+
+        expect(screen.getByTestId("sql-rows").textContent).toContain("slow-result");
+    });
 });
