@@ -32,7 +32,7 @@ export const createFakeState = (): SchedulerDOState & {
             },
             get: async <T = unknown>(key: string) => storageMap.get(key) as T | undefined,
             getAlarm: async () => alarm,
-            list: async <T = unknown>(options: { limit?: number; prefix?: string } = {}) => {
+            list: async <T = unknown>(options: { limit?: number; prefix?: string; startAfter?: string } = {}) => {
                 const result = new Map<string, T>();
                 const prefix = options.prefix ?? "";
                 // Code-unit ordering (NOT locale-aware): the time index relies on
@@ -45,7 +45,17 @@ export const createFakeState = (): SchedulerDOState & {
 
                     return left > right ? 1 : 0;
                 };
-                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted(byteCompare);
+                let keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted(byteCompare);
+
+                // `startAfter` (a cursor pagination page's "resume after this key")
+                // mirrors the real Durable Object storage.list() option, used by
+                // SchedulerDO's countHeaders() to page through the header set with
+                // bounded memory instead of one unlimited list.
+                if (options.startAfter !== undefined) {
+                    const { startAfter } = options;
+
+                    keys = keys.filter((key) => byteCompare(key, startAfter) > 0);
+                }
 
                 for (const key of keys.slice(0, options.limit ?? keys.length)) {
                     result.set(key, storageMap.get(key) as T);
