@@ -100,3 +100,21 @@ export interface AdvisorProcedureProtection {
      */
     writesUserTable?: boolean;
 }
+
+/**
+ * Fail-closed reading of a tri-state behavioural fact: `true` when the feeder
+ * proved it, and — just as importantly — also `true` when the feeder couldn't
+ * read the handler body at all (`undefined`, a genuinely cross-file handler).
+ * Only a proven `false` reads as `false`.
+ *
+ * Several `AdvisorProcedureProtection` fields (`callsMail`, `fanOut`,
+ * `unboundedAiGeneration`, `usesInsertManyUnsafe`, `writesUserTable`, …) are
+ * documented as fail-closed for exactly this reason: an unreadable handler
+ * might well exhibit the behaviour, and a SECURITY lint that silently clears a
+ * finding on "unknown" is worse than one that over-fires on it. Call this
+ * instead of writing `fact !== false` by hand — the bare form reads fine at
+ * each call site but is easy to invert by accident (a future `procedure.fanOut`
+ * truthy check silently reintroduces a fail-open gap), and a named predicate
+ * makes the intent grep-able and impossible to get backwards.
+ */
+export const mightExhibit = (fact: boolean | undefined): boolean => fact !== false;

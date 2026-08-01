@@ -1,6 +1,26 @@
 import emit from "../../finding";
+import type { AdvisorProcedureProtection } from "../../procedure-protections";
+import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
 import { isPublicWrite } from "../helpers";
+
+/**
+ * The human-readable reason a procedure trips this lint, from the same two
+ * facts that decide `sensitive` below. Reached only once `sensitive` is known
+ * true, so at least one of `writesUserTable` / `callsMail` is `true` or
+ * `undefined` — never both provably `false`.
+ */
+const reasonFor = (procedure: AdvisorProcedureProtection): string => {
+    if (procedure.writesUserTable === true) {
+        return "writes a user/session table";
+    }
+
+    if (procedure.callsMail === true) {
+        return "sends mail";
+    }
+
+    return "may write a user/session table or send mail — its handler body could not be read";
+};
 
 /**
  * Flags a public `mutation`/`action` that creates a user/session or sends mail but
@@ -38,20 +58,13 @@ const userCreatingMutationWithoutCaptcha: Lint = {
             // `undefined` means the feeder couldn't read the handler body (a
             // cross-file handler) — stays fail-closed, treated as "might write a
             // user table" / "might send mail" rather than cleared.
-            const sensitive = procedure.writesUserTable !== false || procedure.callsMail !== false;
+            const sensitive = mightExhibit(procedure.writesUserTable) || mightExhibit(procedure.callsMail);
 
             if (!isPublicWrite(procedure) || !sensitive || procedure.usesCaptcha) {
                 continue;
             }
 
-            // Reaching here, `sensitive` is true, so at least one of the two facts
-            // below is `true` or `undefined` (never both provably `false`).
-            const reason =
-                procedure.writesUserTable === true
-                    ? "writes a user/session table"
-                    : procedure.callsMail === true
-                      ? "sends mail"
-                      : "may write a user/session table or send mail — its handler body could not be read";
+            const reason = reasonFor(procedure);
 
             findings.push(
                 emit(userCreatingMutationWithoutCaptcha, {

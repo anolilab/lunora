@@ -1,4 +1,5 @@
 import emit from "../../finding";
+import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
 
 /**
@@ -37,7 +38,7 @@ const aiUnboundedGenerationPublic: Lint = {
         // Distinct from the call-level opaque-config case, which the feeder
         // always reports as `false` (fail-open by design, see the module doc).
         return context.procedureProtections
-            .filter((procedure) => procedure.unboundedAiGeneration !== false && procedure.visibility === "public")
+            .filter((procedure) => mightExhibit(procedure.unboundedAiGeneration) && procedure.visibility === "public")
             .map((procedure) =>
                 emit(aiUnboundedGenerationPublic, {
                     cacheKey: `ai_unbounded_generation_public:${procedure.file}:${procedure.exportName}`,

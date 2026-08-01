@@ -378,12 +378,63 @@ const FUNCTION_BOUNDARY_KINDS: ReadonlySet<SyntaxKind> = new Set([
     SyntaxKind.SetAccessor,
 ]);
 
+/** Array methods whose callback runs synchronously, within the caller's dynamic extent — safe to climb through. */
+const SYNC_ITERATION_METHODS: ReadonlySet<string> = new Set(["every", "filter", "flatMap", "forEach", "map", "some"]);
+
+/** `Promise` combinators whose executor(s) run synchronously, within the caller's dynamic extent — safe to climb through. */
+const SYNC_PROMISE_COMBINATORS: ReadonlySet<string> = new Set(["all", "allSettled", "race"]);
+
+/**
+ * When the enclosing-`try` climb in {@link hasEnclosingTry} hits a function
+ * boundary, decide whether that boundary is itself a callback argument that
+ * runs *synchronously* within its caller's dynamic extent — `.map`/`.forEach`/
+ * `.filter`/`.flatMap`/`.some`/`.every`, or a `Promise.all`/`allSettled`/`race`
+ * combinator. If so, the call site inside it is still covered by a `try` that
+ * wraps the caller, so climbing should resume from that call rather than
+ * stopping. Returns the call to resume from, or `undefined` when `boundary`
+ * isn't such an argument — e.g. it is a deferred callback (`setTimeout`,
+ * `queueMicrotask`, an event listener, a stored/returned function) that does
+ * NOT run inside the try's dynamic extent, so it must still stop the climb.
+ */
+const syncIterationCallToResumeFrom = (boundary: TsNode): CallExpression | undefined => {
+    const parent = boundary.getParent();
+
+    if (!parent || !Node.isCallExpression(parent) || !parent.getArguments().includes(boundary)) {
+        return undefined;
+    }
+
+    const callee = parent.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee)) {
+        return undefined;
+    }
+
+    const methodName = callee.getName();
+
+    if (SYNC_ITERATION_METHODS.has(methodName)) {
+        return parent;
+    }
+
+    const receiver = callee.getExpression();
+
+    if (Node.isIdentifier(receiver) && receiver.getText() === "Promise" && SYNC_PROMISE_COMBINATORS.has(methodName)) {
+        return parent;
+    }
+
+    return undefined;
+};
+
 /**
  * True when `call` sits inside a `try` block WITHIN the same function — climbing
  * stops at the nearest enclosing function boundary, so a `try` wrapping a
  * different, outer function (e.g. one that merely invokes a callback containing
  * `call`) does not count. This is what makes an unrelated `try` elsewhere in the
  * handler stop clearing a genuinely-unguarded outbound call.
+ *
+ * The one exception: a boundary that is itself a synchronous-iteration callback
+ * (`items.map((i) => ...)`, `Promise.all(items.map(...))`, etc.) doesn't escape
+ * the try's dynamic extent, so {@link syncIterationCallToResumeFrom} resumes the
+ * climb from the enclosing call instead of stopping there.
  */
 const hasEnclosingTry = (call: TsNode): boolean => {
     let current: TsNode | undefined = call.getParent();
@@ -398,7 +449,14 @@ const hasEnclosingTry = (call: TsNode): boolean => {
         }
 
         if (FUNCTION_BOUNDARY_KINDS.has(current.getKind())) {
-            return false;
+            const resumeFrom = syncIterationCallToResumeFrom(current);
+
+            if (!resumeFrom) {
+                return false;
+            }
+
+            current = resumeFrom;
+            continue;
         }
 
         current = current.getParent();

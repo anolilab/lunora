@@ -79,17 +79,19 @@ for (const finding of findings) {
 
 ### Runtime lints
 
-The runtime tier (`hot_shard`, `index_utilization`, `constraint_validator`) reads observed signal off the `LintContext` (`shardTraffic`, `tableScans`, `indexHits`, `tableSamples`). The Studio backend fills those from each shard's durable counters. As an alternative feeder, `loadAnalyticsRuntimeMetrics` reconstructs the same arrays from the Analytics Engine SQL API:
+The runtime tier (`hot_shard`, `index_utilization`, `constraint_validator`) reads observed signal off the `LintContext` (`shardTraffic`, `tableScans`, `indexHits`, `tableSamples`). The Studio backend fills those from each shard's durable counters:
 
 ```ts
-import { fromServerSchema, loadAnalyticsRuntimeMetrics, runAdvisor } from "@lunora/advisor";
+import { fromServerSchema, runAdvisor } from "@lunora/advisor";
 
 import schema from "./lunora/schema";
 
-// `client` is an `@lunora/bindings/analytics` SQL client (anything with `query(sql)`).
-const metrics = await loadAnalyticsRuntimeMetrics(client, { dataset: "ANALYTICS" });
-const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { source: "runtime" });
+// `shardTraffic` / `tableScans` / `indexHits` / `tableSamples` come from wherever
+// you read your shards' durable counters — the Studio backend reads its own.
+const findings = runAdvisor({ schema: fromServerSchema(schema), shardTraffic, tableScans, indexHits, tableSamples }, { source: "runtime" });
 ```
+
+An Analytics-Engine-backed alternative feeder (querying AE SQL for `lunora.index.hit`/`lunora.shard.request`/`lunora.table.scan` events instead of the in-DO counters) was quarantined off the package root: nothing in the runtime ever writes those AE events, so the feeder always returned empty arrays. The `AnalyticsMetricsOptions` / `AnalyticsMetricsSource` / `AnalyticsRuntimeMetrics` types it would have produced are still exported from `@lunora/advisor` — they describe the still-valid, still-optional shape of `runAdvisor`'s runtime input — but the loader function itself is not, until something actually emits those events.
 
 A missing metric degrades to an empty array rather than throwing, so a partially configured read path still returns what it can.
 

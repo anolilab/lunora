@@ -273,6 +273,51 @@ const TRY_GUARDED_FETCH = `
     });
 `;
 
+/**
+ * A bare-factory public action whose outbound calls run inside a `Promise.all(items.map(...))`
+ * fan-out, itself inside a `try` — the calls sit in an arrow passed to `.map`, one function
+ * boundary short of the `try`. The old climb stopped at that arrow and reported unguarded even
+ * though the fan-out runs synchronously within the try's dynamic extent.
+ */
+const TRY_GUARDED_PROMISE_ALL_MAP_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => {
+            const items: { url: string }[] = [];
+
+            try {
+                await Promise.all(items.map((item) => ctx.fetch(item.url)));
+            } catch (error) {
+                return { ok: false, error };
+            }
+        },
+    });
+`;
+
+/**
+ * A bare-factory public action whose outbound call sits inside a callback deferred with
+ * \`setTimeout\`, itself inside a \`try\` — the callback runs after the try has already returned,
+ * so it must NOT count as guarded despite textually nesting inside the \`try\` block.
+ */
+const TRY_WRAPPED_DEFERRED_CALLBACK_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => {
+            try {
+                setTimeout(() => {
+                    ctx.fetch("https://example.com/hook");
+                }, 0);
+            } catch {
+                // does not guard the deferred call scheduled above
+            }
+        },
+    });
+`;
+
 /** A builder-form mutation guarded by `.use(rateLimit())`. */
 const RATE_LIMITED = `${PREAMBLE}
     export const send = c.mutation
@@ -592,6 +637,26 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("recognizes an outbound call inside `try { await Promise.all(items.map(...)) }` as guarded", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), TRY_GUARDED_PROMISE_ALL_MAP_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("does not treat an outbound call deferred via `setTimeout` inside a `try` as guarded", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), TRY_WRAPPED_DEFERRED_CALLBACK_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: false, reachesOutbound: true });
     });
 
     it("records a `.use(rateLimit())` builder chain as rate-limited", () => {

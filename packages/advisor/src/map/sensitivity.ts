@@ -1,4 +1,5 @@
 import type { AdvisorProcedureProtection } from "../procedure-protections";
+import { mightExhibit } from "../procedure-protections";
 import type { Sensitivity, SensitivityLevel } from "./types";
 
 /**
@@ -11,16 +12,16 @@ import type { Sensitivity, SensitivityLevel } from "./types";
  * saw writing a user/session/account table is handling identity. That keeps the
  * classification defensible — it never infers sensitivity from a name.
  */
-// `!== false` rather than a truthy read: each fact is `undefined` only when the
-// feeder couldn't read the handler body (a cross-file handler), and that stays
-// fail-closed here too — an unreadable handler is classified as sensitive rather
-// than silently landing in "none".
+// `mightExhibit` rather than a truthy read: each fact is `undefined` only when
+// the feeder couldn't read the handler body (a cross-file handler), and that
+// stays fail-closed here too — an unreadable handler is classified as sensitive
+// rather than silently landing in "none".
 const SIGNALS: ReadonlyArray<{ reason: string; test: (procedure: AdvisorProcedureProtection) => boolean }> = [
-    { reason: "writes an identity table", test: (procedure) => procedure.writesUserTable !== false },
-    { reason: "sends mail", test: (procedure) => procedure.callsMail !== false },
-    { reason: "fans out to a privileged dispatch surface", test: (procedure) => procedure.fanOut !== false },
-    { reason: "bypasses validators with insertManyUnsafe", test: (procedure) => procedure.usesInsertManyUnsafe !== false },
-    { reason: "runs an unbounded AI generation", test: (procedure) => procedure.unboundedAiGeneration !== false },
+    { reason: "writes an identity table", test: (procedure) => mightExhibit(procedure.writesUserTable) },
+    { reason: "sends mail", test: (procedure) => mightExhibit(procedure.callsMail) },
+    { reason: "fans out to a privileged dispatch surface", test: (procedure) => mightExhibit(procedure.fanOut) },
+    { reason: "bypasses validators with insertManyUnsafe", test: (procedure) => mightExhibit(procedure.usesInsertManyUnsafe) },
+    { reason: "runs an unbounded AI generation", test: (procedure) => mightExhibit(procedure.unboundedAiGeneration) },
 ];
 
 /**
