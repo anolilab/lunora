@@ -269,17 +269,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
         svelte: { name: "subscription" },
         vue: { name: "useSubscription" },
     },
-    // Chunked/multipart/TUS/paste file upload. Vue/Solid/Svelte only ever
-    // shipped this as the `./upload` subpath (`src/upload.ts`), never
-    // barreled into `index.ts` — see the file header. Angular has neither the
-    // subpath nor the file: a real, still-open gap (plan 233's cited
-    // evidence), not a naming difference.
+    // Chunked/multipart/TUS/paste file upload. Every adapter ships this as the
+    // `./upload` subpath (`src/upload.ts`), never barreled into `index.ts` —
+    // see the file header. Angular exports it as a bare `upload` (its
+    // signal-style convention, like `voiceAgent`), the others as `useUpload` /
+    // `createUpload`.
     upload: {
-        angular: {
-            gap: "no upload.ts and no ./upload subpath — chunked/multipart/TUS/paste upload was never ported; plan 233 evidence, still open on this base",
-            module: "upload.ts",
-            name: "upload",
-        },
+        angular: { module: "upload.ts", name: "upload", subpath: "./upload" },
         react: { module: "upload.ts", name: "useUpload", subpath: "./upload" },
         solid: { module: "upload.ts", name: "createUpload", subpath: "./upload" },
         svelte: { module: "upload.ts", name: "createUpload", subpath: "./upload" },

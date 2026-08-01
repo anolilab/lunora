@@ -45,13 +45,11 @@ const CONTROLLER_NAME_RE = /^create[A-Z]\w*Controller$/;
  */
 const DELIBERATELY_UNMOUNTED: Record<string, string> = {
     createActiveMemberController: "orphan — no port wires org active-member switching yet (plan 233 evidence); still unaddressed on this base",
-    createBackupCodeSignInController: "orphan — no port wires backup-code sign-in yet (plan 233 evidence); still unaddressed on this base",
     createFormController:
         "generic form-builder primitive, not a mountable flow — every domain controller that needs a form (backup-codes, sign-in, sign-up, …) calls it internally; a port mounts the domain controller, never this one directly",
     createPhoneForgotPasswordController: "orphan — no port wires phone-based password-reset request yet (plan 233 evidence); still unaddressed on this base",
     createPhoneResetPasswordController: "orphan — no port wires phone-based password reset yet (plan 233 evidence); still unaddressed on this base",
     createPhoneVerifyController: "orphan — no port wires phone verification yet (plan 233 evidence); still unaddressed on this base",
-    createResetPasswordOtpController: "orphan — no port wires OTP-based password reset yet (plan 233 evidence); still unaddressed on this base",
     createResourceController:
         "generic resource-fetch primitive, not a mountable flow — every domain controller that lists/fetches a resource (accounts, teams, members, …) calls it internally; a port mounts the domain controller, never this one directly",
 };
