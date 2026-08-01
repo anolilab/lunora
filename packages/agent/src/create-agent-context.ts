@@ -2,6 +2,7 @@
 import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
+import { hasBranchMarker } from "../../../shared/branch-marker";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, AgentWorkflowBindingLike } from "./types";
 
@@ -63,6 +64,14 @@ const createAgentContext = (env: Record<string, unknown>, specs: ReadonlyArray<A
             // server-side `run(...)` below is unaffected.
             publicRun: spec.publicRun === true,
             run: async (input: AgentRunInput, options?: { id?: string }) => {
+                // `input` is reachable from the public `agents:agentRun` mutation
+                // when `publicRun: true` — reject the reserved workflow
+                // branch-marker key at this trust boundary before it ever reaches
+                // `create()`.
+                if (hasBranchMarker(input)) {
+                    throw new LunoraError("BAD_REQUEST", "@lunora/agent: run input may not contain the reserved workflow branch-marker key");
+                }
+
                 const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: input });
 
                 return { id: instance.id };

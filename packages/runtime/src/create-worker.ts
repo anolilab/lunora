@@ -2,6 +2,7 @@ import { isLunoraError, toErrorBody } from "@lunora/errors";
 
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
+import { hasBranchMarker } from "../../../shared/branch-marker";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
@@ -2384,6 +2385,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError(`${label} targets workflow binding "${binding}", which is not bound on env`, {
                 code: "CRON_JOB_FAILED",
                 status: 500,
+            });
+        }
+
+        // `args` may carry app-forwarded, user-derived input (e.g. a public
+        // mutation's `ctx.scheduler.runAfter(workflowRef, args)`) — reject the
+        // reserved workflow branch-marker key at this trust boundary the same as
+        // every other create surface, or a forged marker could reach a child's
+        // `event.payload` and spoof events into an arbitrary workflow instance.
+        if (hasBranchMarker(args)) {
+            throw new LunoraError(`${label} params may not contain the reserved workflow branch-marker key`, {
+                code: "BAD_REQUEST",
+                status: 400,
             });
         }
 

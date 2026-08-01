@@ -1171,6 +1171,38 @@ describe("shardDO admin introspection", () => {
         expect(created).toStrictEqual([{ id: undefined, params: { orderId: "o1" } }]);
     });
 
+    it("rejects (400) createWorkflowInstance params carrying the reserved branch-marker key, and never calls create()", async () => {
+        expect.assertions(2);
+
+        const created: { id?: string; params?: unknown }[] = [];
+
+        const binding = {
+            create: (options: { id?: string; params?: unknown }) => {
+                created.push(options);
+
+                return Promise.resolve({ id: options.id ?? "wf-generated", status: () => Promise.resolve({ status: "queued" }) });
+            },
+            get: () => Promise.reject(new Error("get must not run for create")),
+        };
+
+        // Admin-token-gated, but rejected for uniformity with every other create
+        // surface — a forged marker must never reach `create()`.
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const response = await shard.fetch(
+            adminRequest(
+                ADMIN_FUNCTIONS.createWorkflowInstance,
+                {
+                    exportName: "orderPipeline",
+                    params: { __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" }, orderId: "o1" },
+                },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        expect(response.status).toBe(400);
+        expect(created).toHaveLength(0);
+    });
+
     it("reports a workflow instance's status, output, and error", async () => {
         expect.assertions(1);
 

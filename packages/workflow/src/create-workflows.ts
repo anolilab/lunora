@@ -5,7 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { BRANCH_MARKER_KEY } from "./fan-out";
+import { BRANCH_MARKER_KEY, hasBranchMarker } from "../../../shared/branch-marker";
 import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions, WorkflowHandle, WorkflowInstanceLike, Workflows } from "./types";
 
 /**
@@ -18,9 +18,7 @@ import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions
  * free of the reserved key while leaving `createParallel`'s own injection intact.
  */
 const rejectReservedParams = (options?: WorkflowCreateOptions): void => {
-    const { params } = options ?? {};
-
-    if (params !== undefined && Object.hasOwn(params, BRANCH_MARKER_KEY)) {
+    if (hasBranchMarker(options?.params)) {
         throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
     }
 };

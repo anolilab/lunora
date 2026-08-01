@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { hasBranchMarker } from "../../../shared/branch-marker";
 import type { BranchOutcome, FanOutDeps } from "../src/fan-out";
 import {
     branch,
@@ -388,6 +389,17 @@ describe("branch marker helpers", () => {
 
         expect(stripBranchMarker({ [BRANCH_MARKER_KEY]: { index: 0 }, keep: true })).toEqual({ keep: true });
         expect(stripBranchMarker("scalar")).toBe("scalar");
+    });
+
+    it("hasBranchMarker (shared/branch-marker.ts): detects a top-level key, ignores a nested one and non-objects", () => {
+        expect.assertions(5);
+
+        expect(hasBranchMarker({ [BRANCH_MARKER_KEY]: {}, other: 1 })).toBe(true);
+        // A nested marker is inert — only the top-level own-property is checked.
+        expect(hasBranchMarker({ nested: { [BRANCH_MARKER_KEY]: {} } })).toBe(false);
+        expect(hasBranchMarker({ other: 1 })).toBe(false);
+        expect(hasBranchMarker("scalar")).toBe(false);
+        expect(hasBranchMarker(undefined)).toBe(false);
     });
 });
 

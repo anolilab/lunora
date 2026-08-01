@@ -20,6 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { hasBranchMarker } from "../../../shared/branch-marker";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -272,6 +273,14 @@ const startChannelRun = async (
     channel: AgentInboundChannelKind,
     id: string | undefined,
 ): Promise<Response> => {
+    // `run` derives from an inbound channel webhook mapper — reject the reserved
+    // workflow branch-marker key at this trust boundary before it ever reaches
+    // `create()`. Thrown (not acked): a forged marker must not be reported as
+    // handled, or the provider would never redeliver it once the bug is fixed.
+    if (hasBranchMarker(run)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/agent: inbound channel run params may not contain the reserved workflow branch-marker key");
+    }
+
     // Sanitize the id alone (the `channel-` prefix is already instance-id-safe);
     // an id absent or reduced to empty by sanitization gives no dedup key.
     const sanitizedId = id === undefined ? "" : id.replaceAll(UNSAFE_INSTANCE_ID, "");
