@@ -1,7 +1,7 @@
 import type { User } from "@lunora/client";
 import { describe, expect, it } from "vitest";
 
-import { auth } from "../src/auth";
+import { auth, authGate } from "../src/auth";
 import { createFakeClient, createFakeDestroyRef } from "./fake-client";
 
 const flushAsync = (): Promise<void> =>
@@ -86,5 +86,70 @@ describe(auth, () => {
 
         // Store's per-client refresh listener remains; auth's token updater is removed
         expect(fake.tokenListeners).toHaveLength(1);
+    });
+});
+
+describe(authGate, () => {
+    it("is neither loading nor authenticated before a token is set (signed out)", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const { isAuthenticated, isLoading } = authGate({ client: fake.asClient, destroyRef: destroy.asDestroyRef });
+
+        expect(isAuthenticated()).toBe(false);
+        expect(isLoading()).toBe(false);
+    });
+
+    it("is loading once a token is set but the user hasn't resolved yet", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const { isAuthenticated, isLoading } = authGate({ client: fake.asClient, destroyRef: destroy.asDestroyRef });
+
+        fake.asClient.setAuthToken("jwt-abc");
+        fake.emitAuthTokenChange();
+
+        expect(isLoading()).toBe(true);
+        expect(isAuthenticated()).toBe(false);
+    });
+
+    it("is authenticated once the token is set and the user has resolved", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const testUser: User = { id: "u1", name: "Alice" };
+
+        fake.setCurrentUser(testUser);
+
+        const { isAuthenticated, isLoading } = authGate({ client: fake.asClient, destroyRef: destroy.asDestroyRef });
+
+        fake.asClient.setAuthToken("jwt-abc");
+        fake.emitAuthTokenChange();
+        await flushAsync();
+
+        expect(isAuthenticated()).toBe(true);
+        expect(isLoading()).toBe(false);
+    });
+
+    it("returns to signed out (neither authenticated nor loading) on sign-out", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const testUser: User = { id: "u1", name: "Alice" };
+
+        fake.setCurrentUser(testUser);
+
+        const { isAuthenticated, isLoading } = authGate({ client: fake.asClient, destroyRef: destroy.asDestroyRef });
+
+        fake.asClient.setAuthToken("jwt-abc");
+        fake.emitAuthTokenChange();
+        await flushAsync();
+
+        expect(isAuthenticated()).toBe(true);
+
+        fake.asClient.setAuthToken(null);
+        fake.emitAuthTokenChange();
+        await flushAsync();
+
+        expect(isAuthenticated()).toBe(false);
+        expect(isLoading()).toBe(false);
     });
 });

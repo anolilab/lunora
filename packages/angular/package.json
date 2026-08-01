@@ -39,6 +39,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -57,7 +61,8 @@
     },
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.35",
-        "@lunora/ratelimit": "1.0.0-alpha.14"
+        "@lunora/ratelimit": "1.0.0-alpha.14",
+        "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@angular/core": "^22.0.8",
