@@ -226,6 +226,43 @@ describe("signedUrl", () => {
         });
     });
 
+    it("rejects a baseUrl carrying a path as a 400 validation error naming the path", async () => {
+        expect.assertions(2);
+
+        // `buildSignedUrl` would join `${base}/${safeKey}` (minting
+        // `https://app.test/storage/x.png`), but `verifySignedUrl` reconstructs
+        // the key from the ENTIRE `url.pathname` (`storage/x.png`) — the
+        // signature only binds host + key, so every URL minted from a subpath
+        // base fails verification as `bad_signature`. Reject it loudly at
+        // build time instead of silently minting a dead URL.
+        await expect(buildSignedUrl({ baseUrl: "https://app.test/storage", key: "x.png", secret: "shh" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+            status: 400,
+        });
+
+        await expect(buildSignedUrl({ baseUrl: "https://app.test/storage", key: "x.png", secret: "shh" })).rejects.toThrow(/\/storage/);
+    });
+
+    it("applies the baseUrl-path guard identically to a PUT (upload) URL with a pinned contentType", async () => {
+        expect.assertions(1);
+
+        await expect(
+            buildSignedUrl({ baseUrl: "https://app.test/storage", contentType: "image/png", key: "x.png", method: "PUT", secret: "shh" }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    });
+
+    it("accepts a root-mounted baseUrl (trailing slash) and a multi-trailing-slash baseUrl identically to a bare origin", async () => {
+        expect.assertions(3);
+
+        const bare = await buildSignedUrl({ baseUrl: "https://cdn.test", key: "x.png", secret: "shh" });
+        const rootSlash = await buildSignedUrl({ baseUrl: "https://cdn.test/", key: "x.png", secret: "shh" });
+        const doubleSlash = await buildSignedUrl({ baseUrl: "https://cdn.test//", key: "x.png", secret: "shh" });
+
+        expect(new URL(rootSlash).pathname).toBe(new URL(bare).pathname);
+        expect(new URL(doubleSlash).pathname).toBe(new URL(bare).pathname);
+        expect(new URL(bare).pathname).toBe("/x.png");
+    });
+
     it("normalises a multi-trailing-slash baseUrl to a single-slash join", async () => {
         expect.assertions(1);
 
