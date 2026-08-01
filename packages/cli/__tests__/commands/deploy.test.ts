@@ -106,9 +106,10 @@ const validWranglerWithEnv = (name: string): string => `{
 }
 `;
 
-const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; warns: string[] } => {
+const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; successes: string[]; warns: string[] } => {
     const errors: string[] = [];
     const infos: string[] = [];
+    const successes: string[] = [];
     const warns: string[] = [];
 
     return {
@@ -117,9 +118,10 @@ const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; wa
         logger: {
             error: (message) => errors.push(message),
             info: (message) => infos.push(message),
-            success: () => {},
+            success: (message) => successes.push(message),
             warn: (message) => warns.push(message),
         },
+        successes,
         warns,
     };
 };
@@ -991,6 +993,74 @@ export const backfillNames = defineMigration({
         });
 
         describe("missing-secret gate", () => {
+            it("mints a missing secret, records it in .dev.vars, and never logs the value", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, infos, logger, successes } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // Remote has no secrets → the core LUNORA_ADMIN_TOKEN is missing + mintable,
+                    // and .dev.vars has no value for it yet → a fresh value is minted.
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+
+                // `wrangler secret put` is write-only — the ONLY place this value can
+                // still be read back from is the file it was disclosed into.
+                expect(secretPush?.descriptor.input).toMatch(/^[a-f0-9]{64}$/u);
+
+                const mintedValue = secretPush?.descriptor.input ?? "";
+
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${mintedValue}"`);
+
+                // Never printed, logged, or otherwise disclosed anywhere but the file.
+                expect([...errors, ...infos, ...successes].join("\n")).not.toContain(mintedValue);
+                // The success line names the key and points at the file — never the value.
+                expect(successes.some((line) => line.includes("LUNORA_ADMIN_TOKEN") && line.includes(".dev.vars"))).toBe(true);
+            });
+
+            it("pushes the existing local .dev.vars value instead of minting a new one, leaving the file unchanged", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const existingValue = "existing-local-dev-token";
+                const originalDevVars = `LUNORA_ADMIN_TOKEN="${existingValue}"\n`;
+
+                writeFileSync(join(workdir, ".dev.vars"), originalDevVars, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+
+                // The local value is pushed as-is — nothing new was minted or disclosed.
+                expect(secretPush?.descriptor.input).toBe(existingValue);
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe(originalDevVars);
+            });
+
             it("interactively generates + pushes a missing mintable secret before deploying", async () => {
                 expect.assertions(3);
 

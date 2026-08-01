@@ -652,4 +652,4 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
 
 export { execute };
 export type { EnvCommandOptions, EnvCommandResult, EnvSubcommand };
-export { runEnvCommand };
+export { runEnvCommand, upsertDevVariableLine };

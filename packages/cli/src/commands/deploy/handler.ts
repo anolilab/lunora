@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
@@ -10,6 +10,7 @@ import {
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
+    isPlaceholderValue,
     packageNamesFromBindings,
     parseDevVariableEntries,
     readLinkedProject,
@@ -53,6 +54,7 @@ import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectori
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import { validateWrangler } from "../../util/wrangler-validator";
+import { upsertDevVariableLine } from "../env/handler";
 import type { MigrateDataCommandOptions } from "../migrate/handler";
 import { runMigrateDataCommand } from "../migrate/handler";
 import type { FetchLike } from "../run/handler";
@@ -516,8 +518,44 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
     return [...new Set([...fromPackages, ...fromLocal])];
 };
 
-/** Generate + `wrangler secret put` each mintable key (sequential; stops on first failure). Returns true on full success. */
-const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, keys: ReadonlyArray<string>, target: string): Promise<boolean> => {
+/**
+ * A key's local `.dev.vars` value, if it has a usable (non-placeholder) one.
+ * Reads the raw file once so `pushMintableSecrets` doesn't re-read it per key.
+ */
+const localDevVariables = (cwd: string): Map<string, string> => {
+    const devVariablesPath = join(cwd, DEV_VARS_FILE);
+
+    if (!existsSync(devVariablesPath)) {
+        return new Map();
+    }
+
+    return new Map(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map((entry) => [entry.key, entry.value] as const));
+};
+
+/**
+ * `wrangler secret put <name>` is Cloudflare's write-only channel — the
+ * value never comes back. A previous version of this function minted a fresh
+ * value for every key and piped it straight to `secret put`, without binding
+ * it to anything the caller could see: the only trace was a key-name log
+ * line, so the operator could never again use the secret it just created
+ * (studio against prod, `lunora insights`, admin RPCs). Recovery meant minting
+ * again, invalidating anything already holding the first value.
+ *
+ * Now: for each key, if `.dev.vars` already holds a real (non-placeholder)
+ * local value, push THAT (local and remote end up in sync, nothing new to
+ * disclose); otherwise mint a fresh value, push it, and return it in
+ * `minted` so the caller can record it in `.dev.vars` — the only local record
+ * of a value this function itself must never print, log, or return anywhere
+ * else. Sequential; stops on first failure. `ok` is `false` the moment any
+ * `secret put` fails — `minted` still holds whatever succeeded before that,
+ * because those values are equally unrecoverable if discarded.
+ */
+const pushMintableSecrets = async (
+    cwd: string,
+    options: DeployCommandOptions,
+    keys: ReadonlyArray<string>,
+    target: string,
+): Promise<{ minted: ReadonlyArray<{ key: string; value: string }>; ok: boolean }> => {
     const { logger } = options;
     const spawner = options.spawner ?? defaultSpawner;
     const manager = detectPackageManager(cwd);
@@ -528,30 +566,42 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
     if (toolchain === undefined) {
         logger.error("deploy target has no command-line toolchain; cannot push secrets");
 
-        return false;
+        return { minted: [], ok: false };
     }
 
+    const local = localDevVariables(cwd);
+    const minted: { key: string; value: string }[] = [];
+
     for (const key of keys) {
+        const existing = local.get(key);
+        const usesLocalValue = existing !== undefined && !isPlaceholderValue(existing);
+        const value = usesLocalValue ? existing : generateSecretValue();
+
         const secretCommand = toolchain.secretPut({ environment: options.env, key, temporary: options.temporary });
         const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
 
-        // `wrangler secret put <name>` reads the value from stdin, so the generated
-        // secret never lands on the command line, in env, or in shell history.
+        // `wrangler secret put <name>` reads the value from stdin, so the value
+        // never lands on the command line, in env, or in shell history.
         // eslint-disable-next-line no-await-in-loop -- push sequentially so a failure aborts before the rest.
-        const pushResult = await spawner({ args: exec.args, command: exec.command, cwd, input: generateSecretValue() });
+        const pushResult = await spawner({ args: exec.args, command: exec.command, cwd, input: value });
 
         if (pushResult.code !== 0) {
             logger.error(
                 `failed to push secret ${key} (exit ${String(pushResult.code)}); set it manually with \`wrangler secret put ${key}${environmentFlag}\`.`,
             );
 
-            return false;
+            return { minted, ok: false };
         }
 
-        logger.success(`generated + pushed ${key}`);
+        if (usesLocalValue) {
+            logger.success(`pushed ${key} (using existing local value)`);
+        } else {
+            minted.push({ key, value });
+            logger.success(`generated + pushed ${key} (value written to ${DEV_VARS_FILE})`);
+        }
     }
 
-    return true;
+    return { minted, ok: true };
 };
 
 /**
@@ -621,14 +671,33 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     const confirm = options.secretConfirm ?? createTuiConfirm();
 
     if (
-        await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
+        await confirm(
+            `${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Use your local value or generate strong values and push them now?`,
+        )
     ) {
-        // `pushMintableSecrets` returns `false` the moment any `secret put` fails
-        // (e.g. auth expired mid-push). Discarding that result used to deploy
-        // anyway, shipping a worker still missing the secret it just failed to
-        // set — the exact outcome the non-interactive branch above refuses to
-        // risk.
-        if (!(await pushMintableSecrets(cwd, options, mintable, target))) {
+        // `pushMintableSecrets` returns `ok: false` the moment any `secret put`
+        // fails (e.g. auth expired mid-push). Discarding that result used to
+        // deploy anyway, shipping a worker still missing the secret it just
+        // failed to set — the exact outcome the non-interactive branch above
+        // refuses to risk.
+        const { minted, ok } = await pushMintableSecrets(cwd, options, mintable, target);
+
+        // Persist whatever WAS minted even on a partial failure — a pushed
+        // secret this function doesn't record is permanently lost (Cloudflare
+        // secrets are write-only), so recording it is not conditional on the
+        // rest of the batch succeeding.
+        if (minted.length > 0) {
+            const devVariablesPath = join(cwd, DEV_VARS_FILE);
+            let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+
+            for (const entry of minted) {
+                raw = upsertDevVariableLine(raw, entry.key, entry.value);
+            }
+
+            writeFileSync(devVariablesPath, raw, "utf8");
+        }
+
+        if (!ok) {
             return "failed to push required secret(s) — set them manually and re-deploy";
         }
 
