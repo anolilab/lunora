@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorShardTraffic, LintContext } from "../src";
-import { ALL_LINTS, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
+import type { AdvisorFunctionMetrics, AdvisorShardTraffic, LintContext } from "../src";
+import { ALL_LINTS, errorRateOutlier, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
 /** A minimal context with an empty schema — runtime lints read only the observed-signal fields. */
 const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
@@ -9,6 +9,8 @@ const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
 };
 
 const traffic = (entries: AdvisorShardTraffic[]): LintContext => baseContext({ shardTraffic: entries });
+
+const functionMetrics = (entries: AdvisorFunctionMetrics[]): LintContext => baseContext({ functionMetrics: entries });
 
 describe("hot_shard", () => {
     it("flags a shard taking a dominant share of traffic", () => {
@@ -202,11 +204,65 @@ describe("index_utilization", () => {
     });
 });
 
+describe("error_rate_outlier", () => {
+    it("flags a function whose error rate clears the threshold", () => {
+        expect.assertions(2);
+
+        const findings = errorRateOutlier.run(functionMetrics([{ calls: 100, errors: 15, maxDurationMs: 50, path: "payments:charge" }]));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            categories: ["PERFORMANCE"],
+            cacheKey: "error_rate_outlier:payments:charge",
+            level: "WARN",
+            metadata: { calls: 100, errors: 15, path: "payments:charge", rate: 0.15 },
+            name: "error_rate_outlier",
+        });
+    });
+
+    it("does not flag a healthy function below the error-rate threshold", () => {
+        expect.assertions(1);
+
+        const findings = errorRateOutlier.run(functionMetrics([{ calls: 200, errors: 2, maxDurationMs: 40, path: "posts:list" }]));
+
+        expect(findings).toHaveLength(0);
+    });
+
+    it("stays quiet below the minimum-calls floor, even at 100% errors", () => {
+        expect.assertions(1);
+
+        // 3 of 3 calls failed, but 3 total calls is too sparse to trust the rate.
+        const findings = errorRateOutlier.run(functionMetrics([{ calls: 3, errors: 3, maxDurationMs: 10, path: "new:endpoint" }]));
+
+        expect(findings).toHaveLength(0);
+    });
+
+    it("finds nothing when no function metrics are supplied (static caller)", () => {
+        expect.assertions(1);
+
+        expect(errorRateOutlier.run(baseContext())).toHaveLength(0);
+    });
+
+    it("flags each over-threshold function independently", () => {
+        expect.assertions(1);
+
+        const findings = errorRateOutlier.run(
+            functionMetrics([
+                { calls: 100, errors: 20, maxDurationMs: 50, path: "a" },
+                { calls: 100, errors: 5, maxDurationMs: 50, path: "b" },
+                { calls: 100, errors: 30, maxDurationMs: 50, path: "c" },
+            ]),
+        );
+
+        expect(findings.map((finding) => finding.metadata["path"]).toSorted()).toStrictEqual(["a", "c"]);
+    });
+});
+
 describe("runtime lint registration", () => {
-    it("includes both runtime lints, sourced runtime", () => {
+    it("includes all runtime lints, sourced runtime", () => {
         expect.assertions(3);
 
-        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "constraint_validator"]);
+        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "constraint_validator", "error_rate_outlier"]);
         expect(RUNTIME_LINTS.every((lint) => lint.source === "runtime")).toBe(true);
         expect(ALL_LINTS).toContain(hotShard);
     });

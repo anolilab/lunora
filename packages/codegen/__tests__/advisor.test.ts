@@ -322,6 +322,7 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
         const reads = [{ exportName: "list", file: "posts", hasFilter: true, hasIndex: false, line: 2, table: "posts" }];
         const procedures = [
             {
+                analyzableBody: true,
                 callsMail: false,
                 emitsEvent: false,
                 exempt: false,

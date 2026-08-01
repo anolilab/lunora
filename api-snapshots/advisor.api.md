@@ -9,27 +9,6 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/advisor`
 
-### `AE_METRIC_EVENTS` (const)
-
-```ts
-const AE_METRIC_EVENTS: {
-    readonly indexHit: {
-        readonly event: "lunora.index.hit";
-        readonly index: "blob3";
-        readonly table: "blob2";
-    };
-    readonly shardRequest: {
-        readonly event: "lunora.shard.request";
-        readonly group: "blob3";
-        readonly shardKey: "blob2";
-    };
-    readonly tableScan: {
-        readonly event: "lunora.table.scan";
-        readonly table: "blob2";
-    };
-};
-```
-
 ### `ALL_LINTS` (const)
 
 ```ts
@@ -221,6 +200,17 @@ interface AdvisorFlagSecurityDefault {
     file: string;
     key: string;
     line: number;
+}
+```
+
+### `AdvisorFunctionMetrics` (interface)
+
+```ts
+interface AdvisorFunctionMetrics {
+    calls: number;
+    errors: number;
+    maxDurationMs: number;
+    path: string;
 }
 ```
 
@@ -493,12 +483,13 @@ interface AdvisorPrivilegedDispatch {
 
 ```ts
 interface AdvisorProcedureProtection {
-    callsMail: boolean;
+    analyzableBody?: boolean;
+    callsMail?: boolean;
     emitsEvent?: boolean;
     exempt?: boolean;
     exemptReason?: string;
     exportName: string;
-    fanOut: boolean;
+    fanOut?: boolean;
     file: string;
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
@@ -506,15 +497,15 @@ interface AdvisorProcedureProtection {
     runsAiGeneration?: boolean;
     reachesOutbound?: boolean;
     throwsBareError?: boolean;
-    unboundedAiGeneration: boolean;
+    unboundedAiGeneration?: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
-    usesInsertManyUnsafe: boolean;
+    usesInsertManyUnsafe?: boolean;
     usesMask: boolean;
     usesRateLimit: boolean;
     usesRls: boolean;
     visibility: "internal" | "public";
-    writesUserTable: boolean;
+    writesUserTable?: boolean;
 }
 ```
 
@@ -949,6 +940,7 @@ interface LintContext {
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
+    functionMetrics?: ReadonlyArray<AdvisorFunctionMetrics>;
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
     httpHeaderWrites?: ReadonlyArray<AdvisorHttpHeaderWrite>;
@@ -1282,6 +1274,12 @@ const duplicateIndex: Lint;
 const emptyIndex: Lint;
 ```
 
+### `errorRateOutlier` (const)
+
+```ts
+const errorRateOutlier: Lint;
+```
+
 ### `errorWithoutCatalog` (const)
 
 ```ts
@@ -1418,12 +1416,6 @@ const insertManyUnsafeUserData: Lint;
 
 ```ts
 const kvUnscopedUserKeyIdor: Lint;
-```
-
-### `loadAnalyticsRuntimeMetrics` (const)
-
-```ts
-const loadAnalyticsRuntimeMetrics: (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions) => Promise<AnalyticsRuntimeMetrics>;
 ```
 
 ### `mailInboundDispatchWithoutVerify` (const)

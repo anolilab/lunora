@@ -1,4 +1,5 @@
 import emit from "../../finding";
+import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
 
 /**
@@ -31,8 +32,10 @@ const privilegedFanoutFromPublicProcedure: Lint = {
             return [];
         }
 
+        // `fanOut === undefined` means the feeder couldn't read the handler body
+        // (a cross-file handler) — stays fail-closed, not cleared.
         return context.procedureProtections
-            .filter((procedure) => procedure.fanOut && procedure.visibility === "public" && !procedure.usesRateLimit)
+            .filter((procedure) => mightExhibit(procedure.fanOut) && procedure.visibility === "public" && !procedure.usesRateLimit)
             .map((procedure) =>
                 emit(privilegedFanoutFromPublicProcedure, {
                     cacheKey: `privileged_fanout_from_public_procedure:${procedure.file}:${procedure.exportName}`,

@@ -1,4 +1,5 @@
 import emit from "../../finding";
+import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
 
 /**
@@ -32,8 +33,10 @@ const insertManyUnsafeUserData: Lint = {
             return [];
         }
 
+        // `usesInsertManyUnsafe === undefined` means the feeder couldn't read the
+        // handler body (a cross-file handler) — stays fail-closed, not cleared.
         return context.procedureProtections
-            .filter((procedure) => procedure.usesInsertManyUnsafe && procedure.visibility === "public")
+            .filter((procedure) => mightExhibit(procedure.usesInsertManyUnsafe) && procedure.visibility === "public")
             .map((procedure) =>
                 emit(insertManyUnsafeUserData, {
                     cacheKey: `insert_many_unsafe_user_data:${procedure.file}:${procedure.exportName}`,

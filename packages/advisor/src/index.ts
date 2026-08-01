@@ -9,6 +9,7 @@
  */
 import { dedupeCacheKeys } from "./dedupe-cache-keys";
 import constraintValidator from "./lints/runtime/constraint-validator";
+import errorRateOutlier from "./lints/runtime/error-rate-outlier";
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
 import actionFetchSsrf from "./lints/static/action-fetch-ssrf";
@@ -109,8 +110,14 @@ import workflowUnused from "./lints/static/workflow-unused";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAdminRoute } from "./admin-routes";
+// `AE_METRIC_EVENTS` / `loadAnalyticsRuntimeMetrics` are QUARANTINED (plan 225 /
+// ADVISOR-01), not re-exported here: no writer in the runtime emits the AE
+// events this module reads, and the one caller that could supply
+// `analyticsMetrics` (the studio's `deriveRuntimeAdvisories`) never does. The
+// types stay public — `AnalyticsRuntimeMetrics` is the shape of that still-valid,
+// still-optional extension point — but the reader is a design note, not a
+// package export, until something actually writes those events.
 export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
-export { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics } from "./ae-metrics";
 export type { AdvisorAiRawRun } from "./ai-raw-runs";
 export type { AdvisorAiToolSideEffect } from "./ai-tool-side-effects";
 export type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
@@ -126,6 +133,7 @@ export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+export type { AdvisorFunctionMetrics } from "./function-metrics";
 export type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHttpHeaderWrite } from "./http-header-writes";
@@ -136,6 +144,7 @@ export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
 export type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 export { default as constraintValidator } from "./lints/runtime/constraint-validator";
+export { default as errorRateOutlier } from "./lints/runtime/error-rate-outlier";
 export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as actionFetchSsrf } from "./lints/static/action-fetch-ssrf";
@@ -389,7 +398,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
  * no-op. Run them with `runAdvisor(ctx, { source: "runtime" })` against a live
  * deployment's aggregated metrics.
  */
-export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, constraintValidator];
+export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, constraintValidator, errorRateOutlier];
 
 /** The default lint set: the static lints, then the runtime lints. A caller filters by `source` to run one tier. */
 export const ALL_LINTS: ReadonlyArray<Lint> = [...STATIC_LINTS, ...RUNTIME_LINTS];

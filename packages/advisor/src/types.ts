@@ -13,6 +13,7 @@ import type { AdvisorContainer } from "./containers";
 import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+import type { AdvisorFunctionMetrics } from "./function-metrics";
 import type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 import type { AdvisorHttpActionGuard } from "./http-action-guards";
 import type { AdvisorHttpHeaderWrite } from "./http-header-writes";
@@ -270,6 +271,17 @@ export interface LintContext {
      * codegen feeder; absent for runtime callers, where the lint finds nothing.
      */
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
+
+    /**
+     * Per-function call/error/latency volume observed over the window — the
+     * `error_rate_outlier` runtime lint's input (prototype, plan 248). Sourced
+     * from the same `FunctionCallStat` rows `context.tableScans` already draws
+     * `scannedTables` from (`__lunora_admin__:getFunctionStats`), scoped to
+     * whichever shard the caller queried — see {@link AdvisorFunctionMetrics}.
+     * Supplied by the studio backend; absent for static callers, where the lint
+     * finds nothing.
+     */
+    functionMetrics?: ReadonlyArray<AdvisorFunctionMetrics>;
 
     /**
      * `withGeoIndex("name", …)` reads discovered in function bodies — the use-side

@@ -130,12 +130,13 @@ const AUDIT_LOG_TABLE = "__lunora_audit__";
 
 ```ts
 interface AdvisorProcedure {
-    callsMail: boolean;
+    analyzableBody?: boolean;
+    callsMail?: boolean;
     emitsEvent?: boolean;
     exempt?: boolean;
     exemptReason?: string;
     exportName: string;
-    fanOut: boolean;
+    fanOut?: boolean;
     file: string;
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
@@ -143,15 +144,15 @@ interface AdvisorProcedure {
     reachesOutbound?: boolean;
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
-    unboundedAiGeneration: boolean;
+    unboundedAiGeneration?: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
-    usesInsertManyUnsafe: boolean;
+    usesInsertManyUnsafe?: boolean;
     usesMask: boolean;
     usesRateLimit: boolean;
     usesRls: boolean;
     visibility: "internal" | "public";
-    writesUserTable: boolean;
+    writesUserTable?: boolean;
 }
 ```
 

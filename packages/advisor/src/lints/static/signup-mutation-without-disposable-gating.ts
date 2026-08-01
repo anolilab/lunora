@@ -1,4 +1,5 @@
 import emit from "../../finding";
+import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
 import { isPublicWrite } from "../helpers";
 
@@ -43,7 +44,11 @@ const signupMutationWithoutDisposableGating: Lint = {
         const findings = [];
 
         for (const procedure of context.procedureProtections) {
-            if (!isPublicWrite(procedure) || !procedure.writesUserTable || procedure.usesEmailGate) {
+            // `writesUserTable === false` is a provable "no" from an analyzable
+            // handler; `undefined` means the feeder couldn't read the handler body
+            // (a cross-file handler) and stays fail-closed — treated the same as
+            // `true` rather than cleared. `!mightExhibit(...)` is that "provable no".
+            if (!isPublicWrite(procedure) || !mightExhibit(procedure.writesUserTable) || procedure.usesEmailGate) {
                 continue;
             }
 
@@ -53,7 +58,7 @@ const signupMutationWithoutDisposableGating: Lint = {
             // writes a membership row with no email anywhere in sight. Only an
             // explicit `false` skips: an older feeder leaves the field undefined,
             // and this lint stays fail-closed on unknown.
-            if (procedure.hasEmailArg === false) {
+            if (!mightExhibit(procedure.hasEmailArg)) {
                 continue;
             }
 

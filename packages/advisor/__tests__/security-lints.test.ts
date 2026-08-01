@@ -111,6 +111,31 @@ describe("user_creating_mutation_without_captcha", () => {
 
         expect(userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
     });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (writesUserTable/callsMail undefined)", () => {
+        expect.assertions(2);
+
+        // A genuinely cross-file handler reports `undefined`, not `false` — an
+        // accidental fail-open here is worse than the lint over-firing.
+        const procedures = [procedure({ analyzableBody: false, callsMail: undefined, writesUserTable: undefined })];
+        const findings = userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).toContain("its handler body could not be read");
+    });
+
+    it("does not claim the handler body was unreadable for a partial payload (one fact proven false, the other undefined)", () => {
+        expect.assertions(2);
+
+        // `writesUserTable` is proven `false` here — the handler body WAS read
+        // for that fact, so the fallback must not blame an unreadable body for
+        // the still-undefined `callsMail`.
+        const procedures = [procedure({ analyzableBody: true, callsMail: undefined, writesUserTable: false })];
+        const findings = userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).not.toContain("its handler body could not be read");
+    });
 });
 
 describe("signup_mutation_without_disposable_gating", () => {
@@ -162,6 +187,16 @@ describe("signup_mutation_without_disposable_gating", () => {
                 schema: schema(),
             }),
         ).toHaveLength(0);
+    });
+
+    it("still flags when the feeder couldn't read the handler body (writesUserTable undefined)", () => {
+        expect.assertions(1);
+
+        // A genuinely cross-file handler reports `undefined`, not `false` — an
+        // accidental fail-open here is worse than the lint over-firing.
+        const procedures = [procedure({ writesUserTable: undefined })];
+
+        expect(signupMutationWithoutDisposableGating.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
     });
 
     it("flags nothing when the codegen feeder supplies no protection evidence", () => {
@@ -525,6 +560,14 @@ describe("privileged_fanout_from_public_procedure", () => {
 
         expect(privilegedFanoutFromPublicProcedure.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
     });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (fanOut undefined)", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "enqueue", fanOut: undefined })];
+
+        expect(privilegedFanoutFromPublicProcedure.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
+    });
 });
 
 describe("insert_many_unsafe_user_data", () => {
@@ -546,6 +589,14 @@ describe("insert_many_unsafe_user_data", () => {
         const procedures = [procedure({ exportName: "a", usesInsertManyUnsafe: true, visibility: "internal" }), procedure({ exportName: "b" })];
 
         expect(insertManyUnsafeUserData.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (usesInsertManyUnsafe undefined)", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "importRows", usesInsertManyUnsafe: undefined })];
+
+        expect(insertManyUnsafeUserData.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
     });
 });
 
@@ -572,6 +623,14 @@ describe("ai_unbounded_generation_public", () => {
         const procedures = [procedure({ exportName: "a", unboundedAiGeneration: true, visibility: "internal" }), procedure({ exportName: "b" })];
 
         expect(aiUnboundedGenerationPublic.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+
+    it("stays fail-closed when the feeder couldn't read the handler body (unboundedAiGeneration undefined)", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "summarize", unboundedAiGeneration: undefined })];
+
+        expect(aiUnboundedGenerationPublic.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
     });
 });
 

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsMetricsSource } from "../src";
-import { AE_METRIC_EVENTS, hotShard, indexUtilization, loadAnalyticsRuntimeMetrics, runAdvisor } from "../src";
+import { hotShard, indexUtilization, runAdvisor } from "../src";
+// Quarantined (plan 225 / ADVISOR-01): no writer emits the AE events this module
+// reads, and the studio caller never supplies `analyticsMetrics`. Not part of the
+// package's public surface — import the module directly rather than via `../src`.
+import { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics } from "../src/ae-metrics";
 
 /**
  * A stub AE SQL source that routes each query to a canned row set by matching the

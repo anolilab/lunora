@@ -21,8 +21,42 @@ const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMa
     verifyTurnstileMiddleware: "usesCaptcha",
 };
 
-/** Tables whose insert marks a procedure as user/session-creating (captcha-expected). */
-const USER_TABLE_RE = /account|credential|member|passkey|session|user/iu;
+/** Terminal words that mark a table as user/session-creating (captcha-expected). */
+const USER_TABLE_WORDS: ReadonlySet<string> = new Set(["account", "credential", "member", "passkey", "session", "user"]);
+
+/**
+ * Split a table name into its camelCase / snake_case / kebab-case words, lowercased
+ * (`"userPreferences"` -> `["user", "preferences"]`, `"account_credentials"` ->
+ * `["account", "credentials"]`).
+ */
+const wordsOf = (name: string): string[] =>
+    name
+        .replaceAll(/[-_]/gu, " ")
+        .replaceAll(/([a-z0-9])([A-Z])/gu, "$1 $2")
+        .split(" ")
+        .filter(Boolean)
+        .map((word) => word.toLowerCase());
+
+/**
+ * True when a table name's TERMINAL word is (a singular or simple plural of) one of
+ * {@link USER_TABLE_WORDS} — `"users"` and `"account_credentials"` match,
+ * `"userPreferences"` and `"sessionReplay"` do not, because `user`/`session` sit
+ * there as a modifier on a different terminal word, not naming the table itself.
+ * Mirrors the terminal-word matching in {@link isEmailArgumentName} rather than a
+ * bare substring test, which the modifier cases used to false-positive on.
+ */
+const isUserTableName = (name: string): boolean => {
+    const words = wordsOf(name);
+    const last = words.at(-1);
+
+    if (!last) {
+        return false;
+    }
+
+    const singular = last.endsWith("s") ? last.slice(0, -1) : last;
+
+    return USER_TABLE_WORDS.has(last) || USER_TABLE_WORDS.has(singular);
+};
 
 /**
  * True for an argument name that carries an email **address**.
@@ -195,11 +229,14 @@ const protectionsInChain = (receiver: TsNode): Protections => {
     return protections;
 };
 
-/** True when `call` is a `ctx.db.insert("table", …)` / `db.insert("table", …)` write into a user-shaped table. */
+/** `ctx.db` write methods that create/replace a row wholesale — the ones a user/session-creating write can arrive through. */
+const USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "replace"]);
+
+/** True when `call` is a `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
 const isUserTableInsert = (call: CallExpression): boolean => {
     const callee = call.getExpression();
 
-    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "insert") {
+    if (!Node.isPropertyAccessExpression(callee) || !USER_TABLE_INSERT_METHODS.has(callee.getName())) {
         return false;
     }
 
@@ -212,7 +249,15 @@ const isUserTableInsert = (call: CallExpression): boolean => {
 
     const tableArgument = call.getArguments()[0];
 
-    return Boolean(tableArgument && Node.isStringLiteral(tableArgument) && USER_TABLE_RE.test(tableArgument.getLiteralText()));
+    // A no-substitution template literal (`` `users` ``) is a usable table-name
+    // argument too, not just a string literal — both expose `getLiteralText()`.
+    // Missing this let `ctx.db.insert(\`users\`, row)` read as `writesUserTable:
+    // false`, clearing the security feeders as if the write wasn't there.
+    if (!tableArgument || !(Node.isStringLiteral(tableArgument) || Node.isNoSubstitutionTemplateLiteral(tableArgument))) {
+        return false;
+    }
+
+    return isUserTableName(tableArgument.getLiteralText());
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */
@@ -331,6 +376,195 @@ const referencesContextMember = (declaration: TsNode, members: ReadonlySet<strin
         return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
     });
 
+/** Syntax kinds that bound "the same function" for the enclosing-`try` walk below — climbing stops here. */
+const FUNCTION_BOUNDARY_KINDS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.ArrowFunction,
+    SyntaxKind.FunctionDeclaration,
+    SyntaxKind.FunctionExpression,
+    SyntaxKind.GetAccessor,
+    SyntaxKind.MethodDeclaration,
+    SyntaxKind.SetAccessor,
+]);
+
+/** Array methods whose callback runs synchronously, within the caller's dynamic extent — safe to climb through. */
+const SYNC_ITERATION_METHODS: ReadonlySet<string> = new Set(["every", "filter", "flatMap", "forEach", "map", "some"]);
+
+/** `Promise` combinators whose executor(s) run synchronously, within the caller's dynamic extent — safe to climb through. */
+const SYNC_PROMISE_COMBINATORS: ReadonlySet<string> = new Set(["all", "allSettled", "race"]);
+
+/**
+ * When the enclosing-`try` climb in {@link hasEnclosingTry} hits a function
+ * boundary, decide whether that boundary is itself a callback argument that
+ * runs *synchronously* within its caller's dynamic extent — `.map`/`.forEach`/
+ * `.filter`/`.flatMap`/`.some`/`.every`, or a `Promise.all`/`allSettled`/`race`
+ * combinator. If so, the call site inside it is still covered by a `try` that
+ * wraps the caller, so climbing should resume from that call rather than
+ * stopping. Returns the call to resume from, or `undefined` when `boundary`
+ * isn't such an argument — e.g. it is a deferred callback (`setTimeout`,
+ * `queueMicrotask`, an event listener, a stored/returned function) that does
+ * NOT run inside the try's dynamic extent, so it must still stop the climb.
+ */
+const syncIterationCallToResumeFrom = (boundary: TsNode): CallExpression | undefined => {
+    const parent = boundary.getParent();
+
+    if (!parent || !Node.isCallExpression(parent) || !parent.getArguments().includes(boundary)) {
+        return undefined;
+    }
+
+    const callee = parent.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee)) {
+        return undefined;
+    }
+
+    const methodName = callee.getName();
+
+    if (SYNC_ITERATION_METHODS.has(methodName)) {
+        return parent;
+    }
+
+    const receiver = callee.getExpression();
+
+    if (Node.isIdentifier(receiver) && receiver.getText() === "Promise" && SYNC_PROMISE_COMBINATORS.has(methodName)) {
+        return parent;
+    }
+
+    return undefined;
+};
+
+/**
+ * True when `call` sits inside a `try` block WITHIN the same function — climbing
+ * stops at the nearest enclosing function boundary, so a `try` wrapping a
+ * different, outer function (e.g. one that merely invokes a callback containing
+ * `call`) does not count. This is what makes an unrelated `try` elsewhere in the
+ * handler stop clearing a genuinely-unguarded outbound call.
+ *
+ * The one exception: a boundary that is itself a synchronous-iteration callback
+ * (`items.map((i) => ...)`, `Promise.all(items.map(...))`, etc.) doesn't escape
+ * the try's dynamic extent, so {@link syncIterationCallToResumeFrom} resumes the
+ * climb from the enclosing call instead of stopping there.
+ */
+const hasEnclosingTry = (call: TsNode): boolean => {
+    let current: TsNode | undefined = call.getParent();
+
+    while (current) {
+        if (Node.isTryStatement(current)) {
+            const tryBlock = current.getTryBlock();
+
+            if (call.getPos() >= tryBlock.getPos() && call.getEnd() <= tryBlock.getEnd()) {
+                return true;
+            }
+        }
+
+        if (FUNCTION_BOUNDARY_KINDS.has(current.getKind())) {
+            const resumeFrom = syncIterationCallToResumeFrom(current);
+
+            if (!resumeFrom) {
+                return false;
+            }
+
+            current = resumeFrom;
+            continue;
+        }
+
+        current = current.getParent();
+    }
+
+    return false;
+};
+
+/** True when `call` is the receiver of a `.catch(...)` — directly, or at the end of a `.then(...)`/`.finally(...)` chain. */
+const isCatchGuarded = (call: CallExpression): boolean => {
+    let node: TsNode = call;
+
+    while (true) {
+        const parent = node.getParent();
+
+        if (!Node.isPropertyAccessExpression(parent) || parent.getExpression() !== node) {
+            return false;
+        }
+
+        if (parent.getName() === "catch") {
+            return true;
+        }
+
+        if (parent.getName() !== "then" && parent.getName() !== "finally") {
+            return false;
+        }
+
+        const grandparent = parent.getParent();
+
+        if (!Node.isCallExpression(grandparent) || grandparent.getExpression() !== parent) {
+            return false;
+        }
+
+        node = grandparent;
+    }
+};
+
+/**
+ * Resolve `access` (a `ctx.&lt;member>` property access) to the call expression it
+ * is directly invoked through — `ctx.fetch(...)` resolves `ctx.fetch` itself;
+ * `ctx.mail.send(...)` resolves `ctx.mail` by walking the fluent chain one more
+ * property-access hop. Returns `undefined` when `access` is referenced without
+ * ever being called (e.g. `const m = ctx.mail;`) — nothing to guard there.
+ */
+const outboundCallSite = (access: TsNode): CallExpression | undefined => {
+    let node: TsNode = access;
+
+    while (true) {
+        const parent = node.getParent();
+
+        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {
+            node = parent;
+            continue;
+        }
+
+        return Node.isCallExpression(parent) && parent.getExpression() === node ? parent : undefined;
+    }
+};
+
+/**
+ * Per-outbound-call-site error-handling facts: `reachesOutbound` is `true` when
+ * `declaration` invokes at least one `ctx.&lt;OUTBOUND_MEMBERS>` surface;
+ * `handlesErrors` is `true` only when EVERY such call site is guarded — wrapped in
+ * a `try` within the same function, or the receiver of a `.catch(...)`.
+ *
+ * Replaces a whole-declaration "is there a `try` anywhere" scan, which a
+ * `.catch()`-only handler failed (zero `TryStatement` nodes) and an unrelated
+ * `try` elsewhere in the body passed (clearing a genuinely-unguarded call).
+ */
+const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boolean; reachesOutbound: boolean } => {
+    let reachesOutbound = false;
+    let allGuarded = true;
+
+    for (const access of declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+        if (!OUTBOUND_MEMBERS.has(access.getName())) {
+            continue;
+        }
+
+        const receiver = access.getExpression();
+
+        if (!Node.isIdentifier(receiver) || receiver.getText() !== "ctx") {
+            continue;
+        }
+
+        const call = outboundCallSite(access);
+
+        if (!call) {
+            continue;
+        }
+
+        reachesOutbound = true;
+
+        if (!hasEnclosingTry(call) && !isCatchGuarded(call)) {
+            allGuarded = false;
+        }
+    }
+
+    return { handlesErrors: reachesOutbound && allGuarded, reachesOutbound };
+};
+
 /**
  * True when the body throws a bare `new Error(...)`.
  *
@@ -419,6 +653,88 @@ const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemp
     return { exempt: false, exemptReason: "" };
 };
 
+/**
+ * The `handler` argument node of a procedure registration call — the config
+ * object's `handler` key for the bare-factory form (`mutation({ handler })`), or
+ * the sole argument to the terminal builder-chain call (`.mutation(handler)`).
+ * `undefined` when the shape doesn't match either (e.g. no `handler` key).
+ *
+ * The config object's `handler` key can be written three ways — an explicit
+ * assignment (`{ handler: fn }`), a shorthand property (`{ handler }`), or an
+ * object-literal method (`{ handler() { ... } }`) — and all three are readable
+ * in the same file, so all three resolve here rather than only the first.
+ */
+const handlerArgumentOf = (initializer: CallExpression): TsNode | undefined => {
+    const [firstArgument] = initializer.getArguments();
+
+    if (!firstArgument) {
+        return undefined;
+    }
+
+    if (Node.isObjectLiteralExpression(firstArgument)) {
+        const handlerProperty = firstArgument.getProperty("handler");
+
+        if (!handlerProperty) {
+            return undefined;
+        }
+
+        if (Node.isPropertyAssignment(handlerProperty)) {
+            return handlerProperty.getInitializer();
+        }
+
+        // `{ handler }` — the name node resolves through the same same-file
+        // identifier lookup `analyzableBehaviourRoot` already does below.
+        if (Node.isShorthandPropertyAssignment(handlerProperty)) {
+            return handlerProperty.getNameNode();
+        }
+
+        // `{ handler() { ... } }` — the method itself is the analyzable body.
+        return Node.isMethodDeclaration(handlerProperty) ? handlerProperty : undefined;
+    }
+
+    return firstArgument;
+};
+
+/**
+ * Resolve a procedure's handler to the node whose body the behavioural facts
+ * should be read from, or `undefined` when it can't be read statically.
+ *
+ * An inline function expression/arrow IS the analyzable body — scanning the whole
+ * `declaration` (which already contains it) is unchanged from before. A same-file
+ * identifier handler (`handler: createHandler`) is resolved to its declaration by
+ * NAME, the same idiom {@link resolveUseArgumentCall} uses for a `.use(...)`
+ * alias: a `const`/`function` initialized to a function expression/arrow resolves
+ * and stays analyzable. An imported identifier, a call expression, or anything
+ * else is genuinely cross-file or opaque and returns `undefined` — the caller
+ * then leaves every behavioural fact `undefined` rather than silently reporting
+ * "no writes, no fan-out, no events" for a handler nothing was actually read.
+ */
+const analyzableBehaviourRoot = (declaration: VariableDeclaration, initializer: CallExpression): TsNode | undefined => {
+    const handlerArgument = handlerArgumentOf(initializer);
+
+    if (!handlerArgument) {
+        return undefined;
+    }
+
+    if (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument) || Node.isMethodDeclaration(handlerArgument)) {
+        return declaration;
+    }
+
+    if (!Node.isIdentifier(handlerArgument)) {
+        return undefined;
+    }
+
+    const sourceFile = handlerArgument.getSourceFile();
+    const name = handlerArgument.getText();
+    const variableInitializer = sourceFile.getVariableDeclaration(name)?.getInitializer();
+
+    if (variableInitializer && (Node.isArrowFunction(variableInitializer) || Node.isFunctionExpression(variableInitializer))) {
+        return variableInitializer;
+    }
+
+    return sourceFile.getFunction(name);
+};
+
 /** Behavioural facts read from the procedure declaration body. */
 const behaviourOf = (
     declaration: TsNode,
@@ -466,12 +782,14 @@ const behaviourOf = (
         }
     }
 
+    const { handlesErrors, reachesOutbound } = outboundErrorHandlingFacts(declaration);
+
     return {
         callsMail: referencesContextMember(declaration, MAIL_MEMBERS),
         emitsEvent: referencesContextMember(declaration, EVENT_MEMBERS),
         fanOut,
-        handlesErrors: declaration.getDescendantsOfKind(SyntaxKind.TryStatement).length > 0,
-        reachesOutbound: referencesContextMember(declaration, OUTBOUND_MEMBERS),
+        handlesErrors,
+        reachesOutbound,
         runsAiGeneration: runsAiGeneration || referencesContextMember(declaration, AI_MEMBERS),
         throwsBareError: throwsBareError(declaration),
         unboundedAiGeneration,
@@ -498,12 +816,17 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         ? protectionsInChain(classified.receiver)
         : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
 
+    const behaviourRoot = analyzableBehaviourRoot(declaration, initializer);
+
     // Every key of both fact bags is an IR field, so spreading keeps this in step
-    // automatically when either gains one.
+    // automatically when either gains one. `behaviourRoot === undefined` (a
+    // genuinely cross-file handler) spreads nothing, leaving every behavioural
+    // fact `undefined` rather than a false "not observed".
     return {
-        ...behaviourOf(declaration),
+        ...(behaviourRoot ? behaviourOf(behaviourRoot) : {}),
         ...exemptionOf(declaration),
         ...protections,
+        analyzableBody: behaviourRoot !== undefined,
         exportName: declaration.getName(),
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
