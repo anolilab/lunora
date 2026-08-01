@@ -287,6 +287,33 @@ describe("lunora env", () => {
             expect(recorded.warnings.join("\n")).toContain("A");
         });
 
+        it("unset rejects an invalid key rather than building an unescaped regex from it", async () => {
+            expect.assertions(2);
+
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runEnvCommand({ cwd: workdir, key: "A.B", logger, subcommand: "unset" });
+
+            expect(result.code).toBe(1);
+            expect(recorded.errors.join("\n")).toContain("invalid key");
+        });
+
+        it("unset removes only the exact key, not a lookalike sharing its prefix", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), "FOO=1\nFOO_BAR=2\n", "utf8");
+
+            const { logger } = recordingLogger();
+
+            await runEnvCommand({ cwd: workdir, key: "FOO", logger, subcommand: "unset" });
+
+            const file = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+            expect(file).not.toMatch(/^FOO=/mu);
+            expect(file).toContain("FOO_BAR=2");
+            expect(file.split("\n").filter((line) => line.startsWith("FOO_BAR="))).toHaveLength(1);
+        });
+
         it("push refuses to upload a placeholder value, naming the offending key and nothing gets spawned", async () => {
             expect.assertions(4);
 

@@ -170,7 +170,7 @@ const upsertDevVariableLine = (content: string, key: string, value: string): str
  * newline), preserving all other lines, comments, and blanks verbatim.
  */
 const removeDevVariableLine = (content: string, key: string): string =>
-    content.replaceAll(new RegExp(String.raw`^[ \t]*${key}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
+    content.replaceAll(new RegExp(String.raw`^[ \t]*${escapeRegExp(key)}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
 
 const redact = (value: string): string => {
     if (value.length <= 4) {
@@ -294,6 +294,12 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
 
     if (!options.key) {
         logger.error("env unset requires a key. Usage: lunora env unset <KEY>");
+
+        return { code: 1, descriptors: [] };
+    }
+
+    if (!DEV_VARS_KEY_PATTERN.test(options.key)) {
+        logger.error(`env: invalid key "${options.key}" — must match [A-Za-z_][A-Za-z0-9_]*`);
 
         return { code: 1, descriptors: [] };
     }
