@@ -63,6 +63,18 @@ interface GuardableSchema {
 type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
 
 /**
+ * Batched sibling of {@link TableOfId} for `deleteMany`/`patchMany`: resolve
+ * the owning table of MANY ids in one call instead of one {@link TableOfId}
+ * call per id. Optional — a caller (e.g. the D1/`.global()` twin) that has no
+ * batch-probe primitive simply omits it, and {@link guardWriter}'s batch
+ * methods fall back to the existing per-id loop unchanged. The returned map
+ * carries only RESOLVED ids; an id absent from it is treated exactly like a
+ * {@link TableOfId} `undefined` — unresolved, so it leaks nothing and passes
+ * through.
+ */
+type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
+
+/**
  * Structural surface the guard wraps — method syntax (bivariant params) so the
  * concrete `DatabaseWriterLike` of either dialect satisfies it. The guard reads
  * only the table-targeting methods; everything else is copied through verbatim.
@@ -185,7 +197,7 @@ const guardEraseMethods = (base: GuardableWriter, schema: GuardableSchema, guard
 // would reject the real writer and erase its extra members (`normalizeId`, …)
 // from the return type. Instead we keep `W` opaque — preserving the caller's
 // concrete type through the return — and reach the guardable surface via a cast.
-const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): W => {
+const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds): W => {
     if (schema.rlsMode !== "required") {
         return raw;
     }
@@ -228,6 +240,48 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
         }
     };
 
+    /**
+     * The `deleteMany`/`patchMany` gate: same decision as {@link guardById}
+     * applied to every id in the batch, but fetching table ownership in as
+     * few round-trips as possible instead of one probe per id.
+     *
+     * - `expectedTable` pinned (the by-id facade's bound table) → one
+     * `guardTable` call, no probe at all — identical to the single-id path.
+     * - No {@link tablesOfIds} resolver supplied (the D1/`.global()` twin
+     * hasn't implemented the batch form) → fall back to the per-id loop,
+     * verbatim.
+     * - Otherwise: dedupe, resolve the owning table of every id in ONE call,
+     * then judge each id (in its original, possibly-duplicated input order)
+     * through the same {@link guardTable} — an unresolved id passes through
+     * exactly like {@link guardById}'s bare-id case.
+     */
+    const guardByIds = async (ids: ReadonlyArray<string>, expectedTable?: string): Promise<void> => {
+        if (expectedTable !== undefined) {
+            guardTable(expectedTable);
+
+            return;
+        }
+
+        if (!tablesOfIds) {
+            for (const id of ids) {
+                // eslint-disable-next-line no-await-in-loop -- no batch resolver supplied (D1-twin fallback): mirrors the pre-batch per-id loop verbatim
+                await guardById(id, expectedTable);
+            }
+
+            return;
+        }
+
+        const resolved = await tablesOfIds([...new Set(ids)], expectedTable);
+
+        for (const id of ids) {
+            const tableName = resolved.get(id);
+
+            if (tableName !== undefined) {
+                guardTable(tableName);
+            }
+        }
+    };
+
     const baseRankBefore = base.rankBefore;
     const baseRankPageRows = base.rankPageRows;
 
@@ -256,10 +310,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
             // can't be reached by bare id), then delegate the batch — which
             // enforces the payload cap downstream. `expectedTable` (the facade's
             // bound table) scopes each id, mirroring the single delete gate.
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- per-id table resolution mirrors the single delete gate
-                await guardById(id, expectedTable);
-            }
+            await guardByIds(ids, expectedTable);
 
             return base.deleteMany(ids, options, expectedTable);
         },
@@ -332,10 +383,10 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
         },
         patchMany: async (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => {
             // `expectedTable` (the facade's bound table) scopes each id, mirroring the single patch gate.
-            for (const entry of patches) {
-                // eslint-disable-next-line no-await-in-loop -- per-id table resolution mirrors the single patch gate
-                await guardById(entry.id, expectedTable);
-            }
+            await guardByIds(
+                patches.map((entry) => entry.id),
+                expectedTable,
+            );
 
             return base.patchMany(patches, options, expectedTable);
         },
