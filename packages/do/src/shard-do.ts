@@ -3671,6 +3671,10 @@ abstract class ShardDO {
 
         return createTracer({
             anchor: resolvedAnchor,
+            // Raw span error messages/stacktraces in dev only — production
+            // defaults to the same redacted posture as the request log and
+            // function-metrics sinks (see `context-telemetry.ts`'s `captureRaw`).
+            captureRaw: isDevEnvironment(this.env),
             fuseHostSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
@@ -3719,6 +3723,9 @@ abstract class ShardDO {
 
         return instrumentDatabase(database, {
             anchor,
+            // Raw constraint-error messages in dev only — matches `makeTracer`'s
+            // `captureRaw` posture.
+            captureRaw: isDevEnvironment(this.env),
             functionPath,
             mode,
             record: (recorded) => {
@@ -3803,7 +3810,9 @@ abstract class ShardDO {
             const key = dispatchSpanKey(anchor);
             const entry = this.dispatchSpans.get(key) ?? { sink };
 
-            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId });
+            // Raw `recordException` stacktraces/messages in dev only — matches
+            // `makeTracer`'s `captureRaw` posture for the wide event's collector.
+            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId }, isDevEnvironment(this.env));
             this.dispatchSpans.set(key, entry);
 
             return entry.collector;
@@ -4739,6 +4748,9 @@ abstract class ShardDO {
             this.spans.push(
                 dispatchRootSpan({
                     anchor,
+                    // Raw failure messages in dev only — matches `makeTracer`'s
+                    // `captureRaw` posture for this synthetic root span.
+                    captureRaw: isDevEnvironment(this.env),
                     // The wide event, if the handler attached one through `ctx.span`.
                     ...(collected === undefined ? {} : { collected }),
                     durationMs,
