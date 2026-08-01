@@ -134,6 +134,7 @@ interface SearchScoredDocument {
 }
 
 interface TableReaderLike {
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
     collectWithScores: () => Promise<ScoredDocument[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
@@ -439,6 +440,17 @@ const wrapDatabase = <Context>(
      */
     const wrapReader = (reader: TableReaderLike, columns: MaskColumns<Context>, tableName: string): TableReaderLike => {
         return {
+            // The spread-free literal must re-declare EVERY reader member; the
+            // public `TableReader` type promises lazy iteration (`types.ts`) and
+            // the raw + RLS readers deliver it — omitting it here made
+            // `for await` throw only on masked tables. Rows are masked exactly
+            // like every other terminal.
+            // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+            async *[Symbol.asyncIterator]() {
+                for await (const row of { [Symbol.asyncIterator]: () => reader[Symbol.asyncIterator]() }) {
+                    yield maskRow(row, columns, context);
+                }
+            },
             collect: async () => {
                 const rows = await reader.collect();
 
