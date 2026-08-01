@@ -56,6 +56,13 @@ const CRON_FIELD_SPLIT_PATTERN = /\s+/u;
  * staying silent, without throwing: unlike the ergonomic `.interval()` form,
  * the raw `.cron()` escape hatch is meant to accept cron grammar this module
  * doesn't otherwise second-guess.
+ *
+ * Exported (not module-private) because it is the ONE place this advisory is
+ * written: the runtime `cronJobs()` builder reaches it via
+ * {@link assertValidCronExpression}, and `@lunora/codegen`'s static
+ * `discover-crons.ts` calls it directly after its own `isValidCronExpression`
+ * check — so a hand-authored 6-field `.cron()` warns whether it's discovered
+ * from source at build time or registered at runtime, with one shared message.
  */
 const warnIfSecondsLeading = (schedule: string, context: string): void => {
     if (schedule.trim().split(CRON_FIELD_SPLIT_PATTERN).length === 6) {
@@ -84,4 +91,4 @@ const assertValidCronExpression = (schedule: string, context = "cron expression"
     warnIfSecondsLeading(schedule, context);
 };
 
-export { assertValidCronExpression, isValidCronExpression };
+export { assertValidCronExpression, isValidCronExpression, warnIfSecondsLeading };

@@ -62,6 +62,16 @@ const WITH_LUNORA_SNIPPET = [
     "export default withLunora(astroWorker, { shardDO: env.SHARD /* , … */ });",
 ].join("\n");
 
+/**
+ * Matches an actual `withLunora(...)` CALL — e.g. `withLunora(astroWorker, …)`,
+ * `export default withLunora(…)`, or `ns.withLunora(…)`. Deliberately does NOT
+ * match `import { withLunora } from "@lunora/astro/server";`: that specifier is
+ * followed by `}`/whitespace/`from`, never directly by `(`, so a file that
+ * imports the helper but forgets to invoke it is correctly reported as missing
+ * the wiring instead of passing on the import alone.
+ */
+const WITH_LUNORA_CALL_PATTERN = /\bwithLunora\s*\(/u;
+
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
     /**
@@ -91,10 +101,11 @@ interface LunoraIntegrationOptions {
  *
  * - Documents the `serverEntry` (default `src/worker.ts`) where the
  *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition lives.
- * - Checks, at `astro:config:done`, that `serverEntry` exists and calls
- *   `withLunora` — and warns (does not fail the build) when it doesn't, so a
- *   missing wrapper is caught at build time instead of shipping a worker where
- *   `/_lunora/*` is unrouted and realtime silently 404s.
+ * - Checks, at `astro:config:done`, that `serverEntry` exists and contains an
+ *   actual `withLunora(...)` CALL (not merely an import of it) — and warns
+ *   (does not fail the build) when it doesn't, so a missing wrapper is caught
+ *   at build time instead of shipping a worker where `/_lunora/*` is unrouted
+ *   and realtime silently 404s.
  *
  * This integration does NOT wrap the server entry itself — no file is written
  * or modified. The load-bearing composition is the `withLunora` call the
@@ -140,11 +151,26 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                     return;
                 }
 
-                const source = readFileSync(entryPath, "utf8");
+                let source: string;
 
-                if (!source.includes("withLunora")) {
+                try {
+                    source = readFileSync(entryPath, "utf8");
+                } catch (error) {
+                    // `existsSync` passing doesn't guarantee a readable regular file
+                    // (it could be a directory, permission-denied, a broken symlink
+                    // loop, …) — this hook warns rather than fails the build, so a
+                    // read failure must degrade to a warning too, not an uncaught
+                    // throw out of `astro:config:done`.
+                    const reason = error instanceof Error ? error.message : String(error);
+
+                    warn(`@lunora/astro: could not read server entry "${serverEntry}" (${reason}) — skipping the \`withLunora\` check.`);
+
+                    return;
+                }
+
+                if (!WITH_LUNORA_CALL_PATTERN.test(source)) {
                     warn(
-                        `@lunora/astro: server entry "${serverEntry}" does not call \`withLunora\` — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Wrap the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
+                        `@lunora/astro: couldn't find a \`withLunora(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Wrap the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
                     );
                 }
             },

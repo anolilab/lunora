@@ -40,4 +40,4 @@ export type {
     WorkpoolOptions,
 } from "./types";
 export { isWorkflowReference } from "./types";
-export { assertValidCronExpression, isValidCronExpression } from "./validate-cron";
+export { assertValidCronExpression, isValidCronExpression, warnIfSecondsLeading } from "./validate-cron";

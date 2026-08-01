@@ -495,7 +495,7 @@ const assertValidCronExpression: (schedule: string, context?: string) => void;
 ### `compileCronSchedule` (const)
 
 ```ts
-const compileCronSchedule: (kind: CronScheduleKind, schedule: DailySchedule | HourlySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule) => string;
+const compileCronSchedule: (kind: CronScheduleKind, schedule: DailySchedule | HourlySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule, jobName?: string) => string;
 ```
 
 ### `createCronTrigger` (const)
@@ -556,4 +556,10 @@ const isValidCronExpression: (schedule: string) => boolean;
 
 ```ts
 const isWorkflowReference: (target: unknown) => target is WorkflowReference;
+```
+
+### `warnIfSecondsLeading` (const)
+
+```ts
+const warnIfSecondsLeading: (schedule: string, context: string) => void;
 ```

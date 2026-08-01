@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -76,7 +76,7 @@ describe("lunora() Astro integration", () => {
             hook(contextFor(directory, warn));
 
             expect(warn).toHaveBeenCalledTimes(1);
-            expect(warn.mock.calls[0]?.[0]).toMatch(/does not call `withLunora`/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
         });
 
         it("is silent when serverEntry exists and calls withLunora", () => {
@@ -95,6 +95,46 @@ describe("lunora() Astro integration", () => {
             hook(contextFor(directory, warn));
 
             expect(warn).not.toHaveBeenCalled();
+        });
+
+        it("warns when serverEntry imports withLunora but never calls it", () => {
+            expect.assertions(2);
+
+            // Regression: `source.includes("withLunora")` was always true here
+            // because the import specifier itself contains the substring — the
+            // guard must look for an actual `withLunora(...)` call, not mere
+            // presence of the identifier.
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            writeFileSync(join(directory, "worker.ts"), 'import { withLunora } from "@lunora/astro/server";\nexport default astroWorker;\n');
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
+        });
+
+        it("warns (does not throw) when serverEntry exists but cannot be read", () => {
+            expect.assertions(2);
+
+            // `existsSync` passing doesn't mean `readFileSync` will succeed — a
+            // directory at that path raises EISDIR. The hook's contract is "warns,
+            // does not fail the build", so this must degrade to a warning too.
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            mkdirSync(join(directory, "worker.ts"));
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            expect(() => {
+                hook(contextFor(directory, warn));
+            }).not.toThrow();
+
+            expect(warn.mock.calls[0]?.[0]).toMatch(/could not read server entry/u);
         });
     });
 

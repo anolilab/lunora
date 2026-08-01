@@ -234,6 +234,85 @@ describe("discover-crons", () => {
         expect(() => discoverCrons(newProject(), workdir)).toThrow(/invalid cron expression/u);
     });
 
+    it("names the job + file:line when an interval.seconds schedule is rejected (build path)", () => {
+        expect.assertions(4);
+
+        // Regression: this call site used to pass only 2 args to
+        // `compileCronSchedule` (dropping `jobName`) and wasn't wrapped in
+        // `diagnosticAt` like its siblings, so the rejection named neither the
+        // job nor the file — the exact failure mode `wrangler deploy` produces,
+        // just earlier and worse.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.interval("tick", { seconds: 30 }, internal.jobs.tick, {});
+            export default crons;
+        `,
+        );
+
+        const cronPath = join(workdir, "crons.ts");
+
+        let thrown: unknown;
+
+        try {
+            discoverCrons(newProject(), workdir);
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(CodegenDiagnosticError);
+
+        const diagnostic = thrown as CodegenDiagnosticError;
+
+        expect(diagnostic.file).toBe(cronPath);
+        expect(diagnostic.line).toBeGreaterThan(0);
+        // Names the job ("tick") the way `compileCronSchedule`'s own message does.
+        expect(diagnostic.message).toMatch(/cron job "tick".*one-minute floor/u);
+    });
+
+    it("warns (does not throw) during codegen when a raw 6-field .cron() is accepted (build path)", () => {
+        expect.assertions(2);
+
+        // Regression: `discover-crons.ts` validated a raw `.cron()` with
+        // `isValidCronExpression` directly and never routed the accepted
+        // 6-field case through the shared seconds-leading advisory, so codegen
+        // silently emitted a Cloudflare-incompatible trigger to wrangler.jsonc.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.cron("sub-minute", "*/30 * * * * *", internal.jobs.tick, {});
+            export default crons;
+        `,
+        );
+
+        const warnings: string[] = [];
+        // eslint-disable-next-line no-console -- capture the seconds-leading advisory under test.
+        const originalWarn = console.warn;
+
+        // eslint-disable-next-line no-console -- temporarily intercept warnings emitted during discovery.
+        console.warn = (message: string): void => {
+            warnings.push(message);
+        };
+
+        let result: ReturnType<typeof discoverCrons>;
+
+        try {
+            result = discoverCrons(newProject(), workdir);
+        } finally {
+            // eslint-disable-next-line no-console -- restore the original implementation.
+            console.warn = originalWarn;
+        }
+
+        expect(result).toEqual([{ args: {}, cron: "*/30 * * * * *", functionPath: "jobs:tick", name: "sub-minute" }]);
+        expect(warnings.some((message) => message.includes("6-field (seconds-leading) cron expression"))).toBe(true);
+    });
+
     it("throws when a job name is not a static string literal", () => {
         expect.assertions(1);
 
