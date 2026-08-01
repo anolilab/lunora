@@ -23,6 +23,15 @@ import { LunoraError } from "./errors";
 const MAX_BODY_BYTES = 1_048_576;
 
 /**
+ * `true` iff `x` is a plain, non-null, non-array object — the one definition
+ * of "plain JSON object" shared by every guard that rejects a caller-supplied
+ * `args`/body value before it reaches `JSON.stringify`, the shard RPC body, or
+ * a property lookup. `assertArgsObject` (`./assert-args-object`) imports this
+ * rather than re-deriving the same check.
+ */
+const isPlainObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+/**
  * Read a request body fully into text while enforcing a hard byte budget as the
  * bytes arrive. `Content-Length` is forgeable — a chunked request omits it
  * (so the header guard sees `0`) and a non-numeric value makes the header guard
@@ -157,11 +166,11 @@ const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_
         throw new LunoraError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    if (!isPlainObject(body)) {
         throw new LunoraError("Request body must be an object", { code: "BAD_REQUEST", status: 400 });
     }
 
-    return body as Record<string, unknown>;
+    return body;
 };
 
-export { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit };
+export { isPlainObject, MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit };

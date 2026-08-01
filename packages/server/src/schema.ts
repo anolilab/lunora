@@ -136,7 +136,11 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      */
     global: (options?: { backend?: GlobalBackend }) => TableBuilder<Shape>;
     /** Add a secondary index. */
-    index: (name: string, fields: ReadonlyArray<(keyof Shape & string) | "_creationTime" | "_id">, options?: { unique?: boolean }) => TableBuilder<Shape>;
+    index: (
+        name: string,
+        fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,
+        options?: { unique?: boolean },
+    ) => TableBuilder<Shape>;
 
     /**
      * Name the column holding the owning user's id, so "only the owner sees these
@@ -871,9 +875,21 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
 
 /**
  * Columns every row carries implicitly (never part of a table's declared
- * `shape`), so `.index()` may legitimately name them.
+ * `shape`), so `.index()` may legitimately name them. The single source for
+ * both the compile-time allow-list (`TableBuilder["index"]`'s `fields` type,
+ * via `(typeof SYSTEM_INDEX_FIELDS)[number]`) and the runtime cross-check
+ * below (via `SYSTEM_INDEX_FIELDS_SET`) — declared once so the two can't
+ * drift apart.
  */
-const SYSTEM_INDEX_FIELDS = new Set(["_creationTime", "_id"]);
+const SYSTEM_INDEX_FIELDS = ["_creationTime", "_id"] as const;
+
+/**
+ * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set&lt;string>`
+ * (rather than inferring the literal-union element type) because it is
+ * probed with an arbitrary user-declared `IndexDefinition["fields"]` entry,
+ * not one already narrowed to the system-field union.
+ */
+const SYSTEM_INDEX_FIELDS_SET = new Set<string>(SYSTEM_INDEX_FIELDS);
 
 /**
  * Cross-check every `.index(name, fields)` declaration against the table's
@@ -902,7 +918,7 @@ const validateIndexFields = (tables: Record<string, TableDefinition>): void => {
             seenNames.add(index.name);
 
             for (const field of index.fields) {
-                if (SYSTEM_INDEX_FIELDS.has(field) || field in table.shape) {
+                if (SYSTEM_INDEX_FIELDS_SET.has(field) || field in table.shape) {
                     continue;
                 }
 
