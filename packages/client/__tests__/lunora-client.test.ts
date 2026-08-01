@@ -1091,6 +1091,57 @@ describe("lunoraClient", () => {
             expect(errors).toEqual([{ code: "ADMIN_FORBIDDEN", message: "admin gate not cleared" }]);
         });
 
+        it("a complete frame for a live subscription surfaces SUBSCRIPTION_CANCELLED and re-subscribes on the next reconnect instead of freezing (CLIENT-04)", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const errors: { code?: string; message: string }[] = [];
+            const data: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => data.push(d), { onError: (error) => errors.push(error) });
+
+            const first = latestSocket();
+
+            first.open();
+
+            const subId = firstSub(first).id as string;
+
+            // A subscription-scoped `complete` frame — today's server only sends
+            // `complete` for stream ids (see the source comment on
+            // `handleCompleteMessage`), but this pins the defensive behavior for
+            // a `sub_*` id in case a future/subclassed `ShardDO` ever cancels a
+            // subscription this way. The historical behavior removed the state
+            // from the registry entirely, so it never resubscribed on ANY future
+            // reconnect and the query froze forever.
+            first.receive({ id: subId, type: "complete" });
+
+            expect(errors).toEqual([{ code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" }]);
+
+            // The socket drops and reconnects.
+            first.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const second = latestSocket();
+
+            second.open();
+
+            // Non-destructive: the subscription is still registered and gets
+            // re-sent on the fresh socket instead of having silently vanished.
+            expect(second).not.toBe(first);
+            expect(firstSub(second)?.query?.functionPath).toBe("messages:list");
+            expect(data).toHaveLength(0);
+
+            vi.useRealTimers();
+        });
+
         it("re-sends an admin subscription with its token on reconnect", () => {
             expect.assertions(3);
 

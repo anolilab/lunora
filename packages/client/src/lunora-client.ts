@@ -5124,11 +5124,24 @@ class LunoraClient {
         this.tokenExpiredListeners.emit();
     }
 
+    /**
+     * CLIENT-04: `type: "complete"` today is sent ONLY by `@lunora/do`'s
+     * `handleStream` (see `shard-do.ts`), gated to the `stream` envelope type
+     * and minting only `stream_*` ids — the `subscribe` path never sends it, so
+     * a live SUBSCRIPTION provably never receives `complete` from the current
+     * server. But `ServerCompleteMessage` is a generic `id`-keyed frame and
+     * `ShardDO` is user-subclassable, so this stays defensive rather than
+     * assuming a `sub_*` id can never reach here: unlike the historical
+     * `subscriptions.remove(state)`, which dropped the state out of
+     * `subscriptions.all()` — the set the reconnect resubscribe loop walks
+     * (`ensureSocket`'s `open` handler) — and so froze the query forever across
+     * every future reconnect, this fans a cancellation error to any listener
+     * and marks the registration un-acked instead. Non-destructive: the state
+     * stays in the registry, so the very next reconnect resubscribes it. The
+     * two id-spaces don't overlap (`sub_*` vs `stream_*`), so the stream and
+     * subscription lookups below are mutually exclusive.
+     */
     private handleCompleteMessage(id: string): void {
-        // Streams complete normally — close the iterator. Subscriptions
-        // can also receive `complete` (cancelled server-side); remove them
-        // from the registry. The two id-spaces don't overlap (`sub_*` vs
-        // `stream_*`) so the two lookups are mutually exclusive.
         const stream = this.streams.get(id);
 
         if (stream) {
@@ -5141,7 +5154,8 @@ class LunoraClient {
         const state = this.subscriptions.getById(id);
 
         if (state) {
-            this.subscriptions.remove(state);
+            state.acked = false;
+            fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
     }
 
