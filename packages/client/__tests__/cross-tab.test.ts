@@ -652,7 +652,11 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
     it("a follower's connectionStatus mirrors the leader's aggregate status instead of staying idle forever", async () => {
         expect.assertions(4);
 
-        const client = new LunoraClient({ crossTabSync: true, fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })), url: "https://app.example" });
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })),
+            url: "https://app.example",
+        });
         const rogue = new BroadcastChannel(clientChannel(client));
         const statuses: string[] = [];
 
@@ -684,7 +688,11 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
 
         vi.useFakeTimers();
 
-        const client = new LunoraClient({ crossTabSync: true, fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })), url: "https://app.example" });
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })),
+            url: "https://app.example",
+        });
         const rogue = new BroadcastChannel(clientChannel(client));
 
         try {
@@ -1015,9 +1023,13 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
             // race the belt-and-braces stamp exists for: a `setAuthToken` in
             // this tab already moved it to a new (this) channel while a stale
             // frame from the OLD identity's leader was already queued.
-            rogue.postMessage(
-                { data: "not-mine", identity: "subj:someone-else", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage,
-            );
+            rogue.postMessage({
+                data: "not-mine",
+                identity: "subj:someone-else",
+                key,
+                tabId: "leader-tab",
+                type: "subscription-data",
+            } satisfies RawLeaderMessage);
             await delay(30);
 
             expect(received).toStrictEqual([]);
@@ -1063,7 +1075,12 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
 
             expect(checkpoints).toStrictEqual([]);
 
-            rogue.postMessage({ identity: "subj:someone-else", status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            rogue.postMessage({
+                identity: "subj:someone-else",
+                status: "connected",
+                tabId: "leader-tab",
+                type: "connection-status",
+            } satisfies RawLeaderMessage);
             await delay(30);
 
             // The mismatched connection-status frame must not have been

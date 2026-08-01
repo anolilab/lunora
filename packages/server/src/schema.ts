@@ -904,10 +904,7 @@ const assertFieldInShape = (tableName: string, indexName: string, field: string,
         return;
     }
 
-    throw new LunoraError(
-        "INTERNAL",
-        `defineSchema: table "${tableName}" index "${indexName}" names column "${field}" which is not in the table's shape`,
-    );
+    throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" index "${indexName}" names column "${field}" which is not in the table's shape`);
 };
 
 /**

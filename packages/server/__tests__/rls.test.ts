@@ -611,9 +611,7 @@ describe("rls — read path", () => {
             return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
         };
 
-        const handler = lunora.query
-            .use(rlsForTest<TestContext>([policy]))
-            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
     });
@@ -634,9 +632,7 @@ describe("rls — read path", () => {
 
         enableGetWithTable(fake, rows);
 
-        const handler = lunora.query
-            .use(rlsForTest<TestContext>([policy]))
-            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ row: { _id: "d1" }, tableName: "documents" });
     });
@@ -657,9 +653,7 @@ describe("rls — read path", () => {
 
         enableGetWithTable(fake, rows);
 
-        const handler = lunora.query
-            .use(rlsForTest<TestContext>([policy]))
-            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("a1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("a1"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ row: { _id: "a1" }, tableName: "audit" });
     });

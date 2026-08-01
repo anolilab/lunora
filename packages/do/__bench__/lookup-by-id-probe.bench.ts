@@ -90,7 +90,9 @@ for (const [index, id] of batchIds.entries()) {
 
 const perIdUnionSql = `${batchTableNames.map((tableName) => `SELECT '${tableName}' AS __t__, id, _creationTime, __doc__ FROM "${tableName}" WHERE id = ?`).join(" UNION ALL ")} LIMIT 1`;
 
-const batchedInListSql = batchTableNames.map((tableName) => `SELECT '${tableName}' AS __t__, id FROM "${tableName}" WHERE id IN (${batchIds.map(() => "?").join(", ")})`).join(" UNION ALL ");
+const batchedInListSql = batchTableNames
+    .map((tableName) => `SELECT '${tableName}' AS __t__, id FROM "${tableName}" WHERE id IN (${batchIds.map(() => "?").join(", ")})`)
+    .join(" UNION ALL ");
 
 describe(`RLS guard id→table probe — ${String(BATCH_SIZE)} bare ids: per-id UNION loop vs one batched IN-list UNION`, () => {
     bench(`per-id: ${String(BATCH_SIZE)} single-id UNION-ALL probes (pre-fix guardById loop)`, () => {

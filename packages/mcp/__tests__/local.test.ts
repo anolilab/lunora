@@ -287,7 +287,9 @@ describe("shared client cache", () => {
         // replaced once 9 distinct deployments have been seen. Re-requesting it
         // must still work (a fresh client minted transparently), not error.
         const { asFetch } = stubFetch();
-        const deployments = Array.from({ length: 9 }, (_, index): LocalDeployment => {return { url: `https://worker-${String(index)}.example` }});
+        const deployments = Array.from({ length: 9 }, (_, index): LocalDeployment => {
+            return { url: `https://worker-${String(index)}.example` };
+        });
         let current = 0;
 
         const tools = localTools({ deployment: () => deployments[current], docs: false, fetch: asFetch });

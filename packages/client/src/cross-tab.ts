@@ -173,8 +173,7 @@ class TabCoordinator {
     private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
     private readonly onSubscriptionSettled:
-        | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void)
-        | undefined;
+        ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,

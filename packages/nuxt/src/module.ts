@@ -263,7 +263,9 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // so warn — for a missing file, an unreadable one, or one that exists
         // but doesn't actually export `ShardDO` — rather than fail an
         // otherwise-valid build. See `checkWorkerEntry` for the three checks.
-        checkWorkerEntry(nuxt.options.rootDir, (message) => { useLogger("@lunora/nuxt").warn(message); });
+        checkWorkerEntry(nuxt.options.rootDir, (message) => {
+            useLogger("@lunora/nuxt").warn(message);
+        });
     },
 });
 

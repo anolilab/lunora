@@ -145,11 +145,12 @@ describe(dispatchAgentEmail, () => {
         const support = fakeBinding();
         // A fully untrusted inbound email could fold attacker JSON into the run —
         // simulate a mapper that (mistakenly or maliciously) forwards a forged marker.
-        const onEmail: AgentEmailMapper = () => ({
+        const onEmail: AgentEmailMapper = () =>
+            ({
                 __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" },
                 input: "x",
                 threadKey: "t",
-            } as unknown as ReturnType<AgentEmailMapper>);
+            }) as unknown as ReturnType<AgentEmailMapper>;
 
         const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
         const { message, rejects } = fakeMessage();

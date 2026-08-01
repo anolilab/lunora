@@ -367,9 +367,9 @@ describe("ctx-db geo", () => {
 
             const writer = setupWriter();
 
-            expect(() =>
-                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 5, lng: -73 }, sw: { lat: 10, lng: -74 } })),
-            ).toThrow(/transposed/u);
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 5, lng: -73 }, sw: { lat: 10, lng: -74 } }))).toThrow(
+                /transposed/u,
+            );
         });
 
         it("rejects a .within() box crossing the antimeridian", async () => {
@@ -415,12 +415,8 @@ describe("ctx-db geo", () => {
 
             const writer = setupWriter();
 
-            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: 91, lng: 0 }, 1000))).toThrow(
-                /finite lat in \[-90, 90\]/u,
-            );
-            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: 0, lng: 200 }, 1000))).toThrow(
-                /finite lat in \[-90, 90\]/u,
-            );
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: 91, lng: 0 }, 1000))).toThrow(/finite lat in \[-90, 90\]/u);
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: 0, lng: 200 }, 1000))).toThrow(/finite lat in \[-90, 90\]/u);
             expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: Number.NaN, lng: 0 }, 1000))).toThrow(
                 /finite lat in \[-90, 90\]/u,
             );
@@ -431,12 +427,12 @@ describe("ctx-db geo", () => {
 
             const writer = setupWriter();
 
-            expect(() =>
-                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 91, lng: -73 }, sw: { lat: 40, lng: -74 } })),
-            ).toThrow(/finite lat in \[-90, 90\]/u);
-            expect(() =>
-                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 41, lng: 200 }, sw: { lat: 40, lng: -74 } })),
-            ).toThrow(/finite lat in \[-90, 90\]/u);
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 91, lng: -73 }, sw: { lat: 40, lng: -74 } }))).toThrow(
+                /finite lat in \[-90, 90\]/u,
+            );
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 41, lng: 200 }, sw: { lat: 40, lng: -74 } }))).toThrow(
+                /finite lat in \[-90, 90\]/u,
+            );
         });
 
         it("does not reject well-formed inputs (no regression)", async () => {

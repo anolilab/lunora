@@ -52,10 +52,7 @@ describe("checkWorkerEntry", () => {
         expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
-        writeFileSync(
-            join(directory, "worker.ts"),
-            'export { default } from "./.output/server/index.mjs";\nexport { ShardDO } from "./lunora/server";\n',
-        );
+        writeFileSync(join(directory, "worker.ts"), 'export { default } from "./.output/server/index.mjs";\nexport { ShardDO } from "./lunora/server";\n');
 
         const warn = vi.fn<(message: string) => void>();
 
@@ -64,7 +61,7 @@ describe("checkWorkerEntry", () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
-    it("is silent for an `export * from \"./lunora/server\"` re-export (covers ShardDO without naming it)", () => {
+    it('is silent for an `export * from "./lunora/server"` re-export (covers ShardDO without naming it)', () => {
         expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
@@ -93,7 +90,7 @@ describe("checkWorkerEntry", () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
-    it("warns (does not throw) when worker.ts exists but cannot be read — FAILS ON BASELINE (the old guard treated a directory named worker.ts as \"present\" and stayed silent)", () => {
+    it('warns (does not throw) when worker.ts exists but cannot be read — FAILS ON BASELINE (the old guard treated a directory named worker.ts as "present" and stayed silent)', () => {
         expect.assertions(3);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
@@ -123,7 +120,7 @@ describe("checkWorkerEntry", () => {
         // documented imprecision, not a regression; a real TS parse would not
         // have this gap, which is exactly the tradeoff the pattern's docblock
         // calls out (a build-time warning hook doesn't warrant one).
-        writeFileSync(join(directory, "worker.ts"), "// TODO: remember to export ShardDO from here\nexport { default } from \"./.output/server/index.mjs\";\n");
+        writeFileSync(join(directory, "worker.ts"), '// TODO: remember to export ShardDO from here\nexport { default } from "./.output/server/index.mjs";\n');
 
         const warn = vi.fn<(message: string) => void>();
 

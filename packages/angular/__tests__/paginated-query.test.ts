@@ -165,7 +165,11 @@ describe("paginatedQuery — stableWireKey page keys (plan 285)", () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
 
-        const { status } = paginatedQuery(permutableArgFn, { a: 2, b: 1 }, { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
+        const { status } = paginatedQuery(
+            permutableArgFn,
+            { a: 2, b: 1 },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS },
+        );
 
         expect(fake.subscriptions).toHaveLength(1);
         expect(status()).toBe("LoadingFirstPage");

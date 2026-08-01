@@ -136,9 +136,7 @@ describe("transportRejectionReason", () => {
             process.env[ALLOW_FORWARDED_ENV] = "1";
 
             expect(
-                transportRejectionReason(
-                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
-                ),
+                transportRejectionReason(request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" })),
             ).toBeUndefined();
         });
 
@@ -148,14 +146,10 @@ describe("transportRejectionReason", () => {
             process.env[ALLOW_FORWARDED_ENV] = "1";
 
             expect(
-                transportRejectionReason(
-                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "203.0.113.7" }),
-                ),
+                transportRejectionReason(request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "203.0.113.7" })),
             ).toBe("Lunora studio is only available on loopback connections in dev.");
             expect(
-                transportRejectionReason(
-                    request({ headers: { host: "evil.example.com", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
-                ),
+                transportRejectionReason(request({ headers: { host: "evil.example.com", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" })),
             ).toBe("Lunora studio rejects a non-localhost Host header in dev.");
         });
 
@@ -165,17 +159,13 @@ describe("transportRejectionReason", () => {
             process.env[ALLOW_FORWARDED_ENV] = "true";
 
             expect(
-                transportRejectionReason(
-                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
-                ),
+                transportRejectionReason(request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" })),
             ).toBeDefined();
 
             Reflect.deleteProperty(process.env, ALLOW_FORWARDED_ENV);
 
             expect(
-                transportRejectionReason(
-                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
-                ),
+                transportRejectionReason(request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" })),
             ).toBeDefined();
         });
     });

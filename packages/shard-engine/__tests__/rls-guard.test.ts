@@ -310,10 +310,7 @@ describe("guardWriter — batch id-based methods (deleteMany/patchMany)", () => 
 
         const raw = createFakeWriter();
         const tablesOfIds = vi.fn<(ids: ReadonlyArray<string>, expectedTable?: string) => ReadonlyMap<string, string>>();
-        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId, tablesOfIds) as unknown as Record<
-            string,
-            (...a: unknown[]) => unknown
-        >;
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId, tablesOfIds) as unknown as Record<string, (...a: unknown[]) => unknown>;
 
         await expect(call(guarded, ["any-id-1", "any-id-2"], "posts")).rejects.toThrow(RlsRequiredError);
         expect((raw as unknown as Record<string, FakeWriter[keyof FakeWriter]>)[name]).not.toHaveBeenCalled();
@@ -337,8 +334,8 @@ describe("guardWriter — batch id-based methods (deleteMany/patchMany)", () => 
 
         const raw = createFakeWriter();
         const tableOfIdSpy = vi.fn<typeof tableOfId>(tableOfId);
-        const tablesOfIds = vi.fn<(ids: ReadonlyArray<string>) => ReadonlyMap<string, string>>((ids: ReadonlyArray<string>) =>
-            new Map(ids.map((id) => [id, "stats"])),
+        const tablesOfIds = vi.fn<(ids: ReadonlyArray<string>) => ReadonlyMap<string, string>>(
+            (ids: ReadonlyArray<string>) => new Map(ids.map((id) => [id, "stats"])),
         );
         const guarded = guardWriter(raw as never, requiredSchema as never, tableOfIdSpy, tablesOfIds) as unknown as {
             deleteMany: (ids: ReadonlyArray<string>) => Promise<unknown>;
