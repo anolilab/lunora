@@ -29,12 +29,7 @@ export default defineConfig({
     validation: {
         dependencies: {
             unused: {
-                // `@lunora/testing` is a type-only import (`EvalResult`, in
-                // `commands/eval/`) — the `eval` command never calls `evaluate`
-                // itself, only a discovered project's own `*.eval.ts` file does
-                // (from ITS OWN `@lunora/testing`), so packem's runtime-usage scan
-                // sees no `import ... from` and flags it as unused.
-                exclude: ["@bomb.sh/tab", "@lunora/testing", "cfonts", "react-reconciler"],
+                exclude: ["@bomb.sh/tab", "cfonts", "react-reconciler"],
             },
             hoisted: {
                 exclude: ["@visulima/interactive-manager", "@visulima/is-ansi-color-supported"],

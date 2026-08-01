@@ -138,8 +138,8 @@ describe("lunora eval", () => {
         expect(recorded.errors.some((line) => line.includes("1/1"))).toBe(true);
     });
 
-    it("--format json prints one structured document to stdout and routes progress to stderr", async () => {
-        expect.assertions(3);
+    it("--format json prints one structured document to stdout and routes progress to stderr, matching the documented flat per-eval shape", async () => {
+        expect.assertions(5);
 
         const { logger } = recordingLogger();
         const cwd = join(fixtureRoot, "eval-sample");
@@ -148,11 +148,15 @@ describe("lunora eval", () => {
             await runEvalCommand({ cwd, format: "json", logger });
         });
 
-        const parsed: unknown = JSON.parse(stdout);
+        const parsed = JSON.parse(stdout) as { evals: { average?: number; items?: unknown[]; name?: string; passed?: boolean }[] };
 
         expect(parsed).toMatchObject({ code: 0 });
-        expect((parsed as { evals: unknown[] }).evals).toHaveLength(1);
-        expect((parsed as { evals: { average?: number }[] }).evals).toBeDefined();
+        expect(parsed.evals).toHaveLength(1);
+        // Flat per the documented contract (`plans/245-eval-runner-design.md`
+        // §4/§6): `evals[].average`, not `evals[].result.average`.
+        expect(parsed.evals[0]?.average).toBe(1);
+        expect(parsed.evals[0]?.name).toBe("support-triage");
+        expect(parsed.evals[0]?.passed).toBe(true);
     });
 
     it("rejects an unknown --format before discovering anything", async () => {
@@ -165,5 +169,35 @@ describe("lunora eval", () => {
 
         expect(result.code).toBe(1);
         expect(recorded.errors.some((line) => line.includes("unknown --format"))).toBe(true);
+    });
+
+    it("aborts with one distinct, actionable message and a non-zero exit when the Node floor can't load a .ts eval (ERR_UNKNOWN_FILE_EXTENSION), instead of mislabeling it a per-eval failure", async () => {
+        expect.assertions(4);
+
+        const { logger, recorded } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-floor-sample");
+
+        const result = await runEvalCommand({ cwd, logger });
+
+        expect(result.code).toBe(1);
+        // No per-eval outcome at all — the run aborted before producing one,
+        // rather than recording a mislabeled "failed" entry for it.
+        expect(result.evals).toHaveLength(0);
+        expect(result.error).toContain("Node ≥23.6");
+        expect(recorded.errors.some((line) => line.includes("Node ≥23.6") && line.includes("plans/245-eval-runner-design.md"))).toBe(true);
+    });
+
+    it("--threshold against an empty/missing eval dir exits non-zero instead of passing vacuously", async () => {
+        expect.assertions(3);
+
+        const { logger, recorded } = recordingLogger();
+        // `fixtureRoot` itself has no `evals/` child (see the no-directory test
+        // above) — 0 evals discovered. A `--threshold` gate applied to nothing
+        // must not report success.
+        const result = await runEvalCommand({ cwd: fixtureRoot, logger, threshold: 0.8 });
+
+        expect(result.code).toBe(1);
+        expect(result.evals).toHaveLength(0);
+        expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("0 eval files"))).toBe(true);
     });
 });

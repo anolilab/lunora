@@ -77,7 +77,6 @@
         "@lunora/mcp": "1.0.0-alpha.52",
         "@lunora/runtime": "1.0.0-alpha.49",
         "@lunora/seed": "1.0.0-alpha.56",
-        "@lunora/testing": "1.0.0-alpha.83",
         "@visulima/cerebro": "3.0.0",
         "@visulima/error": "catalog:prod",
         "@visulima/fs": "5.0.5",
@@ -97,6 +96,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/testing": "1.0.0-alpha.83",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
