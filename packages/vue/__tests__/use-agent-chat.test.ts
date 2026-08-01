@@ -1,5 +1,5 @@
 import type { FunctionReference } from "@lunora/client";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { effectScope } from "vue";
 
 import type { AgentLiveEvent, UseAgentChatApi, UseAgentChatResult } from "../src/use-agent-chat";
@@ -33,6 +33,19 @@ const buildApi = (): UseAgentChatApi =>
     }) as unknown as UseAgentChatApi;
 
 describe(useAgentChat, () => {
+    // `useAgentChat` is built on `useSubscription`, which gates its
+    // subscriptions on a browser `window` (SSR guard); the vitest env is
+    // `node` (no `window`), so define one for these client-path tests. The
+    // dedicated SSR test below removes it to exercise the guard, mirroring
+    // `@lunora/vue`'s `use-presence.test.ts`.
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("surfaces durable history and live status over the agents:* subscriptions", () => {
         expect.hasAssertions();
 
