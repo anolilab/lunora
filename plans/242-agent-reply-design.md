@@ -32,25 +32,25 @@
   This matters for the STOP condition this plan was written under
   ("capturing the reply reference requires re-parsing the raw inbound payload
   the verifier already consumed"). Checked directly:
-  - Email: `packages/mail/src/inbound/parse.ts:65-96` (`InboundEmail`) already
-    carries `messageId`, `from`, `to`, `inReplyTo`, `references` — CR/LF-checked,
-    fully parsed — and the WHOLE object is handed to `AgentEmailMapper`
-    (`types.ts:462`) unmodified. No re-parse is needed; the ref is one field
-    read away from where the mapper already stands.
-  - Channels: `InboundChannelEvent` (`types.ts:474-483`) hands the mapper
-    `headers` and a `json()` accessor over the ALREADY-VERIFIED raw body
-    (`channels.ts:328`, built once per request, after signature check). A
-    Slack `event_callback`'s `event.channel`/`event.ts` (or `thread_ts` for a
-    threaded reply), a GitHub `issue_comment`'s `repository`/`issue.number`/
-    `comment.id`, and a Discord message's `channel_id`/`id` are all fields on
-    that same parsed body — again, no re-parse and no signature-verification
-    change required to read them.
-  - **Conclusion: this STOP condition does not trigger for any of the four
-    channels.** The gap is that nothing captures these fields into the
-    RETURNED run shape (`AgentEmailRun`/`AgentChannelRun`,
-    `types.ts:433-448`/`468`) — both are `{ input, owner?, threadKey, title? }`
-    today, with no room for a reply reference. That's a type/shape gap at the
-    map→run boundary, not a re-parsing problem.
+    - Email: `packages/mail/src/inbound/parse.ts:65-96` (`InboundEmail`) already
+      carries `messageId`, `from`, `to`, `inReplyTo`, `references` — CR/LF-checked,
+      fully parsed — and the WHOLE object is handed to `AgentEmailMapper`
+      (`types.ts:462`) unmodified. No re-parse is needed; the ref is one field
+      read away from where the mapper already stands.
+    - Channels: `InboundChannelEvent` (`types.ts:474-483`) hands the mapper
+      `headers` and a `json()` accessor over the ALREADY-VERIFIED raw body
+      (`channels.ts:328`, built once per request, after signature check). A
+      Slack `event_callback`'s `event.channel`/`event.ts` (or `thread_ts` for a
+      threaded reply), a GitHub `issue_comment`'s `repository`/`issue.number`/
+      `comment.id`, and a Discord message's `channel_id`/`id` are all fields on
+      that same parsed body — again, no re-parse and no signature-verification
+      change required to read them.
+    - **Conclusion: this STOP condition does not trigger for any of the four
+      channels.** The gap is that nothing captures these fields into the
+      RETURNED run shape (`AgentEmailRun`/`AgentChannelRun`,
+      `types.ts:433-448`/`468`) — both are `{ input, owner?, threadKey, title? }`
+      today, with no room for a reply reference. That's a type/shape gap at the
+      map→run boundary, not a re-parsing problem.
 - `packages/mail/src/types.ts:33-44` (`SendOptions`) already accepts arbitrary
   `headers?: Record<string, string>` on `mailer.send(...)` — so `In-Reply-To`/
   `References` threading is just two header entries, no new mail-package
@@ -201,7 +201,7 @@ workpool rejection, mirrored:
 - `replyToEmail(mailer, replyRef, body)` — sends via the REAL `Mailer` contract
   from `@lunora/mail` (`mailer.send(...)`), addressed back to `replyRef.from`,
   with `headers: { "In-Reply-To": replyRef.messageId, References: <references
-  + messageId, space-joined> }` — standard RFC 5322 threading.
+    - messageId, space-joined> }` — standard RFC 5322 threading.
 
 `packages/agent/__tests__/reply.prototype.test.ts` builds a fake `MailTransport`
 (records what it was asked to send, matching the pattern `component.test.ts`'s

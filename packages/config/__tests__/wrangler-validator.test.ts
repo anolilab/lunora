@@ -377,17 +377,19 @@ describe("wrangler-validator", () => {
 
     describe("validateWranglerConfig — environment-scoped (env.<name>)", () => {
         /** A top level with every binding this suite exercises, valid on its own. */
-        const topLevel = (): WranglerConfig => {return {
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: [REQUIRED_FLAG],
-            d1_databases: [{ binding: "DB" }],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-            kv_namespaces: [{ binding: "CACHE", id: "top-level-kv-id" }],
-            observability: { enabled: true },
-            queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
-            r2_buckets: [{ binding: "UPLOADS" }],
-            vars: { LUNORA_ENV: "shared" },
-        }};
+        const topLevel = (): WranglerConfig => {
+            return {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                d1_databases: [{ binding: "DB" }],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                kv_namespaces: [{ binding: "CACHE", id: "top-level-kv-id" }],
+                observability: { enabled: true },
+                queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                r2_buckets: [{ binding: "UPLOADS" }],
+                vars: { LUNORA_ENV: "shared" },
+            };
+        };
 
         it("ignores env entirely when environment is not requested (unchanged default)", () => {
             expect.assertions(1);
@@ -409,7 +411,7 @@ describe("wrangler-validator", () => {
             const report = validateWranglerConfig(wrangler, undefined, "production");
 
             expect(report.valid).toBe(false);
-            expect(report.errors.some((line) => line.includes('names no environment declared') && line.includes("staging"))).toBe(true);
+            expect(report.errors.some((line) => line.includes("names no environment declared") && line.includes("staging"))).toBe(true);
         });
 
         it("errors the same way when no env block is declared at all", () => {
@@ -544,7 +546,10 @@ describe("wrangler-validator", () => {
 
             wrangler.vars = { LUNORA_ALLOWED_ORIGINS: "*", LUNORA_CORS_ALLOW_CREDENTIALS: "true" };
             wrangler.env = {
-                production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, vars: { LUNORA_ALLOWED_ORIGINS: "https://app.example.com" } },
+                production: {
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    vars: { LUNORA_ALLOWED_ORIGINS: "https://app.example.com" },
+                },
             };
 
             expect(validateWranglerConfig(wrangler, undefined, "production").valid).toBe(true);
@@ -752,7 +757,7 @@ describe("wrangler-validator", () => {
 
                 expect(result.report.valid).toBe(false);
                 expect(result.problems).toHaveLength(1);
-                expect(result.problems[0]).toContain('names no environment declared');
+                expect(result.problems[0]).toContain("names no environment declared");
             });
         });
 

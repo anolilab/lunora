@@ -1160,7 +1160,11 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
  * `validateWranglerConfig`'s cognitive complexity within the repo's lint
  * budget — no behavior change from inlining it.
  */
-const resolveEnvironmentView = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): { error?: string; wrangler: WranglerConfig } => {
+const resolveEnvironmentView = (
+    wrangler: WranglerConfig,
+    environment: string | undefined,
+    warnings: string[],
+): { error?: string; wrangler: WranglerConfig } => {
     const { error, merged, unverifiedKeys } = mergeWranglerEnvironment(wrangler, environment);
 
     if (error !== undefined) {

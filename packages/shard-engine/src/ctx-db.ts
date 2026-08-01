@@ -629,7 +629,9 @@ const searchViaScan = (
     // Same total order the FTS path sorts by, id-terminated (see `searchViaFts`).
     scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    return scored.slice(0, limit).map((entry) => {return { document: entry.doc, score: entry.score }});
+    return scored.slice(0, limit).map((entry) => {
+        return { document: entry.doc, score: entry.score };
+    });
 };
 
 /**
@@ -828,11 +830,13 @@ const runGeoFetchScored = (
     onScanned: (count: number) => void = () => undefined,
 ): { distanceMeters: null | number; document: Record<string, unknown> }[] => {
     const isWithin = geo.within !== undefined;
-    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {return {
-        // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
-        distanceMeters: isWithin ? null : entry.distance,
-        document: entry.doc,
-    }});
+    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {
+        return {
+            // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
+            distanceMeters: isWithin ? null : entry.distance,
+            document: entry.doc,
+        };
+    });
 
     onScanned(results.length);
 

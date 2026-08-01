@@ -179,7 +179,7 @@ export const searchTermRange = (token: string, isPrefix: boolean): { exact: bool
     // scalar-value string (a UTF-8 binding mangles it to U+FFFD). Degrade the
     // term to an exact match instead: never wrong, merely narrower, and only
     // reachable for tokens ending exactly at those two boundaries.
-    if ((nextCodePoint >= 0xD8_00 && nextCodePoint <= 0xDF_FF) || nextCodePoint > 0x10_FF_FF) {
+    if ((nextCodePoint >= 0xd8_00 && nextCodePoint <= 0xdf_ff) || nextCodePoint > 0x10_ff_ff) {
         return { exact: true, lower: token, upper: token };
     }
 

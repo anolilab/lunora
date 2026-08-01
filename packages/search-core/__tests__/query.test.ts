@@ -281,7 +281,7 @@ describe(searchTermRange, () => {
         // true *code point* instead (0x103FF) increments correctly to its
         // real successor, U+10400 — an ordinary astral code point, not a
         // surrogate-range value, so this is a normal widen, not a refusal.
-        const codePoint = 0x1_03_FF;
+        const codePoint = 0x1_03_ff;
         const token = String.fromCodePoint(codePoint);
         const result = searchTermRange(token, true);
 
@@ -296,7 +296,7 @@ describe(searchTermRange, () => {
     it("refuses to widen (falls back to exact match) for a token ending at the Hangul block boundary (U+D7FF), whose successor is the surrogate block", () => {
         expect.assertions(1);
 
-        const codePoint = 0xD7_FF;
+        const codePoint = 0xd7_ff;
         const token = `x${String.fromCodePoint(codePoint)}`;
 
         expect(searchTermRange(token, true)).toStrictEqual({ exact: true, lower: token, upper: token });
