@@ -693,6 +693,7 @@ interface AdvisorStorageKeyAccess {
     file: string;
     line: number;
     method: string;
+    visibility?: "internal" | "public";
 }
 ```
 
