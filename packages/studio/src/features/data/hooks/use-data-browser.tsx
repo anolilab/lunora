@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import { useMirroredRef } from "../../../hooks/use-mirrored-ref";
+import { useShardKey } from "../../../hooks/use-shard-key";
 import type { BulkDeleteResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
@@ -316,7 +317,16 @@ const useDataBrowser = ({
     // prop seeds the initial value. Changing it re-fetches the first page.
     const [pageSize, setPageSize] = useState<number>(initialPageSize);
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    // `initial` is the LIVE `initialShardKey` prop (not a mount-only capture), so a
+    // shard-only external change (browser back/forward, a saved-query deep link)
+    // resets `queryShardKey` synchronously via the hook — see `useShardKey`. This is
+    // narrower than (and coexists with) the full per-table re-seed effect below,
+    // which also resets filters/sort/search/facets/staged-edits and deliberately
+    // reads its URL params through refs so the debounced shard's own write-back
+    // (`onViewChange`) can't retrigger IT — that loop concern doesn't apply here:
+    // by the time a shard mirrors to the URL it already equals `shardKey`, so this
+    // hook's reset is a no-op echo, not a fresh wipe.
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
     // The open table is DERIVED from the URL — the single source of truth. There is
     // no optimistic local `selectedTable` state mirrored back to the URL: that
@@ -337,13 +347,10 @@ const useDataBrowser = ({
     const [filter, setFilter] = useState<string>(initialSearch ?? "");
     const search = useDebounced(filter.trim(), 300);
 
-    // The shard the reads target, debounced so typing a key settles before
-    // refetching the table list + page rather than firing per keystroke. Page-bound
-    // actions (preview, facet fetch, row write/delete, bulk delete) target this same
-    // settled shard so a write can never hit a different shard than the one whose
-    // rows are on screen during the debounce window. The live `shardKey` is only the
-    // input value + the share-link descriptor.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
+    // `queryShardKey` (above) is what page-bound actions (preview, facet fetch, row
+    // write/delete, bulk delete) target too, so a write can never hit a different
+    // shard than the one whose rows are on screen during the debounce window. The
+    // live `shardKey` is only the input value + the share-link descriptor.
 
     // Structured column filters. Held in a ref too so a write's bulk-delete reads
     // the current value without threading it through; the page query reads the
@@ -376,7 +383,7 @@ const useDataBrowser = ({
     // cache (the same model as every other studio panel). The table list follows
     // the debounced shard; the page read's args ARE the view, so selecting a table
     // or paginating / searching / filtering / sorting transparently refetches.
-    const tablesQuery = useAdminQuery<TableInfo[]>(ADMIN_FUNCTIONS.listTables, NO_ARGS, { live: true, shardKey: debouncedShard });
+    const tablesQuery = useAdminQuery<TableInfo[]>(ADMIN_FUNCTIONS.listTables, NO_ARGS, { live: true, shardKey: queryShardKey });
     const tables = tablesQuery.data ?? null;
     const tablesError = tablesQuery.error;
 
@@ -394,14 +401,14 @@ const useDataBrowser = ({
     const countArgs = toCountArgs({ filters, search, table: selectedTable ?? "" });
 
     // `keepPreviousData` is off: the placeholder isn't identity-aware, so holding
-    // the last page across a `selectedTable` / `debouncedShard` change would render
+    // the last page across a `selectedTable` / `queryShardKey` change would render
     // the prior table's/shard's rows while edits and deletes already target the new
     // one. `live` streams writes in. Disabled until a table is open.
     const pageQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, pageArgs, {
         enabled: selectedTable !== null,
         keepPreviousData: false,
         live: true,
-        shardKey: debouncedShard,
+        shardKey: queryShardKey,
     });
     const page = pageQuery.data ?? null;
     const pageError = pageQuery.error;
@@ -412,15 +419,15 @@ const useDataBrowser = ({
     const countQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, countArgs, {
         enabled: selectedTable !== null,
         live: true,
-        shardKey: debouncedShard,
+        shardKey: queryShardKey,
     });
 
     // Record the browsed shard into recent-shards history once its tables resolve.
     useEffect(() => {
         if (tablesQuery.data !== undefined) {
-            recordShard(debouncedShard);
+            recordShard(queryShardKey);
         }
-    }, [tablesQuery.data, debouncedShard]);
+    }, [tablesQuery.data, queryShardKey]);
 
     // Select a table = navigate the URL to it (the host drops the previous
     // filters/sort/search so the new table opens clean). The selection itself is
@@ -449,7 +456,7 @@ const useDataBrowser = ({
             const result = (await client.query(
                 READ_TABLE_PAGE,
                 { filters: [], limit: PREVIEW_CANDIDATES, offset: 0, search: id, table: targetTable },
-                callOptions(debouncedShard),
+                callOptions(queryShardKey),
             )) as TablePage;
 
             return result.rows.find((row) => rowId(row) === id) ?? null;
@@ -475,7 +482,7 @@ const useDataBrowser = ({
     // drops it entirely. With no table selected the hook seeds the slot without
     // fetching (a null fetcher).
     const toggleFacet = (column: string): void => {
-        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(debouncedShard, selectedTable, filtersRef.current, search));
+        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(queryShardKey, selectedTable, filtersRef.current, search));
     };
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
@@ -512,11 +519,11 @@ const useDataBrowser = ({
 
         // `refetchFacets` re-runs only the already-open facets (read off the hook's
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
-        refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search));
+        refetchFacetsRef.current(facetFetcherRef.current(queryShardKey, selectedTable, filters, search));
         // Fire on the active view; the facet callbacks are read via refs (see above).
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the refs are `useMirroredRef` handles — stable by construction, and reading them is the whole point: the effect keys on the VIEW values so it fires when the view changes, not when a callback identity churns
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: `useMirroredRef` handles are stable, and listing them would say this effect depends on identities it deliberately does not
-    }, [debouncedShard, selectedTable, filters, search]);
+    }, [queryShardKey, selectedTable, filters, search]);
 
     // Tracks the table the local view has been (re-)seeded for. Declared before the
     // mirror effect below so that effect can tell whether the view it's about to
@@ -543,12 +550,12 @@ const useDataBrowser = ({
             filters: toFilterClauses(filters),
             orderBy: toOrderBy(sorting),
             search,
-            shard: debouncedShard,
+            shard: queryShardKey,
         });
         // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the ref is a `useMirroredRef` handle — stable by construction; depending on `onViewChange` itself is what caused the navigate loop this pattern exists to avoid
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: the ref handle is stable, and depending on `onViewChange` is exactly the loop this avoids
-    }, [selectedTable, tableParam, filters, sorting, search, debouncedShard]);
+    }, [selectedTable, tableParam, filters, sorting, search, queryShardKey]);
 
     // The URL's view params, mirrored to refs so the re-seed effect can read the
     // CURRENT values while depending on `tableParam` alone (depending on the params
@@ -630,7 +637,7 @@ const useDataBrowser = ({
         try {
             for (const [id, columns] of Object.entries(stagedEdits.staged)) {
                 // eslint-disable-next-line no-await-in-loop -- one patch per edited row; sequential so a failure pins the offending row
-                (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
+                (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(queryShardKey))) as WriteRowResult;
             }
 
             stagedEdits.clear();
@@ -683,7 +690,7 @@ const useDataBrowser = ({
             (await client.query(
                 WRITE_ROW,
                 { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable },
-                callOptions(debouncedShard),
+                callOptions(queryShardKey),
             )) as WriteRowResult;
             setEditing(null);
             pageQuery.refetch();
@@ -710,7 +717,7 @@ const useDataBrowser = ({
         try {
             for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
                 // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
-                const result = (await client.query(ref, args, callOptions(debouncedShard))) as BulkDeleteResult;
+                const result = (await client.query(ref, args, callOptions(queryShardKey))) as BulkDeleteResult;
 
                 if (!result.hasMore) {
                     break;
@@ -881,7 +888,7 @@ const useDataBrowser = ({
         try {
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- one delete per selected row; sequential so a failure pins the offending row
-                (await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
+                (await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(queryShardKey))) as WriteRowResult;
             }
 
             pageQuery.refetch();
@@ -934,9 +941,9 @@ const useDataBrowser = ({
         previewRef,
         pageError,
         pageSize,
+        queryShardKey,
         rangeEnd,
         rangeStart,
-        queryShardKey: debouncedShard,
         saveEdit,
         selectedTable,
         selectTable,

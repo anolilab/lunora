@@ -14,7 +14,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -42,7 +42,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const client = useLunora();
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -51,15 +51,11 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const [runResult, setRunResult] = useState<MigrationRunResult | null>(null);
     const [runError, setRunError] = useState<null | string>(null);
 
-    // The shard the read targets, debounced so typing a key settles before
-    // refetching (and re-subscribing) rather than firing per keystroke.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
-    // The status query (and its post-run `refetch`) is keyed by `debouncedShard`,
+    // The status query (and its post-run `refetch`) is keyed by `queryShardKey`,
     // while a run targets the live `shardKey`. Until the debounce catches up the two
     // can disagree, so running would hit one shard while the table refreshes another.
     // Gate the run on the displayed shard being settled.
-    const shardSettled = shardKey.trim() === debouncedShard;
+    const shardSettled = shardKey.trim() === queryShardKey;
 
     // One-shot read + always-on live subscription for the committed shard. Each
     // server push refreshes the run-state table so an in-progress migration's
@@ -70,7 +66,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         {},
         {
             live: true,
-            shardKey: debouncedShard,
+            shardKey: queryShardKey,
         },
     );
 
@@ -81,9 +77,9 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     // Record the browsed shard into recent-shards history once its status resolves.
     useEffect(() => {
         if (statusQuery.data !== undefined) {
-            recordShard(debouncedShard);
+            recordShard(queryShardKey);
         }
-    }, [statusQuery.data, debouncedShard]);
+    }, [statusQuery.data, queryShardKey]);
 
     const run = async (): Promise<void> => {
         const id = migrationId.trim();

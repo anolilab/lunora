@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAsyncSubmit } from "../../hooks/use-async-submit";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { ErrorIssue, ExplainIssueArgs, ExplainIssueResult, IssueSeverity, IssuesResult, IssueStatus } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -425,7 +425,7 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
     const t = useT();
     const client = useLunora();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
     // Busy + error state are keyed BY ISSUE HASH, not global: two overlapping triage
     // writes must disable only their own row's buttons, and the first to complete
@@ -434,13 +434,9 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
     const [busyHashes, setBusyHashes] = useState<ReadonlySet<string>>(() => new Set<string>());
     const [actionErrors, setActionErrors] = useState<ReadonlyMap<string, string>>(() => new Map<string, string>());
 
-    // Debounced so typing a key settles before refetching (and re-subscribing)
-    // rather than firing per keystroke — mirrors the Metrics panel.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
     const { data, error, liveError } = useAdminQuery<IssuesResult>(ADMIN_FUNCTIONS.getIssues, statusFilter === "all" ? {} : { status: statusFilter }, {
         live: true,
-        shardKey: debouncedShard,
+        shardKey: queryShardKey,
     });
 
     const loaded = data !== undefined;
@@ -470,7 +466,7 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
         setBusyHashes((previous) => new Set(previous).add(hash));
 
         try {
-            await client.query(reference, { ...args, hash }, callOptions(debouncedShard));
+            await client.query(reference, { ...args, hash }, callOptions(queryShardKey));
         } catch (error_) {
             const message = errorMessage(error_);
 
@@ -562,7 +558,7 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
                                         key={issue.hash}
                                         rowError={actionErrors.get(issue.hash)}
                                         runTriage={runTriage}
-                                        shardKey={debouncedShard}
+                                        shardKey={queryShardKey}
                                     />
                                 ))}
                             </TableBody>

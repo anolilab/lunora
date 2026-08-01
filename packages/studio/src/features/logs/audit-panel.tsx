@@ -12,7 +12,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { AuditEntry, AuditLogResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -72,12 +72,8 @@ const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, cal
 const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [search, setSearch] = useState<string>("");
-
-    // The shard the read targets, debounced so typing a key settles before
-    // refetching (and re-subscribing) rather than firing per keystroke.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
     // One-shot read + always-on live subscription for the committed shard. `live`
     // streams each server write-flush into the cache so new entries appear without
@@ -86,7 +82,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     const { data, error, errorSource, isLoading, liveError } = useAdminQuery<AuditLogResult>(
         ADMIN_FUNCTIONS.getAuditLog,
         {},
-        { live: true, shardKey: debouncedShard },
+        { live: true, shardKey: queryShardKey },
     );
 
     const entries = useMemo<AuditEntry[]>(() => data?.entries ?? [], [data]);

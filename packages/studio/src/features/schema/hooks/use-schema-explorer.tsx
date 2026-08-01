@@ -2,7 +2,7 @@ import type { GlobalTableInfo } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import useDebounced from "../../../hooks/use-debounced";
+import { useShardKey } from "../../../hooks/use-shard-key";
 import type { ColumnMeta, TableIndexesResult, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -69,7 +69,7 @@ interface SchemaExplorer {
 const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?: string; initialTable?: string }): SchemaExplorer => {
     const client = useLunora();
     const [view, setView] = useState<SchemaView>("graph");
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [tableFilter, setTableFilter] = useState<string>("");
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [error, setError] = useState<null | string>(null);
@@ -134,13 +134,11 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
     // Re-read on the debounced shard key so switching shards re-loads the schema
     // once the value settles (no Refresh button). Schema is static between
     // codegen/migrations, so there's no live channel or poll — just this re-load.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
     useEffect(() => {
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async schema load, re-run when the debounced shard settles
-        fireAndForget(refresh(debouncedShard));
+        fireAndForget(refresh(queryShardKey));
         fireAndForget(refreshGlobal());
-    }, [refresh, refreshGlobal, debouncedShard]);
+    }, [refresh, refreshGlobal, queryShardKey]);
 
     const toggle = useCallback(
         async (table: string): Promise<void> => {
