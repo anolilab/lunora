@@ -65,4 +65,39 @@ describe("useFacets", () => {
 
         expect(result.current.facets["status"]?.result).toStrictEqual(facetResult("new"));
     });
+
+    it("clearFacets has no synchronous ref mutation — facetsRef.current only updates once the commit lands", async () => {
+        expect.assertions(2);
+
+        const fetcher = vi.fn<FacetFetcher>(async () => facetResult("a"));
+
+        const { result } = renderHook(() => useFacets());
+
+        await act(async () => {
+            result.current.toggleFacet("status", fetcher);
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        const refBeforeClear = result.current.facetsRef.current;
+
+        expect(refBeforeClear).not.toStrictEqual({});
+
+        // Call OUTSIDE `act` deliberately, so the ref can be inspected between the
+        // `setFacets({})` call and the commit — the render-phase write this
+        // replaces (`facetsRef.current = {}`) mutated the ref synchronously, right
+        // here, before React ever committed anything; this assertion fails against
+        // that code. `useMirroredRef`'s effect only publishes `{}` once the commit
+        // (and its effects) actually run, which the subsequent `act` below flushes.
+        result.current.clearFacets();
+
+        expect(result.current.facetsRef.current).toBe(refBeforeClear);
+
+        // Flush the commit + `useMirroredRef`'s effect so the hook settles cleanly
+        // before the test ends (avoids an act() warning bleeding into later tests).
+        await act(async () => {
+            await Promise.resolve();
+        });
+    });
 });
