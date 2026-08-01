@@ -288,14 +288,29 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
         const run = pushChain.then(async () => {
             for (let attempt = 0; ; attempt += 1) {
                 const clientSeq = nextClientSeq();
-                // eslint-disable-next-line no-await-in-loop -- sequential by design: each reissue must observe the prior ack's watermark before claiming a fresh sequence
-                const { applied } = await client.callMutator(serverRef, args, {
-                    clientSeq,
-                    shardKey: context.shardKey,
-                });
 
-                if (applied) {
-                    return clientSeq;
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- sequential by design: each reissue must observe the prior ack's watermark before claiming a fresh sequence
+                    const { applied } = await client.callMutator(serverRef, args, {
+                        clientSeq,
+                        shardKey: context.shardKey,
+                    });
+
+                    if (applied) {
+                        return clientSeq;
+                    }
+                } catch (error) {
+                    // The claim was never applied — a rejection (unlike a replay) never
+                    // advances the server watermark, so the counter must not stay ahead
+                    // of it either. Pushes are serialized per binding (the FIFO chain
+                    // above), so exactly one claim is outstanding at a time; surrendering
+                    // it back to the watermark here — not to `clientSeq - 1` — is what lets
+                    // the NEXT push's `Math.max(counter, watermark) + 1` re-derive the same
+                    // `watermark + 1` instead of leaving a permanent gap the DO would
+                    // reject as OUT_OF_ORDER.
+                    counter = client.confirmedMutationWatermark(context.shardKey);
+
+                    throw error;
                 }
 
                 if (attempt >= maxReissues) {

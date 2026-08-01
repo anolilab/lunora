@@ -592,6 +592,109 @@ describe(bindMutators, () => {
         expect(calls).toStrictEqual([1, 2]);
     });
 
+    it("reclaims the client sequence after a rejected push instead of leaving a gap", async () => {
+        configs.length = 0;
+        // A thrown rejection never advances the server watermark. The next push
+        // must reclaim the SAME `watermark + 1` rather than continuing from the
+        // claimed-but-never-applied sequence — otherwise the DO would see a gap
+        // and reject every subsequent push as OUT_OF_ORDER.
+        const watermark = 0;
+        const calls: number[] = [];
+        let rejectNext = true;
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async (_path, _args, options) => {
+            calls.push(options.clientSeq);
+
+            if (rejectNext) {
+                rejectNext = false;
+
+                throw new Error("server rejected the mutation");
+            }
+
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({ text: "first" });
+
+        await expect(configs[0]?.mutationFn()).rejects.toThrow("server rejected the mutation");
+
+        bound.send({ text: "second" });
+
+        await expect(configs[1]?.mutationFn()).resolves.toBeUndefined();
+
+        // The rejected push claimed seq 1; since the watermark never advanced, the
+        // next push reclaims the SAME seq 1 instead of jumping to 2 (which the DO
+        // would reject as a gap).
+        expect(calls).toStrictEqual([1, 1]);
+    });
+
+    it("keeps issuing watermark + 1 across interleaved rejections and successes", async () => {
+        configs.length = 0;
+        // Alternate reject/accept, proving a rejection never leaves `counter` ahead
+        // of the watermark: every accepted push must land exactly on the CURRENT
+        // watermark + 1, whatever came immediately before it.
+        let watermark = 0;
+        const calls: number[] = [];
+        const outcomes = ["reject", "accept", "reject", "accept"] as const;
+        let index = 0;
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async (_path, _args, options) => {
+            calls.push(options.clientSeq);
+
+            const outcome = outcomes[index];
+
+            index += 1;
+
+            if (outcome === "reject") {
+                throw new Error(`server rejected push ${String(options.clientSeq)}`);
+            }
+
+            watermark = options.clientSeq;
+
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({ text: "a" });
+
+        await expect(configs[0]?.mutationFn()).rejects.toThrow("server rejected push 1");
+
+        bound.send({ text: "b" });
+
+        await expect(configs[1]?.mutationFn()).resolves.toBeUndefined();
+
+        bound.send({ text: "c" });
+
+        await expect(configs[2]?.mutationFn()).rejects.toThrow("server rejected push 2");
+
+        bound.send({ text: "d" });
+
+        await expect(configs[3]?.mutationFn()).resolves.toBeUndefined();
+
+        // reject@1 (watermark stays 0) -> accept@1 (watermark -> 1) -> reject@2
+        // (watermark stays 1) -> accept@2 (watermark -> 2): each accepted push
+        // lands exactly on watermark + 1 at call time, never skipping ahead
+        // because of a prior rejection.
+        expect(calls).toStrictEqual([1, 1, 2, 2]);
+    });
+
     describe("onWriteRejected", () => {
         it("reports a rejected push and consumes the rejection so a fire-and-forget call is safe", async () => {
             expect.assertions(4);
