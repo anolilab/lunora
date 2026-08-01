@@ -2,12 +2,14 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { SocketHandle } from "@lunora/platform";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createNodePlatform } from "../src/node-platform";
 import { createNodeSchedulerHost } from "../src/node-scheduler-host";
 import { createNodeShardHost } from "../src/node-shard-host";
+import { createNodeSocketHost } from "../src/node-socket-host";
 
 /**
  * Covers the lifecycle-owner cluster: nothing previously closed the
@@ -118,7 +120,8 @@ describe("lifecycle disposers", () => {
             vi.useFakeTimers();
 
             try {
-                const { dispose, scheduler } = createNodeSchedulerHost();
+                const database = new Database(":memory:");
+                const { dispose, scheduler } = createNodeSchedulerHost(database);
 
                 await scheduler.schedule("some/fn", {}, { delayMs: 5000 });
                 await scheduler.schedule("some/other-fn", {}, { delayMs: 10_000 });
@@ -128,9 +131,118 @@ describe("lifecycle disposers", () => {
                 dispose();
 
                 expect(vi.getTimerCount()).toBe(0);
+
+                database.close();
             } finally {
                 vi.useRealTimers();
             }
+        });
+
+        it("re-arms a job persisted by an earlier host over the same database", async () => {
+            expect.assertions(2);
+
+            const path = join(workdir, "scheduler-rearm.sqlite3");
+            const database = new Database(path);
+
+            try {
+                const first = createNodeSchedulerHost(database);
+
+                await first.scheduler.schedule("some/fn", { user: "ada" }, { delayMs: 60_000 });
+                // Shutdown clears the timer but leaves the row — the whole point
+                // of the durable table.
+                first.dispose();
+
+                // A second host over the same connection stands in for a process
+                // restart: it must find the row and arm a timer for it, or the
+                // job is a log entry nobody will ever act on.
+                const second = createNodeSchedulerHost(database);
+                // `list` is optional on the contract (a fire-and-forget host
+                // omits it); this host always supplies it, which is the thing
+                // being asserted.
+                const pending = (await second.scheduler.list?.()) ?? [];
+
+                expect(pending.map((job) => job.functionPath)).toStrictEqual(["some/fn"]);
+                expect(pending[0]?.attempts).toBe(0);
+
+                second.dispose();
+            } finally {
+                database.close();
+            }
+        });
+    });
+
+    /**
+     * The parity legs. `simulateRecycle()` and the TCK prove state survives a
+     * host *forgetting* its runtime half; these prove it survives the process
+     * that held it going away, which is what `ShardAlarms` ("survive host
+     * recycling") and `SocketHost` guarantee 2 ("survive recycling and be
+     * readable on wake") actually promise. A second host constructed over the
+     * same database file is this package's stand-in for a restart.
+     */
+    describe("survives a process restart", () => {
+        it("re-arms and delivers an alarm the previous host persisted", async () => {
+            expect.assertions(2);
+
+            const path = join(workdir, "alarm-rearm.sqlite3");
+            const first = createNodeShardHost({ path });
+
+            // Already elapsed: the case a restart is most likely to hit, and the
+            // one a host that only re-armed *future* alarms would silently drop.
+            await first.host.alarms.set(Date.now() - 1000);
+            first.dispose();
+
+            let delivered = 0;
+            const second = createNodeShardHost({
+                onAlarm: () => {
+                    delivered += 1;
+                },
+                path,
+            });
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+
+            expect(delivered).toBe(1);
+
+            // And the row is consumed, so a third host does not re-deliver it.
+            // Bound to a variable rather than asserted inline: `ShardAlarms.get`
+            // is `Promise<number | null> | number | null` by contract, and this
+            // host answers synchronously — so `.resolves` (which eslint's
+            // autofix reaches for) would reject a legitimate return.
+            const pendingAfterDelivery = await second.host.alarms.get();
+
+            expect(pendingAfterDelivery).toBeNull();
+
+            second.dispose();
+        });
+
+        it("restores a socket's attachment and tags written by the previous host", () => {
+            expect.assertions(3);
+
+            const path = join(workdir, "socket-restore.sqlite3");
+            const first = createNodeShardHost({ path });
+            const firstSockets = createNodeSocketHost(first.database);
+
+            const handle = firstSockets.socket.accept({}, { roles: ["admin"], roomId: "room-1" }, ["room-a"]);
+            const id = firstSockets.socket.idFor(handle);
+
+            first.dispose();
+
+            const second = createNodeShardHost({ path });
+            const secondSockets = createNodeSocketHost(second.database);
+
+            // `undefined` as the fallback: if the attachment comes back, it came
+            // out of SQLite and not from an argument the test kept alive.
+            const restored = secondSockets.restoreSocket(id, undefined);
+
+            expect(restored.deserializeAttachment()).toStrictEqual({ roles: ["admin"], roomId: "room-1" });
+            expect(secondSockets.socket.idFor(restored)).toBe(id);
+            // Tags too — a restored socket that lost them silently drops out of
+            // every tagged fan-out it was subscribed to.
+            expect(secondSockets.socket.getSockets("room-a").map((entry: SocketHandle) => secondSockets.socket.idFor(entry))).toStrictEqual([id]);
+
+            second.dispose();
         });
     });
 

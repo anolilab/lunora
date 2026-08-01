@@ -1,23 +1,42 @@
 /**
- * Node adapter: an in-process socket registry satisfying the provider-neutral
- * `@lunora/platform` `SocketHost` contract.
+ * Node adapter: a socket registry satisfying the provider-neutral
+ * `@lunora/platform` `SocketHost` contract, with attachments and tags persisted
+ * to SQLite.
  *
- * Cloudflare's `SocketHost` is backed by the DO WebSocket hibernation API —
- * sockets survive eviction because the *runtime* owns them. A plain Node
- * process has no hibernation primitive to borrow: every socket this host
- * tracks lives only as long as the process does, and "recycle" only ever
- * means "the caller told us to forget the runtime half and rehydrate it" —
- * there is no involuntary eviction to model. That is a real asymmetry, not a
- * simplification made for the spike: see `plans/234-node-host-findings.md`.
+ * Cloudflare's `SocketHost` is backed by the DO WebSocket hibernation API — the
+ * runtime* owns the sockets, so an attachment and its accept-time tags survive
+ * eviction for free. A Node process has no hibernation primitive to borrow, so
+ * this host splits the two halves explicitly:
  *
- * Unlike Cloudflare — whose tags freeze at `acceptWebSocket` — a Node
- * in-process registry has no reason a live socket's tags can't change, so
- * `setTag`/`removeTag` are implemented here. That is the mutable-tag tier
- * `SocketHost` documents as optional, and this host is the first one in the
- * repo to actually declare it.
+ * - **Runtime state** (the live transport object, its outbound frames, its
+ * in-memory tag set) lives in a `Map` and dies with the process. There is no
+ * way around that: a TCP socket cannot outlive the process holding it.
+ * - **Durable state** (attachment + tags, keyed by socket id) lives in
+ * `_lunora_sockets` on the same `better-sqlite3` connection as the rest of the
+ * shard, so it survives both a `simulateRecycle()` and a genuine process
+ * restart.
+ *
+ * That second half is what the contract actually asks for. `SocketHost`'s
+ * guarantee 2 is "arbitrary JSON state serialized with the socket must survive
+ * recycling and be readable on wake" — a guarantee about the *state*, not about
+ * the connection. A client that reconnects after a restart and presents its
+ * socket id gets its subscription state back, which is the behavior the engine
+ * reassociates on.
+ *
+ * Ids are `crypto.randomUUID()` rather than a counter. A counter restarts at 1
+ * on every process start and would collide with ids already in the table —
+ * silently handing a reconnecting client someone else's attachment.
+ *
+ * Unlike Cloudflare — whose tags freeze at `acceptWebSocket` — a Node registry
+ * has no reason a live socket's tags can't change, so `setTag`/`removeTag` are
+ * implemented. That is the mutable-tag tier `SocketHost` documents as optional,
+ * and this host is the first in the repo to declare it.
  */
 
+import { deserialize, serialize } from "node:v8";
+
 import type { SocketHandle, SocketHost } from "@lunora/platform";
+import type Database from "better-sqlite3";
 
 /** Internal record for one accepted (or restored) socket. */
 interface NodeSocket {
@@ -30,6 +49,12 @@ interface NodeSocket {
     raw: unknown;
     received: (string | ArrayBuffer)[];
     tags: Set<string>;
+}
+
+/** Row shape of `_lunora_sockets`. */
+interface SocketRow {
+    attachment: Buffer | null;
+    tags: string;
 }
 
 const toArrayBuffer = (data: string | ArrayBufferLike | Blob | ArrayBufferView): ArrayBuffer => {
@@ -59,7 +84,14 @@ const toArrayBuffer = (data: string | ArrayBufferLike | Blob | ArrayBufferView):
 export interface NodeSocketHost {
     /** Read back the frames sent to a socket, oldest first, text frames only. */
     readFrames: (handle: SocketHandle) => string[];
-    /** Re-create a runtime socket from durable state (post-"recycle"). */
+
+    /**
+     * Re-create a runtime socket from durable state.
+     *
+     * `attachment` is a fallback only: this host restores what it persisted,
+     * because that is what a real wake looks like. The argument covers an id
+     * this host never durably tracked (a synthetic id a test constructs).
+     */
     restoreSocket: (id: string, attachment: unknown) => SocketHandle;
     /** Drop the runtime socket map while keeping durable attachments/tags. */
     simulateRecycle: () => void;
@@ -67,12 +99,40 @@ export interface NodeSocketHost {
     socket: SocketHost;
 }
 
-/** Build the in-process socket registry. */
-export const createNodeSocketHost = (): NodeSocketHost => {
+/** Build the socket registry, persisting attachments and tags to `database`. */
+export const createNodeSocketHost = (database: Database.Database): NodeSocketHost => {
+    database.exec("CREATE TABLE IF NOT EXISTS _lunora_sockets (id TEXT PRIMARY KEY, attachment BLOB, tags TEXT NOT NULL DEFAULT '[]')");
+
+    const upsertRow = database.prepare<[string, Buffer | null, string]>(
+        `INSERT INTO _lunora_sockets (id, attachment, tags) VALUES (?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET attachment = excluded.attachment, tags = excluded.tags`,
+    );
+    const updateAttachment = database.prepare<[Buffer | null, string]>("UPDATE _lunora_sockets SET attachment = ? WHERE id = ?");
+    const updateTags = database.prepare<[string, string]>("UPDATE _lunora_sockets SET tags = ? WHERE id = ?");
+    const selectRow = database.prepare<[string], SocketRow>("SELECT attachment, tags FROM _lunora_sockets WHERE id = ?");
+    const deleteRow = database.prepare<[string]>("DELETE FROM _lunora_sockets WHERE id = ?");
+
     const runtimeSockets = new Map<string, NodeSocket>();
-    const durableAttachments = new Map<string, unknown>();
-    const durableTags = new Map<string, Set<string>>();
     const handleIds = new WeakMap<SocketHandle, string>();
+
+    /**
+     * Every durable write is guarded on `database.open`. A socket handle can
+     * outlive the connection — a caller that closes the platform still holds
+     * handles, and `send`/`serializeAttachment` on one must not throw from a
+     * closed connection.
+     */
+    const persistAttachment = (id: string, value: unknown): void => {
+        if (database.open) {
+            // eslint-disable-next-line unicorn/no-null -- writing SQL NULL into a nullable BLOB column; better-sqlite3 has no other spelling for it
+            updateAttachment.run(value === undefined ? null : serialize(value), id);
+        }
+    };
+
+    const persistTags = (id: string, tags: Set<string>): void => {
+        if (database.open) {
+            updateTags.run(JSON.stringify([...tags]), id);
+        }
+    };
 
     const createHandle = (socketState: NodeSocket): SocketHandle => {
         // Alias so the mutation is on a local binding, not the parameter
@@ -83,6 +143,16 @@ export const createNodeSocketHost = (): NodeSocketHost => {
             bufferedAmount: state.bufferedAmount,
             close: (_code, _reason) => {
                 state.closed = true;
+                runtimeSockets.delete(state.id);
+
+                // A closed socket is never restored, so its durable row is
+                // garbage the moment it closes. Cloudflare drops the socket from
+                // `getWebSockets()` on the close event; leaving the row (and the
+                // map entry) behind would both leak and fan updates out at a dead
+                // subscriber.
+                if (database.open) {
+                    deleteRow.run(state.id);
+                }
             },
             deserializeAttachment: () => state.attachment,
             send: (data) => {
@@ -90,7 +160,7 @@ export const createNodeSocketHost = (): NodeSocketHost => {
             },
             serializeAttachment: (value) => {
                 state.attachment = value;
-                durableAttachments.set(state.id, value);
+                persistAttachment(state.id, value);
             },
         };
 
@@ -100,16 +170,10 @@ export const createNodeSocketHost = (): NodeSocketHost => {
         return handle;
     };
 
-    let counter = 0;
-    const nextId = (): string => {
-        counter += 1;
-
-        return `node-socket-${String(counter)}`;
-    };
-
     const socket: SocketHost = {
         accept: (raw, attachment, tags) => {
-            const id = nextId();
+            const id = crypto.randomUUID();
+            const tagSet = new Set(tags);
             const state: NodeSocket = {
                 attachment,
                 bufferedAmount: 0,
@@ -118,14 +182,14 @@ export const createNodeSocketHost = (): NodeSocketHost => {
                 id,
                 raw,
                 received: [],
-                tags: new Set(tags),
+                tags: tagSet,
             };
 
             runtimeSockets.set(id, state);
-            durableTags.set(id, new Set(tags));
 
-            if (attachment !== undefined) {
-                durableAttachments.set(id, attachment);
+            if (database.open) {
+                // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
+                upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
             }
 
             return createHandle(state);
@@ -166,7 +230,7 @@ export const createNodeSocketHost = (): NodeSocketHost => {
                 state.tags.delete(tag);
             }
 
-            durableTags.set(id, new Set(state.tags));
+            persistTags(id, state.tags);
         },
         setTag: (handle, tag) => {
             const id = handleIds.get(handle);
@@ -177,27 +241,25 @@ export const createNodeSocketHost = (): NodeSocketHost => {
             }
 
             state.tags.add(tag);
-            durableTags.set(id, new Set(state.tags));
+            persistTags(id, state.tags);
         },
     };
 
     return {
         readFrames: (handle) => (runtimeSockets.get(handleIds.get(handle) ?? "")?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
         restoreSocket: (id, attachment) => {
+            const row = database.open ? selectRow.get(id) : undefined;
+
+            const persisted = row?.attachment === null ? undefined : row?.attachment;
             const state: NodeSocket = {
-                // Prefer this host's OWN durable record over the caller-supplied
-                // `attachment` — a real host restores from what it persisted, not
-                // from a copy the caller happens to still be holding. Falling back
-                // to the argument only covers an id this host never durably
-                // tracked (a synthetic id a test constructs directly).
-                attachment: durableAttachments.has(id) ? durableAttachments.get(id) : attachment,
+                attachment: persisted === undefined ? attachment : deserialize(persisted),
                 bufferedAmount: 0,
                 closed: false,
                 handle: undefined as unknown as SocketHandle,
                 id,
                 raw: undefined,
                 received: [],
-                tags: new Set(durableTags.get(id)),
+                tags: new Set(row === undefined ? [] : (JSON.parse(row.tags) as string[])),
             };
 
             runtimeSockets.set(id, state);

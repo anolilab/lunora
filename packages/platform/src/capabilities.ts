@@ -113,51 +113,58 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
  * (plan 234).
  *
- * `@lunora/platform-node` is a spike: a `ShardHost`/`SocketHost`/
- * `ShardDirectory`/`ShardKvStore`/`SchedulerHost` implementation over
- * `better-sqlite3` and an in-process registry, built to run the conformance
- * TCK against a second host and discover what the contracts under-specify.
- * It is a single Node process with no distributed placement, no host-level
- * scheduler to re-arm timers after a restart, and no bindings at all for the
- * Cloudflare-specific products (R2, Vectorize, Workers AI, Queues,
- * Workflows, Containers, Browser Rendering, Analytics Engine, Secrets Store,
- * Hyperdrive) most `ctx.*` surfaces are built on. Every one of those is
- * rated `"unsupported"` here rather than left undeclared — see
- * `gateAgainstMatrix` in `@lunora/codegen`, whose fail-closed gate (plan
- * 229) treats an undeclared feature as unsupported anyway, but under a
- * different diagnostic name than an honest, explicit rating.
+ * `@lunora/platform-node` implements every contract in this package
+ * (`ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`,
+ * `SchedulerHost`) over `better-sqlite3` and an in-process registry, plus the
+ * `.global()` table backend via `@lunora/sql-store`. It began as a spike to run
+ * the conformance TCK against a second host; the durability gaps that spike
+ * surfaced — alarms and scheduler jobs that were persisted but never re-armed,
+ * socket attachments that lived only in memory — are closed, and each is now
+ * pinned by a restart test rather than only by a simulated recycle.
  *
- * Two features are rated `"emulated"` rather than `"native"` even though
- * this package fully implements their contract, because "native" would
- * overstate what a bare Node process provides on its own: `keyValueStore` is
- * a SQL table wearing a KV-shaped API, not a dedicated KV product, and
- * `websocketHibernation` never actually evicts a socket to save memory — it
- * only proves the attachment/tag durability half of the contract, not real
- * hibernation. Both ratings, and the `"unsupported"` ones for `scheduler`
- * durability and `globalTables`, are argued in detail in
- * `plans/234-node-host-findings.md`.
+ * What remains genuinely absent is everything a single Node process cannot
+ * distribute: placement across nodes, failover, the cross-shard query
+ * coordinator, and any binding at all for the Cloudflare-specific products
+ * (R2, Vectorize, Workers AI, Queues, Workflows, Containers, Browser Rendering,
+ * Analytics Engine, Secrets Store, Hyperdrive) most `ctx.*` surfaces are built
+ * on. Every one of those is rated `"unsupported"` here rather than left
+ * undeclared — see `gateAgainstMatrix` in `@lunora/codegen`, whose fail-closed
+ * gate (plan 229) treats an undeclared feature as unsupported anyway, but under
+ * a different diagnostic name than an honest, explicit rating.
+ *
+ * Almost nothing here is rated `"native"`, and that is the matrix's own
+ * definition doing its job rather than a hedge: `native` means the platform
+ * itself provides the feature, and a bare Node process provides essentially
+ * none of them — Lunora builds alarms out of `setTimeout` plus a durable row,
+ * a KV store out of a SQL table, and `.global()` tables out of a second SQLite
+ * file. `localSql` is the exception, because SQLite genuinely is the platform
+ * primitive there. The ratings say who does the work; the notes say how well.
+ * Both are argued in detail in `plans/234-node-host-findings.md`.
  */
 export const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",
     name: "Node",
     features: {
         shardedState: { level: "emulated", note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover" },
-        globalTables: { level: "unsupported", note: "No replicated SQL store (D1-equivalent) implemented" },
+        globalTables: {
+            level: "emulated",
+            note: "The @lunora/sql-store core on its own SQLite file via the reference sqliteDialect — full store semantics, but one node with no replication",
+        },
         websocketHibernation: {
             level: "emulated",
-            note: "In-process socket registry; attachments/tags survive a simulated recycle, not a process restart, and nothing is ever actually evicted from memory",
+            note: "Socket registry with attachments/tags persisted to SQLite, so subscription state survives a process restart; nothing is ever actually evicted from memory, so this is durability without hibernation's memory saving",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         shardAlarms: {
             level: "emulated",
-            note: "In-process setTimeout; the timestamp can be persisted to SQLite but nothing re-arms it on process restart",
+            note: "setTimeout over a durable row; re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",
         },
         crossShardFanout: { level: "unsupported", note: "No query coordinator / relay tier implemented" },
         queues: { level: "unsupported", note: "No Cloudflare Queues equivalent implemented" },
         workflows: { level: "unsupported", note: "No Cloudflare Workflows equivalent implemented" },
         scheduler: {
             level: "emulated",
-            note: "In-process setTimeout only; not durable across a process restart, and no dynamic cron registration is implemented",
+            note: "SQLite job table re-armed on construction, with retry backoff and a dead-letter queue; the only host that implements runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer",
         },
         objectStorage: { level: "unsupported", note: "No R2/S3-equivalent binding implemented" },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },

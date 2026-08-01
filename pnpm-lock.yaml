@@ -2810,7 +2810,7 @@ importers:
         version: link:../platform
       '@lunora/platform-cloudflare':
         specifier: 1.0.0-alpha.1
-        version: link:../platform-cloudflare
+        version: 1.0.0-alpha.1
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3389,12 +3389,21 @@ importers:
 
   packages/platform-node:
     dependencies:
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/sql-store':
+        specifier: workspace:*
+        version: link:../sql-store
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1
+      cron-parser:
+        specifier: 5.6.2
+        version: 5.6.2
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -7522,6 +7531,10 @@ packages:
   '@lingui/message-utils@6.6.0':
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
+
+  '@lunora/platform-cloudflare@1.0.0-alpha.1':
+    resolution: {integrity: sha512-6awpLQm1Q2tCnPn0ESNoM4czxYvxFtKjBwU3XhIl5HzdIWlUbbxRJ2rZI0m+EBfEYxhkSbCzyd2vua17wtPV7w==}
+    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -16066,10 +16079,12 @@ packages:
   cron-parser@4.9.0:
     resolution: {integrity: sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==}
     engines: {node: '>=12.0.0'}
+    deprecated: v4 is no longer maintained, upgrade to v5
 
   cron-parser@5.6.2:
     resolution: {integrity: sha512-yJ/G1LVir6CnlkLI40CsampPLKl1SprGGlUagWtGJxewytRVYezv5xVyzzbT+Pvzx+VIRvZVF7/a0eEMTxdnTA==}
     engines: {node: '>=18'}
+    deprecated: 'Published tarball was built from a stale dist/ and is missing the fixes from #414 and #415 — its contents are effectively v5.6.1. Upgrade to v5.7.0.'
 
   croner@10.0.1:
     resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
@@ -27389,6 +27404,10 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
+
+  '@lunora/platform-cloudflare@1.0.0-alpha.1':
+    dependencies:
+      '@lunora/platform': link:packages/platform
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true

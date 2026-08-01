@@ -60,8 +60,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/d1": "1.0.0-alpha.56",
         "@lunora/platform": "1.0.0-alpha.1",
-        "better-sqlite3": "^12.11.1"
+        "@lunora/sql-store": "1.0.0-alpha.58",
+        "better-sqlite3": "^12.11.1",
+        "cron-parser": "5.6.2"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

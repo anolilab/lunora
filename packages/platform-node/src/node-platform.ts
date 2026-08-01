@@ -17,6 +17,7 @@ import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, Sh
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { createNodeShardKvStore } from "./node-kv-store";
+import type { NodeSchedulerHostOptions } from "./node-scheduler-host";
 import { createNodeSchedulerHost } from "./node-scheduler-host";
 import { createNodeShardDirectory } from "./node-shard-directory";
 import type { NodeShardHostOptions } from "./node-shard-host";
@@ -43,31 +44,51 @@ export interface NodePlatform {
     close: () => void;
     /** In-process shard directory (see `createNodeShardDirectory`'s docstring for what it cannot do). */
     directory: ShardDirectory;
+
+    /**
+     * Wait for every promise handed to `shard.waitUntil` to settle.
+     *
+     * Separate from `close()` because the two answer different questions:
+     * `close()` releases handles and stays synchronous (it backs
+     * `Symbol.dispose`), while draining is inherently awaitable. A graceful
+     * shutdown is `await platform.drain()` then `platform.close()`.
+     */
+    drain: () => Promise<void>;
+
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
-    /** In-process delayed jobs — NOT durable across a process restart; see `createNodeSchedulerHost`. */
+    /** Delayed jobs and crons, persisted to the same database and re-armed on construction. */
     scheduler: SchedulerHost;
-    /** Single-writer execution, local SQL, transactions, alarms. */
+    /** Single-writer execution, local SQL, transactions, durable alarms. */
     shard: ShardHost;
-    /** In-process socket registry with mutable tags. */
+    /** Socket registry with mutable tags and SQLite-persisted attachments. */
     sockets: SocketHost;
 }
 
-/** Options for {@link createNodePlatform}. */
-export type NodePlatformOptions = NodeShardHostOptions;
+/**
+ * Options for {@link createNodePlatform} — the shard host's (`path`,
+ * `shardKey`, `onAlarm`) plus the scheduler's (`onDispatch`). Both delivery
+ * hooks are optional and both are what make the durable halves useful: a
+ * re-armed alarm or job with nowhere to land is bookkeeping.
+ */
+export type NodePlatformOptions = NodeSchedulerHostOptions & NodeShardHostOptions;
 
 /** Compose every contract this package provides over one `better-sqlite3` database. */
 export const createNodePlatform = (options: NodePlatformOptions = {}): NodePlatform => {
-    const { database, dispose: disposeShard, host: shard } = createNodeShardHost(options);
+    const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
     const kv = createNodeShardKvStore(database);
     const directory = createNodeShardDirectory();
-    const { socket: sockets } = createNodeSocketHost();
-    const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost();
+    const { socket: sockets } = createNodeSocketHost(database);
+    const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
     const close = (): void => {
-        disposeShard();
+        // Scheduler timers first: `disposeShard` closes the connection, and a
+        // job timer that fired in between would find it closed. Both are
+        // guarded, but ordering makes the guard the backstop rather than the
+        // mechanism.
         disposeScheduler();
+        disposeShard();
     };
 
-    return { capabilities: NODE_CAPABILITIES, close, directory, kv, scheduler, shard, sockets, [Symbol.dispose]: close };
+    return { capabilities: NODE_CAPABILITIES, close, directory, drain, kv, scheduler, shard, sockets, [Symbol.dispose]: close };
 };

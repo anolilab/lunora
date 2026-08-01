@@ -4,19 +4,33 @@
  * `SchedulerHost`) over `better-sqlite3` and an in-process socket/directory/
  * scheduler registry.
  *
- * **Spike (plan 234).** Promoted from `@lunora/platform`'s `node:sqlite`
- * reference host (`src/conformance/reference-host.ts`) and hardened toward
- * real persistence semantics — see each adapter module's docstring for what
- * changed and why, and `plans/234-node-host-findings.md` for every contract
- * gap this construction surfaced. Not wired into `lunora dev`; no deploy
- * driver; several capabilities are honestly rated `emulated`/`unsupported` in
- * `NODE_CAPABILITIES` (`@lunora/platform`).
+ * Promoted from `@lunora/platform`'s `node:sqlite` reference host
+ * (`src/conformance/reference-host.ts`) under plan 234, then hardened until the
+ * durability half of each contract actually holds: alarms and scheduler jobs
+ * are persisted **and re-armed on construction**, socket attachments and tags
+ * live in SQLite rather than a `Map`, and `.global()` tables run the real
+ * `@lunora/sql-store` core (`./node-global-store`). Each of those is pinned by
+ * a restart test — a second host over the same database file — not only by the
+ * TCK's simulated recycle.
+ *
+ * Three suites run against this package: `@lunora/platform/conformance`'s host
+ * TCK, `@lunora/shard-engine/conformance`'s engine suite, and its own
+ * lifecycle/global-store tests.
+ *
+ * **Still missing**, and rated accordingly in `NODE_CAPABILITIES`
+ * (`@lunora/platform`): cross-shard fan-out (no query coordinator), a deploy
+ * driver — so `lunora dev --target node` does not exist yet — and every
+ * Cloudflare product binding (R2, Queues, Workflows, Vectorize, Workers AI,
+ * Browser Rendering, Containers, Analytics Engine, Pipelines, Secrets Store,
+ * Hyperdrive). See `plans/234-node-host-findings.md`.
  */
 
+export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
+export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodePlatform, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
-export type { NodeSchedulerHost } from "./node-scheduler-host";
+export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";
 export { createNodeSchedulerHost } from "./node-scheduler-host";
 export { createNodeShardDirectory } from "./node-shard-directory";
 export type { NodeShardHostOptions } from "./node-shard-host";
