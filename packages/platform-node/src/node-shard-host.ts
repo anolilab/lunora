@@ -139,6 +139,14 @@ const createAlarms = (database: Database.Database): { alarms: ShardAlarms; dispo
 
     const alarms: ShardAlarms = {
         delete: () => {
+            // The connection's own open state IS closed-ness (see the module
+            // docstring below and `dispose`'s callback comment) — checked
+            // BEFORE any mutation, so a closed platform's alarm state is never
+            // touched by a call that is about to throw.
+            if (!database.open) {
+                throw new Error("platform closed: cannot delete an alarm");
+            }
+
             alarmAt = undefined;
             clearAlarmTimeout();
             persist(undefined);
@@ -149,6 +157,10 @@ const createAlarms = (database: Database.Database): { alarms: ShardAlarms; dispo
         // eslint-disable-next-line unicorn/no-null -- platform contract uses null
         get: () => alarmAt ?? null,
         set: (timestamp: number | Date) => {
+            if (!database.open) {
+                throw new Error("platform closed: cannot set an alarm");
+            }
+
             const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
 
             alarmAt = ms;
@@ -211,7 +223,14 @@ interface NodeShardHostOptions {
  * inside a Cloudflare Durable Object, where the runtime forbids it and
  * callers must use `storage.transaction`) because better-sqlite3 is a plain
  * embedded database with no platform-level transaction primitive layered over
- * it.
+ * it. It runs on its own private `transactionTail` chain, the same shape as
+ * `runSerialized`'s but never shared with it: two bare, overlapping
+ * `transaction()` calls on this host serialize against each other rather than
+ * corrupting each other's commits (raw `BEGIN` on a connection already inside
+ * a transaction throws, or worse, interleaves). Routing `transaction` through
+ * `runSerialized` itself would deadlock, since the engine already composes
+ * `runSerialized(() => transaction(work))` — the inner enqueue would then wait
+ * on the outer closure awaiting it.
  *
  * The returned `dispose()` is this host's lifecycle owner: it clears the
  * pending alarm `setTimeout` (so it can never fire against a connection this
@@ -243,7 +262,25 @@ const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Da
         return started;
     };
 
-    const transaction: ShardHost["transaction"] = async (function_) => {
+    // A second, private tail chain of the exact same shape as `runSerialized`
+    // above, used ONLY by `transaction`. Raw BEGIN/COMMIT/ROLLBACK on a shared
+    // connection is not safe under overlap — a second `transaction()` call
+    // that starts before the first commits either throws "cannot start a
+    // transaction within a transaction" on the second BEGIN, or (worse) its
+    // COMMIT commits the first's uncommitted writes and the first's ROLLBACK
+    // then discards work that already reported success.
+    //
+    // Routing `transaction` through the SAME `runSerialized`/`tail` chain
+    // would deadlock: the engine composes them as
+    // `runSerialized(() => transaction(work))` (`shard-runner.ts`), so the
+    // inner enqueue would wait on the outer closure that is awaiting it. This
+    // dedicated lane serializes bare, overlapping `transaction()` calls
+    // against each other (the actual bug) while leaving `runInTransaction`'s
+    // composition free of self-deadlock (the outer gate is `runSerialized`,
+    // the inner lane is always empty when it runs).
+    let transactionTail: Promise<unknown> = Promise.resolve();
+
+    const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
 
         try {
@@ -256,6 +293,20 @@ const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Da
             database.exec("ROLLBACK");
             throw error;
         }
+    };
+
+    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => {
+        const started = transactionTail.then(
+            () => runTransaction(function_),
+            () => runTransaction(function_),
+        );
+
+        transactionTail = started.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return started;
     };
 
     const host: ShardHost = {

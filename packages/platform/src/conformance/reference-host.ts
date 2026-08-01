@@ -282,7 +282,20 @@ const createReferenceHost = (): ReferenceHost => {
             drainQueue();
         });
 
-    const transaction: ShardHost["transaction"] = async (function_) => {
+    // A second, private tail chain of the same shape as `runSerialized`'s
+    // `shardState.pending`/`drainQueue`, used ONLY by `transaction`. Raw
+    // BEGIN/COMMIT/ROLLBACK on a shared connection is not safe under overlap:
+    // a second `transaction()` call that starts before the first commits
+    // either throws on the second BEGIN, or its COMMIT commits the first's
+    // uncommitted writes and the first's ROLLBACK then discards work that
+    // already reported success. Routing `transaction` through the same
+    // `runSerialized` queue would deadlock (the engine composes
+    // `runSerialized(() => transaction(work))`), so this is a dedicated lane
+    // — see `@lunora/platform-node`'s `node-shard-host.ts`, which has the
+    // identical shape and the identical reasoning (plan 267).
+    let transactionTail: Promise<unknown> = Promise.resolve();
+
+    const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
         try {
             const result = await function_();
@@ -293,6 +306,20 @@ const createReferenceHost = (): ReferenceHost => {
             database.exec("ROLLBACK");
             throw error;
         }
+    };
+
+    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => {
+        const started = transactionTail.then(
+            () => runTransaction(function_),
+            () => runTransaction(function_),
+        );
+
+        transactionTail = started.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return started;
     };
 
     const setAlarm = (timestamp: number | Date): void => {
