@@ -97,7 +97,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         objectStorage: { level: "native", note: "R2" },
         keyValueStore: { level: "native", note: "Workers KV" },
-        vectorStore: { level: "native", note: "Vectorize" },
+        vectorStore: {
+            level: "native",
+            note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option",
+        },
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
         containers: { level: "native", note: "Cloudflare Containers" },

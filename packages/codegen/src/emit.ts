@@ -4451,6 +4451,38 @@ const vectorsStub: VectorSearchLike = {
 `
         : "";
     const vectorNamespaceOption = hasShardedVectors ? "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, " : "";
+    // Read-side counterpart to `vectorNamespaceOption`: threaded into
+    // `createContextVectors` so `ctx.vectors` (query/getByIds/deleteByIds/
+    // upsert/upsertNow) defaults to this DO's own namespace too — otherwise
+    // `ctx.vectors.query` searches every tenant's vectors (namespace-less
+    // Vectorize queries match the whole index) even though the auto-sync
+    // write hook above is already scoped.
+    //
+    // This does NOT simply mirror `vectorNamespaceOption`'s sentinel mapping,
+    // for a reason specific to the read side: `ctx.vectors` is a single flat
+    // facade over EVERY declared vector index (root-scoped and sharded tables
+    // alike — `config.vectors(env)` registers them all in one map), reachable
+    // from ANY DO instance. The write hook is safe to map `ROOT_SHARD_NAME` to
+    // `undefined` unconditionally because a write event only ever fires for a
+    // table THIS instance owns (a sharded table's rows never reach the root
+    // instance) — but a read/explicit-write call takes an arbitrary index name
+    // from application code, so the SAME mapping on `ctx.vectors` would let a
+    // namespace-less call from the root instance reach a SHARDED index and
+    // search/mutate every tenant's vectors, in a mixed schema (some vectorized
+    // tables `.shardBy()`'d, others root-scoped). `shardedIndexNames` tells the
+    // adapter exactly which indexes `namespace` is a valid default for, so a
+    // root-instance call against a genuinely root-scoped index stays
+    // namespace-less (correct — unchanged), while the same call against a
+    // sharded index throws (see `createContextVectors`'s docblock) rather than
+    // silently defaulting to "every tenant". Gated on `hasShardedVectors` so an
+    // unsharded (or no-vectors) schema keeps emitting the bare
+    // `createContextVectors(lunora)` call, byte-identical.
+    const vectorsContextNamespaceOption = hasShardedVectors
+        ? `, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: [${schema.vectorIndexes
+              .filter((index) => shardedTableNames.has(index.table))
+              .map((index) => JSON.stringify(index.name))
+              .join(", ")}] }`
+        : "";
     const vectorsBuild = hasVectors
         ? `
             let vectors: VectorSearchLike;
@@ -4459,7 +4491,7 @@ const vectorsStub: VectorSearchLike = {
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 ${vectorNamespaceField}
-                vectors = createContextVectors(lunora);
+                vectors = createContextVectors(lunora${vectorsContextNamespaceOption});
                 onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;
