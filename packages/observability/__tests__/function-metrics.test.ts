@@ -1,4 +1,3 @@
-import type { SqlExec } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,37 +16,13 @@ import {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "../src/function-metrics";
+import freshHandleOver from "./_helpers/fresh-handle";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /** A dispatch with every field the recorder reads, so each test varies only what it is about. */
 const dispatch = (overrides: Partial<Parameters<typeof recordFunctionMetric>[1]> = {}) => {
     return { durationMs: 10, errored: false, path: "posts:list", ts: 1_000_000, ...overrides };
 };
-
-/**
- * A brand-new `SqlExec` object bound to the SAME underlying storage as
- * `harness` — simulating a fresh isolate reattaching to a durable shard after
- * hibernation. Object identity differs from `harness.sql`, so any
- * `WeakSet`/`WeakMap` memoization keyed on the handle starts cold, while the
- * SQL it runs lands in the same tables `harness.sql` already wrote.
- */
-const freshHandleOver = (harness: ReturnType<typeof createSqliteExec>): SqlExec => ({
-        exec: (query: string, ...parameters: unknown[]) => {
-            const rows = harness.raw(query, ...parameters);
-
-            return {
-                one: () => {
-                    if (rows.length !== 1) {
-                        throw new Error(`expected exactly one row, received ${String(rows.length)}`);
-                    }
-
-                    return rows[0]!;
-                },
-                [Symbol.iterator]: () => rows[Symbol.iterator](),
-                toArray: () => rows,
-            };
-        },
-    } as unknown as SqlExec);
 
 describe("ensureFunctionMetricsTables", () => {
     it("is idempotent, so read and write paths can both call it defensively", () => {
@@ -534,7 +509,6 @@ describe("per-handle memoization (OBS-02)", () => {
         vi.spyOn(sql, "exec").mockImplementation((query: string, ...parameters: unknown[]) => {
             seen.push(query);
 
-             
             return (original as any)(query, ...parameters);
         });
 
