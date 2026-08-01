@@ -1,14 +1,14 @@
 import { useLunora } from "@lunora/react";
 import { useState } from "react";
 
-import type { ColumnMeta, TableColumnsResult, TablePage, WriteRowResult } from "../../../lib/admin";
+import type { ColumnMeta, ImportShardResult, TableColumnsResult, TablePage } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
 import { MAX_FK_SAMPLE } from "../../../lib/seed-data";
 
 const DESCRIBE_TABLE = adminRef(ADMIN_FUNCTIONS.describeTable);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
-const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
+const IMPORT_SHARD = adminRef(ADMIN_FUNCTIONS.importShard);
 
 /**
  * Extract a string row-id from a raw row object, trying common id column names.
@@ -33,8 +33,8 @@ const extractId = (row: Record<string, unknown>): string => {
  *
  * The hook fetches column metadata from `describeTable` and FK pools from
  * `readTablePage` lazily (when the dialog opens), then routes generated rows
- * through the schema-aware `writeRow` insert path — the same path the
- * add-row form uses. All state is local to this hook; the data browser
+ * through the bulk `importShard` admin RPC — the same batch path the
+ * Export/Import panel uses. All state is local to this hook; the data browser
  * refresh is the caller's responsibility after a successful insert.
  */
 interface UseGenerateRowsModel {
@@ -48,9 +48,10 @@ interface UseGenerateRowsModel {
     fkPools: Readonly<Record<string, ReadonlyArray<string>>>;
 
     /**
-     * Insert a batch of pre-generated row documents. Routes each through
-     * `writeRow insert`. Returns `undefined` on full success or an error string on
-     * the first failure.
+     * Insert a batch of pre-generated row documents in ONE `importShard` call.
+     * Returns `undefined` on full success (no row-level errors — conflicts alone
+     * still count as success, see `composeImportError`) or an error string
+     * naming the first failing row on failure.
      */
     insertBatch: (rows: ReadonlyArray<Record<string, unknown>>, onDone: () => void) => Promise<string | undefined>;
     /** True while fetching column meta / FK pools or inserting rows. */
@@ -66,10 +67,35 @@ interface UseGenerateRowsModel {
 }
 
 /**
+ * Compose an `importShard` result into the dialog's single error string. Only a
+ * non-empty `errors` array is a failure — a conflict-only result (every row's
+ * `_id` collided with an existing one, e.g. a re-click with the same seed)
+ * counts as success, matching the Export/Import panel's semantics. The first
+ * error names its row (by 1-based `line`, which `importShard` treats as the
+ * row's position in `rows` since generated rows have no file lines) and table;
+ * a trailing count covers the rest so a big batch doesn't dump every failure.
+ */
+const composeImportError = (result: ImportShardResult): string | undefined => {
+    const [firstError] = result.errors;
+
+    if (firstError === undefined) {
+        return undefined;
+    }
+
+    const insertedTotal = Object.values(result.inserted).reduce((sum, count) => sum + count, 0);
+    const remaining = result.errors.length - 1;
+    const attempted = insertedTotal + result.conflicts + result.errors.length;
+    const errorWord = remaining === 1 ? "error" : "errors";
+    const suffix = remaining > 0 ? ` (+${remaining.toString()} more ${errorWord})` : "";
+
+    return `Inserted ${insertedTotal.toString()} of ${attempted.toString()} rows — row ${firstError.line.toString()} (${firstError.table}): ${firstError.message}${suffix}`;
+};
+
+/**
  * Manages the full lifecycle of the "Generate & insert dummy rows" dialog:
  * - Fetches column metadata from `describeTable` when the dialog opens.
  * - Fetches FK pools (sampled row ids) from `readTablePage` for each FK column.
- * - Routes generated rows through the schema-aware `writeRow` insert path.
+ * - Routes generated rows through the bulk `importShard` admin RPC in one call, instead of one `writeRow` round trip per row.
  *
  * Used exclusively by `DataBrowser` — not a shared hook.
  */
@@ -160,9 +186,20 @@ const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
         }
 
         try {
-            for (const rowDocument of rows) {
-                // eslint-disable-next-line no-await-in-loop -- sequential inserts through schema-aware writer; failure pins the offending row
-                (await client.query(WRITE_ROW, { doc: rowDocument, op: "insert", table }, callOptions(shardKey))) as WriteRowResult;
+            const result = (await client.query(
+                IMPORT_SHARD,
+                {
+                    rows: rows.map((document_) => {
+                        return { doc: document_, table };
+                    }),
+                },
+                callOptions(shardKey),
+            )) as ImportShardResult;
+
+            const batchError = composeImportError(result);
+
+            if (batchError !== undefined) {
+                return batchError;
             }
 
             onDone();
