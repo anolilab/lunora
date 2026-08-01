@@ -60,6 +60,7 @@ import {
     recordFunctionMetric,
     recordMetricHistory,
     recordQueryMetric,
+    redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
     SpanBuffer,
@@ -4158,7 +4159,18 @@ abstract class ShardDO {
             const code = (error as { code?: unknown } | null)?.code;
 
             if (code !== "FUNCTION_NOT_FOUND") {
-                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
+                // Redact BEFORE either function-metrics sink sees it: `recordFunctionCall`
+                // feeds this same string into both the durable `__lunora_metrics.last_error_message`
+                // column and the in-memory `functionStats` cache served by
+                // `__lunora_admin__:getFunctionStats`, so redacting once here — with the
+                // same `standardRules` treatment and `captureRaw` dev escape hatch the
+                // request-log sinks use — keeps every error-message sink consistent. The
+                // RAW `message` still goes to `recordRequestLog` below (which redacts
+                // internally, at the durable-row/Logpush boundary) and the in-memory
+                // `this.logs` dev buffer, unaffected by this local redaction.
+                const redactedErrorMessage = redactArgs(message, isDevEnvironment(this.env)) as string;
+
+                this.recordFunctionCall(payload.functionPath, durationMs, redactedErrorMessage, this.currentScannedTables, this.currentIndexHits, conflicted);
             }
             // Flush statement samples even on error paths — partial sampling
             // is better than losing the timing signal entirely.
@@ -4778,7 +4790,13 @@ abstract class ShardDO {
     /**
      * Fold one dispatch into the per-function counters keyed by `functionPath`,
      * creating the entry on first sight. `errorMessage` is supplied only when
-     * the handler threw, in which case the failure counters advance too.
+     * the handler threw, in which case the failure counters advance too. The
+     * caller is expected to have already redacted `errorMessage` (via
+     * `redactArgs`, the same `standardRules` treatment the request-log sinks
+     * use) — this method persists/caches it verbatim into BOTH the durable
+     * `__lunora_metrics.last_error_message` column and the in-memory
+     * `functionStats.lastErrorMessage` served by `getFunctionStats`, so an
+     * un-redacted message reaching here leaks into the Studio.
      * `scannedTables` carries the tables the dispatch full-scanned (collected by
      * `getCtxDbReadHook`), which advance the causal scan attribution.
      * `indexHits` carries the declared indexes it exercised (collected by

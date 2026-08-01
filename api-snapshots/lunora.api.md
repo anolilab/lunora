@@ -3747,6 +3747,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `redactArgs` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `resolveTraceAnchor` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.

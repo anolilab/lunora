@@ -203,17 +203,30 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 
 /**
  * Redact the secrets / PII out of a value before it reaches the durable log or a
- * Logpush event, via `@visulima/redact`'s `standardRules` — a value-pattern set
- * covering API keys, tokens, credit cards, SSNs, emails, phone numbers,
- * passwords and bearer/auth material. Unlike a blunt type-tag stamp this masks
- * sensitive values by PATTERN (not just by key name) while leaving benign values
- * readable, so the studio's args/identity columns stay useful. `null` /
- * `undefined` pass through unchanged. Works on a plain string too (`redact`
- * traverses whatever value it's handed), which is how {@link appendRequestLogEntry}
- * and {@link emitRequestLogEvent} reuse this for `errorMessage` — a validation
- * error echoes the offending value, a constraint error quotes the conflicting
- * row, so the error message is at least as PII-dense as args and gets the same
- * treatment.
+ * Logpush event, via `@visulima/redact`'s `standardRules`. Unlike a blunt
+ * type-tag stamp this masks sensitive values by PATTERN (not just by key name)
+ * while leaving benign values readable, so the studio's args/identity columns
+ * stay useful. `null` / `undefined` pass through unchanged.
+ *
+ * What `standardRules` actually catches differs by shape, verified against its
+ * real behavior rather than assumed from its name: on a KEYED object (`args`,
+ * `identity`) it also matches by key name, so `{ password: "hunter2" }` and
+ * `{ token: "…" }` ARE masked regardless of the value's shape. On a PLAIN
+ * STRING — which is what `errorMessage`/log `fields`-as-rendered-text are —
+ * only pattern-shaped matches apply: emails, long digit runs / structured
+ * numeric IDs (credit-card, phone, SSN, AWS-access-key-style), and an explicit
+ * `Bearer &lt;token>` / `token=…`-shaped substring. A free-text `password=hunter2`
+ * or a bare provider API key embedded in prose (e.g. `sk-live-…`) is NOT
+ * caught on a plain string — there is no key to match against, and neither is
+ * a recognized value pattern. So this is a PII-pattern net for rendered text,
+ * not a general secrets scrubber; a handler that echoes a raw credential into
+ * an error message or a log string can still leak it through here. Works on a
+ * plain string too (`redact` traverses whatever value it's handed), which is
+ * how {@link appendRequestLogEntry} and {@link emitRequestLogEvent} reuse this
+ * for `errorMessage` — a validation error echoes the offending value, a
+ * constraint error quotes the conflicting row, so the error message is at
+ * least as PII-dense as args and gets the same treatment (with the free-text
+ * caveat above).
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
  * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can
