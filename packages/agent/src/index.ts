@@ -21,6 +21,7 @@ export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, Containe
 export { browserTool, containerTool, fsTool } from "./sandbox";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
+    AgentApprovalContext,
     AgentAsToolOptions,
     AgentBindingSpec,
     AgentConfig,
