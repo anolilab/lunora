@@ -136,9 +136,13 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * a SQL table wearing a KV-shaped API, not a dedicated KV product, and
  * `websocketHibernation` never actually evicts a socket to save memory — it
  * only proves the attachment/tag durability half of the contract, not real
- * hibernation. Both ratings, and the `"unsupported"` ones for `scheduler`
- * durability and `globalTables`, are argued in detail in
- * `plans/234-node-host-findings.md`.
+ * hibernation. `scheduler` and `shardAlarms` are rated `"unsupported"`, not
+ * `"emulated"`: the Node host stores and times both, but its timer body only
+ * clears bookkeeping — nothing dispatches the scheduled function or wakes the
+ * alarm callback. `"emulated"` means built on lower-level primitives and
+ * working; never-dispatched is not that (plan 267). `globalTables` is also
+ * `"unsupported"` — no replicated SQL store is implemented. All ratings are
+ * argued in detail in `plans/234-node-host-findings.md`.
  */
 export const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",
@@ -152,15 +156,15 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         shardAlarms: {
-            level: "emulated",
-            note: "In-process setTimeout; the timestamp can be persisted to SQLite but nothing re-arms it on process restart",
+            level: "unsupported",
+            note: "In-process bookkeeping only — the armed timer clears state and never wakes anything; no dispatch, and nothing re-arms across a restart",
         },
         crossShardFanout: { level: "unsupported", note: "No query coordinator / relay tier implemented" },
         queues: { level: "unsupported", note: "No Cloudflare Queues equivalent implemented" },
         workflows: { level: "unsupported", note: "No Cloudflare Workflows equivalent implemented" },
         scheduler: {
-            level: "emulated",
-            note: "In-process setTimeout only; not durable across a process restart, and no dynamic cron registration is implemented",
+            level: "unsupported",
+            note: "Jobs are stored and timed but never dispatched — no delivery, no retries; also not durable across a process restart",
         },
         objectStorage: { level: "unsupported", note: "No R2/S3-equivalent binding implemented" },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },

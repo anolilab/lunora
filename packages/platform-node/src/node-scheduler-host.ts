@@ -4,16 +4,23 @@
  *
  * **This is the one contract this package cannot honestly hold as "hardened
  * toward a real implementation."** `SchedulerHost`'s docstring promises
- * "durable persistence — scheduled jobs survive host recycling." On
- * Cloudflare, `SchedulerDO` backs this with alarms on Durable Object storage:
- * the platform re-delivers an alarm to a freshly-woken DO even after the
- * process that scheduled it is long gone. A plain Node process has no
- * equivalent — nothing re-arms a `setTimeout` after `node` restarts, and there
- * is no host-level daemon to hand that job to. Persisting the job row to
- * SQLite without something to re-arm it on process start would be *worse* than
- * this in-memory implementation: it would report a job as "pending" forever
- * after a restart that will in fact never fire. This is filed as a finding,
- * not silently worked around — see `plans/234-node-host-findings.md`.
+ * "durable persistence — scheduled jobs survive host recycling" and, through
+ * its optional dead-letter member, at-least-once delivery. On Cloudflare,
+ * `SchedulerDO` backs both with alarms on Durable Object storage: the
+ * platform re-delivers an alarm to a freshly-woken DO even after the process
+ * that scheduled it is long gone. This host has neither: nothing re-arms a
+ * `setTimeout` after `node` restarts and there is no host-level daemon to hand
+ * that job to, AND its armed timer never dispatches the scheduled function at
+ * all — the timer body is bookkeeping deletion, not delivery. Persisting the
+ * job row to SQLite without something to re-arm it on process start would be
+ * worse than this in-memory implementation: it would report a job as
+ * "pending" forever after a restart that will in fact never fire. Per plan
+ * 267, this host's `scheduler` entry in the Node capability matrix is rated
+ * `"unsupported"` (not `"emulated"`) precisely because jobs are never
+ * dispatched, and the contract's dead-letter member — the documented
+ * at-least-once claim — is omitted below rather than declared falsely. This
+ * is filed as a finding, not silently worked around — see
+ * `plans/234-node-host-findings.md`.
  *
  * `cron` is omitted, matching Cloudflare (whose crons are declared in
  * `wrangler.jsonc`, not registered at runtime) — but for the opposite reason:
@@ -34,29 +41,25 @@ interface NodeJob {
     timer: ReturnType<typeof setTimeout> | undefined;
 }
 
-/**
- * Test-only hook the TCK's dead-letter legs need: force a pending job straight
- * to "exhausted its retry budget" without waiting out a real retry schedule.
- */
 export interface NodeSchedulerHost {
     /**
      * Clear every `setTimeout` this host has armed (every job still in
-     * `pending`). Dead-lettered jobs never carry a live timer — their `timer`
-     * is always `undefined` by the time they land in `dead` — so this only
-     * needs to walk `pending`. Call it on teardown: an armed job timer is a
-     * handle that keeps the event loop (and, transitively, the process) alive
-     * until it fires, so leaving it uncleared on shutdown is what produces the
-     * "worker process failed to exit gracefully" delay.
+     * `pending`), and put the host into a terminal, closed state: after this
+     * runs, `schedule()` throws instead of arming a fresh timer nothing would
+     * ever clear (the exact handle-leak class this disposer exists to
+     * eliminate). Call it on teardown: an armed job timer is a handle that
+     * keeps the event loop (and, transitively, the process) alive until it
+     * fires, so leaving it uncleared on shutdown is what produces the "worker
+     * process failed to exit gracefully" delay.
      */
     dispose: () => void;
     scheduler: SchedulerHost;
-    simulateDeadLetter: (id: string) => Promise<boolean>;
 }
 
 /** Build the in-process scheduler. */
 export const createNodeSchedulerHost = (): NodeSchedulerHost => {
     const pending = new Map<string, NodeJob>();
-    const dead = new Map<string, NodeJob>();
+    let closed = false;
     let counter = 0;
 
     const nextId = (): string => {
@@ -80,6 +83,10 @@ export const createNodeSchedulerHost = (): NodeSchedulerHost => {
             const job = pending.get(id);
 
             if (job === undefined) {
+                // Also covers "closed": `dispose()` empties `pending`, so a
+                // cancel after close answers `false` for the same reason a
+                // cancel of an unknown id does — no throw needed, since this
+                // keeps teardown-order races benign (see `NodePlatform.close()`).
                 return false;
             }
 
@@ -88,33 +95,14 @@ export const createNodeSchedulerHost = (): NodeSchedulerHost => {
 
             return true;
         },
-        deadLetter: {
-            // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
-            list: async () => [...dead].map(([id, job]) => toStatus(id, job)),
-            // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
-            requeue: async (id) => {
-                const job = dead.get(id);
-
-                if (job === undefined) {
-                    return false;
-                }
-
-                dead.delete(id);
-                // A fresh attempt budget is the point of a requeue — see the
-                // `SchedulerHost.deadLetter` docstring. Note the job is NOT
-                // re-armed with a live `setTimeout` here: it re-enters `pending`
-                // with its original `scheduledFor`, which is almost certainly in
-                // the past by the time an operator requeues it. That mirrors "due
-                // immediately" rather than firing an already-elapsed timer.
-                pending.set(id, { ...job, attempts: 0, timer: undefined });
-
-                return true;
-            },
-        },
         // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
         list: async () => [...pending].map(([id, job]) => toStatus(id, job)),
         // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
         schedule: async (functionPath, args, options) => {
+            if (closed) {
+                throw new Error("platform closed: cannot schedule a job");
+            }
+
             const id = nextId();
             let scheduledFor: number;
 
@@ -140,21 +128,10 @@ export const createNodeSchedulerHost = (): NodeSchedulerHost => {
             for (const job of pending.values()) {
                 clearTimeout(job.timer);
             }
+
+            pending.clear();
+            closed = true;
         },
         scheduler,
-        // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
-        simulateDeadLetter: async (id) => {
-            const job = pending.get(id);
-
-            if (job === undefined) {
-                return false;
-            }
-
-            clearTimeout(job.timer);
-            pending.delete(id);
-            dead.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, timer: undefined });
-
-            return true;
-        },
     };
 };

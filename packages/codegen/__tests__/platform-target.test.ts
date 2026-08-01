@@ -144,24 +144,29 @@ describe("gatePlatformFeatures", () => {
     // through the actual registry lookup — the thing `platformMatrixIds`
     // reports and `resolveCodegenTarget`/`lunora.json`'s `target` field select.
     it("gates a project declaring an unsupported ctx.* for the node target", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
         // `browser` and `container` are rated "unsupported" for node
         // (`NODE_CAPABILITIES` — no headless-browser or container binding is
-        // implemented by `@lunora/platform-node`); `kv` and `scheduler` are
-        // rated "emulated" (a real, if non-durable, better-sqlite3-backed
-        // implementation), so they must survive gating unchanged.
+        // implemented by `@lunora/platform-node`); as of plan 267, `scheduler`
+        // is ALSO rated "unsupported" — the Node host stores and times jobs but
+        // never dispatches them, so codegen must gate it off the same as
+        // `browser`/`container`. `kv` stays rated "emulated" (a real, if
+        // non-durable, better-sqlite3-backed implementation), so it must
+        // survive gating unchanged.
         const usage: FeatureUsage = { ...ALL_OFF, browser: true, container: true, kv: true, scheduler: true };
 
         const result = gatePlatformFeatures(usage, "node");
 
         expect(result.usage.browser).toBe(false);
         expect(result.usage.container).toBe(false);
-        expect({ kv: result.usage.kv, scheduler: result.usage.scheduler }).toStrictEqual({ kv: true, scheduler: true });
+        expect(result.usage.scheduler).toBe(false);
+        expect(result.usage.kv).toBe(true);
         expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
             "browser",
             "container",
+            "scheduler",
         ]);
     });
 });

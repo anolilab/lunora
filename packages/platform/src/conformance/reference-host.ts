@@ -29,6 +29,16 @@ interface ConformanceHost {
      * contract — platform delivery is the platform's test, not the adapter's.
      */
     awaitAlarmFired?: (target: number) => Promise<void>;
+
+    /**
+     * Resolve once the host has actually dispatched a scheduled job — invoked
+     * its delivery path, not merely expired the timer. Optional, but NOT for a
+     * host that declares `scheduler.deadLetter`: that member is the
+     * at-least-once claim, and a host that cannot show the TCK a dispatch is
+     * claiming what the suite cannot check.
+     * @returns `true` when the job was dispatched at least once.
+     */
+    awaitJobDispatched?: (id: string) => Promise<boolean>;
     /** Optional cleanup hook (close DBs, release timers). */
     cleanup?: () => void;
 
@@ -282,7 +292,20 @@ const createReferenceHost = (): ReferenceHost => {
             drainQueue();
         });
 
-    const transaction: ShardHost["transaction"] = async (function_) => {
+    // A second, private tail chain of the same shape as `runSerialized`'s
+    // `shardState.pending`/`drainQueue`, used ONLY by `transaction`. Raw
+    // BEGIN/COMMIT/ROLLBACK on a shared connection is not safe under overlap:
+    // a second `transaction()` call that starts before the first commits
+    // either throws on the second BEGIN, or its COMMIT commits the first's
+    // uncommitted writes and the first's ROLLBACK then discards work that
+    // already reported success. Routing `transaction` through the same
+    // `runSerialized` queue would deadlock (the engine composes
+    // `runSerialized(() => transaction(work))`), so this is a dedicated lane
+    // — see `@lunora/platform-node`'s `node-shard-host.ts`, which has the
+    // identical shape and the identical reasoning (plan 267).
+    let transactionTail: Promise<unknown> = Promise.resolve();
+
+    const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
         try {
             const result = await function_();
@@ -293,6 +316,20 @@ const createReferenceHost = (): ReferenceHost => {
             database.exec("ROLLBACK");
             throw error;
         }
+    };
+
+    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => {
+        const started = transactionTail.then(
+            () => runTransaction(function_),
+            () => runTransaction(function_),
+        );
+
+        transactionTail = started.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return started;
     };
 
     const setAlarm = (timestamp: number | Date): void => {
@@ -494,6 +531,15 @@ const createReferenceHost = (): ReferenceHost => {
      */
     const deadJobs = new Map<string, ReferenceJob>();
 
+    /**
+     * Ids the scheduler timer has actually fired for — the difference between
+     * "expired" and "dispatched" that `awaitJobDispatched` exists to make
+     * checkable. This host declares `scheduler.deadLetter` (the at-least-once
+     * claim), so it must hold this half of the claim rather than merely
+     * clearing bookkeeping like the pre-267 Node host did.
+     */
+    const dispatchedJobs = new Set<string>();
+
     const toStatus = (id: string, job: ReferenceJob): ScheduledJobStatus => {
         return {
             attempts: job.attempts,
@@ -551,6 +597,16 @@ const createReferenceHost = (): ReferenceHost => {
 
             const delay = Math.max(0, scheduledFor - Date.now());
             const timer = setTimeout(() => {
+                // Dispatch, not just expiry: record the job as actually fired
+                // (bump its attempt count to 1, the same field a real retry
+                // loop would advance) before dropping it from the pending set.
+                const job = scheduledJobs.get(id);
+
+                if (job !== undefined) {
+                    job.attempts += 1;
+                }
+
+                dispatchedJobs.add(id);
                 scheduledJobs.delete(id);
             }, delay);
 
@@ -567,6 +623,22 @@ const createReferenceHost = (): ReferenceHost => {
             await new Promise((resolve) => {
                 setTimeout(resolve, Math.max(0, target - Date.now()) + 30);
             });
+        },
+        awaitJobDispatched: async (id) => {
+            // Same wait-past-target strategy as `awaitAlarmFired`: look up the
+            // job's own `scheduledFor` while it is still pending and wait
+            // slightly past it. If it already fired (or never existed),
+            // there is nothing to wait for — answer from `dispatchedJobs`
+            // directly.
+            const pendingJob = scheduledJobs.get(id);
+
+            if (pendingJob !== undefined) {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, Math.max(0, pendingJob.scheduledFor - Date.now()) + 30);
+                });
+            }
+
+            return dispatchedJobs.has(id);
         },
         cleanup: () => {
             database.close();
