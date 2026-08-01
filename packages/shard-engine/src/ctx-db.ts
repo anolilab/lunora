@@ -2379,6 +2379,74 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return { docJson: documentJson, row, tableName };
     };
 
+    /**
+     * Batched sibling of {@link locateRowById}, for the RLS guard's
+     * `deleteMany`/`patchMany` pre-check (`guardByIds` in `rls-guard.ts`):
+     * resolve the owning table of MANY ids in as few statements as possible
+     * instead of one `locateRowById` probe per id.
+     *
+     * Selects only `__t__, id` (the guard needs the table name, not the row —
+     * skipping the document column keeps the probe narrow) and has no
+     * `LIMIT 1`: unlike a single lookup, every id may hit a different table
+     * and all hits are wanted.
+     *
+     * Chunked because the multiplied-placeholder UNION widens with both
+     * dimensions: each of the `nonGlobalTables.length` branches repeats the
+     * full `id IN (...)` list, so one statement over `chunkSize` ids costs
+     * `chunkSize * nonGlobalTables.length` bound placeholders. Sized to stay
+     * under SQLite's historical 999-bind-variable floor regardless of what
+     * the DO runtime actually allows.
+     * @returns a map from id to its owning table; an id absent from the map resolved to no table this writer can see
+     */
+    const locateTablesByIds = (ids: ReadonlyArray<string>, expectedTable?: string): Map<string, string> => {
+        const uniqueIds = [...new Set(ids)];
+
+        const resolved = new Map<string, string>();
+
+        if (uniqueIds.length === 0) {
+            return resolved;
+        }
+
+        const nonGlobalTables = Object.entries(schema.tables)
+            .filter(([, definition]) => definition.shardMode?.kind !== "global")
+            .map(([tableName]) => tableName)
+            .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+
+        if (nonGlobalTables.length === 0) {
+            return resolved;
+        }
+
+        // `Math.max(1, …)` keeps a very-wide schema (900+ tables) from
+        // computing a 0-size chunk; the placeholder budget is best-effort at
+        // that point anyway.
+        const chunkSize = Math.max(1, Math.floor(900 / nonGlobalTables.length));
+
+        for (let start = 0; start < uniqueIds.length; start += chunkSize) {
+            const chunk = uniqueIds.slice(start, start + chunkSize);
+            const idList = dsql.join(
+                // eslint-disable-next-line no-restricted-syntax -- a drizzle tagged-template SQL bind parameter, not a string conversion; same false-positive `where-sql.ts` suppresses
+                chunk.map((id): SQL => dsql`${id}`),
+                dsql`, `,
+            );
+            const branches = nonGlobalTables.map(
+                (tableName) =>
+                    // Mirrors `locateRowById`'s inline-literal table discriminator.
+                    dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id FROM ${dsql.identifier(tableName)} WHERE id IN (${idList})`,
+            );
+            const probeQuery = dsql.join(branches, dsql` UNION ALL `);
+
+            for (const row of runDrizzle(sql, probeQuery)) {
+                const { id, __t__: tableName } = row;
+
+                if (typeof tableName === "string" && typeof id === "string") {
+                    resolved.set(id, tableName);
+                }
+            }
+        }
+
+        return resolved;
+    };
+
     // The cross-shard rank-page read unit (compute + hydrate)
     // lives in `./ctx-db-rank-page`; its SQL/order/cursor/hydration is
     // byte-identical to what the coordinator merge + codegen golden fixture
@@ -4011,7 +4079,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     // denies protected tables to any handler that never engaged RLS. Triggers
     // keep the unguarded `writer` above (system path). `guardWriter` is a no-op
     // for non-`required` schemas, so the common case pays nothing.
-    return options.enforceRls === true ? guardWriter(writer, schema, (id, expectedTable) => locateRowById(id, expectedTable)?.tableName) : writer;
+    return options.enforceRls === true
+        ? guardWriter(
+              writer,
+              schema,
+              (id, expectedTable) => locateRowById(id, expectedTable)?.tableName,
+              (ids, expectedTable) => locateTablesByIds(ids, expectedTable),
+          )
+        : writer;
 };
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
