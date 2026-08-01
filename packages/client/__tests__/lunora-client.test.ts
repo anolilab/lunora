@@ -3203,6 +3203,50 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("a scheduled socket whose peer answers the keepalive pong is NOT recycled while idle (plan 253 HIGH-sev fix)", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                heartbeatIntervalMs: 1000,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // Unlike the silent-peer test above, SchedulerDO now registers the
+            // same hibernation-safe `lunora-ping` -> `lunora-pong`
+            // auto-response ShardDO already had — the fix for the HIGH-sev
+            // regression this closure exercises. Simulate that: every
+            // heartbeat tick gets answered. Five ticks span 5000ms, well past
+            // the 2500ms half-open window, so a watchdog whose `lastFrameAt`
+            // never advanced on the scheduled path's pong (the pre-fix
+            // per-caller stamp gap `openManagedSocket` now closes for every
+            // caller) would have force-closed by now.
+            for (let tick = 0; tick < 5; tick += 1) {
+                vi.advanceTimersByTime(1000);
+                socket.receive("lunora-pong");
+            }
+
+            expect(socket.readyState).toBe(1);
+
+            // No reconnect fired — the socket the subscription is using is
+            // still the very first one that opened.
+            expect(latestSocket()).toBe(socket);
+
+            unsubscribe();
+            vi.useRealTimers();
+        });
+
         it("a bare error event with no follow-up close arms a reconnect — inherits the shard socket's error handling (plan 253)", () => {
             expect.assertions(1);
 

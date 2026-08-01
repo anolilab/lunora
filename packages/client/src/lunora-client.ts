@@ -2392,13 +2392,9 @@ class LunoraClient {
                     scheduleReconnect();
                 },
                 onMessage: (event: MessageEvent) => {
-                    // Any inbound frame proves the socket is still alive.
-                    // Stamp it unconditionally, before the parsing below, so
-                    // the heartbeat watchdog (see `startHeartbeat`) can tell a
-                    // half-open socket from a healthy one — mirrors
-                    // `handleServerMessage`'s stamp on the shard path.
-                    conn.lastFrameAt = Date.now();
-
+                    // `lastFrameAt` is stamped by `openManagedSocket` itself
+                    // (its `message` listener) for every caller — nothing to
+                    // do here beyond parsing.
                     try {
                         const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
 
@@ -4379,9 +4375,9 @@ class LunoraClient {
         handlers: {
             onClose: (event?: { code?: number }) => void;
             onMessage: (event: MessageEvent) => void;
-            onOpen: (socket: WebSocket) => void;
+            onOpen: () => void;
         },
-    ): WebSocket {
+    ): void {
         const { WebSocketImpl } = this;
 
         if (WebSocketImpl === undefined) {
@@ -4412,6 +4408,12 @@ class LunoraClient {
             }
         };
 
+        /** The two-step disconnect sequence every trigger below runs: tear down this attempt's bookkeeping, then hand the (optional) close event to the caller. */
+        const disconnect = (event?: { code?: number }): void => {
+            teardown();
+            handlers.onClose(event);
+        };
+
         // Fail-fast connect timeout: if the handshake doesn't reach `open`
         // within `connectTimeoutMs` (a hung proxy / cold worker that never
         // upgrades), force-close the socket and report it through `onClose`
@@ -4424,7 +4426,12 @@ class LunoraClient {
 
                 // Only act if THIS socket is still the connection's current
                 // one. A newer reconnect socket (or an already-resolved
-                // open/close) must be left untouched.
+                // open/close) must be left untouched. `conn.socket !== socket`
+                // alone is sufficient here (no additional `wsState !==
+                // "connecting"` check needed): `open` below clears
+                // `connectTimer` synchronously, before setting `wsState =
+                // "open"`, so once a socket has reached `open` this timer can
+                // never fire for it — it was already cancelled.
                 if (conn.socket !== socket) {
                     return;
                 }
@@ -4435,8 +4442,7 @@ class LunoraClient {
                     /* a stuck socket may throw on close — onClose below still arms reconnect */
                 }
 
-                teardown();
-                handlers.onClose();
+                disconnect();
             }, connectTimeoutMs);
         }
 
@@ -4458,15 +4464,21 @@ class LunoraClient {
             // disconnect/reconnect cycle.
             conn.lastFrameAt = Date.now();
 
-            handlers.onOpen(socket);
+            handlers.onOpen();
 
-            this.startHeartbeat(conn, () => {
-                teardown();
-                handlers.onClose();
-            });
+            this.startHeartbeat(conn, disconnect);
         });
 
         socket.addEventListener("message", (event: MessageEvent): void => {
+            // Any inbound frame — including the plain-string `lunora-pong`
+            // keepalive reply, which `handleServerMessage`'s JSON.parse guard
+            // silently drops — proves the socket is still alive. Stamp it
+            // unconditionally, before delegating to the caller's handler, so
+            // the heartbeat watchdog (see `startHeartbeat`) can tell a
+            // half-open socket from a healthy one. One writer, co-located
+            // with the reader below, for every caller of this helper.
+            conn.lastFrameAt = Date.now();
+
             handlers.onMessage(event);
         });
 
@@ -4478,8 +4490,7 @@ class LunoraClient {
                 return;
             }
 
-            teardown();
-            handlers.onClose(event);
+            disconnect(event);
         });
 
         socket.addEventListener("error", (): void => {
@@ -4494,12 +4505,9 @@ class LunoraClient {
             // Report it through `onClose` too so the caller's reconnect always
             // arms; `onClose` is idempotent downstream (mirrors
             // `handleDisconnect`'s `wsState === "idle"` checks).
-            teardown();
-            handlers.onClose();
+            disconnect();
         });
         /* eslint-enable no-param-reassign */
-
-        return socket;
     }
 
     /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
@@ -4788,17 +4796,9 @@ class LunoraClient {
     }
 
     private handleServerMessage(raw: unknown, shardKey?: string): void {
-        // Any inbound frame — including the plain-string `lunora-pong` keepalive
-        // reply, which the JSON.parse guard below silently drops — proves the
-        // socket is still alive. Stamp it unconditionally, before the parsing
-        // below, so the heartbeat watchdog (see `startHeartbeat`) can tell a
-        // half-open socket from a healthy one.
-        const conn = this.getConnection(shardKey);
-
-        if (conn) {
-            conn.lastFrameAt = Date.now();
-        }
-
+        // `lastFrameAt` is stamped by `openManagedSocket` itself (its `message`
+        // listener) before this handler is ever invoked — nothing to do here
+        // beyond parsing.
         const text = decodeServerFrame(raw);
 
         if (text === undefined) {
