@@ -1,7 +1,7 @@
 import type { User } from "@lunora/client";
 import { getIdentityStore } from "@lunora/client/auth";
 import type { Readable } from "svelte/store";
-import { readable } from "svelte/store";
+import { derived, readable } from "svelte/store";
 
 import { getLunoraClient } from "./context";
 
@@ -51,5 +51,40 @@ const auth = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthStore =>
     return { setToken, token, user };
 };
 
-export type { AuthStore };
-export { auth };
+/** Derived auth-gate stores for template gating (`{#if $isAuthenticated}`), built on {@link auth}. */
+interface AuthGateStore {
+    /** Readable store, `true` once a token is set and the user has resolved. */
+    isAuthenticated: Readable<boolean>;
+
+    /** Readable store, `true` while a token is set but the user hasn't resolved yet. */
+    isLoading: Readable<boolean>;
+}
+
+/**
+ * Derived auth-gate stores built on {@link auth}. Svelte has no JSX-style
+ * `Authenticated` slot component the way React/Vue/Solid do (this package is
+ * plain `.ts` over stores — no `.svelte` component compiler required), so this
+ * exposes the same three-state logic as two boolean stores instead: a token
+ * with no resolved user yet is `isLoading`; a token with a resolved user is
+ * `isAuthenticated`; no token is neither (the signed-out state a template
+ * checks for with a plain `{:else}`).
+ *
+ * ```ts
+ * import { authGate } from "@lunora/svelte";
+ * const { isAuthenticated, isLoading } = authGate();
+ * // markup: {#if $isAuthenticated} signed in {:else if $isLoading} loading… {:else} signed out {/if}
+ * ```
+ *
+ * Pass an explicit client to bypass the ambient context (useful in tests).
+ */
+const authGate = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthGateStore => {
+    const { token, user } = auth(explicitClient);
+
+    const isLoading = derived([token, user], ([$token, $user]) => $token !== null && $user === null);
+    const isAuthenticated = derived([token, user], ([$token, $user]) => $token !== null && $user !== null);
+
+    return { isAuthenticated, isLoading };
+};
+
+export type { AuthGateStore, AuthStore };
+export { auth, authGate };

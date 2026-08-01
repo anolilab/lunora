@@ -28,6 +28,8 @@ interface MockSocket {
     send: (data: string) => void;
     sent: string[];
     triggerClose: () => void;
+    /** Fire a bare `error` event with no follow-up `close` — some WS implementations do this. */
+    triggerError: () => void;
     url: string;
 }
 
@@ -80,6 +82,11 @@ const createMockWebSocket = (): typeof WebSocket => {
             this.readyState = 3;
             this.onclose?.();
             this.dispatch("close");
+        }
+
+        public triggerError(): void {
+            this.onerror?.();
+            this.dispatch("error");
         }
 
         public send(data: string): void {
@@ -3107,6 +3114,120 @@ describe("lunoraClient", () => {
 
             expect(second).not.toBe(first);
             expect(second?.url).toContain("token=eph-2");
+
+            unsubscribe();
+            vi.useRealTimers();
+        });
+
+        // `subscribeScheduledJobs` runs a second, hand-rolled socket-lifecycle
+        // implementation alongside the shard path's (`ensureSocket`/`openSocket`/
+        // `handleDisconnect`/`startHeartbeat`) — the class of duplication plan 231
+        // asks to close by extracting a shared `openManagedSocket` helper. The
+        // shard path is a single, long-lived `ShardConnection` record threaded
+        // through dozens of call sites in this file (subscribe/unsubscribe
+        // dispatch, shape subscriptions, the offline queue, stream teardown,
+        // connection-status reporting); safely generalizing it behind a shared
+        // helper without changing its behavior is a substantial refactor of
+        // load-bearing code, not something to do blind in the same change as
+        // these characterization tests. The three tests below pin the concrete,
+        // currently-provable gaps this closure has relative to the shard path —
+        // the follow-up extraction should close all three at once.
+        it("never fails a hung handshake fast — unlike the shard socket, there is no connect-timeout (gap: plan 231 openManagedSocket follow-up)", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                // Set on the client to show it has no effect here — this option
+                // only ever reaches the shard path's `openSocket`.
+                connectTimeoutMs: 5000,
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+            const socket = latestSocket();
+
+            // Handshake hangs forever: `open` never fires. The shard path's
+            // equivalent test force-closes at `connectTimeoutMs`; this socket is
+            // still sitting in `connecting` state ten minutes later.
+            vi.advanceTimersByTime(600_000);
+
+            expect(socket.readyState).toBe(0);
+            // No fail-fast means no reconnect either — still exactly one socket.
+            expect(sockets.filter((s) => s.url.includes("/scheduled/ws"))).toHaveLength(1);
+
+            unsubscribe();
+            vi.useRealTimers();
+        });
+
+        it("never recycles an open-but-silent socket — unlike the shard socket, there is no heartbeat/watchdog (gap: plan 231 openManagedSocket follow-up)", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                // Set on the client to show it has no effect here — this option
+                // only ever reaches the shard path's `startHeartbeat`.
+                heartbeatIntervalMs: 1000,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // Ten minutes with the far end silent (no `jobs` push, no anything).
+            // The shard path's heartbeat would have sent keepalive pings and, had
+            // none been answered, force-closed and reconnected by
+            // `heartbeatIntervalMs * 2.5`. This socket never sends a ping — there
+            // is no keepalive concept here at all — and stays "open" regardless.
+            vi.advanceTimersByTime(600_000);
+
+            expect(socket.sent).toHaveLength(0);
+            expect(socket.readyState).toBe(1);
+            expect(sockets.filter((s) => s.url.includes("/scheduled/ws"))).toHaveLength(1);
+
+            unsubscribe();
+            vi.useRealTimers();
+        });
+
+        it("a bare error event with no follow-up close never arms a reconnect — the subscription goes silently dead (gap: plan 231 openManagedSocket follow-up)", () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+            // The shard path treats a standalone `error` (no `close` follow-up —
+            // some WS implementations and proxies do this) as a disconnect and
+            // arms reconnect itself; this closure's `error` listener is a no-op
+            // that assumes `close` always follows. It doesn't here.
+            socket.triggerError();
+
+            vi.advanceTimersByTime(600_000);
+
+            // No reconnect ever fires: still exactly the one socket from `open()`.
+            expect(sockets.filter((s) => s.url.includes("/scheduled/ws"))).toHaveLength(1);
 
             unsubscribe();
             vi.useRealTimers();

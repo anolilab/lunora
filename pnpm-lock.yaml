@@ -1932,6 +1932,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@visulima/storage-client':
+        specifier: catalog:storage
+        version: 1.0.0(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.14))(@tanstack/svelte-query@6.1.37(svelte@5.56.7(@typescript-eslint/types@8.65.0)))(@tanstack/vue-query@5.101.3(vue@3.5.40(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.14)(svelte@5.56.7(@typescript-eslint/types@8.65.0))(vue@3.5.40(typescript@6.0.3))
     devDependencies:
       '@angular/core':
         specifier: ^22.0.8

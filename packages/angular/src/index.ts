@@ -16,8 +16,8 @@ export type { AgentStateApi, AgentStateOptions, AgentStateResult } from "./agent
 export { agentState } from "./agent-state";
 export type { AgentToolEvent, AgentToolEventsApi, AgentToolEventsOptions, AgentToolEventsResult } from "./agent-tool-events";
 export { agentToolEvents } from "./agent-tool-events";
-export type { AuthOptions, AuthResult } from "./auth";
-export { auth } from "./auth";
+export type { AuthGateResult, AuthOptions, AuthResult } from "./auth";
+export { auth, authGate } from "./auth";
 
 /**
  * The Angular adapter for Lunora.

@@ -2,7 +2,7 @@ import type { LunoraClient, Unsubscribe, User } from "@lunora/client";
 import { get } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
-import { auth } from "../src/auth";
+import { auth, authGate } from "../src/auth";
 
 const createAuthFakeClient = () => {
     let token: string | null = null;
@@ -107,5 +107,80 @@ describe("auth store (Svelte)", () => {
         expect(get(user)).toBeNull();
 
         stop();
+    });
+});
+
+describe("authGate store (Svelte)", () => {
+    it("is neither loading nor authenticated before a token is set (signed out)", () => {
+        const fake = createAuthFakeClient();
+        const { isAuthenticated, isLoading } = authGate(fake.client);
+
+        const stopA = isAuthenticated.subscribe(() => {});
+        const stopL = isLoading.subscribe(() => {});
+
+        expect(get(isAuthenticated)).toBe(false);
+        expect(get(isLoading)).toBe(false);
+
+        stopA();
+        stopL();
+    });
+
+    it("is loading once a token is set but the user hasn't resolved yet", () => {
+        const fake = createAuthFakeClient();
+        const { isAuthenticated, isLoading } = authGate(fake.client);
+
+        const stopA = isAuthenticated.subscribe(() => {});
+        const stopL = isLoading.subscribe(() => {});
+
+        fake.setAuthToken("jwt-abc");
+
+        expect(get(isLoading)).toBe(true);
+        expect(get(isAuthenticated)).toBe(false);
+
+        stopA();
+        stopL();
+    });
+
+    it("is authenticated once the token is set and the user has resolved", async () => {
+        const fake = createAuthFakeClient();
+        fake.setCurrentUser({ id: "u_1" });
+
+        const { isAuthenticated, isLoading } = authGate(fake.client);
+
+        const stopA = isAuthenticated.subscribe(() => {});
+        const stopL = isLoading.subscribe(() => {});
+
+        fake.setAuthToken("jwt-abc");
+        await flushAsync();
+
+        expect(get(isAuthenticated)).toBe(true);
+        expect(get(isLoading)).toBe(false);
+
+        stopA();
+        stopL();
+    });
+
+    it("returns to signed out on sign-out", async () => {
+        const fake = createAuthFakeClient();
+        fake.setCurrentUser({ id: "u_1" });
+
+        const { isAuthenticated, isLoading } = authGate(fake.client);
+
+        const stopA = isAuthenticated.subscribe(() => {});
+        const stopL = isLoading.subscribe(() => {});
+
+        fake.setAuthToken("jwt-abc");
+        await flushAsync();
+
+        expect(get(isAuthenticated)).toBe(true);
+
+        fake.setAuthToken(null);
+        await flushAsync();
+
+        expect(get(isAuthenticated)).toBe(false);
+        expect(get(isLoading)).toBe(false);
+
+        stopA();
+        stopL();
     });
 });

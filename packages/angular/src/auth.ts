@@ -1,5 +1,5 @@
 import type { Signal } from "@angular/core";
-import { DestroyRef, inject, signal } from "@angular/core";
+import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { LunoraClient, User } from "@lunora/client";
 import { getIdentityStore } from "@lunora/client/auth";
 
@@ -74,4 +74,40 @@ export const auth = (options: AuthOptions = {}): AuthResult => {
     };
 
     return { setToken, token: token.asReadonly(), user: user.asReadonly() };
+};
+
+/**
+ * `AuthGateResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
+export interface AuthGateResult {
+    /** `true` once a token is set and the user has resolved. */
+    isAuthenticated: Signal<boolean>;
+
+    /** `true` while a token is set but the user hasn't resolved yet. */
+    isLoading: Signal<boolean>;
+}
+
+/**
+ * Derived auth-gate signals for template gating (Angular's `\@if` control
+ * flow), built on {@link auth}. Angular has no JSX-style `Authenticated` slot
+ * component the way React/Vue/Solid do, so this exposes the same three-state
+ * logic as two booleans instead: a token with no resolved user yet is
+ * `isLoading`; a token with a resolved user is `isAuthenticated`; no token is
+ * neither (the signed-out state a template checks for with a plain `\@else`).
+ *
+ * Call from an injection context (component/service field or constructor):
+ * ```ts
+ * protected readonly authState = authGate();
+ * // template: \@if (authState.isAuthenticated()) { ... } \@else if (authState.isLoading()) { ... }
+ * ```
+ * @experimental
+ */
+export const authGate = (options: AuthOptions = {}): AuthGateResult => {
+    const { token, user } = auth(options);
+
+    const isLoading = computed(() => token() !== null && user() === null);
+    const isAuthenticated = computed(() => token() !== null && user() !== null);
+
+    return { isAuthenticated, isLoading };
 };

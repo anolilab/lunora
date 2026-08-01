@@ -6,8 +6,8 @@ export type { AgentStateApi, AgentStateHandle, AgentStateOptions } from "./agent
 export { agentState } from "./agent-state";
 export type { AgentToolEvent, AgentToolEventsApi, AgentToolEventsHandle, AgentToolEventsOptions } from "./agent-tool-events";
 export { agentToolEvents } from "./agent-tool-events";
-export type { AuthStore } from "./auth";
-export { auth } from "./auth";
+export type { AuthGateStore, AuthStore } from "./auth";
+export { auth, authGate } from "./auth";
 export type { ConnectionStatusStore } from "./connection-status";
 export { connectionStatus } from "./connection-status";
 
