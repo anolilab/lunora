@@ -479,7 +479,11 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         // repro failure.
         expect(order).toStrictEqual(["A"]);
 
+        // Neither promise is awaited to completion — the assertion above runs
+        // before B's ever settles by design (that's the point of the repro).
+        // eslint-disable-next-line no-void -- marks both intentionally-unresolved-at-assertion-time promises as used, not a fire-and-forget dispatch
         void pendingA;
+        // eslint-disable-next-line no-void -- see above
         void pendingB;
     });
 
@@ -521,12 +525,16 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         const order: string[] = [];
         const pending = options.checkpoints.awaitMutationId(5).then(() => order.push("resolved"));
 
-        onRows([{ _creationTime: 0, _id: "m1", text: "seed" }, { _creationTime: 0, _id: "m2", text: "new" }]);
+        onRows([
+            { _creationTime: 0, _id: "m1", text: "seed" },
+            { _creationTime: 0, _id: "m2", text: "new" },
+        ]);
         await Promise.resolve();
         await Promise.resolve();
 
         expect(order).toStrictEqual(["resolved"]);
 
+        // eslint-disable-next-line no-void -- marks the already-resolved-by-assertion-time promise as used, not a fire-and-forget dispatch
         void pending;
     });
 
@@ -569,12 +577,16 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         const order: string[] = [];
         const pending = options.checkpoints.awaitMutationId(7).then(() => order.push("resolved"));
 
-        onRows([{ _creationTime: 0, _id: "m1", text: "leader-era" }, { _creationTime: 0, _id: "m2", text: "follower-write" }]);
+        onRows([
+            { _creationTime: 0, _id: "m1", text: "leader-era" },
+            { _creationTime: 0, _id: "m2", text: "follower-write" },
+        ]);
         await Promise.resolve();
         await Promise.resolve();
 
         expect(order).toStrictEqual(["resolved"]);
 
+        // eslint-disable-next-line no-void -- marks the already-resolved-by-assertion-time promise as used, not a fire-and-forget dispatch
         void pending;
     });
 });

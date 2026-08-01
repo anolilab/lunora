@@ -484,9 +484,13 @@ describe("global search provisioning", () => {
             // The async iterator on a stage-less chain rejects too — advance it
             // once directly rather than looping, since the throw happens before
             // any value would ever be yielded.
-            await expect(writer.query("notes").filter(() => true)[Symbol.asyncIterator]().next()).rejects.toThrow(
-                /legacy query\(\)\/withIndex\(\) reader is not available/u,
-            );
+            await expect(
+                writer
+                    .query("notes")
+                    .filter(() => true)
+                    [Symbol.asyncIterator]() // eslint-disable-line no-unexpected-multiline -- continues the chain above, not a new statement; Prettier owns this line-wrap
+                    .next(),
+            ).rejects.toThrow(/legacy query\(\)\/withIndex\(\) reader is not available/u);
         });
     });
 });

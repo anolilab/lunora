@@ -109,6 +109,7 @@ describe("discoverMaskMetadata", () => {
     });
 });
 
+// eslint-disable-next-line no-secrets/no-secrets -- the describe block names the function under test, not a credential
 describe("discoverMaskHasNonLiteralPolicy", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-mask-nonliteral-"));

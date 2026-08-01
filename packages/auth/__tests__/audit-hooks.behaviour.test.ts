@@ -106,8 +106,13 @@ const totpCode = (rawSecretBase32: string): string => {
 
     const hmac = createHmac("sha1", key).update(counterBuffer).digest();
     const offset = (hmac.at(-1) ?? 0) & 0x0f;
-    const binary = (((hmac[offset] ?? 0) & 0x7f) << 24) | (((hmac[offset + 1] ?? 0) & 0xff) << 16) | (((hmac[offset + 2] ?? 0) & 0xff) << 8) | ((hmac[offset + 3] ?? 0) & 0xff);
-    const otp = binary % (10 ** 6);
+    const binary =
+        (((hmac[offset] ?? 0) & 0x7f) << 24) |
+        (((hmac[offset + 1] ?? 0) & 0xff) << 16) |
+        (((hmac[offset + 2] ?? 0) & 0xff) << 8) |
+        ((hmac[offset + 3] ?? 0) & 0xff);
+    const sixDigitModulus = 10 ** 6;
+    const otp = binary % sixDigitModulus;
 
     return otp.toString().padStart(6, "0");
 };
@@ -173,9 +178,7 @@ describe("better-auth 1.7.0-rc.2 after-hook contract (plan 280 S0 gate)", () => 
         it("returning `undefined` does NOT throw, and leaves the real sign-up response intact", async () => {
             expect.assertions(2);
 
-            const body = await bodyOf(
-                createAuthMiddleware(async () => undefined),
-            );
+            const body = await bodyOf(createAuthMiddleware(async () => undefined));
 
             expect(body).not.toBe("{}");
             expect(JSON.parse(body)).toHaveProperty("user");
@@ -196,11 +199,7 @@ describe("better-auth 1.7.0-rc.2 after-hook contract (plan 280 S0 gate)", () => 
             );
             const noHookBody = await response.json();
 
-            const withUndefinedHookBody = JSON.parse(
-                await bodyOf(
-                    createAuthMiddleware(async () => undefined),
-                ),
-            );
+            const withUndefinedHookBody = JSON.parse(await bodyOf(createAuthMiddleware(async () => undefined)));
 
             // Random per-call fields (`token`, `user.id`, timestamps) will differ —
             // the no-op claim is about SHAPE, not byte-identity: same top-level
@@ -380,9 +379,7 @@ describe("better-auth 1.7.0-rc.2 after-hook contract (plan 280 S0 gate)", () => 
             // Omitting `callbackURL` takes magic-link/verify's JSON-response branch
             // instead of the redirect-throw branch (see the plugin's own source) —
             // the simpler case to pin first for "does the after-hook fire at all".
-            const verifyResponse = await auth.handler(
-                new Request(`http://localhost/api/auth/magic-link/verify?token=${String(sentToken)}`, { method: "GET" }),
-            );
+            const verifyResponse = await auth.handler(new Request(`http://localhost/api/auth/magic-link/verify?token=${String(sentToken)}`, { method: "GET" }));
 
             expect(verifyResponse.status).toBe(200);
 
