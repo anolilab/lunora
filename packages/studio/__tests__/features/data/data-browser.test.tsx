@@ -2064,8 +2064,7 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
             () => {
                 const reads = mock.query.mock.calls.filter(
                     (call) =>
-                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage &&
-                        (call[1] as { search?: string }).search === "hel",
+                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { search?: string }).search === "hel",
                 );
 
                 if (reads.length === 0) {

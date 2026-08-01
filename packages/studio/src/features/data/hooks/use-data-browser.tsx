@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
@@ -431,40 +431,45 @@ const useDataBrowser = ({
     // The view this component last EMITTED (or would emit) to the host — the
     // exact payload the mirror effect far below sends. Read here, at the TOP of
     // the function, to tell an incoming view apart from the mirror's own echo of
-    // it; updated by a plain effect (not `useMirroredRef`) because the value
-    // isn't computable until this render's `search`/`debouncedShard` exist,
-    // further down — see that effect for why.
-    const emittedViewKeyRef = useRef<string>(serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy));
+    // it — which is exactly why this is `useState`, not a ref: a value that
+    // participates in a render-time branching decision (see `isSameTableViewApply`
+    // below) has to be state so the read stays pure and the Compiler can reason
+    // about it, even though nothing here renders it directly. Updated by a plain
+    // effect (not `useMirroredRef`) because the value isn't computable until this
+    // render's `search`/`debouncedShard` exist, further down — see that effect for
+    // why. The lazy initializer keeps the mount-only `serializeView` call from
+    // re-running (and being discarded) on every subsequent render.
+    const [emittedViewKey, setEmittedViewKey] = useState<string>(() => serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy));
 
     const isTableSwitch = tableParam !== seededTableParameter;
 
     // The incoming view this render's props describe — compared against BOTH
     // `seededViewKey` (what the reset block below last locked in) and
-    // `emittedViewKeyRef.current` (what this component last mirrored to the
-    // host). Needing BOTH to differ is what makes the URL round trip a fixed
-    // point, without a second seeding mechanism:
+    // `emittedViewKey` (what this component last mirrored to the host).
+    // Needing BOTH to differ is what makes the URL round trip a fixed point,
+    // without a second seeding mechanism:
     //
     //  - `seededViewKey` breaks the loop WITHIN one re-seed: React's "adjust
     //    state while rendering" pattern discards this render and retries
     //    synchronously once a setter below runs; on that retry `seededViewKey`
     //    already equals the incoming key (it's plain state, so the update is
     //    visible on the retry), so the condition goes false immediately.
-    //    Without it, `emittedViewKeyRef` — only updated by a COMMITTED render's
+    //    Without it, `emittedViewKey` — only updated by a COMMITTED render's
     //    effect, which the retry hasn't reached yet — would still read stale,
     //    and the retry would re-trigger itself forever.
-    //  - `emittedViewKeyRef` breaks the loop ACROSS renders: the user's own
+    //  - `emittedViewKey` breaks the loop ACROSS renders: the user's own
     //    typing debounces into `search`/`debouncedShard`, the mirror effect
     //    below sends that to the host, and the host echoes it straight back as
     //    this same render's `initialSearch`/`initialShardKey`. By the time that
     //    echo arrives, the mirror's effect has already updated
-    //    `emittedViewKeyRef` to match it, so the echo reads as "already
-    //    current" rather than as a fresh apply.
+    //    `emittedViewKey` to match it, so the echo reads as "already current"
+    //    rather than as a fresh apply.
     //
     // Gated on `!isTableSwitch` because a real table switch already
     // unconditionally re-seeds below; this only covers the same-table case a
     // switch doesn't reach.
     const incomingViewKey = serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy);
-    const isSameTableViewApply = !isTableSwitch && incomingViewKey !== seededViewKey && incomingViewKey !== emittedViewKeyRef.current;
+    const isSameTableViewApply = !isTableSwitch && incomingViewKey !== seededViewKey && incomingViewKey !== emittedViewKey;
     const isReseed = isTableSwitch || isSameTableViewApply;
 
     // Re-seed the per-table local view state whenever the open table changes OR
@@ -494,7 +499,7 @@ const useDataBrowser = ({
     // ever fire when the table actually changed or the incoming view actually
     // differs from both what was seeded AND what was just emitted. The URL-mirror
     // round trip from the user's OWN typing (which changes `initialSearch` etc.
-    // without changing `tableParam`) is exactly the case `emittedViewKeyRef`
+    // without changing `tableParam`) is exactly the case `emittedViewKey`
     // exists to recognize as "no-op" rather than "apply" — see the comment on
     // `isSameTableViewApply` above.
     if (isReseed) {
@@ -518,8 +523,8 @@ const useDataBrowser = ({
     } else if (incomingViewKey !== seededViewKey) {
         // Not a re-seed (`isReseed` is false here, and `isReseed` is
         // `isTableSwitch || isSameTableViewApply` — so BOTH are false too: this
-        // only reaches here when `incomingViewKey === emittedViewKeyRef.current`),
-        // but `incomingViewKey` still differs from `seededViewKey` — the URL
+        // only reaches here when `incomingViewKey === emittedViewKey`), but
+        // `incomingViewKey` still differs from `seededViewKey` — the URL
         // mirror's own echo of what THIS component last emitted, arriving back
         // as this render's `initialSearch`/`initialShardKey`/etc.
         //
@@ -530,7 +535,7 @@ const useDataBrowser = ({
         // frozen at its last RESEED value (rather than catching it up to every
         // harmless echo too) would permanently desync it from `incomingViewKey`
         // after the FIRST echo — the mirror guard would then block every future
-        // commit, and the next render whose `emittedViewKeyRef` has moved on
+        // commit, and the next render whose `emittedViewKey` has moved on
         // further (from a SECOND, later keystroke) would misread the still-stale
         // `incomingViewKey` as a fresh external apply and wrongly re-seed,
         // reverting the second change and wiping staged edits/offset/facets with
@@ -569,15 +574,26 @@ const useDataBrowser = ({
     const debouncedShard = useDebounced(shardInput.trim(), 400, debounceResetKey);
 
     // Mirror the emitted view — the exact payload the mirror effect far below
-    // sends to the host — into `emittedViewKeyRef` on every commit, so the
-    // render-time re-seed check above can compare against it next render. No dep
-    // array: track every commit, the same way `useMirroredRef` does (this can't
-    // just BE a `useMirroredRef` call up there, since its value depends on
+    // sends to the host — into `emittedViewKey`, so the render-time re-seed
+    // check above can compare against it next render. This is the same
+    // "adjust state while rendering" idiom as the `isReseed` block above (a
+    // direct, conditional `setEmittedViewKey` call in the render body, not
+    // inside `useEffect`) rather than a mirrored ref: it can't just BE a
+    // `useMirroredRef`/effect up there, since the value depends on
     // `search`/`debouncedShard`/`filters`/`sorting`, none of which exist yet at
-    // that point in the function).
-    useEffect(() => {
-        emittedViewKeyRef.current = serializeView(debouncedShard, search, toFilterClauses(filters), toOrderBy(sorting));
-    });
+    // that point in the function — and a ref would have to be READ during
+    // render too (in the `isSameTableViewApply` comparison), which is the
+    // access-refs-during-render pattern this hook deliberately avoids. When the
+    // computed value differs, calling the setter here discards this render and
+    // retries synchronously with the new value already in place — exactly once,
+    // since the retry recomputes the identical string from the same
+    // `search`/`debouncedShard`/`filters`/`sorting` and the comparison then
+    // holds.
+    const nextEmittedViewKey = serializeView(debouncedShard, search, toFilterClauses(filters), toOrderBy(sorting));
+
+    if (nextEmittedViewKey !== emittedViewKey) {
+        setEmittedViewKey(nextEmittedViewKey);
+    }
 
     // ── Reads via TanStack Query: a one-shot fetch plus a live WS push into the
     // cache (the same model as every other studio panel). The table list follows
