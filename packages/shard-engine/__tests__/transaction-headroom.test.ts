@@ -90,22 +90,65 @@ describe("transactionHeadroomTracker", () => {
         // expansion of the same data still fits alongside it.
         expect(DEFAULT_TRANSACTION_LIMITS.maxWrittenBytes * 3).toBeLessThan(128 * 1024 * 1024);
     });
+
+    // Plan 270: `estimateBytes`'s fallback used to equal the caller's own cap
+    // (`maxWrittenBytes`), and the check is `>` not `>=`, so the FIRST
+    // unserializable write set `writtenBytes` to exactly the cap and passed —
+    // only the SECOND write (of any size) tripped `TRANSACTION_LIMIT_EXCEEDED`,
+    // naming byte limits when the real problem was serializability.
+    it("recordWrite() rejects an unserializable value on the first call, naming serializability", () => {
+        expect.assertions(2);
+
+        const tracker = new TransactionHeadroomTracker();
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic["self"] = cyclic;
+
+        expect(
+            codeOf(() => {
+                tracker.recordWrite(cyclic);
+            }),
+        ).toBe("BAD_REQUEST");
+
+        // The row count was incremented before the size check ran (matching
+        // the existing member order), but bytes never charged.
+        expect(tracker.headroom().writtenBytes).toBe(0);
+    });
+
+    it("a normal write is still charged the same bytes as before (JSON.stringify(row).length)", () => {
+        expect.assertions(1);
+
+        const tracker = new TransactionHeadroomTracker();
+        const row = { body: "hello world" };
+
+        tracker.recordWrite(row);
+
+        expect(tracker.headroom().writtenBytes).toBe(JSON.stringify(row).length);
+    });
 });
 
 describe("estimateBytes", () => {
-    it("charges the fallback for a value that cannot be serialized", () => {
+    // Plan 270: `estimateBytes` used to charge the caller-supplied `fallback`
+    // for a value it cannot size — but both callers passed their own cap,
+    // which made the first unserializable write pass silently (the byte
+    // check is `>`, not `>=`) and let one unserializable cache result consume
+    // the whole cache budget. There is no honest byte count for an
+    // unserializable value, so it now reports that distinctly via
+    // `undefined` and drops the `fallback` parameter — each caller decides
+    // what "cannot be sized" means on its own terms.
+    it("reports undefined for a value that cannot be serialized", () => {
         expect.assertions(1);
 
         const cyclic: Record<string, unknown> = {};
 
         cyclic["self"] = cyclic;
 
-        expect(estimateBytes(cyclic, 999)).toBe(999);
+        expect(estimateBytes(cyclic)).toBeUndefined();
     });
 
     it("charges nothing for a value JSON drops", () => {
         expect.assertions(1);
 
-        expect(estimateBytes(undefined, 999)).toBe(0);
+        expect(estimateBytes(undefined)).toBe(0);
     });
 });

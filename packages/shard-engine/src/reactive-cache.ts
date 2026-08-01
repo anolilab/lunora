@@ -178,12 +178,20 @@ class ReactiveCache {
 
         this.misses += 1;
         const result = await run();
+        const bytes = estimateBytes(result);
+
+        // A result `estimateBytes` cannot size (a cycle, a function) has no
+        // honest byte count to charge against `maxBytes` — storing it under a
+        // fake size (0, or the whole cap) either lets it evict everything else
+        // or makes it free forever. Declining to memoize is correct-by-
+        // construction: the next call just re-runs the handler (a miss).
+        if (bytes === undefined) {
+            return result;
+        }
+
         // Evaluated AFTER the callback: like `deps`, the read's footprint is
         // only complete once the handler has actually run.
         const readRanges = ranges();
-        // Charge against THIS instance's cap — `evict()` compares against it, so
-        // using the module default would undercharge a cache built with a larger one.
-        const bytes = estimateBytes(result, this.maxBytes);
         const entry: CacheEntry = {
             bytes,
             deps,

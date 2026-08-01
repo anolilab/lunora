@@ -7,8 +7,10 @@
  * uses it to bound memory, the transaction meter to bound one request — so the
  * cheap estimate is the right trade.
  *
- * A value that cannot be serialized (a cycle) is charged `fallback`, so the
- * caller fails on its own terms rather than silently costing nothing.
+ * A value that cannot be serialized (a cycle, a function, a bigint outside a
+ * codec) returns `undefined` rather than a size — there is no honest byte count
+ * for it, and each caller decides what "cannot be sized" means on its own terms
+ * (the meter throws; the cache declines to memoize).
  *
  * NOTE the unit: `String.length` counts UTF-16 code units, not UTF-8 bytes, so a
  * CJK- or emoji-heavy document costs up to ~3x more on the wire than it is
@@ -16,7 +18,7 @@
  * which absorbs the skew — but a caller needing true byte accuracy must not use
  * this.
  */
-const estimateBytes = (value: unknown, fallback: number): number => {
+const estimateBytes = (value: unknown): number | undefined => {
     try {
         // `JSON.stringify` is TYPED as returning `string`, but genuinely returns
         // `undefined` for `undefined`, functions, and symbols — so the result
@@ -25,7 +27,7 @@ const estimateBytes = (value: unknown, fallback: number): number => {
 
         return encoded === undefined ? 0 : encoded.length;
     } catch {
-        return fallback;
+        return undefined;
     }
 };
 
