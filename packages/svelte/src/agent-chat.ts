@@ -3,6 +3,7 @@ import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import type { AgentThreadRecord, AgentThreadStatus } from "./agent";
 import { isClient, NO_MUTATION_REF } from "./agent";
 import { getLunoraClient } from "./context";
@@ -257,7 +258,6 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
     // mirrors the `presence.ts` guard). Skip them server-side; `messages`/
     // `status`/`streamingText` stay at their inert initial values until the
     // component hydrates and `teardown` becomes a no-op.
-    const isBrowser = (globalThis as { window?: unknown }).window !== undefined;
 
     // The token stream is optional: with no reference we pass the sentinel + "skip"
     // so `stream` never opens a stream (and `streamingText` stays empty). Subscribed
@@ -266,7 +266,7 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
     // `chunks` store opens the underlying stream on its first subscriber, so calling
     // it unconditionally here would open (and leak) a live stream during SSR too.
     const streamArguments = streamReference === undefined ? "skip" : { key: threadKey };
-    const unsubscribeStream = isBrowser
+    const unsubscribeStream = isBrowser()
         ? stream(client, streamReference ?? NO_STREAM_REF, streamArguments).chunks.subscribe((value) => {
               liveEvents = value;
               recomputeStreamingText();
@@ -274,14 +274,14 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
         : (): void => undefined;
 
     const historyArgs = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
-    const unsubscribeHistory = isBrowser
+    const unsubscribeHistory = isBrowser()
         ? client.subscribe(api.agents.agentMessages, historyArgs, (value) => {
               durable = value as unknown as ReadonlyArray<AgentChatMessage>;
               recompute();
               recomputeStreamingText();
           })
         : (): void => undefined;
-    const unsubscribeThread = isBrowser
+    const unsubscribeThread = isBrowser()
         ? client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
               latestThread = value as AgentThreadRecord | undefined;
               statusStore.set(latestThread?.status);

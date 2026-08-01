@@ -2,6 +2,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { ShallowRef } from "vue";
 import { getCurrentScope, onScopeDispose, shallowRef } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
@@ -92,7 +93,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     // and the render scope never stops — so `onScopeDispose` never fires and each
     // request would leak a live `setInterval` handle. Skip the whole client wiring
     // server-side; the returned refs stay inert until the component hydrates.
-    if ((globalThis as { window?: unknown }).window !== undefined) {
+    if (isBrowser()) {
         // Heartbeat: immediately on mount, on interval, and on tab re-focus.
         sendHeartbeat();
         const intervalHandle = setInterval(sendHeartbeat, intervalMs);
