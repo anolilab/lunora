@@ -232,6 +232,7 @@ export const ERROR_CATALOG = {
     CRON_NAME_NOT_STATIC: { status: 500, title: "Cron job name is not statically analyzable" },
     CRON_NON_STATIC_FN: { status: 500, title: "Cron function reference is not statically analyzable" },
     CRON_NON_STATIC_VALUE: { status: 500, title: "Cron value is not statically analyzable" },
+    CRON_SCHEDULE_INVALID: { status: 500, title: "Invalid cron schedule" },
     CRON_SCHEDULE_NOT_STATIC: { status: 500, title: "Cron schedule is not statically analyzable" },
     DUPLICATE_CRON_NAME: { status: 500, title: "Duplicate cron job name" },
 
