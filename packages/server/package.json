@@ -81,9 +81,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.10",
-        "@lunora/scheduler": "1.0.0-alpha.16",
-        "@lunora/values": "1.0.0-alpha.13",
+        "@lunora/errors": "1.0.0-alpha.11",
+        "@lunora/scheduler": "1.0.0-alpha.17",
+        "@lunora/values": "1.0.0-alpha.14",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },
