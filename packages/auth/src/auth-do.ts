@@ -29,7 +29,7 @@
  */
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
-import type { AuthAuditEntry } from "./audit";
+import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
@@ -59,6 +59,46 @@ const READ_AUDIT_PATH = "/__lunora/auth/audit";
 
 /** Header carrying the shared secret that authenticates the calling worker. */
 const INTERNAL_SECRET_HEADER = "x-lunora-auth-do-secret";
+
+/**
+ * Narrow an already-JSON-parsed request body into {@link ReadAuthAuditOptions},
+ * or an error message for the first field that fails validation. Guards the
+ * one boundary `readAuthAuditLog` itself does not (it trusts its caller):
+ * before this, a non-numeric `limit` reached `Math.min`/`Math.max` as `NaN`
+ * and was bound as the SQL `LIMIT` parameter, and a malformed body threw an
+ * unhandled exception out of `#readAudit` (a 500) instead of a 400. Only the
+ * four fields `readAuthAuditLog` reads are accepted; anything else — an
+ * unknown key or an ill-typed value — is rejected rather than silently
+ * ignored, since a caller sending garbage deserves a 400, not a request that
+ * quietly did something other than what was asked.
+ */
+const parseReadAuditOptions = (parsed: unknown): { error: string } | { options: ReadAuthAuditOptions } => {
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { error: "body must be a JSON object" };
+    }
+
+    const options: ReadAuthAuditOptions = {};
+
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (key === "limit" || key === "sinceSeq") {
+            if (typeof value !== "number" || !Number.isFinite(value)) {
+                return { error: `"${key}" must be a finite number` };
+            }
+
+            options[key] = value;
+        } else if (key === "actorId" || key === "event") {
+            if (typeof value !== "string") {
+                return { error: `"${key}" must be a string` };
+            }
+
+            options[key] = value;
+        } else {
+            return { error: `unknown audit read option "${key}"` };
+        }
+    }
+
+    return { options };
+};
 
 /**
  * Options for the auth DO, beyond the better-auth options themselves.
@@ -186,10 +226,33 @@ class LunoraAuthDO {
      * `AuthAuditEntry` is entirely JSON-safe (`ts` and `seq` are numbers, there are no
      * `Date` values), so proxying it over HTTP is lossless rather than a lossy
      * serialisation the studio would have to compensate for.
+     *
+     * The body is parsed and validated defensively (plan 280 §5 S3): a
+     * malformed body (not JSON at all) previously threw an unhandled exception
+     * out of this method — a 500 — instead of the 400 a caller error deserves;
+     * an ill-typed field (e.g. `limit` as a string) previously reached
+     * `readAuthAuditLog` unchecked and could bind `NaN` as the SQL `LIMIT`.
+     * Both are now rejected here, before the reader ever runs.
      */
     async #readAudit(request: Request): Promise<Response> {
         if (!this.#isTrustedCaller(request)) {
             return Response.json({ error: "unauthorized" }, { status: 401 });
+        }
+
+        let parsedBody: unknown;
+
+        try {
+            parsedBody = await request.json();
+        } catch {
+            return Response.json({ error: "invalid body" }, { status: 400 });
+        }
+
+        // An empty body parses to `undefined`/`null` — treat that as "no options",
+        // matching the reader's own default, rather than rejecting it.
+        const parsed = parseReadAuditOptions(parsedBody ?? {});
+
+        if ("error" in parsed) {
+            return Response.json({ error: parsed.error }, { status: 400 });
         }
 
         const executor = doExecutor(this.#storage);
@@ -199,8 +262,7 @@ class LunoraAuthDO {
         // the request path for apps that never read the log.
         await ensureAuthAuditTable(executor);
 
-        const options = await request.json();
-        const entries = await createAuthAuditReader(executor).read(options ?? {});
+        const entries = await createAuthAuditReader(executor).read(parsed.options);
 
         return Response.json({ entries } satisfies { entries: AuthAuditEntry[] });
     }

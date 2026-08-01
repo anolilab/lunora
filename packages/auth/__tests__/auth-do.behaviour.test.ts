@@ -182,6 +182,62 @@ describe("lunoraAuthDO", () => {
         await expect(response.json()).resolves.toStrictEqual({ entries: [] });
     });
 
+    /**
+     * Plan 280 §5 S3: a trusted caller sending a malformed body previously threw
+     * an unhandled exception out of `#readAudit` (an opaque 500) instead of the
+     * 400 a caller error deserves.
+     */
+    it("400s a trusted caller's malformed (non-JSON) body instead of throwing a 500", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo();
+        const response = await authDo.fetch(
+            new Request(`https://example.test${READ_AUDIT_PATH}`, {
+                body: "not-json",
+                headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: expect.any(String) });
+    });
+
+    /**
+     * Plan 280 §5 S3: a non-numeric `limit` previously reached `readAuthAuditLog`
+     * unchecked, where `Math.min`/`Math.max` propagate `NaN` and it is bound as
+     * the SQL `LIMIT` parameter.
+     */
+    it("400s a non-numeric `limit` instead of letting NaN reach the SQL LIMIT clause", async () => {
+        expect.assertions(1);
+
+        const { authDo } = createDo();
+        const response = await authDo.fetch(
+            new Request(`https://example.test${READ_AUDIT_PATH}`, {
+                body: JSON.stringify({ limit: "1e2junk" }),
+                headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(400);
+    });
+
+    it("400s an unknown audit-read option instead of silently ignoring it", async () => {
+        expect.assertions(1);
+
+        const { authDo } = createDo();
+        const response = await authDo.fetch(
+            new Request(`https://example.test${READ_AUDIT_PATH}`, {
+                body: JSON.stringify({ limit: 5, unexpectedField: "anything" }),
+                headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(400);
+    });
+
     it("refuses the audit log without the secret", async () => {
         expect.assertions(1);
 

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { appendAuthAuditEntry, readAuthAuditLog } from "../src/audit";
+import { appendAuthAuditEntry, ensureAuthAuditTable, readAuthAuditLog } from "../src/audit";
 import { buildAuditEntry } from "../src/audit-hooks";
 import type { SqlExecutor } from "../src/sql-store";
 
@@ -63,6 +63,24 @@ describe("auth audit trail", () => {
             expect.assertions(1);
 
             await expect(readAuthAuditLog(executor)).resolves.toStrictEqual([]);
+        });
+
+        /**
+         * Plan 280 §5 S3: `Math.max(1, Math.min(NaN, MAX_READ_LIMIT))` is `NaN` —
+         * previously reached the SQL `LIMIT ?` bind unchecked. The library-level
+         * fix falls back to `DEFAULT_READ_LIMIT` for any non-finite `limit`, so
+         * every caller of `readAuthAuditLog` is protected, not just the DO's
+         * `#readAudit` boundary (which now also 400s before ever calling this).
+         */
+        it("falls back to the default limit when `limit` is NaN, instead of binding NaN as the SQL LIMIT", async () => {
+            expect.assertions(1);
+
+            for (let index = 0; index < 5; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential appends model the real per-request write order
+                await appendAuthAuditEntry(executor, { event: "sign-in", outcome: "success", ts: index });
+            }
+
+            await expect(readAuthAuditLog(executor, { limit: Number.NaN })).resolves.toHaveLength(5);
         });
     });
 
@@ -137,6 +155,49 @@ describe("auth audit trail", () => {
             expect(persisted.event).toBe("sign-in");
             expect((persisted.detail as Record<string, unknown>)["secret"]).not.toBe("abc123");
         });
+
+        /**
+         * Plan 280 §4's verified correction: `targetEmail` MUST be a top-level
+         * column, not a `detail` key — `AUDIT_REDACT_RULES` scrubs email-shaped
+         * VALUES inside `detail` regardless of key name (a deep value-pattern
+         * rule, not just a key-name rule), so the same address survives as
+         * `targetEmail` while it is erased inside `detail`.
+         */
+        it("`targetEmail` survives redaction (top-level) while the SAME address inside `detail` is scrubbed", async () => {
+            expect.assertions(2);
+
+            await appendAuthAuditEntry(executor, {
+                detail: { email: "victim@example.com" },
+                event: "sign-in",
+                outcome: "failure",
+                targetEmail: "victim@example.com",
+                ts: 1,
+            });
+
+            const [row] = await readAuthAuditLog(executor);
+
+            expect(row?.targetEmail).toBe("victim@example.com");
+            expect(row?.detail?.["email"]).not.toBe("victim@example.com");
+        });
+
+        it("old-shape rows (written before `target_email` existed) read back with no `targetEmail` field", async () => {
+            expect.assertions(1);
+
+            // Simulate a pre-migration row: create the (now-migrated) table first,
+            // then insert directly with the OLD column list, bypassing
+            // `appendAuthAuditEntry` (which always supplies `target_email` now
+            // that the column exists) — `target_email` lands NULL, same as any
+            // row written before this change shipped.
+            await ensureAuthAuditTable(executor);
+            await executor.run(
+                `INSERT INTO "__lunora_auth_audit__" (ts, event, outcome, actor_id, actor_email, ip, user_agent, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [1, "sign-in", "success", "u1", null, null, null, null],
+            );
+
+            const [row] = await readAuthAuditLog(executor);
+
+            expect(row).not.toHaveProperty("targetEmail");
+        });
     });
 
     describe("buildAuditEntry — classification & extraction", () => {
@@ -148,6 +209,105 @@ describe("auth audit trail", () => {
             expect(buildAuditEntry({ path: "/api/auth/change-password" })?.event).toBe("password-change");
             expect(buildAuditEntry({ path: "/api/auth/two-factor/enable" })?.event).toBe("mfa-enable");
             expect(buildAuditEntry({ path: "/api/auth/two-factor/disable" })?.event).toBe("mfa-disable");
+        });
+
+        /**
+         * Plan 280 §1/§4: `/sign-in/social` and `/sign-in/magic-link` only DISPATCH
+         * (mint a redirect URL / send an email) — pre-fix they were misclassified as
+         * a completed `sign-in`. The endpoints that actually complete a challenged
+         * or third-party sign-in (`/callback/:id`, `/magic-link/verify`, every
+         * `/two-factor/verify-*`) were not recorded at all before this change.
+         */
+        it("classifies dispatch-only sign-in endpoints as `sign-in-initiated`, not `sign-in`", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ path: "/api/auth/sign-in/social" })?.event).toBe("sign-in-initiated");
+            expect(buildAuditEntry({ path: "/api/auth/sign-in/magic-link" })?.event).toBe("sign-in-initiated");
+        });
+
+        it("classifies every sign-in COMPLETION endpoint as `sign-in` (previously unrecorded)", () => {
+            expect.assertions(5);
+
+            expect(buildAuditEntry({ path: "/api/auth/callback/github" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/magic-link/verify" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/two-factor/verify-totp" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/two-factor/verify-otp" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/two-factor/verify-backup-code" })?.event).toBe("sign-in");
+        });
+
+        it("still classifies every credential/username/phone sign-in as plain `sign-in` (no regression)", () => {
+            expect.assertions(3);
+
+            expect(buildAuditEntry({ path: "/api/auth/sign-in/email" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/sign-in/username" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/sign-in/phone-number" })?.event).toBe("sign-in");
+        });
+
+        it("no-regression: sign-up / sign-out / MFA-toggle / revoke / link / unlink classify exactly as before", () => {
+            expect.assertions(7);
+
+            expect(buildAuditEntry({ path: "/api/auth/sign-up/email" })?.event).toBe("sign-up");
+            expect(buildAuditEntry({ path: "/api/auth/sign-out" })?.event).toBe("sign-out");
+            expect(buildAuditEntry({ path: "/api/auth/two-factor/enable" })?.event).toBe("mfa-enable");
+            expect(buildAuditEntry({ path: "/api/auth/two-factor/disable" })?.event).toBe("mfa-disable");
+            expect(buildAuditEntry({ path: "/api/auth/revoke-session" })?.event).toBe("session-revoke");
+            expect(buildAuditEntry({ path: "/api/auth/link-social" })?.event).toBe("account-link");
+            expect(buildAuditEntry({ path: "/api/auth/unlink-account" })?.event).toBe("account-unlink");
+        });
+
+        /**
+         * Plan 280 §4/§9 Q2: the identifier extraction is shared across the
+         * sign-in family, so `sign-in-initiated` (a magic-link dispatch) carries
+         * `targetEmail` too — the address the link was sent to.
+         */
+        it("carries `targetEmail` from the request body for BOTH sign-in and sign-in-initiated events", () => {
+            expect.assertions(2);
+
+            const initiated = buildAuditEntry({ body: { email: "ada@example.com" }, path: "/api/auth/sign-in/magic-link" });
+            const completed = buildAuditEntry({ body: { email: "ada@example.com" }, path: "/api/auth/sign-in/email" });
+
+            expect(initiated?.targetEmail).toBe("ada@example.com");
+            expect(completed?.targetEmail).toBe("ada@example.com");
+        });
+
+        it("falls back to `body.username` when `email` is absent", () => {
+            expect.assertions(1);
+
+            expect(buildAuditEntry({ body: { username: "ada" }, path: "/api/auth/sign-in/username" })?.targetEmail).toBe("ada");
+        });
+
+        it("does NOT carry `targetEmail` for a non-sign-in event, even if the body happens to have an `email` field", () => {
+            expect.assertions(1);
+
+            expect(buildAuditEntry({ body: { email: "ada@example.com" }, path: "/api/auth/change-password" })?.targetEmail).toBeUndefined();
+        });
+
+        it("length-caps `targetEmail` at 320 chars (RFC 5321) against a hostile body", () => {
+            expect.assertions(1);
+
+            const hostile = `${"a".repeat(400)}@example.com`;
+            const entry = buildAuditEntry({ body: { email: hostile }, path: "/api/auth/sign-in/email" });
+
+            expect(entry?.targetEmail).toHaveLength(320);
+        });
+
+        /**
+         * A FAILED credential sign-in records no `actorEmail` (no authenticated
+         * user), so without `targetEmail` a credential-stuffing sweep against one
+         * address is invisible in the trail — this is the finding the plan opened
+         * with.
+         */
+        it("a FAILED /sign-in/email still carries the attempted `targetEmail`", () => {
+            expect.assertions(2);
+
+            const entry = buildAuditEntry({
+                body: { email: "victim@example.com" },
+                context: { returned: new Error("invalid credentials") },
+                path: "/api/auth/sign-in/email",
+            });
+
+            expect(entry?.outcome).toBe("failure");
+            expect(entry?.targetEmail).toBe("victim@example.com");
         });
 
         it("skips non-security endpoints (returns undefined)", () => {
