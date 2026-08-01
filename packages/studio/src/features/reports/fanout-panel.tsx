@@ -1,5 +1,4 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { ShardInput } from "../../components/shard-input";
@@ -10,7 +9,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { FanoutMetricsResult, FanoutPathCounters } from "../../lib/admin";
@@ -75,18 +74,14 @@ const PathCounters = ({
 const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-
-    // Re-read on the debounced shard key so typing a shard applies once it settles
-    // without querying a half-typed value.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
     const {
         data: result,
         error,
         errorSource,
         refetch,
-    } = useAdminQuery<FanoutMetricsResult>(ADMIN_FUNCTIONS.getFanoutMetrics, {}, { keepPreviousData: true, shardKey: debouncedShard });
+    } = useAdminQuery<FanoutMetricsResult>(ADMIN_FUNCTIONS.getFanoutMetrics, {}, { keepPreviousData: true, shardKey: queryShardKey });
 
     // Point-in-time DO read — poll to keep the snapshot current without a manual refresh.
     useAutoRefresh(refetch, true);

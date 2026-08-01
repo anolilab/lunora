@@ -10,7 +10,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { FunctionCallStat, FunctionStatsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -98,12 +98,8 @@ const SORTERS: Record<SortKey, (a: FunctionCallStat, b: FunctionCallStat) => num
 export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStatsPanelProps): ReactElement => {
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [sortKey, setSortKey] = useState<SortKey>("recent");
-
-    // The shard the read targets, debounced so typing a key settles before
-    // refetching (and re-subscribing) rather than firing per keystroke.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
     // One-shot read + always-on live subscription for the committed shard. Each
     // server push updates the table as mutations land; `liveError` holds a
@@ -114,7 +110,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
         {},
         {
             live: true,
-            shardKey: debouncedShard,
+            shardKey: queryShardKey,
         },
     );
 

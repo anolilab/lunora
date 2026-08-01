@@ -7,7 +7,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } fro
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type {
@@ -141,7 +141,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     const navigate = useNavigate();
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
     // Runtime-lint inputs the dead-index advisory reconciles: every declared index
     // from listTables + listTableIndexes. Best-effort — absent on an older worker,
@@ -151,11 +151,6 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // out on demand (not on the metrics hot path) and best-effort — null when
     // the worker predates the shard-traffic endpoint, so hot_shard stays quiet.
     const [shardTraffic, setShardTraffic] = useState<AdvisorShardTraffic[] | null>(null);
-
-    // The shard the reads target, debounced so typing a key settles before
-    // re-fetching (and re-subscribing) rather than firing per keystroke — the
-    // shard-seed protocol the audit/metrics panels share.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
     // The most recently requested enumeration shard. `enumerateShard` runs
     // fire-and-forget from both the shard-change effect and the visibility handler,
@@ -168,9 +163,9 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // without a manual refresh. `metrics`/`functions`/`advisories` are best-effort:
     // a partial snapshot still yields useful insights, so a single failure doesn't
     // blank the panel — only a failure of BOTH runtime reads surfaces a hard error.
-    const metricsQuery = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: debouncedShard });
-    const functionsQuery = useAdminQuery<FunctionStatsResult>(ADMIN_FUNCTIONS.getFunctionStats, {}, { live: true, shardKey: debouncedShard });
-    const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true, shardKey: debouncedShard });
+    const metricsQuery = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: queryShardKey });
+    const functionsQuery = useAdminQuery<FunctionStatsResult>(ADMIN_FUNCTIONS.getFunctionStats, {}, { live: true, shardKey: queryShardKey });
+    const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true, shardKey: queryShardKey });
 
     const metrics: MetricsSnapshot | null = metricsQuery.data ?? null;
     const functions: FunctionCallStat[] | null = functionsQuery.data?.functions ?? null;
@@ -345,8 +340,8 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // exists precisely so it ISN'T a reactive dependency.
     useEffect(() => {
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- drives an imperative enumeration over the debounced shard — an async load, not derived state
-        fireAndForget(enumerateShard(debouncedShard));
-    }, [debouncedShard]);
+        fireAndForget(enumerateShard(queryShardKey));
+    }, [queryShardKey]);
 
     // Auto-refresh when the tab regains focus. The studio is a standalone app
     // (not a Vite HMR client), so it can't hear codegen reloads directly — but
@@ -362,7 +357,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         metricsQuery.refetch();
         functionsQuery.refetch();
         advisoriesQuery.refetch();
-        fireAndForget(enumerateShard(debouncedShard));
+        fireAndForget(enumerateShard(queryShardKey));
     });
 
     useEffect(() => {

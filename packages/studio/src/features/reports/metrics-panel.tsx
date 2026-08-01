@@ -7,7 +7,7 @@ import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricsSnapshot, ShardMetrics } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -61,7 +61,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const t = useT();
     const navigate = useNavigate();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     /** Active panel tab: "overview" (default) or "query-insights" (shown when queryStats present). */
     const [activeTab, setActiveTab] = useState<"overview" | "query-insights">("overview");
     const [history, setHistory] = useState<ReadonlyArray<number>>([]);
@@ -83,16 +83,12 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         };
     }, []);
 
-    // The shard the read targets, debounced so typing a key settles before
-    // refetching (and re-subscribing) rather than firing per keystroke.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
     // Exemplar drill-down: stash the trace id — and the shard the series was queried
     // on, so the Traces panel searches the right ring rather than the root — for the
     // Traces panel to pick up and pre-filter on mount, then navigate there. A
     // one-shot handoff keeps the two panels decoupled from the router's search schema.
     const openTrace = (traceId: string): void => {
-        writePendingTraceFilter({ shardKey: debouncedShard, traceId });
+        writePendingTraceFilter({ shardKey: queryShardKey, traceId });
         fireAndForget(navigate({ to: "/traces" }));
     };
 
@@ -100,7 +96,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     // server push folds in like a refresh; `liveError` holds a rejection message
     // (e.g. missing admin token) so the panel can say why it stopped updating. The
     // one-shot read remains the source of truth.
-    const { data, error, liveError } = useAdminQuery<ShardMetrics>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: debouncedShard });
+    const { data, error, liveError } = useAdminQuery<ShardMetrics>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: queryShardKey });
 
     const metrics = data ?? null;
 
@@ -117,7 +113,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             return;
         }
 
-        recordShard(debouncedShard);
+        recordShard(queryShardKey);
 
         const next = data;
         const previous = lastRequestsRef.current;
@@ -138,7 +134,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         if (previous !== null && next.requests >= previous) {
             setHistory((prior) => [...prior, next.requests - previous].slice(-MAX_HISTORY));
         }
-    }, [data, debouncedShard]);
+    }, [data, queryShardKey]);
 
     // Cross-shard aggregate: per-shard results for the shards we know about
     // (root + current + recently-visited). `null` = aggregate view not loaded.
@@ -280,7 +276,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {/* Query Insights tab — rendered only when present and selected. */}
-            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsightsRange shardKey={debouncedShard} />}
+            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsightsRange shardKey={queryShardKey} />}
 
             {effectiveTab === "overview" && metrics !== null && (
                 <MetricsOverviewStats
@@ -299,7 +295,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
              * this shard. Self-contained (its own live read), renders nothing until a
              * series exists, and sits below the shard-health cards on the overview.
              */}
-            {effectiveTab === "overview" && <InstrumentsTable onOpenTrace={openTrace} shardKey={debouncedShard} />}
+            {effectiveTab === "overview" && <InstrumentsTable onOpenTrace={openTrace} shardKey={queryShardKey} />}
 
             {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
                 <MetricsAggregateView aggregate={aggregate} shardResults={shardResults} />

@@ -1245,19 +1245,28 @@ const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, pre
     }
 };
 
-const runBoundedFanOut = async (
-    namespace: ShardNamespaceLike,
-    keys: ReadonlyArray<string>,
-    request: ShardRpcRequest,
-    maxConcurrency: number,
-    timeoutMs: number,
-): Promise<ReadonlyArray<ShardRpcOutcome>> => {
-    if (keys.length === 0) {
+/**
+ * Run `jobs` through `run`, with at most `concurrency` of them in flight at
+ * once. A shared cursor lets each of the (at most `concurrency`) workers pull
+ * the next unclaimed job, so a fast job doesn't sit idle waiting for a slow
+ * sibling started in the same "batch" — the bounded-fan-out shape every
+ * multi-shard orchestrator in this file needs, whether every job shares the
+ * same request (`runBoundedFanOut`) or each carries its own args/cursor
+ * (`orchestrateCdcSync`, `orchestrateImport`, `orchestrateApplyCdc`,
+ * `orchestrateRankPage`). Results land at the same index as their job,
+ * regardless of completion order.
+ *
+ * `jobs` must not contain `undefined` — every caller here passes shard keys or
+ * pre-bucketed batch objects, never a sparse/optional array, and a literal
+ * `undefined` element would be indistinguishable from "past the end" and end
+ * the worker early.
+ */
+const runBoundedJobs = async <T, R>(jobs: ReadonlyArray<T>, concurrency: number, run: (job: T, index: number) => Promise<R>): Promise<R[]> => {
+    if (jobs.length === 0) {
         return [];
     }
 
-    const prepared = prepareShardRpc(request);
-    const outcomes: ShardRpcOutcome[] = Array.from({ length: keys.length });
+    const results: R[] = Array.from({ length: jobs.length });
     let cursor = 0;
 
     const worker = async (): Promise<void> => {
@@ -1267,22 +1276,34 @@ const runBoundedFanOut = async (
 
             cursor += 1;
 
-            const shardKey = keys[index];
+            const job = jobs[index];
 
-            if (index >= keys.length || shardKey === undefined) {
+            if (index >= jobs.length || job === undefined) {
                 return;
             }
 
-            // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
-            outcomes[index] = await callOneShard(namespace, shardKey, prepared, timeoutMs);
+            // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes jobs sequentially while `concurrency` workers run in parallel
+            results[index] = await run(job, index);
         }
     };
 
-    const concurrency = Math.min(maxConcurrency, keys.length);
+    const workerCount = Math.min(concurrency, jobs.length);
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-    return outcomes;
+    return results;
+};
+
+const runBoundedFanOut = async (
+    namespace: ShardNamespaceLike,
+    keys: ReadonlyArray<string>,
+    request: ShardRpcRequest,
+    maxConcurrency: number,
+    timeoutMs: number,
+): Promise<ReadonlyArray<ShardRpcOutcome>> => {
+    const prepared = prepareShardRpc(request);
+
+    return runBoundedJobs(keys, maxConcurrency, async (shardKey) => callOneShard(namespace, shardKey, prepared, timeoutMs));
 };
 
 /**
@@ -1630,45 +1651,23 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             const shardKeys = [...union];
             const cursors = request.cursors ?? {};
-            const results: { outcome: ShardRpcOutcome; sinceSeq: number }[] = Array.from({ length: shardKeys.length });
-            let cursor = 0;
 
-            const concurrency = Math.min(maxConcurrency, shardKeys.length);
+            const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {
+                const sinceSeq = cursors[shardKey] ?? 0;
 
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
+                const outcome = await callOneShard(
+                    namespace,
+                    shardKey,
+                    prepareShardRpc({
+                        args: { limit: request.limit, sinceSeq },
+                        functionPath: "__lunora_admin__:cdcSync",
+                        headers: request.headers,
+                    }),
+                    perShardTimeoutMs,
+                );
 
-                    cursor += 1;
-
-                    const shardKey = shardKeys[index];
-
-                    if (index >= shardKeys.length || shardKey === undefined) {
-                        return;
-                    }
-
-                    const sinceSeq = cursors[shardKey] ?? 0;
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
-                    const outcome = await callOneShard(
-                        namespace,
-                        shardKey,
-                        prepareShardRpc({
-                            args: { limit: request.limit, sinceSeq },
-                            functionPath: "__lunora_admin__:cdcSync",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-
-                    results[index] = { outcome, sinceSeq };
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+                return { outcome, sinceSeq };
+            });
 
             return rollUpCdcSync(results);
         },
@@ -1678,41 +1677,19 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // every shard. The structure mirrors it: bounded `Promise.all`
             // workers pulling jobs off a shared cursor.
             const { batches } = request;
-            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
-            let cursor = 0;
 
-            const concurrency = Math.min(maxConcurrency, batches.length);
-
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    const batch = batches[index];
-
-                    if (index >= batches.length || batch === undefined) {
-                        return;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
-                    outcomes[index] = await callOneShard(
-                        namespace,
-                        batch.shardKey,
-                        prepareShardRpc({
-                            args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                            functionPath: "__lunora_admin__:importShard",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+                callOneShard(
+                    namespace,
+                    batch.shardKey,
+                    prepareShardRpc({
+                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
+                        functionPath: "__lunora_admin__:importShard",
+                        headers: request.headers,
+                    }),
+                    perShardTimeoutMs,
+                ),
+            );
 
             return rollUpImport(outcomes);
         },
@@ -1721,41 +1698,19 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // orchestrateImport (each shard gets distinct args, so we can't use
             // runBoundedFanOut's same-args-to-all model).
             const { batches } = request;
-            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
-            let cursor = 0;
 
-            const concurrency = Math.min(maxConcurrency, batches.length);
-
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    const batch = batches[index];
-
-                    if (index >= batches.length || batch === undefined) {
-                        return;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
-                    outcomes[index] = await callOneShard(
-                        namespace,
-                        batch.shardKey,
-                        prepareShardRpc({
-                            args: { changes: [...batch.changes] },
-                            functionPath: "__lunora_admin__:applyCdc",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+                callOneShard(
+                    namespace,
+                    batch.shardKey,
+                    prepareShardRpc({
+                        args: { changes: [...batch.changes] },
+                        functionPath: "__lunora_admin__:applyCdc",
+                        headers: request.headers,
+                    }),
+                    perShardTimeoutMs,
+                ),
+            );
 
             return rollUpApplyCdc(outcomes);
         },
@@ -1802,64 +1757,39 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // `take`; the shard-local reader internally `LIMIT take + 1`s so its
             // `hasMore` is observable even when the returned slice is exactly
             // `take` long, but the merge only ever emits up to the GLOBAL `take`.
-            const outcomes: ShardRankPageOutcome[] = Array.from({ length: keys.length });
-            let cursor = 0;
+            const outcomes = await runBoundedJobs(keys, maxConcurrency, async (shardKey): Promise<ShardRankPageOutcome> => {
+                const shardCursorKey = cursorState.perShard[shardKey];
+                const args: Record<string, unknown> = {
+                    index: request.index,
+                    table: request.table,
+                    take,
+                };
 
-            const concurrency = Math.min(maxConcurrency, keys.length);
-
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    const shardKey = keys[index];
-
-                    if (index >= keys.length || shardKey === undefined) {
-                        return;
-                    }
-
-                    const shardCursorKey = cursorState.perShard[shardKey];
-                    const args: Record<string, unknown> = {
-                        index: request.index,
-                        table: request.table,
-                        take,
-                    };
-
-                    if (request.partitionKey !== undefined) {
-                        args["partitionKey"] = request.partitionKey;
-                    }
-
-                    if (shardCursorKey !== undefined) {
-                        // Forward the prior page's resume key for THIS shard so
-                        // it pages strictly-after the last globally-consumed row.
-                        args["after"] = shardCursorKey;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
-                    const outcome = await callOneShard(
-                        namespace,
-                        shardKey,
-                        prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
-                        perShardTimeoutMs,
-                    );
-
-                    if (outcome.kind === "err") {
-                        outcomes[index] = { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
-
-                        continue;
-                    }
-
-                    const payload = readRankPageResult(unwrapResult(outcome.value));
-
-                    outcomes[index] = { directions: payload.directions, hasMore: payload.hasMore, rows: payload.rows, shardKey };
+                if (request.partitionKey !== undefined) {
+                    args["partitionKey"] = request.partitionKey;
                 }
-            };
 
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+                if (shardCursorKey !== undefined) {
+                    // Forward the prior page's resume key for THIS shard so
+                    // it pages strictly-after the last globally-consumed row.
+                    args["after"] = shardCursorKey;
+                }
+
+                const outcome = await callOneShard(
+                    namespace,
+                    shardKey,
+                    prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
+                    perShardTimeoutMs,
+                );
+
+                if (outcome.kind === "err") {
+                    return { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
+                }
+
+                const payload = readRankPageResult(unwrapResult(outcome.value));
+
+                return { directions: payload.directions, hasMore: payload.hasMore, rows: payload.rows, shardKey };
+            });
 
             const slices: ShardSlice[] = [];
             let ok = 0;

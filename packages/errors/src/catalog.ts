@@ -174,6 +174,164 @@ export const ERROR_CATALOG = {
     ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
+
+    /**
+     * Admin-gated `/_lunora/admin/*` and `__lunora_admin__:*` codes. Registered
+     * here (plan 230, ERRORS-01) after an audit found them minted with `code:`
+     * but never added to the catalog — `isInternalCode` fails OPEN for an
+     * unregistered code, so each was already echoing its message unredacted.
+     * Below is that audit's verdict per code, not a blanket allow: most of these
+     * are deliberately actionable ("you forgot to configure X") and stay
+     * client-safe; the ones that can carry backend detail are flagged
+     * `internal: true` individually, with the reason noted alongside.
+     */
+    ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
+    ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
+    AUTH_NOT_CONFIGURED: { status: 400, title: "Auth admin not configured" },
+    AUTH_OP_NOT_SUPPORTED: { status: 400, title: "Auth admin operation not supported" },
+    BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
+    CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
+    CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    EXPORT_TAP_NOT_CONFIGURED: { status: 400, title: "Export tap not configured" },
+    FUNCTIONS_NOT_CONFIGURED: { status: 400, title: "Functions registry not configured" },
+    GLOBALS_NOT_CONFIGURED: { status: 400, title: "Global-table introspector not configured" },
+    KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
+    MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
+    PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
+    SCHEDULER_NOT_CONFIGURED: { status: 400, title: "Scheduler not configured" },
+    STORAGE_DELETE_NOT_CONFIGURED: { status: 400, title: "Storage delete not configured" },
+    STORAGE_NOT_CONFIGURED: { status: 400, title: "Storage not configured" },
+    STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
+    STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
+    VECTORS_NOT_CONFIGURED: { status: 400, title: "Vector index introspector not configured" },
+    VECTOR_QUERY_UNSUPPORTED: { status: 400, title: "Vector index querying not enabled" },
+    WORKFLOWS_NOT_CONFIGURED: { status: 501, title: "Workflows not configured" },
+
+    /** The auth/security audit read plane (`__lunora_admin__:getAuthAuditLog`). */
+    AUTH_AUDIT_NOT_CONFIGURED: { status: 400, title: "Auth audit reader not configured" },
+
+    /**
+     * Backend/DB failure reading the auth audit store. The throw site already
+     * keeps the message generic and logs the real error server-side only — flagged
+     * `internal: true` anyway as the deliberate posture for "a backend read
+     * failed", so a future edit that inlines the driver error can't leak it.
+     */
+    AUTH_AUDIT_READ_FAILED: { internal: true, status: 500, title: "Auth audit read failed" },
+
+    /**
+     * Cron-job codes. The `*_NOT_STATIC` / `_INVALID` family are codegen
+     * build-time diagnostics — like `CODEGEN_DIAGNOSTIC`, they're thrown as plain
+     * messages into the CLI/Vite-overlay output, never cross the RPC wire, and are
+     * deliberately not `internal` (the message IS the fix). `CRON_JOB_FAILED` is
+     * the one runtime-reachable code in this family — its message interpolates
+     * binding/function/job names from the deployment, so it is flagged internal.
+     */
+    CRON_EXPR_INVALID: { status: 500, title: "Invalid cron expression" },
+    CRON_EXPR_NOT_STATIC: { status: 500, title: "Cron expression is not statically analyzable" },
+    CRON_JOB_FAILED: { internal: true, status: 500, title: "Cron job failed" },
+    CRON_NAME_NOT_STATIC: { status: 500, title: "Cron job name is not statically analyzable" },
+    CRON_NON_STATIC_FN: { status: 500, title: "Cron function reference is not statically analyzable" },
+    CRON_NON_STATIC_VALUE: { status: 500, title: "Cron value is not statically analyzable" },
+    CRON_SCHEDULE_NOT_STATIC: { status: 500, title: "Cron schedule is not statically analyzable" },
+    DUPLICATE_CRON_NAME: { status: 500, title: "Duplicate cron job name" },
+
+    /** More codegen build-time diagnostics — see the cron-family comment above; same reasoning applies. */
+    DUPLICATE_AGENT_BINDING: { status: 500, title: "Duplicate agent binding" },
+    DUPLICATE_AGENT_CLASS: { status: 500, title: "Duplicate agent generated class name" },
+    DUPLICATE_AGENT_NAME: { status: 500, title: "Duplicate agent name" },
+    DUPLICATE_MIGRATION_ID: { status: 500, title: "Duplicate migration id" },
+    DUPLICATE_QUEUE_BINDING: { status: 500, title: "Duplicate queue binding" },
+    DUPLICATE_QUEUE_NAME: { status: 500, title: "Duplicate queue name" },
+    DUPLICATE_WORKFLOW_CLASS: { status: 500, title: "Duplicate workflow generated class name" },
+    MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
+    NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
+
+    /**
+     * `@lunora/runtime`'s dispatch/security-boundary codes — RPC/HTTP entry, not
+     * admin-gated. Fixed, non-sensitive messages throughout, so none are `internal`.
+     */
+    BAD_ROW: { status: 400, title: "Malformed import row" },
+    BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
+    BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
+    CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
+    FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
+    FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
+    FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
+    GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
+    INVALID_INPUT: { status: 400, title: "Invalid input" },
+    RATE_LIMITED: { status: 429, title: "Rate limited" },
+    /** Thrown by `@lunora/auth` (Turnstile) and `@lunora/ratelimit` — an upstream dependency didn't respond. Fixed, safe message. */
+    SERVICE_UNAVAILABLE: { status: 503, title: "Service unavailable" },
+    SHAPE_CROSS_SHARD_JOIN: { status: 400, title: "Shape cross-shard join is unsupported" },
+    UNAUTHENTICATED: { status: 401, title: "Unauthenticated" },
+    UNKNOWN_COLUMN: { status: 404, title: "Unknown column" },
+
+    /**
+     * `@lunora/do`'s ShardDO — WebSocket-frame codes and SQLite-in-DO invariants.
+     * `NESTED_TRANSACTION` and `SQL_UNAVAILABLE` are "should never happen" state
+     * invariants (mirrors `RUN_DEPTH_EXCEEDED`'s posture above): today's message
+     * is static and safe, but flagged internal so a future edit that adds
+     * diagnostic detail can't accidentally start leaking it.
+     */
+    EXPIRED: { status: 404, title: "Session expired" },
+    NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
+    OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
+    SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },
+    SHAPE_NOT_FOUND: { status: 404, title: "Shape not found" },
+    SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
+    TOKEN_EXPIRED: { status: 401, title: "Authentication token expired" },
+    TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
+    UNKNOWN_ADMIN_OP: { status: 404, title: "Unknown admin operation" },
+
+    /**
+     * `@lunora/shard-engine`'s relay hub (cross-shard shape relay coordination).
+     * Mirrors `SHARD_ERROR`/`SHARD_UNAVAILABLE` above: operational status for an
+     * app's own relay topology, not a secret — not `internal`.
+     */
+    RELAY_CANNOT_SEED: { status: 500, title: "Relay cannot seed" },
+    RELAY_MISCONFIGURED: { status: 500, title: "Relay misconfigured" },
+    RELAY_SEED_FAILED: { status: 502, title: "Relay seed failed" },
+
+    /**
+     * A worker option required by the request path is absent (a deploy-config
+     * gap, not a caller error) — the fixed message names the missing option, so
+     * it's actionable and echoed. `MISCONFIGURED` is the one exception: its
+     * message interpolates the caller-supplied `functionPath`, and it's the code
+     * this plan's audit found live-leaking (`create-worker.ts`'s x402 gate).
+     */
+    MISCONFIGURED: { internal: true, status: 500, title: "Worker misconfigured" },
+
+    /** `@lunora/nuxt`'s Nitro bridge: the request carried no Cloudflare bindings. Fixed, safe message. */
+    LUNORA_RUNTIME_UNAVAILABLE: { status: 500, title: "Lunora runtime unavailable" },
+
+    /**
+     * `@lunora/replica`'s event-log Durable Object: generic request-handler
+     * catch-all, mirroring `INTERNAL`/`INTERNAL_SERVER_ERROR`/`RPC_FAILED` above
+     * — the real error is logged server-side only, never in this code's message.
+     */
+    INTERNAL_ERROR: { internal: true, status: 500, title: "Internal error" },
+
+    /**
+     * Client-SDK-only codes (`@lunora/client`), thrown locally in the browser/app
+     * process rather than by the server — `internal`'s wire-redaction semantics
+     * don't apply the same way here, since the "wire" is the app's own code
+     * catching its own client's exception. Kept in the catalog for the client's
+     * `code`-discrimination union and Studio/CLI rendering consistency.
+     */
+    BROWSER_TIMEOUT: { status: 504, title: "Browser operation timed out" },
+    CLIENT_CLOSED: { status: 400, title: "Client is closed" },
+    HTTP_STREAM_BAD_CHUNK: { status: 502, title: "Malformed HTTP stream chunk" },
+    HTTP_STREAM_INTERRUPTED: { status: 502, title: "HTTP stream interrupted" },
+    HTTP_STREAM_MISSING_PARAM: { status: 400, title: "HTTP stream missing path parameter" },
+    HTTP_STREAM_NO_BODY: { status: 502, title: "HTTP stream response has no body" },
+    HTTP_STREAM_STATUS: { status: 502, title: "HTTP stream request failed" },
+    HTTP_STREAM_TRANSPORT: { status: 502, title: "HTTP stream transport error" },
+    STREAM_BACKPRESSURE: { status: 429, title: "Stream backpressure" },
+    STREAM_DISCONNECTED: { status: 503, title: "Stream disconnected" },
+    STREAM_QUEUE_OVERFLOW: { status: 429, title: "Stream queue overflow" },
+
+    /** `@lunora/db`'s offline outbox: a queued write targeted a collection removed/renamed in a later deploy. */
+    UNKNOWN_MUTATION_FN: { status: 404, title: "Unknown mutation function" },
 } as const;
 
 // Shape validation kept as a standalone statement: `as const satisfies …` is not

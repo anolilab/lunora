@@ -2,7 +2,7 @@ import type { GlobalTableInfo } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import useDebounced from "../../../hooks/use-debounced";
+import { useShardKey } from "../../../hooks/use-shard-key";
 import type { ColumnMeta, TableIndexesResult, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -69,12 +69,12 @@ interface SchemaExplorer {
 const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?: string; initialTable?: string }): SchemaExplorer => {
     const client = useLunora();
     const [view, setView] = useState<SchemaView>("graph");
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [tableFilter, setTableFilter] = useState<string>("");
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [columns, setColumns] = useState<Record<string, string[]>>({});
-    // Declared indexes per `${shardKey}:${table}`, loaded lazily alongside columns on expand.
+    // Declared indexes per `${queryShardKey}:${table}`, loaded lazily alongside columns on expand.
     const [indexes, setIndexes] = useState<Record<string, TableIndexInfo[]>>({});
     const [expanded, setExpanded] = useState<null | string>(null);
 
@@ -134,13 +134,11 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
     // Re-read on the debounced shard key so switching shards re-loads the schema
     // once the value settles (no Refresh button). Schema is static between
     // codegen/migrations, so there's no live channel or poll — just this re-load.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
     useEffect(() => {
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async schema load, re-run when the debounced shard settles
-        fireAndForget(refresh(debouncedShard));
+        fireAndForget(refresh(queryShardKey));
         fireAndForget(refreshGlobal());
-    }, [refresh, refreshGlobal, debouncedShard]);
+    }, [refresh, refreshGlobal, queryShardKey]);
 
     const toggle = useCallback(
         async (table: string): Promise<void> => {
@@ -155,8 +153,9 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
             // Key the column cache by shard + table so editing the shard input
             // (before the debounced re-load settles) and then expanding a table
             // can't return a previous shard's columns; the probe below uses the
-            // same shardKey.
-            const cacheKey = `${shardKey}:${table}`;
+            // same queryShardKey — the settled shard the displayed tables/columns
+            // actually belong to, not the live keystroke-by-keystroke input.
+            const cacheKey = `${queryShardKey}:${table}`;
 
             if (columns[cacheKey] !== undefined) {
                 return;
@@ -166,8 +165,8 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
             // older worker without `listTableIndexes` (or one without an admin
             // token for that read) still shows the column list.
             const [page, indexResult] = await Promise.allSettled([
-                client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey)) as Promise<TablePage>,
-                client.query(LIST_TABLE_INDEXES, { table }, callOptions(shardKey)) as Promise<TableIndexesResult>,
+                client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(queryShardKey)) as Promise<TablePage>,
+                client.query(LIST_TABLE_INDEXES, { table }, callOptions(queryShardKey)) as Promise<TableIndexesResult>,
             ]);
 
             if (page.status === "fulfilled") {
@@ -184,7 +183,7 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
                 });
             }
         },
-        [client, columns, expanded, shardKey],
+        [client, columns, expanded, queryShardKey],
     );
 
     const toggleGlobal = async (table: string): Promise<void> => {
@@ -299,25 +298,27 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
     // When the graph opens (or the shard switches) probe every table's columns
     // once per shard. List view never probes, so the graph cost is opt-in. This is
     // a genuine lazy data-load, not a click handler: it must also re-run when the
-    // shard's `tables` change (after a re-seed) or `shardKey` switches, so it stays
-    // an effect keyed on those values rather than firing from the toggle's onClick.
+    // shard's `tables` change (after a re-seed) or `queryShardKey` switches, so it
+    // stays an effect keyed on those values rather than firing from the toggle's
+    // onClick. Keyed on `queryShardKey` (not the live `shardKey`) so the probe
+    // targets the same settled shard `tables`/`globalTables` were loaded for.
     // It waits for global discovery to resolve (success or failure) so the probe
     // covers global table names too.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- lazy data-load gated on view + shard, not an event handler
-        if (view !== "graph" || tables === null || (globalTables === null && globalError === null) || shardColumns[shardKey] !== undefined) {
+        if (view !== "graph" || tables === null || (globalTables === null && globalError === null) || shardColumns[queryShardKey] !== undefined) {
             return;
         }
 
         fireAndForget(
             // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- lazy column probe gated on view + shard, not derived state
             probeSchema(
-                shardKey,
+                queryShardKey,
                 tables.map((table) => table.name),
                 (globalTables ?? []).map((table) => table.name),
             ),
         );
-    }, [view, tables, globalTables, globalError, shardKey, shardColumns, probeSchema]);
+    }, [view, tables, globalTables, globalError, queryShardKey, shardColumns, probeSchema]);
 
     // The unified diagram model: every table across both tiers, tagged with its
     // storage tier and carrying the columns probed for this shard (schema-typed
@@ -325,7 +326,7 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
     // A shard column referencing a global table resolves to a real node, so the
     // cross-tier FK edge can render.
     const diagramTables = useMemo<DiagramTable[]>(() => {
-        const columnsForShard = shardColumns[shardKey] ?? EMPTY_COLUMNS;
+        const columnsForShard = shardColumns[queryShardKey] ?? EMPTY_COLUMNS;
         const shardOnes = (tables ?? []).map((table): DiagramTable => {
             return { columns: columnsForShard[table.name] ?? EMPTY_COLUMN_META, name: table.name, tier: "shard" };
         });
@@ -334,7 +335,7 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
         });
 
         return [...shardOnes, ...globalOnes];
-    }, [tables, globalTables, shardColumns, shardKey]);
+    }, [tables, globalTables, shardColumns, queryShardKey]);
 
     // Substring filter (case-insensitive) over each tier's table names, applied
     // only in the list view. An empty filter shows every table.

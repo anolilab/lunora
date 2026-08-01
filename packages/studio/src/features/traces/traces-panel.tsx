@@ -11,7 +11,7 @@ import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { TraceSpan, TracesResult, TraceSummary } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -215,7 +215,9 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
     // clear lives in the mount effect below, not here.
     const [pending] = useState<PendingTraceFilter | undefined>(peekPendingTraceFilter);
 
-    const [shardKey, setShardKey] = useState<string>(pending?.shardKey !== undefined && pending.shardKey !== "" ? pending.shardKey : (initialShardKey ?? ""));
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(
+        pending?.shardKey !== undefined && pending.shardKey !== "" ? pending.shardKey : (initialShardKey ?? ""),
+    );
     const [search, setSearch] = useState<string>(pending?.traceId ?? "");
     const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
@@ -227,14 +229,10 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
         clearPendingTraceFilter();
     }, []);
 
-    // Debounced so typing a key settles before refetching (and re-subscribing)
-    // rather than firing per keystroke — mirrors the Logs and Issues panels.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
     const { data, error, errorSource, isLoading, liveError } = useAdminQuery<TracesResult>(
         ADMIN_FUNCTIONS.getTraces,
         {},
-        { live: true, shardKey: debouncedShard },
+        { live: true, shardKey: queryShardKey },
     );
 
     // Record the browsed shard into recent-shards history once the read resolves,
@@ -242,9 +240,9 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
     // matching the nine other shard-scoped panels.
     useEffect(() => {
         if (data !== undefined) {
-            recordShard(debouncedShard);
+            recordShard(queryShardKey);
         }
-    }, [data, debouncedShard]);
+    }, [data, queryShardKey]);
 
     const traces = tracesOf(data);
     // The RPC returns only the newest `DEFAULT_TRACE_LIMIT` traces; `total` is how

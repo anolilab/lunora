@@ -1,5 +1,4 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { ShardInput } from "../../components/shard-input";
@@ -9,7 +8,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { SubscriptionConnection, SubscriptionInfo, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -86,11 +85,7 @@ const DASH = <span className="text-muted-foreground">—</span>;
 const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): ReactElement => {
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-
-    // Re-read on the debounced shard key so typing a shard applies once it settles
-    // (no Refresh button) without querying a half-typed value.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
     // A point-in-time DO read (no write-flush fires on socket connect/disconnect),
     // so a one-shot read keyed by the debounced shard; the poll below keeps it
@@ -101,7 +96,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
         error,
         errorSource,
         refetch,
-    } = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { keepPreviousData: true, shardKey: debouncedShard });
+    } = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { keepPreviousData: true, shardKey: queryShardKey });
 
     // No write-flush fires on socket connect/disconnect, so poll the committed
     // shard to keep the snapshot current without a manual refresh.

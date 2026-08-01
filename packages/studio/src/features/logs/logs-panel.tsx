@@ -11,7 +11,7 @@ import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useDebounced from "../../hooks/use-debounced";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { LogEntry, LogLevel, RequestLogEntry, RequestLogQuery, RequestOutcome } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -319,7 +319,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const t = useT();
 
     const [view, setView] = useState<LogsView>("requests");
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [search, setSearch] = useState<string>("");
     // Errors-view client-side filters: a level allow-set (empty = all levels), a
     // function-path substring, and a relative time window. AND-composed.
@@ -335,10 +335,6 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const [tableFilter, setTableFilter] = useState<string>("");
     const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
 
-    // The shard the reads target, debounced so typing a key settles before
-    // refetching (and re-subscribing) rather than firing per keystroke.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
     // Typed as a plain record too, so it satisfies the `useAdminQuery` args
     // surface (`Record<string, unknown>`) without a per-call-site cast. Folding it
     // into the query args means changing a correlation filter re-fetches the
@@ -352,7 +348,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const requestsQuery = useAdminQuery<{ entries?: unknown }>(ADMIN_FUNCTIONS.getRequestLog, requestQuery, {
         enabled: view === "requests",
         live: true,
-        shardKey: debouncedShard,
+        shardKey: queryShardKey,
     });
 
     const errorsQuery = useAdminQuery<{ entries?: unknown }>(
@@ -361,7 +357,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         {
             enabled: view === "errors",
             live: true,
-            shardKey: debouncedShard,
+            shardKey: queryShardKey,
         },
     );
 
@@ -379,9 +375,9 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- recording the browsed shard is derived from the resolved read (a value, not a discrete event); writing it when the data lands is the correct pattern.
         if (activeQuery.data !== undefined) {
-            recordShard(debouncedShard);
+            recordShard(queryShardKey);
         }
-    }, [activeQuery.data, debouncedShard]);
+    }, [activeQuery.data, queryShardKey]);
 
     // AND-composed client-side filter for the Errors view (level allow-set,
     // function-path substring, message substring, relative time window), derived
@@ -548,7 +544,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 with the readout state machine — so it's gated once, not negated on every
                 `readout` branch. */}
             {view === "archive" ? (
-                <ArchiveFeed shardKey={debouncedShard} />
+                <ArchiveFeed shardKey={queryShardKey} />
             ) : (
                 <>
                     {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
