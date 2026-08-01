@@ -86,6 +86,7 @@ export {
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
+    IndexFieldsByTable,
     InlineAggregateIndexOptions,
     InlineRankIndexOptions,
     ManyRelation,
@@ -96,7 +97,7 @@ export type {
     VectorIndexOptions,
     VectorizeOptions,
 } from "./schema";
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex } from "./schema";
+export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema } from "./schema";
 export type { RegisteredShape, ShapeDefinition } from "./shapes";
 export { defineShape } from "./shapes";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";

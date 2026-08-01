@@ -869,6 +869,60 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
     }
 };
 
+/**
+ * Per-table index→declared-fields map: for each table, each declared index
+ * NAME maps to the column names it declares. Distilled by
+ * {@link indexFieldsFromSchema}; this is the shape `mask()`'s
+ * `MaskOptions.indexFields` expects (see `./mask/types`), so a table not
+ * present here (no declared indexes) is simply absent from the map rather than
+ * mapped to `{}`.
+ */
+type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, ReadonlyArray<string>>>>>;
+
+/**
+ * Distill a schema's declared index fields into an {@link IndexFieldsByTable}
+ * map — regular index `fields`; rank index `sortBy[].field` ∪ `partitionBy`.
+ * Built to close the `mask()` bare-index-scan / rank position oracle: pass the
+ * result as `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
+ * so the middleware can reject a bare `withIndex`/`rank` read over an index
+ * whose DECLARED fields include a masked column — a range/search CALLBACK
+ * referencing a masked field is already caught by `assertIndexFieldsAllowed`,
+ * but a bare `withIndex(name)` (no callback) and a `rank`/`rankPage`/
+ * `rankBefore` read give the recorder nothing to observe, so the guard needs
+ * the index's *declaration* instead (see `./mask/middleware`).
+ *
+ * Pure and side-effect free; takes anything carrying `tables` (a `Schema`, an
+ * `ExtendableSchema`, or a plugin-merged schema), so it works whether called
+ * before or after `.extend(...)`.
+ */
+const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
+    const result: Record<string, Record<string, ReadonlyArray<string>>> = {};
+
+    for (const [tableName, table] of Object.entries(schema.tables)) {
+        const perIndex: Record<string, ReadonlyArray<string>> = {};
+
+        for (const index of table.indexes) {
+            perIndex[index.name] = index.fields;
+        }
+
+        for (const rankIndex of table.rankIndexes) {
+            const fields = new Set<string>(rankIndex.sortBy.map((key) => key.field));
+
+            for (const field of rankIndex.partitionBy ?? []) {
+                fields.add(field);
+            }
+
+            perIndex[rankIndex.name] = [...fields];
+        }
+
+        if (Object.keys(perIndex).length > 0) {
+            result[tableName] = perIndex;
+        }
+    }
+
+    return result;
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -882,11 +936,12 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     return withExtend({ tables, vectorIndexes });
 };
 
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex };
+export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema };
 
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
+    IndexFieldsByTable,
     InlineAggregateIndexOptions,
     InlineRankIndexOptions,
     ManyRelation,
