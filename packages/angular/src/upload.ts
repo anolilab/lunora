@@ -20,26 +20,19 @@
  */
 import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
-import type { CreateUploadOptions, UploadProtocol, UploadResult } from "@lunora/client/upload";
+import type { ChunkedRestAdapter, CreateUploadOptions, TusAdapter, UploadProtocol, UploadResult } from "@lunora/client/upload";
 import { createUpload } from "@lunora/client/upload";
 
 /**
- * The resumable-adapter surface {@link upload} drives — the members TUS and
- * chunked-REST share identically. Multipart's adapter has a different shape
- * (`uploadBatch`, per-item abort) and is intentionally excluded from
- * {@link UploadOptions.protocol}, so this interface never needs to describe it.
+ * The resumable-adapter surface {@link upload} drives — `TusAdapter` and
+ * `ChunkedRestAdapter` share the members this module calls (`abort`, `isPaused`,
+ * `pause`, `resume`, `setOnError`/`setOnFinish`/`setOnProgress`/`setOnStart`,
+ * `upload`) identically, so the union stands in directly instead of a bespoke
+ * interface drifting from the real types. `MultipartAdapter` has a different
+ * shape (`uploadBatch`, per-item abort) and is intentionally excluded from
+ * {@link UploadOptions.protocol}, so it never enters this union.
  */
-interface ResumableUploadAdapter {
-    abort: () => void;
-    isPaused: () => boolean;
-    pause: () => void;
-    resume: () => Promise<void>;
-    setOnError: (callback: ((error: Error) => void) | undefined) => void;
-    setOnFinish: (callback: ((result: UploadResult) => void) | undefined) => void;
-    setOnProgress: (callback: ((progress: number, offset: number) => void) | undefined) => void;
-    setOnStart: (callback: (() => void) | undefined) => void;
-    upload: (file: File) => Promise<UploadResult>;
-}
+type ResumableUploadAdapter = ChunkedRestAdapter | TusAdapter;
 
 /** The lifecycle of an {@link upload} primitive. */
 export type UploadStatus = "error" | "idle" | "paused" | "success" | "uploading";
@@ -105,24 +98,20 @@ export interface UploadApi {
  * @experimental
  */
 export const upload = (options: UploadOptions): UploadApi => {
-    const destroyRef = options.destroyRef ?? inject(DestroyRef);
+    // Rest-destructure rather than enumerate `CreateUploadOptions` fields by hand: the
+    // type does the work of stripping the Angular-only `destroyRef`, so a future field
+    // added to `CreateUploadOptions` flows through automatically instead of being
+    // silently dropped by a stale field list.
+    const { destroyRef: explicitDestroyRef, ...createOptions } = options;
 
-    const createOptions: CreateUploadOptions = {
-        chunkSize: options.chunkSize,
-        control: options.control,
-        endpoint: options.endpoint,
-        headers: options.headers,
-        maxRetries: options.maxRetries,
-        metadata: options.metadata,
-        protocol: options.protocol,
-        restrictions: options.restrictions,
-        retry: options.retry,
-    };
+    const destroyRef = explicitDestroyRef ?? inject(DestroyRef);
 
     // Safe: `UploadOptions.protocol` excludes "multipart" at the type level, so
     // `createUpload` can only ever return the resumable (TUS / chunked-REST)
-    // member of its union here.
-    const adapter = createUpload(createOptions) as unknown as ResumableUploadAdapter;
+    // member of its union here. `ResumableUploadAdapter` is a subset of
+    // `createUpload`'s real return union (`ChunkedRestAdapter | MultipartAdapter |
+    // TusAdapter`), so a single assertion narrows it without an `unknown` hop.
+    const adapter = createUpload(createOptions) as ResumableUploadAdapter;
 
     const progress = signal(0);
     const status = signal<UploadStatus>("idle");
@@ -160,18 +149,18 @@ export const upload = (options: UploadOptions): UploadApi => {
         // `adapter.resume()` is async (it may re-probe the upload offset before
         // resuming); route failure into the same `error`/`status` signals a
         // failed `start()` would, rather than an unhandled rejection.
-        (async () => {
-            try {
-                await adapter.resume();
+        adapter
+            .resume()
+            .then(() => {
                 isPaused.set(false);
                 status.set("uploading");
-            } catch (resumeError) {
+
+                return undefined;
+            })
+            .catch((resumeError: unknown) => {
                 error.set(resumeError instanceof Error ? resumeError : new Error(String(resumeError)));
                 status.set("error");
-            }
-        })().catch(() => {
-            // Unreachable: the IIFE's own try/catch already routes errors into the signals.
-        });
+            });
     };
 
     const abort = (): void => {
