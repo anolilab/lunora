@@ -235,6 +235,72 @@ describe(searchTermRange, () => {
             upper: `emoji${String.fromCodePoint(emojiCodePoint + 1)}`,
         });
     });
+
+    // Plan 272: `codePointAt(token.length - 1)` is a code-*unit* index, so for a
+    // token ending in a surrogate pair it reads the lone low surrogate rather
+    // than the character. The 😀 case above happens to produce the right
+    // answer anyway (the low surrogate's increment stays inside the surrogate
+    // block, so the pair re-forms by luck) — these cases pin the ones where
+    // that luck runs out.
+
+    it("increments the true last code point for U+10437 (𐐷, DESERET SMALL LETTER YEE) — a case where the code-unit bug happens to still land right", () => {
+        expect.assertions(2);
+
+        const codePoint = 0x1_04_37;
+        const token = String.fromCodePoint(codePoint);
+        const result = searchTermRange(token, true);
+
+        expect(result).toStrictEqual({ exact: false, lower: token, upper: String.fromCodePoint(codePoint + 1) });
+        // No lone surrogate anywhere in the bound — spreading a string iterates by
+        // code point, so a well-formed trailing astral character spreads to
+        // exactly one element (a lone surrogate would instead spread to one
+        // element per unpaired UTF-16 unit only by coincidence of length, so this
+        // is a coarse but sufficient smoke check alongside the exact-value assertion above).
+        // eslint-disable-next-line @typescript-eslint/no-misused-spread -- intentional: code-point iteration is the property under test
+        expect([...result.upper]).toHaveLength(1);
+    });
+
+    it('increments the true last code point when the astral character is not the whole token ("a𐐷")', () => {
+        expect.assertions(1);
+
+        const codePoint = 0x1_04_37;
+        const token = `a${String.fromCodePoint(codePoint)}`;
+
+        expect(searchTermRange(token, true)).toStrictEqual({ exact: false, lower: token, upper: `a${String.fromCodePoint(codePoint + 1)}` });
+    });
+
+    it("increments the true last code point for a token ending at the UTF-16 low-surrogate boundary (U+103FF → U+10400)", () => {
+        expect.assertions(2);
+
+        // U+103FF's UTF-16 low surrogate is 0xDFFF — the top of the low-surrogate
+        // range. The CODE-UNIT bug reads that raw code unit via
+        // `codePointAt(token.length - 1)` and increments it in isolation,
+        // escaping the surrogate block entirely (0xE000, a real BMP character)
+        // and stranding the high surrogate — producing an invalid lone
+        // high-surrogate bound (`\uD800` followed by ``). Reading the
+        // true *code point* instead (0x103FF) increments correctly to its
+        // real successor, U+10400 — an ordinary astral code point, not a
+        // surrogate-range value, so this is a normal widen, not a refusal.
+        const codePoint = 0x1_03_FF;
+        const token = String.fromCodePoint(codePoint);
+        const result = searchTermRange(token, true);
+
+        expect(result).toStrictEqual({ exact: false, lower: token, upper: String.fromCodePoint(codePoint + 1) });
+        // No lone surrogate in the bound: spreading a well-formed string yields
+        // one element per code point, so a single trailing astral character
+        // spreads to exactly one element.
+        // eslint-disable-next-line @typescript-eslint/no-misused-spread -- intentional: code-point iteration is the property under test
+        expect([...result.upper]).toHaveLength(1);
+    });
+
+    it("refuses to widen (falls back to exact match) for a token ending at the Hangul block boundary (U+D7FF), whose successor is the surrogate block", () => {
+        expect.assertions(1);
+
+        const codePoint = 0xD7_FF;
+        const token = `x${String.fromCodePoint(codePoint)}`;
+
+        expect(searchTermRange(token, true)).toStrictEqual({ exact: true, lower: token, upper: token });
+    });
 });
 
 describe(scoreDocument, () => {
