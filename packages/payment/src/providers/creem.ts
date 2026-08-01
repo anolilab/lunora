@@ -347,7 +347,12 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
 
             const event = asRecord(JSON.parse(payload));
 
-            return mapEvent(readString(event, "id") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object));
+            // Same multi-casing fallback as `eventType` below — Creem's `id` field name has drifted
+            // across SDK/webhook versions too. `?? ""` here is only to satisfy `mapEvent`'s `string`
+            // parameter (WebhookAction.eventId is non-optional) — it is NOT a "safe default": a blank
+            // id still flows through as `eventId: ""`, and `applyWebhookAction`'s central guard
+            // (sync.ts) is what actually rejects it before it can ever reach the dedupe store.
+            return mapEvent(readAny(event, "id", "event_id", "eventId") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object));
         },
 
         // Creem refunds are issued from the dashboard; there is no SDK endpoint to initiate one.
