@@ -72,6 +72,16 @@ interface FakeDatabase {
             indexName: string,
             options?: unknown,
         ) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
+        /** Optional — mirrors `@lunora/shard-engine`'s cross-shard companion to `rankPage`. Enabled per-test via `enableRankPageRows`. */
+        rankPageRows?: (
+            tableName: string,
+            indexName: string,
+            options?: unknown,
+        ) => Promise<{
+            directions: ReadonlyArray<"asc" | "desc">;
+            hasMore: boolean;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; key: { partitionKey: string; rowId: string; sortValues: ReadonlyArray<unknown> } }>;
+        }>;
         replace: (id: string, document: Record<string, unknown>) => Promise<void>;
         restore: (id: string, expectedTable?: string) => Promise<void>;
     };
@@ -226,6 +236,24 @@ const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknow
         const row = byId.get(id);
 
         return row ? { row, tableName: row.table } : null;
+    };
+};
+
+/** Enable the optional `rankPageRows` seam — the cross-shard companion to `rankPage` (mirrors `@lunora/shard-engine`'s writer). */
+const enableRankPageRows = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
+    // eslint-disable-next-line no-param-reassign -- the helper's purpose is to install the seam on the caller's fake writer
+    database.writer.rankPageRows = async (tableName, _indexName, options) => {
+        database.calls.push({ args: options, method: "rankPageRows", tableOrId: tableName });
+
+        return {
+            directions: ["asc"],
+            hasMore: false,
+            rows: rows
+                .filter((row) => row.table === tableName)
+                .map((row, index) => {
+                    return { doc: row, key: { partitionKey: "", rowId: row._id, sortValues: [index] } };
+                }),
+        };
     };
 };
 
@@ -544,6 +572,121 @@ describe("rls — read path", () => {
         const unscopedProbes = fake.calls.filter((call) => call.method === "findFirst" && !(call.args as { baseWhere?: unknown } | undefined)?.baseWhere);
 
         expect(unscopedProbes).toHaveLength(0);
+    });
+
+    it("lookupById() resolves null (not the row) when the read policy denies it (plan 254)", async () => {
+        expect.assertions(1);
+
+        // Same shape as "get() does NOT leak a row that the read policy
+        // denied" above, but calling the `lookupById` seam directly — the
+        // `...base` spread in `rls/middleware.ts` would otherwise expose
+        // `base.lookupById` (the RLS-guarded, but not policy-filtered, seam)
+        // unfiltered by the read policy, leaking another user's row.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+
+        const rows = [{ _id: "d1", ownerId: "u2", table: "documents" }];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        // Honest fake: a baseWhere-scoped findFirst filters by the predicate,
+        // mirroring what `@lunora/do`'s `findFirst` does at runtime (the
+        // default fake ignores `baseWhere` entirely).
+        const wrappedFindFirst = fake.writer.findFirst;
+
+        fake.writer.findFirst = async (tableName, args) => {
+            const candidate = await wrappedFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: unknown } } | undefined)?.baseWhere;
+
+            if (!candidate || !baseWhere || !("ownerId" in baseWhere)) {
+                return candidate;
+            }
+
+            return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
+        };
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([policy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
+    });
+
+    it("lookupById() returns { row, tableName } when the read policy grants access (plan 254)", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+
+        const rows = [{ _id: "d1", ownerId: "u1", table: "documents" }];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([policy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ row: { _id: "d1" }, tableName: "documents" });
+    });
+
+    it("lookupById() on an id outside every policy-gated table passes through unrestricted (plan 254)", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return { ownerId: "anyone" };
+            },
+        });
+
+        const rows = [{ _id: "a1", event: "login", table: "audit" }];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([policy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("a1"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ row: { _id: "a1" }, tableName: "audit" });
+    });
+
+    it("lookupById() on an unresolvable (e.g. global) id returns null rather than throwing (plan 254)", async () => {
+        expect.assertions(1);
+
+        // Mirrors `@lunora/shard-engine`'s own contract: a global row's table
+        // isn't resolvable by the shard-local seam, so it returns `null` and
+        // the caller keeps its probe fallback — the gate must not turn this
+        // into a thrown error.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: () => true,
+        });
+
+        const rows: (Record<string, unknown> & { _id: string; table: string })[] = [];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([policy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("unresolvable-id"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
     });
 
     it("count() on a non-policy table does NOT mark restrictsCounts", async () => {
@@ -1377,6 +1520,41 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED" });
         expect(database.calls.some((entry) => entry.method === "rankPage")).toBe(false);
+    });
+
+    it("fails rankPageRows() closed with COUNT_RLS_UNSUPPORTED under a read policy (plan 254)", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "d1", ownerId: "u1", table: "documents" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("documents", "byScore"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED" });
+        // The underlying writer is never reached — the guard throws first.
+        expect(database.calls.some((entry) => entry.method === "rankPageRows")).toBe(false);
+    });
+
+    it("leaves rankPageRows() UNRESTRICTED on a table with no read policy (plan 254)", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "e1", table: "events" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("events", "byTime"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.rows).toHaveLength(1);
+        expect(database.calls.some((entry) => entry.method === "rankPageRows")).toBe(true);
     });
 
     it("leaves analytical reads UNRESTRICTED on a table with no read policy", async () => {

@@ -95,6 +95,26 @@ interface QueryPage {
     page: Record<string, unknown>[];
 }
 
+/** Structural mirror of `@lunora/shard-engine`'s `RankPageRowKey`. */
+interface RankPageRowKeyLike {
+    partitionKey: string;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+}
+
+/** Structural mirror of `@lunora/shard-engine`'s `RankPageRow`. */
+interface RankPageRowLike {
+    doc: Record<string, unknown>;
+    key: RankPageRowKeyLike;
+}
+
+/** Structural mirror of `@lunora/shard-engine`'s `ShardRankPageResult` — the `rankPageRows` return shape. */
+interface ShardRankPageResultLike {
+    directions: ReadonlyArray<"asc" | "desc">;
+    hasMore: boolean;
+    rows: ReadonlyArray<RankPageRowLike>;
+}
+
 interface QueryArgs {
     baseWhere?: unknown;
     cursor?: null | string;
@@ -182,6 +202,9 @@ interface MaskDatabase {
     rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
+
+    /** Cross-shard companion to `rankPage`, gated the same way `rankPage` is masked below. */
+    rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
@@ -386,6 +409,11 @@ const wrapDatabase = <Context>(
     // override below can call it without re-narrowing `base.rankBefore` inside
     // the nested closure.
     const baseRankBefore = base.rankBefore;
+
+    // `rankPageRows` (plan 254) is likewise optional — the D1 twin omits it too
+    // (only the shard-local writer implements the cross-shard rank companion) —
+    // so it's captured and conditionally overridden the same way as `rankBefore`.
+    const baseRankPageRows = base.rankPageRows;
 
     /**
      * SECURITY (position oracle on the index DECLARATION path): `assertIndexFieldsAllowed`
@@ -823,6 +851,25 @@ const wrapDatabase = <Context>(
             return maskRow(row, columns, context);
         },
 
+        // Delegates to `base.lookupById` directly (not the `locate` helper
+        // above, which folds an unmasked table's name away to `undefined` —
+        // `lookupById`'s contract must keep returning the row's REAL owning
+        // table regardless of masking). Masks the row when that table carries
+        // masked columns; the `...base` spread would otherwise expose
+        // `base.lookupById` with its column values in the clear.
+        async lookupById(id, expectedTable) {
+            const located = await base.lookupById?.(id, expectedTable);
+
+            if (!located) {
+                // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
+                return null;
+            }
+
+            const columns = perTable.get(located.tableName);
+
+            return { row: columns ? maskRow(located.row, columns, context) : located.row, tableName: located.tableName };
+        },
+
         groupBy(tableName, options) {
             assertReductionAllowed(tableName, [...options.by, options.agg?.field], "groupBy");
             assertWhereAllowed(tableName, options.where, "groupBy");
@@ -864,6 +911,32 @@ const wrapDatabase = <Context>(
                       assertIndexDeclarationAllowed(tableName, indexName, "rankBefore");
 
                       return baseRankBefore(tableName, indexName, options);
+                  },
+              }
+            : {}),
+
+        // `rankPageRows` (plan 254) is likewise optional (the D1 twin omits it) —
+        // only override it when `base` actually carries one, mirroring the
+        // `rankBefore` conditional above.
+        ...(baseRankPageRows
+            ? {
+                  async rankPageRows(tableName: string, indexName: string, options: unknown) {
+                      assertRankWhereAllowed(tableName, options, "rankPageRows");
+                      assertIndexDeclarationAllowed(tableName, indexName, "rankPageRows");
+
+                      const result = await baseRankPageRows(tableName, indexName, options);
+                      const columns = perTable.get(tableName);
+
+                      if (!columns) {
+                          return result;
+                      }
+
+                      return {
+                          ...result,
+                          rows: result.rows.map((row) => {
+                              return { ...row, doc: maskRow(row.doc, columns, context) };
+                          }),
+                      };
                   },
               }
             : {}),

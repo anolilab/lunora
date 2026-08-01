@@ -86,6 +86,7 @@ interface GuardableWriter {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => unknown;
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: unknown, expectedTable?: string) => unknown;
     patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => unknown;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => unknown;
@@ -93,6 +94,7 @@ interface GuardableWriter {
     rank: (tableName: string, indexName: string, options: unknown) => unknown;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
+    rankPageRows: (tableName: string, indexName: string, options?: unknown) => unknown;
     replace: (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => unknown;
     restore?: (id: string, expectedTable?: string) => unknown;
     wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => unknown;
@@ -314,6 +316,14 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.insertManyUnsafe(tableName, documents, options);
         },
+        lookupById: async (id: string, expectedTable?: string) => {
+            // The spread would otherwise expose the raw lookup, letting a bare id
+            // read any row in any table past the table-level secure-by-default check.
+            await guardById(id, expectedTable);
+
+            // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
+            return base.lookupById?.(id, expectedTable) ?? null;
+        },
         patch: async (id: string, patch: unknown, expectedTable?: string) => {
             await guardById(id, expectedTable);
 
@@ -351,6 +361,11 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
             guardTable(tableName);
 
             return base.rankPage(tableName, indexName, options);
+        },
+        rankPageRows: (tableName: string, indexName: string, options?: unknown) => {
+            guardTable(tableName);
+
+            return base.rankPageRows(tableName, indexName, options);
         },
         replace: async (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => {
             await guardById(id, expectedTable);

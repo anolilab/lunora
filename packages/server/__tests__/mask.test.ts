@@ -108,6 +108,16 @@ interface FakeDatabase {
             indexName: string,
             options?: unknown,
         ) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
+        /** Optional — mirrors `@lunora/shard-engine`'s cross-shard companion to `rankPage`. Enabled per-test via `enableRankPageRows`. */
+        rankPageRows?: (
+            tableName: string,
+            indexName: string,
+            options?: unknown,
+        ) => Promise<{
+            directions: ReadonlyArray<"asc" | "desc">;
+            hasMore: boolean;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; key: { partitionKey: string; rowId: string; sortValues: ReadonlyArray<unknown> } }>;
+        }>;
         replace: (id: string, document: Record<string, unknown>) => Promise<void>;
     };
 }
@@ -234,6 +244,24 @@ const enableRankBefore = (database: FakeDatabase, rows: (Record<string, unknown>
     };
 };
 
+/** Enable the optional `rankPageRows` seam — the cross-shard companion to `rankPage` (mirrors `@lunora/shard-engine`'s writer). */
+const enableRankPageRows = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
+    // eslint-disable-next-line no-param-reassign -- the helper installs the seam on the caller's fake writer
+    database.writer.rankPageRows = async (tableName, _indexName, options) => {
+        database.calls.push({ args: options, method: "rankPageRows", tableOrId: tableName });
+
+        return {
+            directions: ["asc"],
+            hasMore: false,
+            rows: rows
+                .filter((row) => row.table === tableName)
+                .map((row, index) => {
+                    return { doc: row, key: { partitionKey: "", rowId: row._id, sortValues: [index] } };
+                }),
+        };
+    };
+};
+
 /**
  * Install a chainable `query()` reader on the fake writer — the legacy
  * iterator-style reader that masking's `wrapReader` wraps. Mirrors `@lunora/do`'s
@@ -298,19 +326,6 @@ const enableQueryReader = (
                 };
 
                 search(builder);
-
-                return makeReader(list);
-            },
-            // Same shape as `withIndex`: run the builder against a chainable
-            // no-op (mirrors `@lunora/do`'s geo reader), so the reader still
-            // works end-to-end for a geo read the declaration guard lets through.
-            withGeoIndex: (_indexName, build) => {
-                const builder: FakeGeoBuilder = {
-                    near: () => builder,
-                    within: () => builder,
-                };
-
-                build(builder);
 
                 return makeReader(list);
             },
@@ -1161,6 +1176,69 @@ describe("mask — value oracle via rank reads fails closed (plan 209)", () => {
         // handling — must not synthesize one either.
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe("undefined");
     });
+
+    it("rankPageRows() with a where on a masked column throws MASK_UNSUPPORTED (plan 254)", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "u1", ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("users", "by_ssn", { where: { ssn: { eq: "123-45-6789" } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "rankPageRows")).toBe(false);
+    });
+
+    it("rankPageRows() with a baseWhere on a masked column throws MASK_UNSUPPORTED (plan 254)", async () => {
+        expect.assertions(1);
+
+        const rows = [{ _id: "u1", ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("users", "by_ssn", { baseWhere: { ssn: { eq: "123-45-6789" } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("rankPageRows() with a where on a NON-masked column of a masked table still works and masks every doc (plan 254)", async () => {
+        expect.assertions(3);
+
+        const rows = [{ _id: "u1", ssn: "123-45-6789", status: "active", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("users", "by_status", { where: { status: { eq: "active" } } }));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.some((call) => call.method === "rankPageRows")).toBe(true);
+        expect(result?.rows[0]?.doc["ssn"]).toBeNull();
+        expect(result?.rows[0]?.doc["status"]).toBe("active");
+    });
+
+    it("does not surface rankPageRows() at all when the underlying writer omits it (D1 twin) (plan 254)", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(({ ctx }) => typeof (ctx as unknown as TestContext).db.rankPageRows);
+
+        // No `enableRankPageRows` call: the fake writer never carries the
+        // method, so the wrapper must not synthesize one either — mirrors the
+        // rankBefore D1-twin-omission test above.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe("undefined");
+    });
 });
 
 describe("mask — bare-index-scan / rank declaration oracle fails closed (plan 250)", () => {
@@ -1488,6 +1566,45 @@ describe("mask — get() table resolution", () => {
         expect(result?.["_id"]).toBe("e1");
         expect(result?.["email"]).toBe("raw@x.com");
     });
+
+    it("lookupById() itself (not just get()) masks the row it resolves (plan 254)", async () => {
+        expect.assertions(2);
+
+        // The `...base` spread would otherwise expose `base.lookupById`
+        // directly, unmasked — `get()` above delegates to a `locate` helper
+        // that already masks its result, but a caller reaching the
+        // `lookupById` seam directly must see the same masked column.
+        const rows = [{ _id: "u1", email: "a@x.com", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableGetWithTable(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("u1"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.row["email"]).toBeNull();
+        expect(result?.tableName).toBe("users");
+    });
+
+    it("lookupById() on a row outside every masked table returns it unmasked (plan 254)", async () => {
+        expect.assertions(1);
+
+        const rows = [{ _id: "e1", email: "raw@x.com", table: "events" }];
+        const database = createFakeDatabase(rows);
+
+        enableGetWithTable(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("e1"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.row["email"]).toBe("raw@x.com");
+    });
 });
 
 describe("mask — opt-in scope & stored data", () => {
@@ -1644,6 +1761,9 @@ describe("mask — guarded-read coverage (every MaskDatabase read method)", () =
         // in `Promise.resolve` so a fake writer missing the seam unifies with the
         // other entries' `Promise<unknown>` instead of `Promise<unknown> | undefined`.
         { invoke: (db) => Promise.resolve(db.rankBefore?.("users", "by_ssn", { rowId: "u1", where: maskedWhere })), name: "rankBefore" },
+        // `rankPageRows` (plan 254) is likewise optional on `MaskDatabase` — the
+        // cross-shard companion to `rankPage`, gated the same way.
+        { invoke: (db) => Promise.resolve(db.rankPageRows?.("users", "by_ssn", { where: maskedWhere })), name: "rankPageRows" },
     ];
 
     it.each(READ_METHODS_WITH_WHERE)("$name(...) with a where on a masked column throws MASK_UNSUPPORTED", async ({ invoke }) => {
@@ -1653,6 +1773,7 @@ describe("mask — guarded-read coverage (every MaskDatabase read method)", () =
         const database = createFakeDatabase(rows);
 
         enableRankBefore(database, rows);
+        enableRankPageRows(database, rows);
 
         const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) => invoke((ctx as unknown as TestContext).db));
 
@@ -1666,10 +1787,12 @@ describe("mask — guarded-read coverage (every MaskDatabase read method)", () =
         // new filterable read method, this name list must grow with it — this
         // assertion is the tripwire a reviewer (or this test file's own drift)
         // would otherwise miss silently.
-        const coveredNames = READ_METHODS_WITH_WHERE.map((entry) => entry.name).toSorted();
+        const coveredNames = READ_METHODS_WITH_WHERE.map((entry) => entry.name).toSorted((a, b) => a.localeCompare(b));
 
         expect(coveredNames).toStrictEqual(
-            ["aggregate", "count", "findFirst", "findFirstOrThrow", "findMany", "groupBy", "rank", "rankBefore", "rankPage"].toSorted(),
+            ["aggregate", "count", "findFirst", "findFirstOrThrow", "findMany", "groupBy", "rank", "rankBefore", "rankPage", "rankPageRows"].toSorted(
+                (a, b) => a.localeCompare(b),
+            ),
         );
     });
 });

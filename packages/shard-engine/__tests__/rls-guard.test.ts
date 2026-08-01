@@ -23,11 +23,15 @@ const createFakeWriter = () => {
         get: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`get:${id}`)),
         groupBy: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`groupBy:${tableName}`)),
         insert: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`insert:${tableName}`)),
+        lookupById: vi.fn<(id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>>((id: string) =>
+            Promise.resolve({ row: { _id: id }, tableName: "sentinel" }),
+        ),
         patch: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`patch:${id}`)),
         query: vi.fn<(tableName: string) => string>((tableName: string) => `query:${tableName}`),
         rank: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rank:${tableName}`)),
         rankBefore: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rankBefore:${tableName}`)),
         rankPage: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rankPage:${tableName}`)),
+        rankPageRows: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rankPageRows:${tableName}`)),
         replace: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`replace:${id}`)),
     };
 };
@@ -84,6 +88,7 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
         "rank",
         "rankBefore",
         "rankPage",
+        "rankPageRows",
     ] as const;
 
     it.each(tableMethods)("denies %s against the protected table", (method) => {
@@ -124,6 +129,7 @@ describe("guardWriter — id-based methods with a pinned table (by-id facade)", 
     const idMethods: ReadonlyArray<{ call: (m: Record<string, (...a: unknown[]) => unknown>, table: string) => unknown; name: string }> = [
         { call: (m, table) => m["delete"]!("any-id", table), name: "delete" },
         { call: (m, table) => m["get"]!("any-id", table), name: "get" },
+        { call: (m, table) => m["lookupById"]!("any-id", table), name: "lookupById" },
         { call: (m, table) => m["patch"]!("any-id", {}, table), name: "patch" },
         { call: (m, table) => m["replace"]!("any-id", {}, table), name: "replace" },
     ];
@@ -181,6 +187,54 @@ describe("guardWriter — generic id-based access resolves the owning table", ()
         await guarded.patch("orphan_id", { x: 1 });
 
         expect(raw.patch).toHaveBeenCalledTimes(1);
+    });
+
+    it("denies lookupById(id) for a bare id that resolves to a protected table (plan 254)", async () => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await expect(guarded.lookupById("post_42")).rejects.toThrow(RlsRequiredError);
+        expect(raw.lookupById).not.toHaveBeenCalled();
+    });
+
+    it("allows lookupById(id) for a bare id that resolves to a .public() table (plan 254)", async () => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await guarded.lookupById("stat_7");
+
+        expect(raw.lookupById).toHaveBeenCalledWith("stat_7", undefined);
+    });
+
+    it("passes an unresolvable bare id through lookupById without throwing (nothing to leak) (plan 254)", async () => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await expect(guarded.lookupById("orphan_id")).resolves.not.toBeNull();
+
+        expect(raw.lookupById).toHaveBeenCalledTimes(1);
+    });
+
+    it("lookupById(id) resolves null (does not throw) when the underlying writer has no match, mirroring the seam's own contract (plan 254)", async () => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+
+        // Override the fake's default sentinel-object return to mirror the
+        // real seam's "absent row" contract (`ctx-db.ts`'s `lookupById`
+        // returns `null`, never throws, when the id/table can't be resolved —
+        // e.g. a `.global()` row this shard-local seam can't see).
+        raw.lookupById.mockResolvedValueOnce(null);
+
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await expect(guarded.lookupById("orphan_id")).resolves.toBeNull();
     });
 });
 
