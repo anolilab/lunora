@@ -973,150 +973,7 @@ class LunoraClient {
         // Cross-tab coordinator: when `crossTabSync` is set, tabs coordinate
         // via BroadcastChannel so only one tab (the leader) opens WS sockets.
         if (options.crossTabSync) {
-            this.tabCoordinator = new TabCoordinator({
-                onBecomeLeader: () => {
-                    // Re-open sockets for every active subscription now that
-                    // we own the WS connections.
-                    for (const state of this.subscriptions.all()) {
-                        this.ensureSocket(state.shardKey);
-                        this.sendSubscribeIfOpen(state);
-                    }
-
-                    // Broadcast our aggregate status once immediately, so a
-                    // follower that was mirroring the PREVIOUS leader isn't
-                    // stuck displaying a stale value until this tab's own
-                    // status happens to change (which may be a while, e.g. no
-                    // active subscription ever opens a socket).
-                    this.tabCoordinator?.broadcastConnectionStatus(this.computeStatus());
-                },
-                onStopBeingLeader: () => {
-                    // Close all WS connections now that another tab leads —
-                    // reuse the same timer-teardown sequence `close()` uses so
-                    // a demoted leader can't leak a `reconnectTimer` /
-                    // `heartbeatTimer` the way an inline `conn.socket?.close()`
-                    // (which skips both) used to.
-                    for (const [key, conn] of this.connections) {
-                        this.teardownConnection(conn);
-                        this.connections.delete(key);
-                    }
-
-                    // We're now a follower of whoever won leadership — clear
-                    // any stale mirror from the previous leader until the new
-                    // one's first `connection-status` broadcast arrives.
-                    this.leaderStatus = undefined;
-                    this.leaderWasEverConnected = false;
-                },
-                onConnectionStatus: (status) => {
-                    // A follower has no `ShardConnection` of its own — this is
-                    // its only truthful status signal. Mirror it and re-run
-                    // the same notify path a real status change takes so this
-                    // tab's own `onConnectionStatus`/`connectionStatus()`
-                    // consumers see it.
-                    const transitionedToConnected = status === "connected" && this.leaderStatus !== "connected";
-
-                    this.leaderStatus = status;
-
-                    if (status === "connected") {
-                        this.leaderWasEverConnected = true;
-                    }
-
-                    this.emitConnectionStatus();
-
-                    // Flush this tab's own queued offline writes now that the
-                    // (leader's) connection is back — they replay over HTTP
-                    // RPC, which needs no socket of this follower's own.
-                    if (transitionedToConnected) {
-                        this.flushAllOfflineQueues();
-                    }
-                },
-                onSubscriptionData: (key, data, cursor, epoch) => {
-                    // A follower tab received the authoritative server value from
-                    // the leader. Update serverBase and re-fold any local optimistic
-                    // layers so the displayed value reflects both the new base and
-                    // the follower's own pending writes.
-                    const state = this.subscriptions.get(key);
-
-                    if (!state) {
-                        return;
-                    }
-
-                    state.serverBase = data;
-
-                    // `cursor` rides the broadcast only from a CLIENT-01-aware
-                    // leader tab. When present, advance this follower's own resume
-                    // cursor/epoch and run the SAME confirmed-layer drop + notify
-                    // tail `handleDataMessage` uses on the leader — so a follower's
-                    // optimistic overlay (per-call or `setQuery`) is released the
-                    // moment the confirming frame arrives instead of staying masked
-                    // forever (CLIENT-01). A mixed-version deploy where the leader
-                    // hasn't shipped the cursor yet falls through to the historical
-                    // fold-and-notify-without-drop behavior below — backward
-                    // compatible with a cursor-less wire frame.
-                    if (cursor !== undefined) {
-                        state.serverCursor = cursor;
-
-                        if (epoch !== undefined) {
-                            state.serverEpoch = epoch;
-                        }
-
-                        dropConfirmedLayers(state, cursor);
-                        notifySubscription(state, state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers));
-
-                        return;
-                    }
-
-                    const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
-
-                    notifySubscription(state, folded);
-                },
-                onSubscriptionError: (key, error) => {
-                    const state = this.subscriptions.get(key);
-
-                    if (state) {
-                        fanSubscriptionError(state.errorCallbacks, error);
-                    }
-                },
-                onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId) => {
-                    // The leader's `settled` checkpoint advanced with no value
-                    // change — reuse the exact same tail the leader itself runs
-                    // (ack + advance cursor/epoch + drop confirmed layers +
-                    // notify) so a follower's `setQuery`/per-call overlay a
-                    // byte-identical write just confirmed gets released here too.
-                    const state = this.subscriptions.get(key);
-
-                    if (state) {
-                        this.ackAndAdvanceCursor(state, cursor, epoch);
-
-                        // The echoed `lastMutationId` is the LEADER's own
-                        // per-client watermark — scoped server-side to ITS
-                        // announced `clientId` — so it only belongs to this
-                        // follower when the two clientIds match (clientIds CAN
-                        // legitimately be shared across tabs, e.g. a `@lunora/db`
-                        // app persisting one stable id alongside its outbox; see
-                        // `this.clientId`'s docblock). An absent `clientId`
-                        // (mixed-version leader) also skips this half — the
-                        // follower's own RPC-ack watermark path and the
-                        // `CheckpointRegistry` bounded fallback still resolve it.
-                        // `Math.max` guards monotonicity: this must never move
-                        // `state.lastMutationId` backwards.
-                        if (lastMutationId !== undefined && clientId === this.clientId) {
-                            state.lastMutationId = Math.max(state.lastMutationId ?? 0, lastMutationId);
-                        }
-
-                        // Fan out to every registered checkpoint subscriber, same
-                        // as the leader's own `handleSettledMessage` tail — a
-                        // `@lunora/db` `onCheckpoint` gate on a follower tab must
-                        // advance too, or it hangs on a confirmed write the leader
-                        // already acknowledged. The checkpoint (cursor) half
-                        // always fires; `state.lastMutationId` is whatever it was
-                        // above — unchanged (a no-op re-resolve) when the frame
-                        // didn't own this follower's watermark.
-                        for (const onCheckpoint of state.checkpointCallbacks) {
-                            onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
-                        }
-                    }
-                },
-            });
+            this.tabCoordinator = this.createTabCoordinator();
             this.tabCoordinator.start();
         } else {
             this.tabCoordinator = undefined;
@@ -1233,6 +1090,17 @@ class LunoraClient {
                 // just got more stable (a subject resolved). Migrate queued writes
                 // to the new fingerprint instead of dropping them.
                 this.restampQueuedIdentity(previousIdentity, newIdentity);
+            }
+
+            // The cross-tab channel name embeds the identity fingerprint (see
+            // `createTabCoordinator`) — restart on the re-derived channel so
+            // this tab doesn't keep leading/following the PREVIOUS identity's
+            // group. After the queue handling above, so drained/restamped
+            // writes settle before the new group's leader election begins.
+            if (this.tabCoordinator) {
+                this.tabCoordinator.stop();
+                this.tabCoordinator = this.createTabCoordinator();
+                this.tabCoordinator.start();
             }
         }
 
@@ -3674,6 +3542,176 @@ class LunoraClient {
 
         conn.wsState = "closed";
         /* eslint-enable no-param-reassign */
+    }
+
+    /**
+     * Build (but do not start) this client's `TabCoordinator`. Extracted out of
+     * the constructor so `setAuthToken` can rebuild it on an identity change —
+     * the default channel name embeds the identity fingerprint (see below), so
+     * a new identity needs a new coordinator on a new channel. The callback
+     * bodies are the drift-sensitive region (a hand-merged identity guard on
+     * the shard message listener sits ahead of an extracted `lastFrameAt`
+     * stamp elsewhere in this file) — moved verbatim, not reflowed.
+     */
+    private createTabCoordinator(): TabCoordinator {
+        // Scope the channel to this deployment + identity so two same-origin
+        // tabs signed in as different users (or two different Lunora apps on
+        // one origin) never share a leader or a query result — see the durable
+        // read-cache identity gate this mirrors (`identityFingerprint()`'s
+        // docblock, and the `entry.identity === this.identityFingerprint()`
+        // check at the cache-peek/hydration-seed sites). `anon` is a stable,
+        // non-secret label for "no identity yet" (signed-out or not-yet-resolved) —
+        // distinct from the fingerprint's own `null` sentinel, which can't appear
+        // in a channel-name string. The fingerprint itself is already a
+        // non-reversible stamp (see its docblock), so this introduces no new
+        // exposure class; `this.url` is not a secret to same-origin script either.
+        const channelName = `lunora-bridge::${this.url}::${this.identityFingerprint() ?? "anon"}`;
+
+        return new TabCoordinator({
+            channelName,
+            onBecomeLeader: () => {
+                // Re-open sockets for every active subscription now that
+                // we own the WS connections.
+                for (const state of this.subscriptions.all()) {
+                    this.ensureSocket(state.shardKey);
+                    this.sendSubscribeIfOpen(state);
+                }
+
+                // Broadcast our aggregate status once immediately, so a
+                // follower that was mirroring the PREVIOUS leader isn't
+                // stuck displaying a stale value until this tab's own
+                // status happens to change (which may be a while, e.g. no
+                // active subscription ever opens a socket).
+                this.tabCoordinator?.broadcastConnectionStatus(this.computeStatus());
+            },
+            onStopBeingLeader: () => {
+                // Close all WS connections now that another tab leads —
+                // reuse the same timer-teardown sequence `close()` uses so
+                // a demoted leader can't leak a `reconnectTimer` /
+                // `heartbeatTimer` the way an inline `conn.socket?.close()`
+                // (which skips both) used to.
+                for (const [key, conn] of this.connections) {
+                    this.teardownConnection(conn);
+                    this.connections.delete(key);
+                }
+
+                // We're now a follower of whoever won leadership — clear
+                // any stale mirror from the previous leader until the new
+                // one's first `connection-status` broadcast arrives.
+                this.leaderStatus = undefined;
+                this.leaderWasEverConnected = false;
+            },
+            onConnectionStatus: (status) => {
+                // A follower has no `ShardConnection` of its own — this is
+                // its only truthful status signal. Mirror it and re-run
+                // the same notify path a real status change takes so this
+                // tab's own `onConnectionStatus`/`connectionStatus()`
+                // consumers see it.
+                const transitionedToConnected = status === "connected" && this.leaderStatus !== "connected";
+
+                this.leaderStatus = status;
+
+                if (status === "connected") {
+                    this.leaderWasEverConnected = true;
+                }
+
+                this.emitConnectionStatus();
+
+                // Flush this tab's own queued offline writes now that the
+                // (leader's) connection is back — they replay over HTTP
+                // RPC, which needs no socket of this follower's own.
+                if (transitionedToConnected) {
+                    this.flushAllOfflineQueues();
+                }
+            },
+            onSubscriptionData: (key, data, cursor, epoch) => {
+                // A follower tab received the authoritative server value from
+                // the leader. Update serverBase and re-fold any local optimistic
+                // layers so the displayed value reflects both the new base and
+                // the follower's own pending writes.
+                const state = this.subscriptions.get(key);
+
+                if (!state) {
+                    return;
+                }
+
+                state.serverBase = data;
+
+                // `cursor` rides the broadcast only from a CLIENT-01-aware
+                // leader tab. When present, advance this follower's own resume
+                // cursor/epoch and run the SAME confirmed-layer drop + notify
+                // tail `handleDataMessage` uses on the leader — so a follower's
+                // optimistic overlay (per-call or `setQuery`) is released the
+                // moment the confirming frame arrives instead of staying masked
+                // forever (CLIENT-01). A mixed-version deploy where the leader
+                // hasn't shipped the cursor yet falls through to the historical
+                // fold-and-notify-without-drop behavior below — backward
+                // compatible with a cursor-less wire frame.
+                if (cursor !== undefined) {
+                    state.serverCursor = cursor;
+
+                    if (epoch !== undefined) {
+                        state.serverEpoch = epoch;
+                    }
+
+                    dropConfirmedLayers(state, cursor);
+                    notifySubscription(state, state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers));
+
+                    return;
+                }
+
+                const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
+
+                notifySubscription(state, folded);
+            },
+            onSubscriptionError: (key, error) => {
+                const state = this.subscriptions.get(key);
+
+                if (state) {
+                    fanSubscriptionError(state.errorCallbacks, error);
+                }
+            },
+            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId) => {
+                // The leader's `settled` checkpoint advanced with no value
+                // change — reuse the exact same tail the leader itself runs
+                // (ack + advance cursor/epoch + drop confirmed layers +
+                // notify) so a follower's `setQuery`/per-call overlay a
+                // byte-identical write just confirmed gets released here too.
+                const state = this.subscriptions.get(key);
+
+                if (state) {
+                    this.ackAndAdvanceCursor(state, cursor, epoch);
+
+                    // The echoed `lastMutationId` is the LEADER's own
+                    // per-client watermark — scoped server-side to ITS
+                    // announced `clientId` — so it only belongs to this
+                    // follower when the two clientIds match (clientIds CAN
+                    // legitimately be shared across tabs, e.g. a `@lunora/db`
+                    // app persisting one stable id alongside its outbox; see
+                    // `this.clientId`'s docblock). An absent `clientId`
+                    // (mixed-version leader) also skips this half — the
+                    // follower's own RPC-ack watermark path and the
+                    // `CheckpointRegistry` bounded fallback still resolve it.
+                    // `Math.max` guards monotonicity: this must never move
+                    // `state.lastMutationId` backwards.
+                    if (lastMutationId !== undefined && clientId === this.clientId) {
+                        state.lastMutationId = Math.max(state.lastMutationId ?? 0, lastMutationId);
+                    }
+
+                    // Fan out to every registered checkpoint subscriber, same
+                    // as the leader's own `handleSettledMessage` tail — a
+                    // `@lunora/db` `onCheckpoint` gate on a follower tab must
+                    // advance too, or it hangs on a confirmed write the leader
+                    // already acknowledged. The checkpoint (cursor) half
+                    // always fires; `state.lastMutationId` is whatever it was
+                    // above — unchanged (a no-op re-resolve) when the frame
+                    // didn't own this follower's watermark.
+                    for (const onCheckpoint of state.checkpointCallbacks) {
+                        onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+                    }
+                }
+            },
+        });
     }
 
     // --- Internals ----------------------------------------------------------
