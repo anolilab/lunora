@@ -138,6 +138,32 @@ describe("gatePlatformFeatures", () => {
 
         expect(result.usage).toStrictEqual(usage);
     });
+
+    // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
+    // matrix above), so this exercises the real `NODE_CAPABILITIES` matrix
+    // through the actual registry lookup — the thing `platformMatrixIds`
+    // reports and `resolveCodegenTarget`/`lunora.json`'s `target` field select.
+    it("gates a project declaring an unsupported ctx.* for the node target", async () => {
+        expect.assertions(4);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        // `browser` and `container` are rated "unsupported" for node
+        // (`NODE_CAPABILITIES` — no headless-browser or container binding is
+        // implemented by `@lunora/platform-node`); `kv` and `scheduler` are
+        // rated "emulated" (a real, if non-durable, better-sqlite3-backed
+        // implementation), so they must survive gating unchanged.
+        const usage: FeatureUsage = { ...ALL_OFF, browser: true, container: true, kv: true, scheduler: true };
+
+        const result = gatePlatformFeatures(usage, "node");
+
+        expect(result.usage.browser).toBe(false);
+        expect(result.usage.container).toBe(false);
+        expect({ kv: result.usage.kv, scheduler: result.usage.scheduler }).toStrictEqual({ kv: true, scheduler: true });
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
+            "browser",
+            "container",
+        ]);
+    });
 });
 
 describe("project-declared target", () => {
@@ -173,6 +199,19 @@ describe("project-declared target", () => {
         // diagnostic at all, and the mismatch would only surface at runtime on
         // the deployed app.
         expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
+    });
+
+    it("recognises node as a registered target end-to-end through runCodegen", () => {
+        expect.assertions(1);
+
+        // The `simple` fixture uses none of the gated ctx.* surfaces, so a
+        // recognised target with an honest matrix produces no diagnostics —
+        // same shape as the default Cloudflare case above, proving `node` is
+        // resolved through the real registry (`PLATFORM_MATRICES`), not
+        // rejected as `platform_unknown_target` the way "aws" is.
+        writeConfig(`{ "target": "node" }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
     });
 
     it("reads the target as JSONC, matching how the rest of lunora.json is parsed", () => {

@@ -1,0 +1,81 @@
+{
+    "name": "@lunora/platform-node",
+    "version": "0.0.0",
+    "description": "Node implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost over better-sqlite3 and an in-process socket registry (dev/test target)",
+    "keywords": [
+        "better-sqlite3",
+        "lunora",
+        "node",
+        "platform",
+        "portability"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/platform-node"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./conformance": {
+            "types": "./dist/conformance/index.d.ts",
+            "import": "./dist/conformance/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@lunora/platform": "1.0.0-alpha.1",
+        "better-sqlite3": "^12.11.1"
+    },
+    "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/shard-engine": "1.0.0-alpha.4",
+        "@types/better-sqlite3": "^7.6.13",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

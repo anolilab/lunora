@@ -80,7 +80,7 @@ export type {
 
 // Capability matrix
 export type { Capability, CapabilityLevel, PlatformCapabilities } from "./capabilities";
-export { CLOUDFLARE_CAPABILITIES } from "./capabilities";
+export { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "./capabilities";
 
 // Durable key-value store
 export type { ShardKvListOptions, ShardKvStore } from "./kv-store";

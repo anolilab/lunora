@@ -19,19 +19,33 @@
  * `native` and `emulated` both emit as-is — `emulated` means Lunora builds the
  * feature on lower-level primitives, which is still a working surface.
  *
- * Only Cloudflare is registered today (its matrix lives in `@lunora/platform`);
- * other hosts register their matrices as their per-target `@lunora/platform`
- * host packages land. Until then a non-Cloudflare `target` is a configuration error,
- * reported as `platform_unknown_target` — and, crucially, the usage set is left
- * untouched so codegen never silently omits a surface against a matrix it does
- * not have.
+ * Cloudflare and Node are registered (their matrices live in `@lunora/platform`
+ * as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES`); other hosts register
+ * their matrices as their per-target `@lunora/platform-&lt;target>` packages land.
+ * An unregistered `target` is a configuration error, reported as
+ * `platform_unknown_target` — and, crucially, the usage set is left untouched
+ * so codegen never silently omits a surface against a matrix it does not have.
+ *
+ * `node` is registered here even though `@lunora/platform-node` (plan 234) is a
+ * spike with no `lunora dev`/deploy wiring and no `@lunora/config` deploy
+ * driver — see that package's README and `plans/234-node-host-findings.md`.
+ * Registering it is what actually exercises 229's fail-closed capability gate
+ * against a matrix that is mostly `unsupported`/`emulated`, which is the point
+ * of this module existing before a second host does. It also means
+ * `platformMatrixIds()` and `@lunora/config`'s `deployTargetIds()` now
+ * disagree — `@lunora/config`'s driver registry has no `node` entry, because a
+ * spike host with no deploy story is not a deploy target. That is flagged, not
+ * silently reconciled, in `plans/234-node-host-findings.md`: the two registries
+ * conflate "codegen can gate capabilities for this" with "the CLI can deploy to
+ * this," and `node` is the first target where those two questions have
+ * different answers.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { PlatformCapabilities } from "@lunora/platform";
-import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
+import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
 import type { ParseError } from "jsonc-parser";
 import { parse as parseJsonc } from "jsonc-parser";
 
@@ -105,22 +119,27 @@ const resolveCodegenTarget = (projectRoot: string, explicit?: string): string =>
 
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
- * entry per host package that ships a `PlatformCapabilities`; only Cloudflare
- * exists so far.
+ * entry per host package that ships a `PlatformCapabilities` — Cloudflare
+ * (deployable) and, per plan 234, Node (a spike host with no deploy story; see
+ * `@lunora/platform-node`).
  */
 const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
     cloudflare: CLOUDFLARE_CAPABILITIES,
+    node: NODE_CAPABILITIES,
 };
 
 /**
  * The target ids codegen can gate against.
  *
- * Exported so `@lunora/config` can assert that its driver registry and this
- * capability-matrix registry name the same targets. They are two id spaces for one
- * concept: a target that ships a driver but no matrix passes the CLI's
- * validation and then emits an un-gated surface, and one with a matrix but no
- * driver gates a surface nothing can deploy. Today both hold exactly
- * `cloudflare`, which is why nothing has noticed.
+ * `@lunora/config`'s driver registry (`deployTargetIds`) used to assert
+ * equality against this — "two id spaces for one concept" — on the theory that
+ * a target with a matrix but no driver "gates a surface nothing can deploy."
+ * Plan 234 found that reasoning incomplete by registering `node` here: a
+ * codegen-gateable target and a deployable target are genuinely different
+ * questions, and a spike/dev-only host answers the first "yes" and the second
+ * "not yet" without that being a bug in either registry. See
+ * `plans/234-node-host-findings.md` for the finding and `@lunora/config`'s
+ * `project-config.test.ts` for where the now-relaxed invariant lives.
  * @returns the registered matrix ids, sorted.
  */
 const platformMatrixIds = (): ReadonlyArray<string> => Object.keys(PLATFORM_MATRICES).toSorted((a, b) => a.localeCompare(b));

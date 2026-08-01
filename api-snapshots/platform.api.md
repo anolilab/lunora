@@ -232,6 +232,12 @@ interface MessageSendRequestLike<Body = unknown> {
 }
 ```
 
+### `NODE_CAPABILITIES` (const)
+
+```ts
+const NODE_CAPABILITIES: PlatformCapabilities;
+```
+
 ### `NOOP_EXECUTION_CONTEXT` (const)
 
 ```ts
