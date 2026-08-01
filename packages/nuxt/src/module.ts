@@ -30,7 +30,7 @@
  */
 
 /* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { addServerHandler, createResolver, defineNuxtModule, useLogger } from "@nuxt/kit";
@@ -100,6 +100,94 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
             order: "pre",
         },
     };
+};
+
+/** Wrapper snippet shown in every `worker.ts` warning — kept as one constant so the three messages below stay byte-identical. */
+const WORKER_TS_SNIPPET = 'export { default } from "./.output/server/index.mjs"; export { ShardDO } from "./lunora/server";';
+
+/** Whether the source has an `export` keyword anywhere at all. */
+const EXPORT_KEYWORD_PATTERN = /\bexport\b/u;
+
+/** Whether the source mentions the `ShardDO` identifier anywhere at all. */
+const SHARD_DO_IDENTIFIER_PATTERN = /\bShardDO\b/u;
+
+/** `export * from` a specifier containing "lunora" — re-exports everything (including `ShardDO`) from a barrel without naming it, the common case being `export * from "./lunora/server"`. */
+const LUNORA_STAR_EXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*lunora[^"']*["']/u;
+
+/**
+ * Whether `source` looks like it exports `ShardDO` — the file has an `export`
+ * keyword AND either mentions the `ShardDO` identifier somewhere (covers
+ * `export { ShardDO } from "./lunora/server"`, a local `export { ShardDO }`,
+ * `export { X as ShardDO }` — a binding named `ShardDO` is what wrangler
+ * resolves the Durable Object class by, whether it's the bare name or the
+ * right side of `as`) or re-exports a lunora barrel wholesale via
+ * {@link LUNORA_STAR_EXPORT_PATTERN}.
+ *
+ * Deliberately two independent, simple keyword/identifier checks rather than
+ * one combined regex trying to prove `ShardDO` sits INSIDE a specific `export`
+ * statement — not a real TS parse (mirrors `@lunora/astro`'s
+ * `WITH_LUNORA_CALL_PATTERN`: a documented regex is judged proportionate to a
+ * build-time warning hook; ts-morph would be heavier than this hook
+ * warrants). Known imprecisions: false-POSITIVE on `export { ShardDO as
+ * Other }` (renames `ShardDO` away, so the binding wrangler needs is actually
+ * named `Other` — not caught), on a `ShardDO` mention inside a comment
+ * anywhere alongside an unrelated `export`, or in principle on `export`ing
+ * something else entirely while `ShardDO` is merely imported (not exported)
+ * elsewhere in the file. All are accepted trade-offs for a two-line worker
+ * entry file, where the realistic failure mode is "forgot the line
+ * entirely", not an adversarial one.
+ */
+const looksLikeShardDoExport = (source: string): boolean => {
+    if (!EXPORT_KEYWORD_PATTERN.test(source)) {
+        return false;
+    }
+
+    return SHARD_DO_IDENTIFIER_PATTERN.test(source) || LUNORA_STAR_EXPORT_PATTERN.test(source);
+};
+
+/**
+ * Check that `worker.ts` at the project root actually re-exports `ShardDO` —
+ * not just that the file exists. Extracted from `setup()` so it is testable
+ * without booting Nuxt (`defineNuxtModule`'s `setup` needs full Nuxt Kit
+ * scaffolding to invoke; this plain function does not).
+ *
+ * All three outcomes — missing file, unreadable file, present-but-no-`ShardDO`-
+ * export — WARN and return; none of them throws. Matches the module's existing
+ * stance ("we can't write the user's file, so warn... rather than fail an
+ * otherwise-valid build") and the `@lunora/astro` precedent this mirrors.
+ */
+export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) => void): void => {
+    const workerPath = join(rootDirectory, "worker.ts");
+
+    if (!existsSync(workerPath)) {
+        warn(
+            `missing worker.ts at the project root — add a wrapper that re-exports Nitro's handler and \`ShardDO\` (\`${WORKER_TS_SNIPPET}\`) and point wrangler's \`main\` at it, so the SHARD Durable Object is exported from the deployed worker.`,
+        );
+
+        return;
+    }
+
+    let source: string;
+
+    try {
+        source = readFileSync(workerPath, "utf8");
+    } catch (error) {
+        // `existsSync` passing doesn't guarantee a readable regular file (it
+        // could be a directory, permission-denied, a broken symlink loop, …) —
+        // this hook warns rather than fails the build, so a read failure must
+        // degrade to a warning too, not an uncaught throw out of `setup()`.
+        const reason = error instanceof Error ? error.message : String(error);
+
+        warn(`could not read worker.ts at the project root (${reason}) — skipping the \`ShardDO\` export check.`);
+
+        return;
+    }
+
+    if (!looksLikeShardDoExport(source)) {
+        warn(
+            `worker.ts at the project root does not appear to export \`ShardDO\` — add \`export { ShardDO } from "./lunora/server";\` (e.g. \`${WORKER_TS_SNIPPET}\`) and point wrangler's \`main\` at it, so the SHARD Durable Object is exported from the deployed worker.`,
+        );
+    }
 };
 
 /** Options for the `@lunora/nuxt` module (configurable under the `lunora` key in `nuxt.config`). */
@@ -172,12 +260,10 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // `cloudflare_module` output exports only the SSR handler, so the project
         // needs a root `worker.ts` wrapper (pointed at by `wrangler.jsonc`'s
         // `main`) that re-exports `ShardDO` too. We can't write the user's file,
-        // so warn when it's missing rather than fail an otherwise-valid build.
-        if (!existsSync(join(nuxt.options.rootDir, "worker.ts"))) {
-            useLogger("@lunora/nuxt").warn(
-                'missing worker.ts at the project root — add a wrapper that re-exports Nitro\'s handler and `ShardDO` (`export { default } from "./.output/server/index.mjs"; export { ShardDO } from "./lunora/server";`) and point wrangler\'s `main` at it, so the SHARD Durable Object is exported from the deployed worker.',
-            );
-        }
+        // so warn — for a missing file, an unreadable one, or one that exists
+        // but doesn't actually export `ShardDO` — rather than fail an
+        // otherwise-valid build. See `checkWorkerEntry` for the three checks.
+        checkWorkerEntry(nuxt.options.rootDir, (message) => { useLogger("@lunora/nuxt").warn(message); });
     },
 });
 
