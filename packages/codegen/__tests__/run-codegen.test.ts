@@ -2815,10 +2815,16 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
-            // The read side gets the same sentinel-mapped namespace default —
-            // the cross-tenant leak this plan closes was on `ctx.vectors`, not
-            // just the auto-sync write hook above.
-            expect(output).toContain("vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey });");
+            // The read side gets the same sentinel-mapped namespace default,
+            // PLUS the set of index names it's actually valid for — the
+            // cross-tenant leak this plan closes was on `ctx.vectors`, not
+            // just the auto-sync write hook above, and the read facade is a
+            // single flat surface over every index, so it must know exactly
+            // which ones are tenant-partitioned (a root-instance call against
+            // any other listed index stays namespace-less, unaffected).
+            expect(output).toContain(
+                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+            );
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite,");
         });
@@ -2857,9 +2863,56 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
-            expect(output).toContain("vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey });");
+            expect(output).toContain(
+                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+            );
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite,");
+        });
+
+        it("lists only the sharded table's index in shardedIndexNames for a MIXED schema (one sharded, one root-scoped vectorized table)", () => {
+            expect.assertions(1);
+
+            // A root-scoped vectorized table's index must NOT be listed —
+            // `ctx.vectors` is a single flat facade over both, reachable from
+            // any DO instance, so `shardedIndexNames` is what keeps a
+            // root-instance call against "by_summary" (root-scoped, correctly
+            // namespace-less) from being confused with a call against
+            // "by_body" (sharded, namespace-scoped or throwing from root).
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "docs",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { body: { kind: "string" } },
+                        shardMode: { field: "tenantId", kind: "shardBy" },
+                        vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+                    },
+                    {
+                        indexes: [],
+                        name: "announcements",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { summary: { kind: "string" } },
+                        shardMode: "root",
+                        vectorIndexes: [{ field: "summary", name: "by_summary", table: "announcements" }],
+                    },
+                ],
+                vectorIndexes: [
+                    { field: "body", name: "by_body", table: "docs" },
+                    { field: "summary", name: "by_summary", table: "announcements" },
+                ],
+            };
+
+            const output = emitShard({ schema });
+
+            expect(output).toContain(
+                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+            );
         });
 
         it("omits @lunora/bindings/vectors entirely when the schema declares no vectors", () => {
