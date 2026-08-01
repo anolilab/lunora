@@ -1189,6 +1189,7 @@ describe("lunoraClient", () => {
             expect(firstSub(second)?.query?.functionPath).toBe("messages:list");
             expect(data).toHaveLength(0);
 
+            client.close();
             vi.useRealTimers();
         });
 
@@ -1224,6 +1225,7 @@ describe("lunoraClient", () => {
             expect(second.url).toContain("token=adm1n");
             expect(firstSub(second).query.functionPath).toBe("__lunora_admin__:getMetrics");
 
+            client.close();
             vi.useRealTimers();
         });
 
@@ -1262,6 +1264,8 @@ describe("lunoraClient", () => {
 
             expect(env.type).toBe("subscribe");
             expect(env.query.args).toEqual({ x: 1 });
+
+            client.close();
         });
 
         it("duplicate subscribe calls share a single server-side subscription", () => {
@@ -1450,6 +1454,8 @@ describe("lunoraClient", () => {
 
             expect(value).toEqual({ id: "1" });
             expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            client.close();
         });
     });
 
@@ -2988,7 +2994,12 @@ describe("lunoraClient", () => {
 
             expect(seen).toEqual(["idle", "connecting", "connected", "offline"]);
 
+            // This test's own `triggerClose()` armed a REAL 10ms reconnect
+            // timer (no fake timers here) — without closing, it fires during
+            // whatever test happens to be running ~10ms later and leaks a
+            // stray, un-tokened socket into that test's `sockets` array.
             unsubscribe();
+            client.close();
         });
 
         it("stops notifying after unsubscribe", () => {
@@ -3071,6 +3082,7 @@ describe("lunoraClient", () => {
             expect(seen).toHaveLength(1);
 
             unsubscribe();
+            client.close();
         });
 
         it("reconnects after the socket drops", () => {
@@ -3101,6 +3113,7 @@ describe("lunoraClient", () => {
             expect(second.url).toContain("/_lunora/admin/scheduled/ws");
 
             unsubscribe();
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3159,6 +3172,7 @@ describe("lunoraClient", () => {
             expect(second?.url).toContain("token=eph-2");
 
             unsubscribe();
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3205,6 +3219,7 @@ describe("lunoraClient", () => {
             expect(second.url).toContain("/_lunora/admin/scheduled/ws");
 
             unsubscribe();
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3243,6 +3258,7 @@ describe("lunoraClient", () => {
             expect(second).not.toBe(first);
 
             unsubscribe();
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3287,6 +3303,7 @@ describe("lunoraClient", () => {
             expect(latestSocket()).toBe(socket);
 
             unsubscribe();
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3321,6 +3338,7 @@ describe("lunoraClient", () => {
             expect(second).not.toBe(first);
 
             unsubscribe();
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3377,6 +3395,7 @@ describe("lunoraClient", () => {
 
             expect(fresh.readyState).toBe(3);
 
+            client.close();
             vi.useRealTimers();
         });
     });
@@ -3413,6 +3432,16 @@ describe("lunoraClient", () => {
 
             expect(tokened?.url).toContain("token=eph-token");
             expect(provider).toHaveBeenCalledTimes(1);
+
+            // Without this, the connect-timeout fail-fast timer (a REAL
+            // setTimeout — this test never engages fake timers) stays armed
+            // on the un-opened socket and can fire well into a LATER test's
+            // run, re-arming the reconnect loop and pushing a stray socket
+            // into whatever test happens to be executing when it lands (the
+            // exact class of cross-test flake the `sockets.find(...)`
+            // workarounds throughout this describe block are defending
+            // against — closing the client removes the root cause instead).
+            client.close();
         });
 
         it("re-invokes the provider on the reconnect after a token-expired (4001) drop", async () => {
@@ -3458,6 +3487,15 @@ describe("lunoraClient", () => {
             expect(second).not.toBe(first);
             expect(second?.url).toContain("token=eph-2");
 
+            // Close WHILE fake timers are still installed, so `close()`'s
+            // `clearTimeout`/`clearInterval` calls actually cancel the
+            // fake-scheduled reconnect/connect-timeout/heartbeat timers this
+            // client armed. Without this, the client is abandoned with those
+            // timers still pending; switching to real timers doesn't fire
+            // them, but it also doesn't guarantee they're gone — leaving
+            // that to chance is exactly what made this test (and its
+            // siblings below) intermittently flaky under load.
+            client.close();
             vi.useRealTimers();
         });
 
@@ -3495,6 +3533,10 @@ describe("lunoraClient", () => {
 
             expect(latestSocket().url).toContain("token=eph-recovered");
 
+            // See the sibling test above — close before switching timer
+            // modes so the fake-scheduled timers this client armed are
+            // actually cancelled, not just abandoned.
+            client.close();
             vi.useRealTimers();
         });
     });
