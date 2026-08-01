@@ -1,6 +1,11 @@
+<!--
+    Redeems an emailed one-time code instead of a link — for apps that set
+    `forgotPassword: { method: "otp" }`. Unlike ResetPasswordCard, the email
+    address is a field rather than something carried from the previous screen:
+    a code can legitimately be redeemed from a fresh tab.
+-->
 <script lang="ts">
-    import { queryParameter } from "../core/browser-location";
-    import { createResetPasswordController } from "../core/reset-password";
+    import { createResetPasswordOtpController } from "../core/reset-password-otp";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -8,14 +13,11 @@
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
-    let { token }: { /** Defaults to `?token=` from the URL. */ token?: string } = $props();
-
     const t = useAuthUI().localization;
-    // The reset token is read once at mount; navigate to a fresh route to reset.
-    const { actions, state: form } = controllerStore((context) => createResetPasswordController(context, { token: token ?? queryParameter("token") }));
+    const { actions, state: form } = controllerStore((context) => createResetPasswordOtpController(context));
 </script>
 
-<AuthCard title={t.resetPassword}>
+<AuthCard description={t.resetPasswordOtpDescription} title={t.resetPassword}>
     <form
         class="lunora-auth-form"
         novalidate
@@ -25,6 +27,31 @@
         }}
     >
         <FormBanner error={$form.formError} success={$form.successMessage} />
+        <Field
+            autoComplete="email"
+            field={$form.fields.email}
+            label={t.emailLabel}
+            name="email"
+            onBlur={() => {
+                actions.blur("email");
+            }}
+            onChange={(value) => {
+                actions.setField("email", value);
+            }}
+            type="email"
+        />
+        <Field
+            autoComplete="one-time-code"
+            field={$form.fields.otp}
+            label={t.codeLabel}
+            name="otp"
+            onBlur={() => {
+                actions.blur("otp");
+            }}
+            onChange={(value) => {
+                actions.setField("otp", value);
+            }}
+        />
         <Field
             autoComplete="new-password"
             field={$form.fields.password}

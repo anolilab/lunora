@@ -17,7 +17,7 @@ const { actions, state } = useController((context) => createProfileController(co
 </script>
 
 <template>
-    <AuthCard :title="t.profile">
+    <AuthCard :headingLevel="2" :title="t.profile">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <Field

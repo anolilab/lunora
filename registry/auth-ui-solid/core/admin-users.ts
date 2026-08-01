@@ -50,6 +50,8 @@ type AdminUsersController = Controller<AdminUsersState, AdminUsersActions>;
 
 interface AdminUsersOptions {
     autoLoad?: boolean;
+    /** Milliseconds to wait after the last keystroke before re-querying. Defaults to 300. */
+    debounceMs?: number;
     limit?: number;
 }
 
@@ -84,6 +86,16 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
         { autoLoad: options.autoLoad, initialExtra: { search: "" } },
     );
 
+    const debounceMs = options.debounceMs ?? 300;
+    let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearSearchTimer = (): void => {
+        if (searchTimer !== undefined) {
+            clearTimeout(searchTimer);
+            searchTimer = undefined;
+        }
+    };
+
     /**
      * Navigate only when the mutation actually ran and succeeded.
      *
@@ -108,14 +120,31 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
             refetch: resource.refetch,
             remove: (userId: string) => resource.mutate(async () => assertOk(await context.authClient.admin.removeUser({ userId }))),
             setRole: (userId: string, role: string) => resource.mutate(async () => assertOk(await context.authClient.admin.setRole({ role, userId }))),
-            setSearch: async (value: string) => {
+            setSearch: (value: string) => {
+                // The field itself updates at once (it's controlled off
+                // `state.extra.search`) — only the network `refetch` is debounced,
+                // or every keystroke would fire `admin.listUsers`.
                 resource.patch({ search: value });
-                await resource.refetch();
+                clearSearchTimer();
+
+                if (typeof setTimeout !== "function") {
+                    return resource.refetch();
+                }
+
+                return new Promise<void>((resolve) => {
+                    searchTimer = setTimeout(() => {
+                        searchTimer = undefined;
+                        resolve(resource.refetch());
+                    }, debounceMs);
+                });
             },
             stopImpersonating: () => afterSessionSwap(async () => resource.mutateOk(async () => assertOk(await context.authClient.admin.stopImpersonating()))),
             unban: (userId: string) => resource.mutate(async () => assertOk(await context.authClient.admin.unbanUser({ userId }))),
         },
-        destroy: resource.destroy,
+        destroy: () => {
+            clearSearchTimer();
+            resource.destroy();
+        },
         getState: resource.getState,
         subscribe: resource.subscribe,
     };

@@ -10,7 +10,7 @@
     const { actions, state: res } = controllerStore(createSessionsController);
 </script>
 
-<AuthCard title={t.sessions}>
+<AuthCard headingLevel={2} title={t.sessions}>
     <FormBanner error={$res.error} />
     {#if $res.loading}
         <p class="lunora-auth-card__description">…</p>

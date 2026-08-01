@@ -23,7 +23,7 @@ const onRevokeOthers = (): void => {
 </script>
 
 <template>
-    <AuthCard :title="t.sessions">
+    <AuthCard :headingLevel="2" :title="t.sessions">
         <FormBanner :error="state.error" />
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>
         <p v-else-if="state.items.length === 0" class="lunora-auth-card__description">{{ t.sessionsEmpty }}</p>

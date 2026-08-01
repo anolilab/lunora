@@ -34,6 +34,7 @@ export {
     ForgotPasswordCardComponent,
     MagicLinkCardComponent,
     ResetPasswordCardComponent,
+    ResetPasswordOtpCardComponent,
     SignInCardComponent,
     SignUpCardComponent,
     TwoFactorCardComponent,

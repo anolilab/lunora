@@ -1,6 +1,6 @@
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
-    import { createTwoFactorSetupController } from "../core/two-factor-setup";
+    import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -12,6 +12,7 @@
     const t = context.localization;
     const enabled = isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard");
     const { actions, state: flow } = controllerStore(createTwoFactorSetupController);
+    const secret = $derived(totpSecret($flow.totpUri));
 </script>
 
 {#if enabled}
@@ -41,8 +42,15 @@
     {:else if $flow.step === "verify"}
         <AuthCard description={t.twoFactorScan} title={t.twoFactorSetup}>
             <FormBanner error={$flow.error} />
-            {#if $flow.totpUri !== undefined}
-                <code class="lunora-auth-code">{$flow.totpUri}</code>
+            <!--
+                The setup key, not the raw `otpauth://…` URI: this package
+                ships no QR encoder, so there is nothing to scan, and most
+                authenticators reject a pasted `otpauth://…` string anyway —
+                the key is the only path that reliably works.
+            -->
+            {#if secret !== undefined}
+                <p class="lunora-auth-note">{t.twoFactorSecret}</p>
+                <code class="lunora-auth-code">{secret}</code>
             {/if}
             {#if $flow.backupCodes.length > 0}
                 <p class="lunora-auth-card__description">{t.backupCodes}</p>

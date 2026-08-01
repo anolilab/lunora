@@ -18,7 +18,7 @@
 </script>
 
 {#if enabled}
-    <AuthCard title={t.organizationSettings}>
+    <AuthCard headingLevel={2} title={t.organizationSettings}>
         {#if $form.loading}
             <p class="lunora-auth-card__description">…</p>
         {:else}

@@ -107,6 +107,7 @@
         { "from": "svelte/ProfileCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/ProfileCard.svelte" },
         { "from": "svelte/ResendVerificationCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/ResendVerificationCard.svelte" },
         { "from": "svelte/ResetPasswordCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/ResetPasswordCard.svelte" },
+        { "from": "svelte/ResetPasswordOtpCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/ResetPasswordOtpCard.svelte" },
         { "from": "svelte/SessionsCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/SessionsCard.svelte" },
         { "from": "svelte/SetUsernameCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/SetUsernameCard.svelte" },
         { "from": "svelte/SignInCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/SignInCard.svelte" },

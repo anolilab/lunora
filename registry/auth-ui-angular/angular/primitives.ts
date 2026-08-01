@@ -29,7 +29,17 @@ const serializeThemeVariables = (variables: Readonly<Record<string, string>>): s
     template: `
         <section class="lunora-auth-card" [attr.style]="themeStyle">
             <header class="lunora-auth-card__header">
-                <h1 class="lunora-auth-card__title">{{ title() }}</h1>
+                @switch (headingLevel()) {
+                    @case (2) {
+                        <h2 class="lunora-auth-card__title">{{ title() }}</h2>
+                    }
+                    @case (3) {
+                        <h3 class="lunora-auth-card__title">{{ title() }}</h3>
+                    }
+                    @default {
+                        <h1 class="lunora-auth-card__title">{{ title() }}</h1>
+                    }
+                }
                 @if (description() !== undefined) {
                     <p class="lunora-auth-card__description">{{ description() }}</p>
                 }
@@ -55,6 +65,13 @@ class AuthCardComponent {
     readonly description = input<string>();
     /** Set true when projecting `[lunoraAuthCardFooter]` content. */
     readonly footer = input(false);
+
+    /**
+     * The title's heading level (default 1) — see the React `AuthCard`'s doc
+     * comment for why a settings/organization composition passes `2` rather
+     * than letting every card render an `h1`.
+     */
+    readonly headingLevel = input<1 | 2 | 3>(1);
     readonly title = input.required<string>();
 }
 

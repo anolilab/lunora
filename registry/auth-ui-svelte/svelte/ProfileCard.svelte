@@ -19,7 +19,7 @@
     const { actions, state: form } = controllerStore((context) => createProfileController(context, { initialImage: defaultImage, initialName: defaultName }));
 </script>
 
-<AuthCard title={t.profile}>
+<AuthCard headingLevel={2} title={t.profile}>
     <form
         class="lunora-auth-form"
         novalidate

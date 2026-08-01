@@ -73,6 +73,7 @@ export type { AuthUIProviderProps, AuthUIVueContext } from "./provider";
 export { AUTH_UI_INJECTION_KEY, createAuthUI, provideAuthUI, useAuthUI, useAuthUIContextRef, useAuthUILink } from "./provider";
 export { default as ResendVerificationCard } from "./ResendVerificationCard.vue";
 export { default as ResetPasswordCard } from "./ResetPasswordCard.vue";
+export { default as ResetPasswordOtpCard } from "./ResetPasswordOtpCard.vue";
 export { default as SessionsCard } from "./SessionsCard.vue";
 export { default as SetUsernameCard } from "./SetUsernameCard.vue";
 export { default as SignInCard } from "./SignInCard.vue";
