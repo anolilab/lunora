@@ -288,6 +288,33 @@ interface EnsureDevVariablesResult {
 const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
 
 /**
+ * Atomically (over)write a `.dev.vars`-shaped file: write the content to a
+ * sibling temp file with owner-only permissions (`mode: 0o600`), then
+ * `rename` it over the target. The rename is atomic within one filesystem,
+ * so a reader can never observe a half-written file, and an interrupt
+ * mid-write can't truncate the target — for a file holding secrets that
+ * would destroy every other local value alongside the new one, and the new
+ * value itself has no other recoverable copy if it was never disclosed
+ * anywhere else (Cloudflare secrets are write-only). On any failure the temp
+ * file is removed before the error propagates; never logs or throws the
+ * content. Exported so a caller writing to a `.dev.vars`-shaped path outside
+ * this module (`lunora deploy`'s minted-secret disclosure) reuses this
+ * instead of hand-rolling another copy of the pattern below.
+ */
+const writeDevVariablesFileAtomically = (path: string, content: string): void => {
+    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+
+    try {
+        writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+        renameSync(temporaryPath, path);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+};
+
+/**
  * Atomically create `.dev.vars`: write the content to a sibling temp file with
  * exclusive-create (`wx`), then `rename` it over the target. The rename is atomic
  * within one filesystem, so a concurrent `lunora dev` / Vite dev server can never
@@ -715,4 +742,5 @@ export {
     planDevVariablesAugment,
     planDevVariablesScaffold,
     requiredSecrets,
+    writeDevVariablesFileAtomically,
 };

@@ -5,6 +5,7 @@ import {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     DEV_VARS_KEY_PATTERN,
+    escapeRegExp,
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
@@ -14,6 +15,7 @@ import {
     requiredSecrets,
     resolveDeployDriver,
     resolveProjectTarget,
+    upsertDevVariableLine,
 } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
@@ -93,81 +95,13 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => {
 };
 
 /**
- * Match the `.dev.vars` line that *defines* `key` (matching the shared grammar's
- * `splitDevVariableLine`: optional leading whitespace, the key, optional
- * whitespace, then `=`). Comment (`#…`) and blank lines never match. Keys are
- * always validated against `DEV_VARS_KEY_PATTERN` before we build this, so they
- * hold only `[A-Za-z_]\w*` — no regex metacharacters to escape in practice —
- * but `key` is escaped anyway as defense-in-depth against a future caller that
- * skips validation.
- *
- * The trailing `(\r?\n|$)` capture consumes the line's own line terminator (or
- * matches the zero-width end-of-string when the line is the file's last, with
- * no trailing newline) — `upsertDevVariableLine` needs this to drop a whole
- * duplicate line, not just its content, leaving no blank line behind.
- *
- * `global` selects the all-matches form (`g`) `upsertDevVariableLine` needs to
- * collapse every duplicate `KEY=` line down to one, vs. a plain single-match
- * form for the `.test()` existence check. Callers must not reuse ONE instance
- * for both a `.test()` and a `.replace()` — a global regex's `.test()` mutates
- * `lastIndex`, which would make a subsequent `.replace()` on the same instance
- * silently start scanning mid-file.
- */
-const escapeRegExp = (value: string): string => value.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-
-const devVariableLinePattern = (key: string, global: boolean): RegExp =>
-    new RegExp(String.raw`^[ \t]*${escapeRegExp(key)}[ \t]*=.*(\r?\n|$)`, global ? "gmu" : "mu");
-
-/**
- * Surgically upsert a single `KEY="value"` line in raw `.dev.vars` content,
- * leaving every comment, blank line, and untouched entry verbatim. Rebuilding
- * the whole file from the parsed entry map (the previous approach) silently
- * dropped all `# …` comments and blank lines — including the documentation the
- * registry installer and scaffolder write — and re-quoted lines the user never
- * touched. If the key already has a line it is replaced in place; otherwise the
- * new line is appended with a single trailing newline. Always quotes the value
- * to preserve a whitespace round-trip; `env set` rejects newline/`"`/`\` up
- * front so the verbatim quote is safe.
- *
- * Duplicate `KEY=` lines are collapsed down to exactly one. The shared read
- * path (`parseDevVariableEntries`, which `env get`/`env list`/`env diff` all
- * build on) is last-wins — it keeps overwriting a Map entry as it walks the
- * file, so with duplicate lines the LAST one wins at read time. Replacing only
- * the first match (as a plain, non-global `.replace()` does) left that later,
- * untouched duplicate still winning at read time — a `set` that silently
- * didn't take effect. The first matching line is replaced in place (preserving
- * its position in the file); every later duplicate is dropped entirely
- * (including its own trailing newline).
- */
-const upsertDevVariableLine = (content: string, key: string, value: string): string => {
-    const rendered = `${key}="${value}"`;
-
-    if (!devVariableLinePattern(key, false).test(content)) {
-        if (content === "") {
-            return `${rendered}\n`;
-        }
-
-        return content.endsWith("\n") ? `${content}${rendered}\n` : `${content}\n${rendered}\n`;
-    }
-
-    let replacedFirst = false;
-
-    // Replace via a function so `$`-bearing values aren't treated as
-    // replacement-string special patterns.
-    return content.replace(devVariableLinePattern(key, true), (_match: string, newline: string) => {
-        if (replacedFirst) {
-            return "";
-        }
-
-        replacedFirst = true;
-
-        return `${rendered}${newline}`;
-    });
-};
-
-/**
  * Surgically remove every `.dev.vars` line defining `key` (and its trailing
- * newline), preserving all other lines, comments, and blanks verbatim.
+ * newline), preserving all other lines, comments, and blanks verbatim. Keys
+ * are always validated against `DEV_VARS_KEY_PATTERN` before we build this
+ * (see `runEnvUnset`), so they hold only `[A-Za-z_]\w*` — no regex
+ * metacharacters to escape in practice — but `key` is escaped anyway
+ * (via the shared `escapeRegExp`) as defense-in-depth against a future
+ * caller that skips validation.
  */
 const removeDevVariableLine = (content: string, key: string): string =>
     content.replaceAll(new RegExp(String.raw`^[ \t]*${escapeRegExp(key)}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
@@ -658,4 +592,4 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
 
 export { execute };
 export type { EnvCommandOptions, EnvCommandResult, EnvSubcommand };
-export { runEnvCommand, upsertDevVariableLine };
+export { runEnvCommand };

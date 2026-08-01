@@ -29,6 +29,7 @@ import { discoverAgentInfo } from "./agent-info";
 import { readWranglerJsonc, WRANGLER_FILES } from "./cloudflare/wrangler-path";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
+import { escapeRegExp } from "./dev-variables-format";
 import { discoverFlagsInfo } from "./flags-info";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
@@ -528,9 +529,6 @@ const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] =>
 interface ClassExportable {
     className: string;
 }
-
-/** Escape a runtime string for safe literal interpolation into a `RegExp` source. */
-const escapeRegExp = (value: string): string => value.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
 
 /**
  * PRIMARY (lexer-based, per-entry) type-only-export detector. Whether a lexer

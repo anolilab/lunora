@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
@@ -10,12 +10,13 @@ import {
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
-    isPlaceholderValue,
     packageNamesFromBindings,
     parseDevVariableEntries,
     readLinkedProject,
     requiredSecrets,
     resolveDeployDriver,
+    upsertDevVariableLine,
+    writeDevVariablesFileAtomically,
 } from "@lunora/config";
 import {
     findWranglerFile,
@@ -54,7 +55,6 @@ import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectori
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import { validateWrangler } from "../../util/wrangler-validator";
-import { upsertDevVariableLine } from "../env/handler";
 import type { MigrateDataCommandOptions } from "../migrate/handler";
 import { runMigrateDataCommand } from "../migrate/handler";
 import type { FetchLike } from "../run/handler";
@@ -519,20 +519,6 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
 };
 
 /**
- * A key's local `.dev.vars` value, if it has a usable (non-placeholder) one.
- * Reads the raw file once so `pushMintableSecrets` doesn't re-read it per key.
- */
-const localDevVariables = (cwd: string): Map<string, string> => {
-    const devVariablesPath = join(cwd, DEV_VARS_FILE);
-
-    if (!existsSync(devVariablesPath)) {
-        return new Map();
-    }
-
-    return new Map(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map((entry) => [entry.key, entry.value] as const));
-};
-
-/**
  * `wrangler secret put &lt;name>` is Cloudflare's write-only channel — the
  * value never comes back. A previous version of this function minted a fresh
  * value for every key and piped it straight to `secret put`, without binding
@@ -541,14 +527,23 @@ const localDevVariables = (cwd: string): Map<string, string> => {
  * (studio against prod, `lunora insights`, admin RPCs). Recovery meant minting
  * again, invalidating anything already holding the first value.
  *
- * Now: for each key, if `.dev.vars` already holds a real (non-placeholder)
- * local value, push THAT (local and remote end up in sync, nothing new to
- * disclose); otherwise mint a fresh value, push it, and return it in
+ * Now: mint a fresh value for every missing key, push it, and return it in
  * `minted` so the caller can record it in `.dev.vars` — the only local record
  * of a value this function itself must never print, log, or return anywhere
  * else. Sequential; stops on first failure. `ok` is `false` the moment any
  * `secret put` fails — `minted` still holds whatever succeeded before that,
  * because those values are equally unrecoverable if discarded.
+ *
+ * Deliberately does NOT reuse an existing local `.dev.vars` value for a
+ * missing key, even a non-placeholder one — an earlier version of this
+ * function did, on the theory that a real local value needs no fresh
+ * disclosure. That reasoning doesn't hold: `isPlaceholderValue` is a marker
+ * heuristic (empty / `&lt;…>` / `changeme` / `todo` / …), not a strength check,
+ * so a real-but-weak shared dev secret (`AUTH_SECRET="devsecret"`) would
+ * silently become the value protecting `--env production`, and the confirm
+ * prompt never named which keys were about to be promoted that way. Minting
+ * fresh for every missing key is the only choice that can't leak a weak
+ * local value into a production credential.
  */
 const pushMintableSecrets = async (
     cwd: string,
@@ -569,13 +564,10 @@ const pushMintableSecrets = async (
         return { minted: [], ok: false };
     }
 
-    const local = localDevVariables(cwd);
     const minted: { key: string; value: string }[] = [];
 
     for (const key of keys) {
-        const existing = local.get(key);
-        const usesLocalValue = existing !== undefined && !isPlaceholderValue(existing);
-        const value = usesLocalValue ? existing : generateSecretValue();
+        const value = generateSecretValue();
 
         const secretCommand = toolchain.secretPut({ environment: options.env, key, temporary: options.temporary });
         const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
@@ -593,35 +585,69 @@ const pushMintableSecrets = async (
             return { minted, ok: false };
         }
 
-        if (usesLocalValue) {
-            logger.success(`pushed ${key} (using existing local value)`);
-        } else {
-            minted.push({ key, value });
-            logger.success(`generated + pushed ${key} (value written to ${DEV_VARS_FILE})`);
-        }
+        minted.push({ key, value });
+        // Destination is `persistMintedSecrets`'s call — it knows the actual
+        // path (bare `.dev.vars` vs. an `--env`-scoped sibling); don't claim
+        // one here.
+        logger.success(`generated + pushed ${key}`);
     }
 
     return { minted, ok: true };
 };
 
 /**
- * Fold newly-minted secret values into `.dev.vars` via the same surgical
- * upsert `env generate --set` uses. A no-op when nothing was minted (every
- * missing key already had a usable local value).
+ * Plain-identifier check before `options.env` is spliced into a filename
+ * (`.dev.vars.&lt;env>`) — defense-in-depth; a `--env &lt;name>` naming no
+ * declared `wrangler.jsonc` environment is already blocked earlier in the
+ * deploy pipeline (`validateWrangler`), so this should be unreachable in
+ * practice.
  */
-const persistMintedSecrets = (cwd: string, minted: ReadonlyArray<{ key: string; value: string }>): void => {
+const SAFE_ENV_NAME = /^[\w-]+$/u;
+
+/**
+ * Fold newly-minted secret values into the right `.dev.vars`-shaped file, via
+ * the same surgical upsert `env generate --set` uses, written atomically and
+ * owner-only (`writeDevVariablesFileAtomically`, matching `@lunora/config`'s
+ * own `.dev.vars` writers) — a plain `writeFileSync` would let a process
+ * interrupted mid-write truncate the file, destroying every OTHER secret in
+ * it alongside the new one, which for a value with no other recoverable copy
+ * (Cloudflare secrets are write-only) is worse than not writing at all. A
+ * no-op when nothing was minted.
+ *
+ * Which file depends on `options.env`:
+ * - No explicit `--env`: the deploy targets the account's one default environment — the same one `.dev.vars`/`lunora dev`/a plain `lunora env push` already treat as authoritative — so the minted value goes into `.dev.vars` itself, same as `env set`/`env generate --set` would.
+ * - An explicit `--env &lt;name>`: a DIFFERENT, named environment. Writing that secret into the bare, environment-agnostic `.dev.vars` would silently share it with local dev and with a later no-`--env` `env push` — the exact cross-environment leak an `--env`-scoped deploy is supposed to avoid. So it goes into a sibling `.dev.vars.&lt;name>` instead (already covered by this repo's `.gitignore` `.dev.vars.*` pattern). No other command reads `.dev.vars.&lt;name>` today — it exists purely as this deploy's own recoverable record of a value `wrangler secret put` can never return; open it by hand to retrieve the value.
+ */
+const persistMintedSecrets = (cwd: string, options: DeployCommandOptions, minted: ReadonlyArray<{ key: string; value: string }>): void => {
     if (minted.length === 0) {
         return;
     }
 
-    const devVariablesPath = join(cwd, DEV_VARS_FILE);
+    const keys = minted.map((entry) => entry.key).join(", ");
+
+    if (options.env !== undefined && !SAFE_ENV_NAME.test(options.env)) {
+        options.logger.warn(
+            `${keys}: minted and pushed for --env ${options.env}, but "${options.env}" isn't a safe filename fragment — the value could not be recorded. Capture it manually if you need it again.`,
+        );
+
+        return;
+    }
+
+    const targetFile = options.env === undefined ? DEV_VARS_FILE : `${DEV_VARS_FILE}.${options.env}`;
+    const devVariablesPath = join(cwd, targetFile);
     let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
 
     for (const entry of minted) {
         raw = upsertDevVariableLine(raw, entry.key, entry.value);
     }
 
-    writeFileSync(devVariablesPath, raw, "utf8");
+    writeDevVariablesFileAtomically(devVariablesPath, raw);
+
+    options.logger.success(
+        options.env === undefined
+            ? `${keys}: value(s) written to ${DEV_VARS_FILE}`
+            : `${keys}: value(s) written to ${targetFile} (kept separate from ${DEV_VARS_FILE} so \`lunora dev\` and a plain \`lunora env push\` don't inherit the --env ${options.env} value)`,
+    );
 };
 
 /**
@@ -691,9 +717,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     const confirm = options.secretConfirm ?? createTuiConfirm();
 
     if (
-        await confirm(
-            `${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Use your local value or generate strong values and push them now?`,
-        )
+        await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
     ) {
         // `pushMintableSecrets` returns `ok: false` the moment any `secret put`
         // fails (e.g. auth expired mid-push). Discarding that result used to
@@ -706,7 +730,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         // secret this function doesn't record is permanently lost (Cloudflare
         // secrets are write-only), so recording it is not conditional on the
         // rest of the batch succeeding.
-        persistMintedSecrets(cwd, minted);
+        persistMintedSecrets(cwd, options, minted);
 
         if (!ok) {
             return "failed to push required secret(s) — set them manually and re-deploy";

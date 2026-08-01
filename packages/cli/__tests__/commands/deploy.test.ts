@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1030,15 +1030,39 @@ export const backfillNames = defineMigration({
                 expect(successes.some((line) => line.includes("LUNORA_ADMIN_TOKEN") && line.includes(".dev.vars"))).toBe(true);
             });
 
-            it("pushes the existing local .dev.vars value instead of minting a new one, leaving the file unchanged", async () => {
+            it("writes the minted secret file owner-only (mode 0o600), not world-readable", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                // eslint-disable-next-line no-bitwise -- checking the permission bits is the point of this test
+                expect(statSync(join(workdir, ".dev.vars")).mode & 0o777).toBe(0o600);
+            });
+
+            it("never reuses an existing local .dev.vars value — always mints fresh, even for a non-placeholder key", async () => {
                 expect.assertions(3);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
+                // A real (non-placeholder) value already sits in .dev.vars for the
+                // missing key. Reusing it — the behaviour this test guards against —
+                // would let a real-but-weak shared dev secret quietly become the
+                // value protecting the deploy target.
                 const existingValue = "existing-local-dev-token";
-                const originalDevVars = `LUNORA_ADMIN_TOKEN="${existingValue}"\n`;
 
-                writeFileSync(join(workdir, ".dev.vars"), originalDevVars, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), `LUNORA_ADMIN_TOKEN="${existingValue}"\n`, "utf8");
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
@@ -1056,9 +1080,46 @@ export const backfillNames = defineMigration({
 
                 const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
 
-                // The local value is pushed as-is — nothing new was minted or disclosed.
-                expect(secretPush?.descriptor.input).toBe(existingValue);
-                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe(originalDevVars);
+                // A fresh value was minted — never the pre-existing local one.
+                expect(secretPush?.descriptor.input).toMatch(/^[a-f0-9]{64}$/u);
+                expect(secretPush?.descriptor.input).not.toBe(existingValue);
+            });
+
+            it("--env production writes the minted secret into a sibling .dev.vars.production, leaving bare .dev.vars untouched", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                // A pre-existing bare .dev.vars (local dev's own file) must not be
+                // touched by a secret minted for a DIFFERENT, named environment.
+                // eslint-disable-next-line no-secrets/no-secrets -- test fixture literal, not a real secret
+                const localDevVars = 'SOME_OTHER_LOCAL_VAR="untouched"\n';
+
+                writeFileSync(join(workdir, ".dev.vars"), localDevVars, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+                const mintedValue = secretPush?.descriptor.input ?? "";
+
+                expect(mintedValue).toMatch(/^[a-f0-9]{64}$/u);
+                // The env-scoped sibling file gets the minted value...
+                expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${mintedValue}"`);
+                // ...and the bare, environment-agnostic .dev.vars is left exactly as it was.
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe(localDevVars);
             });
 
             it("interactively generates + pushes a missing mintable secret before deploying", async () => {
