@@ -27,6 +27,7 @@ import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
 
+import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { autoLinkFromDeployOutput } from "../../util/auto-link";
@@ -307,15 +308,6 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
 
     return process.stdout.isTTY && !process.env.CI;
 };
-
-/**
- * Same CI-detection default `lunora codegen` uses: strict in CI, advisory
- * locally, so a legitimately-partial target can still be shipped by hand.
- * Extracted (rather than inlined in `executeDeploy`) purely to keep that
- * function's cognitive complexity within the repo's lint budget.
- */
-const resolveStrictAdvisories = (options: DeployCommandOptions): boolean =>
-    options.strictAdvisories ?? (process.env["CI"] !== undefined && process.env["CI"] !== "");
 
 /**
  * Return the name of any D1 binding that still carries the placeholder
@@ -811,10 +803,9 @@ const runCodegenStep = async (
         // the same `--no-strict-advisories` opt-out `lunora codegen` uses, so a
         // legitimately-partial target can still ship interactively while CI
         // stays strict by default.
-        const errorAdvisories = result.advisories.filter((advisory) => advisory.level === "ERROR");
+        const { errorAdvisories, names, shouldBlock } = evaluateAdvisoryGate(result.advisories, strictAdvisories);
 
-        if (errorAdvisories.length > 0 && strictAdvisories) {
-            const names = [...new Set(errorAdvisories.map((advisory) => advisory.name))].toSorted((a, b) => a.localeCompare(b));
+        if (shouldBlock) {
             const message =
                 `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
                 `Pass --no-strict-advisories to downgrade this to a warning and deploy anyway.`;

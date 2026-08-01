@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
@@ -139,24 +139,25 @@ interface CodegenSafelyResult {
 /**
  * The `blockingMessage` for {@link runCodegenSafely}'s result: one aggregated
  * line naming every ERROR-level advisory/platform diagnostic, or `undefined`
- * when none. Extracted purely to keep `runCodegenSafely`'s cognitive
- * complexity within the repo's lint budget — no behavior change from inlining
- * it.
+ * when none. The name list itself comes from `@lunora/codegen`'s
+ * `describeErrorLevelFindings` — the same filter+dedup+sort the CLI's
+ * `lunora codegen`/`lunora deploy` gate uses — so this only owns folding the
+ * two categories into one combined, sorted message; it used to compute an
+ * unsorted list inline, which is what let it drift from the CLI's. Extracted
+ * purely to keep `runCodegenSafely`'s cognitive complexity within the repo's
+ * lint budget — no other behavior change from inlining it.
  */
 const buildBlockingMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">): string | undefined => {
-    const blockingNames = [
-        ...result.advisories.filter((advisory) => advisory.level === "ERROR").map((advisory) => advisory.name),
-        ...result.platformDiagnostics.filter((diagnostic) => diagnostic.level === "error").map((diagnostic) => diagnostic.name),
-    ];
+    const { advisoryNames, platformDiagnosticNames } = describeErrorLevelFindings(result);
+    const blockingNames = [...new Set([...advisoryNames, ...platformDiagnosticNames])].toSorted((a, b) => a.localeCompare(b));
 
     if (blockingNames.length === 0) {
         return undefined;
     }
 
-    const names = [...new Set(blockingNames)].join(", ");
-    const noun = blockingNames.length === 1 ? "issue" : "issues";
+    const noun = blockingNames.length === 1 ? "advisory/platform diagnostic" : "advisories/platform diagnostics";
 
-    return `${LUNORA_TAG} ${String(blockingNames.length)} ERROR-level ${noun} (${names}) — see the log above for detail.`;
+    return `${LUNORA_TAG} ${String(blockingNames.length)} ERROR-level ${noun} (${blockingNames.join(", ")}) — see the log above for detail.`;
 };
 
 /**

@@ -14,6 +14,7 @@ export type {
 export { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 export type { LintSchemaOptions } from "./advisor";
 export { formatAdvisories, lintSchema, toAdvisorContext } from "./advisor";
+export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames } from "./blocking";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover-agents";
 export { default as discoverAuthApiCalls } from "./discover-authapi-calls";

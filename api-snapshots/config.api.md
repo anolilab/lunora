@@ -1594,6 +1594,7 @@ interface WranglerConfig {
     durable_objects?: {
         bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
     };
+    env?: Record<string, WranglerConfig>;
     exports?: Record<string, {
         cache?: {
             enabled?: boolean;
@@ -1735,6 +1736,7 @@ interface WranglerContainerEntry {
 
 ```ts
 interface WranglerProjectValidationOptions {
+    environment?: string;
     projectRoot: string;
     schemaDir?: string;
 }
@@ -1822,7 +1824,7 @@ const readWranglerJsonc: <T = unknown>(wranglerPath: string) => ReadWranglerResu
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings) => ReconcileBindingsResult;
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, environment?: string) => ReconcileBindingsResult;
 ```
 
 ### `reconcileWranglerCompatibilityDate` (const)
@@ -1858,7 +1860,7 @@ const validateWrangler: typeof validateWranglerConfig;
 ### `validateWranglerConfig` (const)
 
 ```ts
-const validateWranglerConfig: (wrangler: WranglerConfig | undefined, schema?: SchemaInfo) => WranglerValidationReport;
+const validateWranglerConfig: (wranglerInput: WranglerConfig | undefined, schema?: SchemaInfo, environment?: string) => WranglerValidationReport;
 ```
 
 ### `validateWranglerProject` (const)

@@ -49,10 +49,17 @@ interface ListRemoteSecretsResult {
  * hardening. A spawn error (the child never started) is reported as a failed
  * result rather than a thrown rejection, matching the previous `execFile`-based
  * runner's contract.
+ *
+ * Uses `captureStdoutSilently`, not `captureStdout`: this output is parsed
+ * (secret *names* only — Cloudflare never returns values), never displayed, so
+ * it must not be teed to the parent's stdout. `offerMissingSecrets` runs this
+ * on every real deploy, including `--format json`, where the parent process
+ * writes a single JSON document to stdout — a teed `secret list` payload ahead
+ * of it would corrupt that document for CI's `JSON.parse(stdout)`.
  */
 const defaultRunner: SecretListRunner = async (command, args, cwd) => {
     try {
-        const result = await defaultSpawner({ args, captureStderr: true, captureStdout: true, command, cwd });
+        const result = await defaultSpawner({ args, captureStderr: true, captureStdoutSilently: true, command, cwd });
 
         return { code: result.code, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
     } catch (error: unknown) {
