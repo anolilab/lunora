@@ -6,6 +6,8 @@
  * `dist/*.d.ts` entries, and pins it in committed `api-snapshots/<package>.api.md`
  * files. A breaking change to a covered surface must land together with an
  * explicit, reviewable snapshot update — it cannot ship on a reviewer's memory.
+ * A source-shipping package (exports pointing at `.ts`/`.tsx` instead of a build
+ * output) is extracted straight from that source instead — see `collectEntries`.
  *
  *   node scripts/api-snapshot.js check    # (default) fail if the surface drifted
  *   node scripts/api-snapshot.js update   # regenerate the snapshots
@@ -57,6 +59,13 @@ const snapshotsDir = join(rootDir, "api-snapshots");
  * deploy driver, capabilities mostly `unsupported`/`emulated`), and its public
  * surface is still expected to move. Add it here once it graduates past spike
  * stage, alongside `platform`/`platform-cloudflare`.
+ *
+ * `auth-ui` IS covered (TIER_2) despite being `private: true` with no build
+ * step — privacy and "no dist" are not exemptions (see `dispatch`, also
+ * private, also covered). Its `core`/`react` exports point at `.ts`/`.tsx`
+ * source and are extracted via the source-file fallback in `collectEntries`.
+ * Only `./core` and `./react` are wired into its exports map today; `solid`,
+ * `svelte`, `vue`, `angular` aren't covered until they are.
  */
 const TIER_1 = [
     "server",
@@ -92,6 +101,7 @@ const TIER_2 = [
     "astro",
     "nuxt",
     "auth",
+    "auth-ui",
     "storage",
     "scheduler",
     "mail",
@@ -151,6 +161,11 @@ const collectEntries = (pkgDir) => {
 
             if (types) {
                 entries.push({ dts: resolve(pkgDir, types), subpath });
+            } else if (typeof value === "string" && /\.(ts|tsx)$/.test(value)) {
+                // Source-shipping packages (no build step, no `dist`) point their
+                // exports map straight at `.ts`/`.tsx` source — extract from that
+                // directly instead of a built `.d.ts`.
+                entries.push({ dts: resolve(pkgDir, value), subpath });
             }
         }
     } else if (typeof manifest.types === "string") {
