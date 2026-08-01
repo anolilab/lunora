@@ -111,6 +111,18 @@ export interface AgentToolContext {
 }
 
 /**
+ * The READ-ONLY view of {@link AgentToolContext} handed to a `needsApproval`
+ * gate function — every field except `setState`. A gate that mutates thread
+ * state is a side effect inside a decision predicate, which this type makes a
+ * compile-time error rather than a documented-but-unenforced rule: `getState`
+ * and `run` stay available (reads are legitimate gate inputs, and the
+ * function form is resolved inside its own durable step, so they are
+ * replay-safe there too).
+ * @experimental
+ */
+export type AgentApprovalContext = Omit<AgentToolContext, "setState">;
+
+/**
  * An agent tool. Unlike a raw AI SDK tool, `execute` is NOT handed to the
  * model call — the loop runs it itself inside a named durable step so a
  * completed call never re-runs on replay, and passes the
@@ -135,13 +147,19 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * On approve the tool runs exactly as normal; on reject it is skipped and a
      * tool result explaining the rejection is persisted so the next turn recovers.
      * A boolean gates statically; a function gates per input. Default: `false`
-     * (unchanged behavior). Evaluated from replay-stable input OUTSIDE the
-     * durable step (it re-runs on every replay), so it must be a PURE predicate:
-     * deterministic (no `Date.now()`/`Math.random()`) and free of side effects —
-     * never call {@link AgentToolContext.setState}/`getState` or a mutating `run`
-     * here; state writes belong only in `execute`, inside the memoized step.
+     * (unchanged behavior).
+     *
+     * The boolean/`undefined` forms are compile-time constants re-derived
+     * identically on every replay — no durable step. The FUNCTION form runs
+     * inside its OWN durable step (`tool:approval-gate:&lt;toolCallId>`, distinct
+     * from the tool's own step), so it now runs exactly once per call, not once
+     * per replay. It must still be otherwise pure: deterministic given its
+     * inputs (no `Date.now()`/`Math.random()`) and free of side effects — the
+     * context it receives is {@link AgentApprovalContext}, which has no
+     * `setState`; state writes belong only in `execute`, inside the tool's own
+     * memoized step.
      */
-    needsApproval?: ((input: Input, context: AgentToolContext) => boolean | Promise<boolean>) | boolean;
+    needsApproval?: ((input: Input, context: AgentApprovalContext) => boolean | Promise<boolean>) | boolean;
 }
 
 /**

@@ -6,6 +6,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
 import type {
+    AgentApprovalContext,
     AgentCompact,
     AgentConfig,
     AgentDefinition,
@@ -27,7 +28,6 @@ import type {
     AgentStreamGenerate,
     AgentTokenSink,
     AgentToolCall,
-    AgentToolContext,
     AgentUsage,
     AgentWorkflowBindingLike,
     AnyAgentTool,
@@ -187,10 +187,21 @@ const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): A
 };
 
 /**
- * Resolve a tool's `needsApproval` gate against the (replay-stable) model input.
- * A boolean gates statically; a function gates per input.
+ * Resolve a tool's `needsApproval` gate against the (replay-stable) model
+ * input. The `true`/`false`/`undefined` forms are compile-time constants —
+ * replay re-derives them identically for free, so they stay outside any
+ * durable step. The FUNCTION form can read `getState`/`run` and so can be
+ * non-deterministic or (if misused) side-effecting; it is memoized in its own
+ * durable step (`gateStepName`, distinct from the tool's own step — see
+ * `runToolCall`) so it now resolves exactly ONCE per call, not once per replay.
  */
-const resolveNeedsApproval = async (tool: AnyAgentTool, input: unknown, context: AgentToolContext): Promise<boolean> => {
+const resolveNeedsApproval = async (
+    tool: AnyAgentTool,
+    input: unknown,
+    step: AgentStepLike,
+    gateStepName: string,
+    context: AgentApprovalContext,
+): Promise<boolean> => {
     const { needsApproval } = tool;
 
     if (needsApproval === undefined || needsApproval === false) {
@@ -201,7 +212,7 @@ const resolveNeedsApproval = async (tool: AnyAgentTool, input: unknown, context:
         return true;
     }
 
-    return needsApproval(input, context);
+    return step.do(gateStepName, async () => needsApproval(input, context));
 };
 
 /**
@@ -264,13 +275,24 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     };
 
     const toolContext = { env, getState, idempotencyKey: stepName, reportProgress, run, setState, threadKey, toolCallId: call.id };
+    // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
+    // that mutates state is a side effect inside a decision predicate, which is
+    // exactly the misuse durability here is fixing, not relocating.
+    const gateContext: AgentApprovalContext = { env, getState, idempotencyKey: stepName, reportProgress, run, threadKey, toolCallId: call.id };
+    // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
+    // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
+    // durable result with the tool's own (see the advisor's duplicate-step-name
+    // lint for this collision class). Keyed on `call.id` alone (the
+    // replay-stable identity `stepName` and `approval:${call.id}` already
+    // trust), so it stays collision-free per call.
+    const gateStepName = `tool:approval-gate:${call.id}`;
 
     // Human-in-the-loop: a gated tool pauses the run until a client approves or
     // rejects it. A rejection skips the tool and records why, so the next LLM
     // turn can recover instead of stalling.
     let status: "approved" | undefined;
 
-    if (await resolveNeedsApproval(tool, call.input, toolContext)) {
+    if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext)) {
         const { decision, note } = await awaitApproval(turnContext, call);
 
         if (decision === "reject") {
