@@ -401,13 +401,24 @@ const useDataBrowser = ({
     const [editingCell, setEditingCell] = useState<null | { column: string; rowId: string }>(null);
     const [committing, setCommitting] = useState<boolean>(false);
 
-    // Tracks the (table, view) identity the local view state has been (re-)seeded
-    // for. Seeded with the mount `tableParam`/incoming view so the first render is
-    // a no-op (the `useState` initializers above already hydrated from the URL).
+    // Tracks the (table, view) identity the local view state has last been
+    // caught up to — either by a full re-seed, OR by simply catching up to the
+    // URL mirror's own echo (see the `else if` below the reset block). Seeded
+    // with the mount `tableParam`/incoming view so the first render is a no-op
+    // (the `useState` initializers above already hydrated from the URL).
     // `seededViewKey` is a serialized snapshot of the fields a re-seed consumes
-    // (shard/search/filters/order — see `serializeView`), so a same-table apply (a
-    // saved query, or browser back/forward, that changes the view WITHOUT
+    // (shard/search/filters/order — see `serializeView`), so a same-table apply
+    // (a saved query, or browser back/forward, that changes the view WITHOUT
     // changing the table) is visible even though `tableParam` alone isn't.
+    //
+    // MUST advance on every committed render whose incoming view is accounted
+    // for — a re-seed OR an echo — never JUST a re-seed. It is also read by the
+    // mirror effect's guard below, and if it only ever advanced inside the
+    // reset block, the FIRST echo would permanently desync it from
+    // `incomingViewKey` (the echo isn't a re-seed, so the reset block never
+    // runs) — the guard would then block the mirror forever after that point,
+    // and the next unrelated render would misread whatever the user had typed
+    // SINCE as a fresh external apply, wrongly re-seeding and reverting it.
     const [seededTableParameter, setSeededTableParameter] = useState<string | undefined>(tableParam);
     const [seededViewKey, setSeededViewKey] = useState<string>(() => serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy));
 
@@ -504,6 +515,28 @@ const useDataBrowser = ({
         stagedEdits.clear();
         setEditingCell(null);
         setOffset(0);
+    } else if (incomingViewKey !== seededViewKey) {
+        // Not a re-seed (`isReseed` is false here, and `isReseed` is
+        // `isTableSwitch || isSameTableViewApply` — so BOTH are false too: this
+        // only reaches here when `incomingViewKey === emittedViewKeyRef.current`),
+        // but `incomingViewKey` still differs from `seededViewKey` — the URL
+        // mirror's own echo of what THIS component last emitted, arriving back
+        // as this render's `initialSearch`/`initialShardKey`/etc.
+        //
+        // `seededViewKey` MUST still advance here, even though nothing else
+        // does: it is also read by the mirror effect's guard below
+        // (`seededViewKey !== incomingViewKey`), which exists to skip a stale
+        // mirror write while a re-seed is in flight. Leaving `seededViewKey`
+        // frozen at its last RESEED value (rather than catching it up to every
+        // harmless echo too) would permanently desync it from `incomingViewKey`
+        // after the FIRST echo — the mirror guard would then block every future
+        // commit, and the next render whose `emittedViewKeyRef` has moved on
+        // further (from a SECOND, later keystroke) would misread the still-stale
+        // `incomingViewKey` as a fresh external apply and wrongly re-seed,
+        // reverting the second change and wiping staged edits/offset/facets with
+        // it. Advancing it here — without touching any other state — keeps the
+        // invariant the mirror guard depends on actually true.
+        setSeededViewKey(incomingViewKey);
     }
 
     // The raw input each debounced mirror below reflects for THIS render: on a

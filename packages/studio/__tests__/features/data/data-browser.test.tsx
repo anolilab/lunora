@@ -2030,4 +2030,100 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
 
         expect(laterCount).toBe(settledCount);
     });
+
+    it("keeps mirroring — and never reverts a SECOND change — after the URL has already echoed back the first one", async () => {
+        expect.assertions(3);
+
+        const mock = createSameTableClient();
+        const onViewChangeCall = vi.fn<(view: Pick<DataView, "filters" | "orderBy" | "search" | "shard">) => void>();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <MiniTableEditor onViewChangeCall={onViewChangeCall} pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        await screen.findByText("hello");
+
+        // Stage an inline cell edit BEFORE touching the search box — a spurious
+        // re-seed (this test's whole point) wipes it via `stagedEdits.clear()`.
+        fireEvent.doubleClick(screen.getByTestId("db-cell-r1-text"));
+
+        const cellInput = await screen.findByTestId<HTMLInputElement>("db-cell-input-r1-text");
+
+        fireEvent.change(cellInput, { target: { value: "edited" } });
+        fireEvent.keyDown(cellInput, { key: "Enter" });
+        await screen.findByTestId("db-staged");
+
+        // First change: type "hel" and let it debounce-settle, mirror, and echo
+        // back through `initialSearch` — the exact round trip the same-table
+        // gate exists to survive.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hel" } });
+
+        await waitFor(
+            () => {
+                const reads = mock.query.mock.calls.filter(
+                    (call) =>
+                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage &&
+                        (call[1] as { search?: string }).search === "hel",
+                );
+
+                if (reads.length === 0) {
+                    throw new Error("first change not applied yet");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        // Give the mirror's echo (onViewChange → host state → back down as
+        // `initialSearch`) a moment to actually round-trip before the second edit.
+        await waitFor(
+            () => {
+                if (!onViewChangeCall.mock.calls.some(([view]) => view.search === "hel")) {
+                    throw new Error("first change was never mirrored to the host");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        onViewChangeCall.mockClear();
+
+        // Second change: type "hell" — a further, distinct edit made AFTER the
+        // first one's echo has already landed as this render's `initialSearch`.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hell" } });
+
+        await waitFor(
+            () => {
+                const reads = mock.query.mock.calls.filter(
+                    (call) =>
+                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage &&
+                        (call[1] as { search?: string }).search === "hell",
+                );
+
+                if (reads.length === 0) {
+                    throw new Error("second change never took effect — the mirror died after the first echo");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        // (a) the host's view reflects the SECOND change — the mirror is still
+        // alive, not permanently blocked by a `seededViewKey` that fell behind
+        // `incomingViewKey` after the first echo.
+        expect(onViewChangeCall.mock.calls.some(([view]) => view.search === "hell")).toBe(true);
+
+        // `keepPreviousData` is off, so the page (and everything inside it,
+        // including the filter bar) can briefly disappear between the read
+        // landing above and the new page committing — `findByTestId` waits for
+        // that to settle rather than racing it.
+        const filterInput = await screen.findByTestId<HTMLInputElement>("db-filter");
+
+        // The search box itself must still show what was typed — a spurious
+        // re-seed snaps it back to the stale `initialSearch` ("hel").
+        expect(filterInput.value).toBe("hell");
+
+        // (b) the staged inline edit survives. A spurious re-seed wipes it via
+        // `stagedEdits.clear()` / `setEditingCell(null)`.
+        expect(screen.getByTestId("db-staged").textContent).toContain("edited");
+    });
 });
