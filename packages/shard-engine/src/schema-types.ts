@@ -359,10 +359,20 @@ export interface GeoFilterBuilderLike {
  * misleading `0`. The two fields are mutually exclusive per call — which one
  * is populated depends on which index the chain staged.
  */
-export interface ScoredDocument {
-    distanceMeters?: null | number;
+export type ScoredDocument = GeoScoredDocument | SearchScoredDocument;
+
+/** A `.collectWithScores()` row from a `.withGeoIndex()` chain — see {@link ScoredDocument}. */
+export interface GeoScoredDocument {
+    distanceMeters: null | number;
     document: Record<string, unknown>;
-    score?: number;
+    score?: never;
+}
+
+/** A `.collectWithScores()` row from a `.withSearchIndex()` chain — see {@link ScoredDocument}. */
+export interface SearchScoredDocument {
+    distanceMeters?: never;
+    document: Record<string, unknown>;
+    score: number;
 }
 
 /** A `ctx.db.&lt;table>` reader facade. */

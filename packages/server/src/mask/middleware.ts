@@ -82,10 +82,20 @@ interface GroupByArgs {
 }
 
 /** One row of a `.collectWithScores()` result — mirrors `@lunora/shard-engine`'s `ScoredDocument`. */
-interface ScoredDocument {
-    distanceMeters?: null | number;
+type ScoredDocument = GeoScoredDocument | SearchScoredDocument;
+
+/** A `.withGeoIndex()` row — mirrors `@lunora/shard-engine`'s `GeoScoredDocument`. */
+interface GeoScoredDocument {
+    distanceMeters: null | number;
     document: Record<string, unknown>;
-    score?: number;
+    score?: never;
+}
+
+/** A `.withSearchIndex()` row — mirrors `@lunora/shard-engine`'s `SearchScoredDocument`. */
+interface SearchScoredDocument {
+    distanceMeters?: never;
+    document: Record<string, unknown>;
+    score: number;
 }
 
 interface TableReaderLike {
@@ -377,15 +387,15 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             collectWithScores: async () => {
                 const rows = await reader.collectWithScores();
 
-                return rows.map((row) => {
-                    const masked: ScoredDocument = { ...row, document: maskRow(row.document, columns, context) };
+                return rows.map((row): ScoredDocument => {
+                    const document = maskRow(row.document, columns, context);
 
-                    if ("distanceMeters" in masked) {
+                    if ("distanceMeters" in row) {
                         // eslint-disable-next-line unicorn/no-null -- fail closed: withhold the geo-distance oracle, mirrors the null sentinel used elsewhere in this file
-                        masked.distanceMeters = null;
+                        return { distanceMeters: null, document };
                     }
 
-                    return masked;
+                    return { document, score: row.score };
                 });
             },
             // SECURITY (value oracle): the predicate must see the MASKED row, not

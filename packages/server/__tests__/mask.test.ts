@@ -57,9 +57,17 @@ interface FakeReader {
     /**
      * Synthesizes a deterministic, distinguishable score/distance per row
      * (by position) — the fixture doesn't need a realistic ranking, only one
-     * a test can prove passed through the mask wrapper unchanged.
+     * a test can prove passed through the mask wrapper unchanged. Mirrors the
+     * real `ScoredDocument` union: a row carries `distanceMeters` XOR `score`,
+     * never both — see `@lunora/shard-engine`'s `GeoScoredDocument` /
+     * `SearchScoredDocument`.
      */
-    collectWithScores: () => Promise<{ distanceMeters: null | number; document: Record<string, unknown>; score: number }[]>;
+    collectWithScores: () => Promise<
+        (
+            | { distanceMeters: null | number; document: Record<string, unknown>; score?: never }
+            | { distanceMeters?: never; document: Record<string, unknown>; score: number }
+        )[]
+    >;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => FakeReader;
     first: () => Promise<Record<string, unknown> | null>;
     order: (direction: "asc" | "desc") => FakeReader;
@@ -219,16 +227,24 @@ const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknow
  * iterator-style reader that masking's `wrapReader` wraps. Mirrors `@lunora/do`'s
  * reader surface (`withIndex` / `order` / `filter` / terminal `collect` etc.) so
  * the full chain, including `.order()`, is exercised end-to-end.
+ *
+ * `scoreMode` picks which of `collectWithScores()`'s two exclusive row shapes
+ * this reader hands back (default `"search"`) — only the `.collectWithScores()`
+ * tests care; every other caller ignores it.
  */
-const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
+const enableQueryReader = (
+    database: FakeDatabase,
+    rows: (Record<string, unknown> & { _id: string; table: string })[],
+    scoreMode: "geo" | "search" = "search",
+): void => {
     const makeReader = (list: Record<string, unknown>[]): FakeReader => {
         return {
             collect: async () => list,
 
             collectWithScores: async () =>
-                list.map((row, index) => {
-                    return { distanceMeters: index === 0 ? 111 : null, document: row, score: 100 - index };
-                }),
+                list.map((row, index) =>
+                    scoreMode === "geo" ? { distanceMeters: index === 0 ? 111 : null, document: row } : { document: row, score: 100 - index },
+                ),
             filter: (predicate) => makeReader(list.filter((row) => predicate(row))),
             first: async () => list[0] ?? null,
             order: (direction) => makeReader(direction === "desc" ? list.toReversed() : list),
@@ -404,7 +420,7 @@ describe("mask — read path", () => {
         const seed = [{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }];
         const database = createFakeDatabase(seed);
 
-        enableQueryReader(database, seed);
+        enableQueryReader(database, seed, "geo");
 
         const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) =>
             (ctx as unknown as TestContext).db
@@ -454,7 +470,7 @@ describe("mask — read path", () => {
         const seed = [{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }];
         const database = createFakeDatabase(seed);
 
-        enableQueryReader(database, seed);
+        enableQueryReader(database, seed, "geo");
 
         // No mask policy for "users" at all — `perTable` has no entry for it, so
         // `wrapped.query("users")` (see `middleware.ts`'s `query()`) returns the
