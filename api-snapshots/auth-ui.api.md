@@ -2440,11 +2440,11 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
             const session = await context.authClient.getSession();
             if (!session.data?.user) {
                 const invited = store.get().invitation?.email;
-                const target = new URLSearchParams({ redirectTo: currentPath() });
+                const parameters: Record<string, string> = { redirectTo: currentPath() };
                 if (invited !== undefined && invited !== "") {
-                    target.set("email", invited);
+                    parameters.email = invited;
                 }
-                context.nav.replace(`${context.redirects.signIn}?${target.toString()}`);
+                context.nav.replace(mergeQuery(context.redirects.signIn, parameters));
                 return;
             }
             await (decision === "accept"
@@ -2658,7 +2658,7 @@ const createAvatarUploadController = (context: ControllerContext, options: {
                     store.update({ error: `${context.localization.avatarTooLarge} (${megabytes(maxSize)})`, status: "error" });
                     return;
                 }
-                if (file.type === "" ? !(await sniffImageType(file)) : !ACCEPTED_TYPES.has(file.type)) {
+                if (!(await isAcceptedImage(file))) {
                     store.update({ error: context.localization.avatarWrongType, status: "error" });
                     return;
                 }
@@ -3249,7 +3249,7 @@ const createOrganizationLogoController = (context: ControllerContext, options: L
                     store.update({ error: `${context.localization.avatarTooLarge} (${megabytes(maxSize)})`, status: "error" });
                     return;
                 }
-                if (file.type !== "" && !ACCEPTED_TYPES.has(file.type)) {
+                if (!(await isAcceptedImage(file))) {
                     store.update({ error: context.localization.avatarWrongType, status: "error" });
                     return;
                 }
@@ -4808,10 +4808,7 @@ const withRedirectTo = (path: string): string => {
     if (target === undefined) {
         return path;
     }
-    const [base, existing = ""] = path.split("?");
-    const parameters = new URLSearchParams(existing);
-    parameters.set("redirectTo", target);
-    return `${base ?? path}?${parameters.toString()}`;
+    return mergeQuery(path, { redirectTo: target });
 };
 ```
 
@@ -7716,11 +7713,11 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
             const session = await context.authClient.getSession();
             if (!session.data?.user) {
                 const invited = store.get().invitation?.email;
-                const target = new URLSearchParams({ redirectTo: currentPath() });
+                const parameters: Record<string, string> = { redirectTo: currentPath() };
                 if (invited !== undefined && invited !== "") {
-                    target.set("email", invited);
+                    parameters.email = invited;
                 }
-                context.nav.replace(`${context.redirects.signIn}?${target.toString()}`);
+                context.nav.replace(mergeQuery(context.redirects.signIn, parameters));
                 return;
             }
             await (decision === "accept"
@@ -7934,7 +7931,7 @@ const createAvatarUploadController = (context: ControllerContext, options: {
                     store.update({ error: `${context.localization.avatarTooLarge} (${megabytes(maxSize)})`, status: "error" });
                     return;
                 }
-                if (file.type === "" ? !(await sniffImageType(file)) : !ACCEPTED_TYPES.has(file.type)) {
+                if (!(await isAcceptedImage(file))) {
                     store.update({ error: context.localization.avatarWrongType, status: "error" });
                     return;
                 }
@@ -8525,7 +8522,7 @@ const createOrganizationLogoController = (context: ControllerContext, options: L
                     store.update({ error: `${context.localization.avatarTooLarge} (${megabytes(maxSize)})`, status: "error" });
                     return;
                 }
-                if (file.type !== "" && !ACCEPTED_TYPES.has(file.type)) {
+                if (!(await isAcceptedImage(file))) {
                     store.update({ error: context.localization.avatarWrongType, status: "error" });
                     return;
                 }
@@ -10120,9 +10117,6 @@ const withRedirectTo = (path: string): string => {
     if (target === undefined) {
         return path;
     }
-    const [base, existing = ""] = path.split("?");
-    const parameters = new URLSearchParams(existing);
-    parameters.set("redirectTo", target);
-    return `${base ?? path}?${parameters.toString()}`;
+    return mergeQuery(path, { redirectTo: target });
 };
 ```

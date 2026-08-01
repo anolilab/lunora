@@ -1079,6 +1079,12 @@ const ensureDevVariables: (deps: EnsureDevVariablesDeps) => Promise<EnsureDevVar
 const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<string>) => string[];
 ```
 
+### `escapeRegExp` (const)
+
+```ts
+const escapeRegExp: (value: string) => string;
+```
+
 ### `fillDevSecrets` (const)
 
 ```ts
@@ -1327,6 +1333,12 @@ const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogS
 const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>) => DevServerState | undefined;
 ```
 
+### `upsertDevVariableLine` (const)
+
+```ts
+const upsertDevVariableLine: (content: string, key: string, value: string) => string;
+```
+
 ### `wireRlsIntoProcedure` (const)
 
 ```ts
@@ -1337,6 +1349,12 @@ const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit) => WireResult;
 
 ```ts
 const writeDevServerState: (projectRoot: string, state: DevServerState) => string | undefined;
+```
+
+### `writeDevVariablesFileAtomically` (const)
+
+```ts
+const writeDevVariablesFileAtomically: (path: string, content: string) => void;
 ```
 
 ### `writeLinkedProject` (const)

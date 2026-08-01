@@ -3355,6 +3355,9 @@ importers:
 
   packages/platform-cloudflare:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform

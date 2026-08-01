@@ -142,6 +142,7 @@ interface DeployCommandResult {
     code: number;
     descriptor: SpawnDescriptor | undefined;
     error?: string;
+    mintedSecretsFile?: string;
     schemaDrift?: {
         blocked: boolean;
         reason: string;

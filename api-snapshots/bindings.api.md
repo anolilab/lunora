@@ -998,6 +998,7 @@ interface VectorQueryInputLike {
 interface VectorRecordLike {
     id: string;
     metadata?: Record<string, unknown>;
+    namespace?: string;
     values: ReadonlyArray<number>;
 }
 ```
@@ -1006,8 +1007,8 @@ interface VectorRecordLike {
 
 ```ts
 interface VectorSearchLike {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
-    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecordLike>>;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<void>;
+    getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
     upsert: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
@@ -1078,7 +1079,7 @@ type WriteHook = (event: WriteEvent) => Promise<void>;
 ### `createContextVectors` (const)
 
 ```ts
-const createContextVectors: (lunora: LunoraVectors) => VectorSearchLike;
+const createContextVectors: (lunora: LunoraVectors, options?: CreateContextVectorsOptions) => VectorSearchLike;
 ```
 
 ### `createVectorAdminIntrospector` (const)

@@ -338,6 +338,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Cron value is not statically analyzable";
     };
+    readonly CRON_SCHEDULE_INVALID: {
+        readonly status: 500;
+        readonly title: "Invalid cron schedule";
+    };
     readonly CRON_SCHEDULE_NOT_STATIC: {
         readonly status: 500;
         readonly title: "Cron schedule is not statically analyzable";

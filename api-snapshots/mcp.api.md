@@ -286,7 +286,7 @@ const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, res
 ### `localTools` (const)
 
 ```ts
-const localTools: (options: LocalMcpServerOptions) => ReadonlyArray<McpTool>;
+const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient) => ReadonlyArray<McpTool>;
 ```
 
 ### `parseAgentsEnv` (const)

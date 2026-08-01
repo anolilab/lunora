@@ -3256,7 +3256,7 @@ const geoTableName: (table: string, indexName: string) => string;
 ### `guardWriter` (const)
 
 ```ts
-const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId) => W;
+const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds) => W;
 ```
 
 ### `hasTrigger` (const)
