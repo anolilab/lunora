@@ -3119,29 +3119,27 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
-        // `subscribeScheduledJobs` runs a second, hand-rolled socket-lifecycle
-        // implementation alongside the shard path's (`ensureSocket`/`openSocket`/
-        // `handleDisconnect`/`startHeartbeat`) — the class of duplication plan 231
-        // asks to close by extracting a shared `openManagedSocket` helper. The
-        // shard path is a single, long-lived `ShardConnection` record threaded
-        // through dozens of call sites in this file (subscribe/unsubscribe
-        // dispatch, shape subscriptions, the offline queue, stream teardown,
-        // connection-status reporting); safely generalizing it behind a shared
-        // helper without changing its behavior is a substantial refactor of
-        // load-bearing code, not something to do blind in the same change as
-        // these characterization tests. The three tests below pin the concrete,
-        // currently-provable gaps this closure has relative to the shard path —
-        // the follow-up extraction should close all three at once.
-        it("never fails a hung handshake fast — unlike the shard socket, there is no connect-timeout (gap: plan 231 openManagedSocket follow-up)", () => {
-            expect.assertions(2);
+        // `subscribeScheduledJobs` used to run a second, hand-rolled
+        // socket-lifecycle implementation alongside the shard path's
+        // (`ensureSocket`/`openSocket`/`handleDisconnect`/`startHeartbeat`) —
+        // plan 231-D pinned the divergence with characterization tests below
+        // but deliberately didn't extract (the shard `ShardConnection` record
+        // threads through dozens of call sites; generalizing it blind was
+        // judged too risky). Plan 253 did the extraction — both this
+        // subscription and the shard socket now build on the shared
+        // `openManagedSocket` helper — so the three tests below assert the
+        // gaps are CLOSED, not open, plus a fourth pins the specific CLIENT-05
+        // bug (a superseded socket's late `close` corrupting the live one)
+        // that motivated sharing the shard socket's identity guard.
+        it("fails a hung handshake fast — inherits the shard socket's connect-timeout (plan 253)", () => {
+            expect.assertions(3);
 
             vi.useFakeTimers();
 
             const client = new LunoraClient({
-                // Set on the client to show it has no effect here — this option
-                // only ever reaches the shard path's `openSocket`.
                 connectTimeoutMs: 5000,
                 fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
                 wsToken: "adm1n",
@@ -3149,31 +3147,33 @@ describe("lunoraClient", () => {
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
 
-            const socket = latestSocket();
+            const first = latestSocket();
 
-            // Handshake hangs forever: `open` never fires. The shard path's
-            // equivalent test force-closes at `connectTimeoutMs`; this socket is
-            // still sitting in `connecting` state ten minutes later.
-            vi.advanceTimersByTime(600_000);
+            // Handshake hangs forever: `open` never fires. At `connectTimeoutMs`
+            // the socket is force-closed and a reconnect is armed — same as the
+            // shard socket, no longer stuck `connecting` forever.
+            vi.advanceTimersByTime(5010);
 
-            expect(socket.readyState).toBe(0);
-            // No fail-fast means no reconnect either — still exactly one socket.
-            expect(sockets.filter((s) => s.url.includes("/scheduled/ws"))).toHaveLength(1);
+            expect(first.readyState).toBe(3);
+
+            const second = latestSocket();
+
+            expect(second).not.toBe(first);
+            expect(second.url).toContain("/_lunora/admin/scheduled/ws");
 
             unsubscribe();
             vi.useRealTimers();
         });
 
-        it("never recycles an open-but-silent socket — unlike the shard socket, there is no heartbeat/watchdog (gap: plan 231 openManagedSocket follow-up)", () => {
+        it("recycles an open-but-silent socket — inherits the shard socket's heartbeat/watchdog (plan 253)", () => {
             expect.assertions(3);
 
             vi.useFakeTimers();
 
             const client = new LunoraClient({
                 fetch: async () => jsonResponse({ result: null }),
-                // Set on the client to show it has no effect here — this option
-                // only ever reaches the shard path's `startHeartbeat`.
                 heartbeatIntervalMs: 1000,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
                 wsToken: "adm1n",
@@ -3181,26 +3181,29 @@ describe("lunoraClient", () => {
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
 
-            const socket = latestSocket();
+            const first = latestSocket();
 
-            socket.open();
+            first.open();
 
             // Ten minutes with the far end silent (no `jobs` push, no anything).
-            // The shard path's heartbeat would have sent keepalive pings and, had
-            // none been answered, force-closed and reconnected by
-            // `heartbeatIntervalMs * 2.5`. This socket never sends a ping — there
-            // is no keepalive concept here at all — and stays "open" regardless.
+            // The heartbeat sends keepalive pings every second; none answered
+            // means the half-open watchdog (`heartbeatIntervalMs * 2.5`)
+            // force-closes and reconnects well within the ten minutes — same as
+            // the shard path, no longer stuck "open" forever.
             vi.advanceTimersByTime(600_000);
 
-            expect(socket.sent).toHaveLength(0);
-            expect(socket.readyState).toBe(1);
-            expect(sockets.filter((s) => s.url.includes("/scheduled/ws"))).toHaveLength(1);
+            expect(first.sent.length).toBeGreaterThan(0);
+            expect(first.readyState).toBe(3);
+
+            const second = latestSocket();
+
+            expect(second).not.toBe(first);
 
             unsubscribe();
             vi.useRealTimers();
         });
 
-        it("a bare error event with no follow-up close never arms a reconnect — the subscription goes silently dead (gap: plan 231 openManagedSocket follow-up)", () => {
+        it("a bare error event with no follow-up close arms a reconnect — inherits the shard socket's error handling (plan 253)", () => {
             expect.assertions(1);
 
             vi.useFakeTimers();
@@ -3215,21 +3218,78 @@ describe("lunoraClient", () => {
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
 
-            const socket = latestSocket();
+            const first = latestSocket();
 
-            socket.open();
-            // The shard path treats a standalone `error` (no `close` follow-up —
-            // some WS implementations and proxies do this) as a disconnect and
-            // arms reconnect itself; this closure's `error` listener is a no-op
-            // that assumes `close` always follows. It doesn't here.
-            socket.triggerError();
+            first.open();
+            // Some WS implementations and proxies fire a standalone `error` with
+            // no follow-up `close`. `openManagedSocket` now treats it as a
+            // disconnect (mirrors the shard socket) and arms reconnect — no
+            // longer a silently dead subscription.
+            first.triggerError();
 
-            vi.advanceTimersByTime(600_000);
+            vi.advanceTimersByTime(10);
 
-            // No reconnect ever fires: still exactly the one socket from `open()`.
-            expect(sockets.filter((s) => s.url.includes("/scheduled/ws"))).toHaveLength(1);
+            const second = latestSocket();
+
+            expect(second).not.toBe(first);
 
             unsubscribe();
+            vi.useRealTimers();
+        });
+
+        it("a superseded socket's late close cannot clear the live socket or arm a duplicate reconnect (CLIENT-05)", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                // Fixed, jitter-free backoff so a single timer advance fires
+                // exactly one reconnect.
+                reconnect: { initialDelayMs: 1000, jitter: false, maxDelayMs: 1000 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+            const stale = latestSocket();
+
+            stale.open();
+
+            // The socket drops; the reconnect timer fires and builds a fresh
+            // socket that's now this subscription's current one.
+            stale.triggerClose();
+            vi.advanceTimersByTime(1000);
+
+            const fresh = latestSocket();
+
+            expect(fresh).not.toBe(stale);
+
+            fresh.open();
+
+            // A late, duplicate close from the dead (superseded) socket — the
+            // bug this closure had before it shared the shard socket's identity
+            // guard: `socket = undefined` was an unconditional reassignment of
+            // the whole subscription's SHARED outer variable, so a stale
+            // socket's late `close` cleared the LIVE one and armed a second,
+            // duplicate reconnect racing the first.
+            stale.triggerClose();
+
+            // No duplicate reconnect: advancing past the backoff produces no
+            // third socket — `fresh` was healthy and was never torn down.
+            vi.advanceTimersByTime(1000);
+
+            expect(sockets.filter((socket) => socket.url.includes("/scheduled/ws"))).toHaveLength(2);
+
+            // The live socket was never cleared: `unsubscribe()` can still find
+            // and close it. Under the bug, the stale close's unconditional
+            // `socket = undefined` would have left `fresh` leaked open forever.
+            unsubscribe();
+
+            expect(fresh.readyState).toBe(3);
+
             vi.useRealTimers();
         });
     });
