@@ -207,7 +207,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-import { decodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -8889,10 +8889,7 @@ abstract class ShardDO {
         // request of its own.
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // Optional credential expiry (epoch ms) forwarded by the runtime. A
-        // malformed value is ignored (the socket simply never auto-expires).
-        const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
-        const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
+        const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
 
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
@@ -8935,27 +8932,24 @@ abstract class ShardDO {
         }
     }
 
-    /** Whether `ws` carries a credential whose expiry (stamped at upgrade) is now past. */
+    /**
+     * Whether `ws` carries a credential whose expiry (stamped at upgrade) is
+     * now past. Delegates to the shared boundary check `@lunora/agent`'s
+     * voice DO uses for the same decision, so the two DOs can never disagree
+     * about it.
+     */
     private isSocketExpired(ws: ShardSocketLike): boolean {
-        const { expiresAt } = this.readAttachment(ws);
-
-        return typeof expiresAt === "number" && Date.now() >= expiresAt;
+        return isIdentityExpired(this.readAttachment(ws).expiresAt);
     }
 
     /**
-     * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
-     * the client distinguishes an expired-credential drop from an ordinary one
-     * and refreshes before reconnecting. Best-effort: a throw (socket already
-     * gone) is swallowed — this must never escape the hibernation handlers.
+     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
+     * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
+     * client-facing wire shape from one place.
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
     private dropExpiredSocket(ws: ShardSocketLike): void {
-        try {
-            ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
-            ws.close?.(4001, "token_expired");
-        } catch {
-            /* socket already gone */
-        }
+        dropExpiredCredentialSocket(ws);
     }
 
     /**

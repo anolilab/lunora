@@ -4,7 +4,7 @@ import { createAi } from "@lunora/ai";
 import { createDispatchRunner } from "@lunora/dispatch";
 
 import { toBase64 } from "../../../shared/base64";
-import { decodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { createStreamGenerate } from "./generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunFunction, AgentStreamGenerate } from "./types";
@@ -149,10 +149,7 @@ class VoiceSessionDO {
         const connectionId = crypto.randomUUID();
         const identity = parseIdentity(request.headers.get("x-lunora-identity"));
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
-        // Optional credential expiry (epoch ms) forwarded by the runtime. A
-        // malformed value is ignored (the socket simply never auto-expires).
-        const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
-        const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
+        const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
 
         (server as unknown as HibernatableWebSocket).serializeAttachment?.({
             connectionId,
@@ -453,28 +450,25 @@ class VoiceSessionDO {
         this.bufferedBytes.delete(attachment.connectionId);
     }
 
-    /** Whether `attachment` carries a credential whose expiry (stamped at upgrade) is now past. */
+    /**
+     * Whether `attachment` carries a credential whose expiry (stamped at
+     * upgrade) is now past. Delegates to the shared boundary check
+     * `@lunora/do`'s `ShardDO` uses for the same decision, so the two DOs can
+     * never disagree about it.
+     */
     // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with dropExpiredSocket; operates only on the passed attachment
     private isSocketExpired(attachment: VoiceSocketAttachment): boolean {
-        return typeof attachment.expiresAt === "number" && Date.now() >= attachment.expiresAt;
+        return isIdentityExpired(attachment.expiresAt);
     }
 
     /**
-     * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
-     * the client distinguishes an expired-credential drop from an ordinary one
-     * and refreshes before reconnecting. Best-effort: a throw (socket already
-     * gone) is swallowed — this must never escape the hibernation handlers.
+     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
+     * helper `@lunora/do`'s `ShardDO` also calls, so both DOs send the
+     * client-facing wire shape from one place.
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
     private dropExpiredSocket(ws: WebSocket): void {
-        try {
-            (ws as unknown as HibernatableWebSocket).send(
-                JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }),
-            );
-            (ws as unknown as HibernatableWebSocket).close?.(4001, "token_expired");
-        } catch {
-            /* socket already gone */
-        }
+        dropExpiredCredentialSocket(ws);
     }
 
     /** Send a JSON control frame, swallowing a closed-socket error (never throw from a handler). */
