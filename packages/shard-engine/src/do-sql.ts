@@ -16,11 +16,35 @@
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
+
+/**
+ * Encode a document into the `__doc__` blob's on-disk string form. Wraps
+ * `encodeWire` (the repo's tagged JSON-safe value codec, `shared/wire-codec.ts`)
+ * so `v.bigint()` (a real `bigint` — `JSON.stringify` throws on it) and
+ * `v.bytes()` (an `ArrayBuffer` — `JSON.stringify` silently corrupts it to
+ * `{}`) round-trip through storage. A document with no bigint/bytes/Date/Map/
+ * Set leaves encodes byte-identically to plain `JSON.stringify` (the wire
+ * codec's documented fidelity guarantee) — load-bearing for the OCC
+ * compare-and-swap and every `json_extract(__doc__, …)` read, which must see
+ * the same stored string for a doc this change doesn't touch.
+ */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "DocJson" mirrors the established `DOC_COLUMN`/`__doc__` naming this module already uses throughout.
+const encodeDocJson = (document: Record<string, unknown>): string => JSON.stringify(encodeWire(document));
+
+/**
+ * Inverse of {@link encodeDocJson}. Accepts both new tagged blobs and
+ * pre-existing plain-JSON blobs unchanged — `decodeWire` is a no-op on a tree
+ * with no `$lunora.wire$` sentinel, so rows written before this codec shipped
+ * keep parsing exactly as they did under bare `JSON.parse`.
+ */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
+const decodeDocJson = (raw: string): Record<string, unknown> => decodeWire(JSON.parse(raw)) as Record<string, unknown>;
 
 /** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
 const geoTableName = (table: string, indexName: string): string => `${table}__geo_${indexName}`;
@@ -119,7 +143,7 @@ const rowToDocument = (row: Record<string, unknown> | undefined): Record<string,
     let parsed: Record<string, unknown>;
 
     if (typeof raw === "string") {
-        parsed = JSON.parse(raw) as Record<string, unknown>;
+        parsed = decodeDocJson(raw);
     } else if (raw && typeof raw === "object") {
         parsed = raw as Record<string, unknown>;
     } else {
@@ -206,7 +230,9 @@ export {
     AGG_VALUE,
     aggUpsertSql,
     createIndexSql,
+    decodeDocJson,
     DOC_COLUMN,
+    encodeDocJson,
     geoTableName,
     isFtsAvailable,
     jsonPath,

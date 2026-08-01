@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { CdcChange, DatabaseWriterLike } from "../src/ctx-db";
+import type { CdcChange, DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -208,5 +208,47 @@ describe("applyCdcChanges (replay-PITR engine)", () => {
 
         await expect(writer.get("m_1")).resolves.toMatchObject({ text: "v2" });
         await expect(writer.get("m_2")).resolves.toBeNull();
+    });
+});
+
+describe("cdc round-trip of a v.bigint() column (plan 265)", () => {
+    // A dedicated schema — `messagesSchema` declares no bigint/bytes column,
+    // and this regression is specifically about `recordCdc` (ctx-db-cdc.ts)
+    // no longer throwing one line after a successful insert of such a row.
+    const bigintSchema: SchemaLike = {
+        tables: {
+            accounts: {
+                indexes: [],
+                shape: { amount: { kind: "bigint" }, name: { kind: "string" } },
+            },
+        },
+    };
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("readCdcChanges yields a doc whose bigint survives (pre-fix: recordCdc throws)", async () => {
+        expect.assertions(1);
+
+        runShardMigrations(harness.sql, bigintSchema, { cdc: true });
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: bigintSchema,
+            sql: harness.sql,
+        });
+
+        await writer.insert("accounts", { _id: "a1", amount: 10n, name: "acme" }, { allowExplicitId: true });
+
+        const { changes } = readCdcChanges(harness.sql);
+
+        expect(changes[0]?.doc?.["amount"]).toBe(10n);
     });
 });
