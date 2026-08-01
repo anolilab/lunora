@@ -157,4 +157,74 @@ describe("discoverMaskHasNonLiteralPolicy", () => {
 
         expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(false);
     });
+
+    // Plan 257: `dfa7e16ee` closed the `mask(sharedPolicies)` fail-open above,
+    // but a spread-bearing OR computed-keyed object literal argument still IS
+    // an object literal — `extractMaskColumns` skips the member it can't name
+    // and contributes zero pairs for it, silently reopening the same
+    // fail-open through a trivial rewrite of the policies object. These four
+    // cases pin the closed hole; the fifth pins the no-false-positive
+    // boundary.
+
+    it("is true when a mask() policies object literal spreads a variable at the table level", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const sharedPolicies = { users: { email: "redact" } };
+
+    export const list = c.query.use(mask({ ...sharedPolicies })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true when a mask() policies object literal has a computed table key", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const tableName = "users";
+
+    export const list = c.query.use(mask({ [tableName]: { email: "redact" } })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true when a mask() policies object literal spreads a variable at the column level (nested under a literal table key)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const piiColumns = { email: "redact" as const };
+
+    export const list = c.query.use(mask({ users: { ...piiColumns } })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is false for a mask() policies object literal using a quoted string key (not a computed key)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    export const list = c.query.use(mask({ "users": { "email": "redact" } })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(false);
+    });
 });

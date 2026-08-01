@@ -310,7 +310,7 @@ const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: 
 
         throw new LunoraError(
             "MASK_UNSUPPORTED",
-            `This project declares a \`mask(...)\` policy whose argument isn't a plain object literal (e.g. \`mask(sharedPolicies)\` referencing a hoisted variable), so codegen can't enumerate which columns it masks. Because the project also declares replication shape(s) (${shapeList}), codegen can't verify none of them replicate a table that policy masks — inline the mask(...) policies object literal so codegen can verify it, or remove the affected shape(s).`,
+            `This project declares a \`mask(...)\` policy whose argument isn't a plain object literal (e.g. \`mask(sharedPolicies)\` referencing a hoisted variable), or contains a spread (\`...shared\`) or computed key (\`[name]:\`) codegen can't enumerate, so codegen can't tell which columns it masks. Because the project also declares replication shape(s) (${shapeList}), codegen can't verify none of them replicate a table that policy masks — inline every table and column as literal keys so codegen can verify it, or remove the affected shape(s).`,
             { status: 422 },
         );
     }

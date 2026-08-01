@@ -1,4 +1,4 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
@@ -490,14 +490,68 @@ const discoverMaskStrategies = (project: Project, lunoraDirectory: string): Mask
 };
 
 /**
+ * True when `member` has a name {@link memberName} would resolve, but the name
+ * is COMPUTED (`[expr]: …`) rather than a plain identifier/string/numeric
+ * literal — e.g. `mask({ [tableName]: { email: "redact" } })`. Whether
+ * ts-morph's `getName()` renders the bracketed source text or throws for such
+ * a member, neither is a table/column name codegen can trust enumerating
+ * against, so this is checked independently of {@link memberName} rather than
+ * relying on it returning `undefined`. Covers every member kind `memberName`
+ * accepts except `ShorthandPropertyAssignment`, which can't have a computed
+ * name by grammar.
+ */
+const hasComputedName = (member: TsNode): boolean => {
+    if (Node.isPropertyAssignment(member) || Node.isMethodDeclaration(member) || Node.isGetAccessorDeclaration(member)) {
+        return Node.isComputedPropertyName(member.getNameNode());
+    }
+
+    return false;
+};
+
+/**
+ * True when `object` — a `mask(...)` policies literal, or one of its
+ * table-level initializers — has a member {@link extractMaskColumns} can't
+ * enumerate: a `SpreadAssignment` (`...shared`) or a computed property name
+ * (`[expr]: …`), at EITHER the table level or, recursively, the column level
+ * (`mask({ users: { ...piiColumns } })` hides columns of a perfectly literal,
+ * named table). Mirrors the two-level table→column walk
+ * {@link extractMaskColumns}/{@link extractMaskColumnMetadata} perform, so
+ * "this object has a member the extractors would skip" and "this object has
+ * an unnameable member" agree by construction.
+ */
+const objectLiteralHasUnnameableMember = (object: ObjectLiteralExpression): boolean => {
+    for (const property of object.getProperties()) {
+        if (Node.isSpreadAssignment(property) || hasComputedName(property)) {
+            return true;
+        }
+
+        if (Node.isPropertyAssignment(property)) {
+            const initializer = property.getInitializer();
+
+            if (initializer && Node.isObjectLiteralExpression(initializer) && objectLiteralHasUnnameableMember(initializer)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
  * True when the project declares at least one `mask(...)` call whose policies
  * argument IS PRESENT but isn't a plain object literal — e.g. a hoisted
- * `mask(sharedPolicies)`. {@link extractMaskColumns}/{@link extractMaskColumnMetadata}
- * both return `[]` for that call (a variable reference can't be statically
- * enumerated), so every masked-column consumer derived from
- * {@link discoverMaskMetadata} is blind to whichever table(s) it actually
- * masks. `assertNoMaskedShapeTable` (in `run-codegen.ts`) uses this to fail
- * closed rather than clear a `defineShape` it can't actually prove safe.
+ * `mask(sharedPolicies)` — OR is an object literal that contains a spread or
+ * computed key (see {@link objectLiteralHasUnnameableMember}) at either the
+ * table or the column level — e.g. `mask({ ...sharedPolicies })`,
+ * `mask({ [tableName]: { email: "redact" } })`, or
+ * `mask({ users: { ...piiColumns } })`. {@link extractMaskColumns}/
+ * {@link extractMaskColumnMetadata} silently contribute `[]` (or an
+ * incomplete column list) for all of these — a variable reference, a spread,
+ * or a computed key can't be statically enumerated — so every masked-column
+ * consumer derived from {@link discoverMaskMetadata} is blind to whichever
+ * table(s)/column(s) the call actually masks. `assertNoMaskedShapeTable` (in
+ * `run-codegen.ts`) uses this to fail closed rather than clear a `defineShape`
+ * it can't actually prove safe.
  *
  * Deliberately kept OUT of {@link MaskMetadataIR} — that IR is JSON-embedded
  * verbatim into the generated `LUNORA_MASK_METADATA` literal and type-checked
@@ -514,7 +568,7 @@ const discoverMaskHasNonLiteralPolicy = (project: Project, lunoraDirectory: stri
             for (const maskCall of maskCallsInChain(receiver)) {
                 const argument = maskCall.getArguments()[0];
 
-                if (argument !== undefined && !Node.isObjectLiteralExpression(argument)) {
+                if (argument !== undefined && (!Node.isObjectLiteralExpression(argument) || objectLiteralHasUnnameableMember(argument))) {
                     return true;
                 }
             }
