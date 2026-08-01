@@ -66,6 +66,7 @@ const COMMANDS = [
     "import",
     "seed",
     "backup",
+    "eval",
     "verify",
     "info",
     "doctor",

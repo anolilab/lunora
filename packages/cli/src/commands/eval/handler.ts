@@ -305,6 +305,16 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
         return { code: 1, error: formatError, evals: [] };
     }
 
+    // Cerebro parses `--threshold` with `type: Number`, so a non-numeric value
+    // (`--threshold abc`) silently becomes NaN instead of erroring at the CLI
+    // layer. Reject it — and anything outside the documented [0, 1] range —
+    // here, before it can gate the run: an unchecked NaN makes every eval's
+    // `average >= NaN` comparison false, reporting every eval as FAIL with no
+    // stated cause.
+    if (options.threshold !== undefined && !(Number.isFinite(options.threshold) && options.threshold >= 0 && options.threshold <= 1)) {
+        return abortWithTopLevelError(logger, options.format, `eval: --threshold must be a number in [0, 1] — received "${String(options.threshold)}"`);
+    }
+
     const directoryOption = options.dir ?? DEFAULT_EVAL_DIR;
     const directory = join(cwd, directoryOption);
     const files = discoverFilesLogged(directory, directoryOption, logger);

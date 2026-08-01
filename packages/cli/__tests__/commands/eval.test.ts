@@ -171,6 +171,32 @@ describe("lunora eval", () => {
         expect(recorded.errors.some((line) => line.includes("unknown --format"))).toBe(true);
     });
 
+    it("rejects a NaN --threshold before discovering anything", async () => {
+        expect.assertions(2);
+
+        const { logger, recorded } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-sample");
+
+        // Mirrors Cerebro parsing `--threshold abc` with `type: Number`, which
+        // yields NaN rather than a CLI-level parse error.
+        const result = await runEvalCommand({ cwd, logger, threshold: Number.NaN });
+
+        expect(result.code).toBe(1);
+        expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("[0, 1]"))).toBe(true);
+    });
+
+    it("rejects a --threshold outside [0, 1] before discovering anything", async () => {
+        expect.assertions(2);
+
+        const { logger, recorded } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-sample");
+
+        const result = await runEvalCommand({ cwd, logger, threshold: 5 });
+
+        expect(result.code).toBe(1);
+        expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("[0, 1]"))).toBe(true);
+    });
+
     it("aborts with one distinct, actionable message and a non-zero exit when the Node floor can't load a .ts eval (ERR_UNKNOWN_FILE_EXTENSION), instead of mislabeling it a per-eval failure", async () => {
         expect.assertions(4);
 

@@ -27,7 +27,15 @@ const discoverEvalFiles = (directory: string, accumulator: string[] = []): strin
 
     for (const entry of entries) {
         const full = join(directory, entry);
-        const info = lstatSync(full);
+        let info;
+
+        try {
+            info = lstatSync(full);
+        } catch {
+            // Entry removed between readdirSync and lstatSync, or unreadable
+            // (permissions) — skip it rather than crash the whole discovery walk.
+            continue;
+        }
 
         if (info.isDirectory()) {
             if (SKIP_DIRECTORIES.has(entry)) {
