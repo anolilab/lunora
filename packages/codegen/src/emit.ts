@@ -4121,6 +4121,34 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     const { constant: workflowsMetadataConst, override: workflowsMetadataOverride } = emitWorkflowsMetadataFragments(workflows);
     const { constant: queuesMetadataConst, override: queuesMetadataOverride } = emitQueuesMetadataFragments(queues);
     const hasVectors = schema.vectorIndexes.length > 0;
+    // Cross-tenant leak guard: Vectorize indexes are account-global, so a
+    // vector index owned by a `.shardBy()`'d table must scope its auto-sync
+    // upserts by the owning DO's shard key, or every tenant's vectors land in
+    // one shared namespace. A vectorized table that stays `root`/`global` has
+    // exactly one canonical copy — no shard key to scope by — so this must
+    // stay `false` for those, keeping their emitted `shard.ts` (and goldens)
+    // byte-identical to the namespace-less form.
+    //
+    // Gated on `schema.vectorIndexes` (not `table.vectorIndexes`) because only
+    // inline `.vectorize()` (Shape A) indexes get hoisted onto their owning
+    // `TableIR.vectorIndexes`; standalone `defineVectorIndex(...)` (Shape B —
+    // the `defineSchema` 2nd-arg map, and extension-contributed ones) live
+    // only in the schema-level `vectorIndexes` array, keyed back to their
+    // owner via `VectorIndexIR.table`. Checking `table.vectorIndexes.length`
+    // alone misses those and leaves a sharded Shape-B index syncing into one
+    // unpartitioned namespace — the same cross-tenant leak this guard exists
+    // to close.
+    // `TableIR["shardMode"]` has exactly one object-typed member today, so
+    // `.kind === "shardBy"` below is a no-op under the current type — kept
+    // explicit (over bare `typeof === "object"`) so this still discriminates
+    // correctly if the union ever grows a second object-shaped shard mode.
+    const shardedTableNames = new Set(
+        schema.tables
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see comment above
+            .filter((table) => typeof table.shardMode === "object" && table.shardMode.kind === "shardBy")
+            .map((table) => table.name),
+    );
+    const hasShardedVectors = schema.vectorIndexes.some((index) => shardedTableNames.has(index.table));
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     // Which `.global()` backend(s) the schema uses. A `.global()` table defaults
     // to D1; `.global({ backend: "hyperdrive" })` routes it to a Postgres/MySQL
@@ -4252,7 +4280,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
@@ -4408,6 +4436,21 @@ const vectorsStub: VectorSearchLike = {
 `
         : "";
 
+    // Vectorize indexes are account-global — a `.shardBy()` table's auto-sync
+    // must scope upserts by this DO's own shard key (its tenant identity), or
+    // every tenant's vectors land in one shared, unpartitioned namespace.
+    // `currentShardKey()` returns the real key for a per-tenant DO instance and
+    // the `ROOT_SHARD_NAME` sentinel for the single default DO, so mapping the
+    // sentinel back to `undefined` keeps a root-mode write on this same schema
+    // (e.g. a mixed app where only SOME vectorized tables are `.shardBy()`)
+    // namespace-less, same as today. Gated on `hasShardedVectors` so a schema
+    // with no `.shardBy()`'d vector table emits the bare call, unchanged.
+    const vectorNamespaceField = hasShardedVectors
+        ? `
+                const vectorShardKey = this.currentShardKey();
+`
+        : "";
+    const vectorNamespaceOption = hasShardedVectors ? "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, " : "";
     const vectorsBuild = hasVectors
         ? `
             let vectors: VectorSearchLike;
@@ -4415,9 +4458,9 @@ const vectorsStub: VectorSearchLike = {
 
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
-
+${vectorNamespaceField}
                 vectors = createContextVectors(lunora);
-                onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
+                onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;
                 onWrite = undefined;
