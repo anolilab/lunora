@@ -203,7 +203,7 @@ describe("function-metrics module", () => {
             expect(buckets[0]).toEqual({ bucketMs: base, calls: 2, errors: 1, path: "f:a" });
             expect(buckets[1]).toEqual({ bucketMs: base + FUNCTION_METRICS_BUCKET_MS, calls: 1, errors: 0, path: "f:a" });
 
-            expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 1, requests: 3 });
+            expect(readFunctionMetricsTotals(database.sql)).toEqual({ capped: false, errors: 1, requests: 3 });
         } finally {
             database.close();
         }
@@ -339,7 +339,7 @@ describe("function-metrics module", () => {
             expect(readFunctionMetricBuckets(database.sql)).toEqual({ buckets: [], truncated: false });
             expect(readFunctionMetricScans(database.sql).size).toBe(0);
             expect(readFunctionMetricIndexHits(database.sql)).toEqual([]);
-            expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 0, requests: 0 });
+            expect(readFunctionMetricsTotals(database.sql)).toEqual({ capped: false, errors: 0, requests: 0 });
         } finally {
             database.close();
         }
@@ -356,7 +356,7 @@ describe("function-metrics module", () => {
                 recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: `fn:${String(index)}`, ts: 1000 });
             }
 
-            // A brand-new path past the cap is dropped; an already-tracked path
+            // A brand-new path past the cap is refused; an already-tracked path
             // keeps accumulating.
             recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:flood-1", ts: 2000 });
             recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:0", ts: 2000 });

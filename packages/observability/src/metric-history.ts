@@ -9,9 +9,10 @@
  * external collector.
  *
  * Modelled directly on `function-metrics.ts`'s `__lunora_metrics_buckets` (same
- * bucket width, same bounded-retention trim, same distinct-key cap for
- * attacker-reachable keys). One row per `(series, bucket)`, written with a single
- * PK-keyed `INSERT … ON CONFLICT … DO UPDATE` upsert plus a bounded `DELETE`.
+ * bucket width, same bounded-retention trim, same distinct-key cap that
+ * protects already-tracked identities by refusing a brand-new one once full).
+ * One row per `(series, bucket)`, written with a single PK-keyed
+ * `INSERT … ON CONFLICT … DO UPDATE` upsert plus a bounded `DELETE`.
  *
  * Each bucket also carries an **exemplar**: a sample `traceId` of a measurement
  * folded into it, so the studio can jump from a point on the chart to a trace
@@ -42,7 +43,11 @@ const METRIC_HISTORY_BUCKET_RETENTION = 1440;
  * series per id — so without a cap a high-cardinality dimension would grow the
  * table without bound and eventually crowd the app's own data out of the shard's
  * SQLite. Mirrors `function-metrics.ts`'s `FUNCTION_METRICS_MAX_PATHS`: at the
- * cap a brand-new series is dropped while already-tracked ones keep accumulating.
+ * cap, a brand-new series is refused (see `readMetricHistory`'s `capped` flag,
+ * the write-side signal this used to lack) while already-tracked series keep
+ * accumulating past the cap — protecting the incumbent leaderboard from a
+ * flood of one-off series is the point of the cap, so admission is refused
+ * rather than evicting an existing series to make room for the flood.
  */
 const METRIC_HISTORY_MAX_SERIES = 1000;
 
@@ -80,6 +85,17 @@ interface MetricHistorySeries {
 
 /** {@link readMetricHistory} result: every tracked series with its buckets. */
 interface MetricHistoryResult {
+    /**
+     * True when the distinct-series cap has been reached — a **write-side**
+     * signal ("this shard can no longer admit a brand-new series", see
+     * `admitNewSeries`), not a read-side truncation flag. It is computed over
+     * the whole table regardless of `options.sinceMs`/the row-count read
+     * limit, so it can be `true` even when every series `readMetricHistory`
+     * actually returned fits comfortably: the caller should read it as "a
+     * flood of new series would currently be refused", the same thing
+     * `readQueryInsights`'s `capped` already signals for query-metrics.
+     */
+    capped: boolean;
     series: MetricHistorySeries[];
 }
 
@@ -177,11 +193,28 @@ const knownBucketsFor = (sql: SqlExec): Set<string> => {
  * omitted field keeps the historical behaviour.
  */
 interface MetricHistoryOptions {
-    /** Distinct series tracked before a brand-new one is dropped (default {@link METRIC_HISTORY_MAX_SERIES}). */
+    /** Distinct series tracked before the least-recently-updated one is evicted to admit a new one (default {@link METRIC_HISTORY_MAX_SERIES}). */
     maxSeries?: number;
     /** Minute-buckets kept per series before older rows are trimmed (default {@link METRIC_HISTORY_BUCKET_RETENTION}). */
     retentionBuckets?: number;
 }
+
+/**
+ * Admit a brand-new `key` against the distinct-series cap. Mirrors
+ * `function-metrics.ts`'s `admitPath` and `query-metrics.ts`'s
+ * `admitStatement`: `false` at capacity, so a flood of one-off series can't
+ * displace the app's real leaderboard — protecting already-tracked
+ * incumbents is the reason the cap exists, so admission is refused rather
+ * than evicting one of them to make room. Only called for a series
+ * `recordMetricHistory` has confirmed is not yet tracked (an already-tracked
+ * series always keeps accumulating past the cap, so it never reaches this
+ * check).
+ */
+const admitNewSeries = (sql: SqlExec, maxSeries: number): boolean => {
+    const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
+
+    return seriesCountRow.n < maxSeries;
+};
 
 /**
  * Fold one measurement into its `(series, minute)` bucket. Runs per
@@ -233,12 +266,11 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
         // into a new minute skips it, and an in-minute update never reaches here.
         const seriesTracked = runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ? LIMIT 1`, key).toArray().length > 0;
 
-        if (!seriesTracked) {
-            const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
-
-            if (seriesCountRow.n >= maxSeries) {
-                return;
-            }
+        if (!seriesTracked && !admitNewSeries(sql, maxSeries)) {
+            // At capacity: refuse the write rather than evict an existing
+            // series — see `admitNewSeries` for why. `readMetricHistory`'s
+            // `capped` flag is the read-side signal for this.
+            return;
         }
     }
 
@@ -335,10 +367,14 @@ const parseAttributes = (raw: string): LogFields | undefined => {
  * trend line reads oldest→newest.
  *
  * `options.sinceMs`, when set, returns only buckets at or after this epoch-ms —
- * the studio's time-window selector.
+ * the studio's time-window selector. `options.maxSeries`, mirroring the write
+ * side's tunable, is only used to compute `capped` — it does not affect which
+ * rows are read.
  */
-const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): MetricHistoryResult => {
+const readMetricHistory = (sql: SqlExec, options: { maxSeries?: number; sinceMs?: number } = {}): MetricHistoryResult => {
     ensureMetricHistoryTable(sql);
+
+    const maxSeries = options.maxSeries ?? METRIC_HISTORY_MAX_SERIES;
 
     const rows =
         options.sinceMs === undefined
@@ -385,7 +421,9 @@ const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): Me
         series.points.sort((a, b) => a.bucketMs - b.bucketMs);
     }
 
-    return { series: [...bySeries.values()] };
+    const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
+
+    return { capped: seriesCountRow.n >= maxSeries, series: [...bySeries.values()] };
 };
 
 export { readMetricHistory, recordMetricHistory };

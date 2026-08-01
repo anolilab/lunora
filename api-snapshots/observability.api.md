@@ -162,6 +162,7 @@ interface DatabaseTally {
 ```ts
 interface DatabaseTelemetryDeps {
     anchor: TraceAnchor;
+    captureRaw?: boolean;
     functionPath: string;
     mode: DatabaseInstrumentation;
     record: (span: SpanEvent) => void;
@@ -505,6 +506,7 @@ interface MetricHistoryPoint {
 
 ```ts
 interface MetricHistoryResult {
+    capped: boolean;
     series: MetricHistorySeries[];
 }
 ```
@@ -909,6 +911,7 @@ interface TracedFetchDeps {
 ```ts
 interface TracerDeps {
     anchor: TraceAnchor;
+    captureRaw?: boolean;
     functionPath: string;
     fuseHostSpans?: boolean;
     record: (span: SpanEvent) => void;
@@ -950,7 +953,7 @@ const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 const createSpanCollector: (ids: {
     spanId: string;
     traceId: string;
-}) => SpanCollector;
+}, captureRaw?: boolean) => SpanCollector;
 ```
 
 ### `createTracedFetch` (const)
@@ -970,6 +973,7 @@ const createTracer: (deps: TracerDeps) => ContextTracer;
 ```ts
 const dispatchRootSpan: (input: {
     anchor: TraceAnchor;
+    captureRaw?: boolean;
     collected?: SpanCollection;
     durationMs: number;
     failure: {
@@ -1105,6 +1109,7 @@ const readFunctionMetrics: (sql: SqlExec) => FunctionCallStat[];
 
 ```ts
 const readFunctionMetricsTotals: (sql: SqlExec) => {
+    capped: boolean;
     errors: number;
     requests: number;
 };
@@ -1114,6 +1119,7 @@ const readFunctionMetricsTotals: (sql: SqlExec) => {
 
 ```ts
 const readMetricHistory: (sql: SqlExec, options?: {
+    maxSeries?: number;
     sinceMs?: number;
 }) => MetricHistoryResult;
 ```
