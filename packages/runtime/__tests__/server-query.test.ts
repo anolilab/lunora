@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeIdentityHeader } from "../../../shared/identity-header";
 import type { ExecutionContextLike, ResolvedIdentity } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -133,7 +134,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
             result: {
                 args: {},
                 functionPath: "messages:list",
-                identity: JSON.stringify({ email: "u@example.com" }),
+                identity: encodeIdentityHeader({ email: "u@example.com" }),
                 shardKey: "__root__",
                 userId: "user_42",
             },

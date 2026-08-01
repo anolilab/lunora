@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeIdentityHeader } from "../../../shared/identity-header";
 import { defineAgent } from "../src/define-agent";
 import { agentBindingName, voiceBindingName, voiceClassName } from "../src/naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentFunctionReference, AgentRunFunction, AgentStreamGenerate } from "../src/types";
 import type { VoiceServerFrame, VoiceSynthesize } from "../src/voice-turn";
-import { runVoiceTurn } from "../src/voice-turn";
+import { parseIdentity, runVoiceTurn } from "../src/voice-turn";
 
 /** An in-memory model of the shared agent thread functions the voice turn dispatches to. */
 const createThreadStore = (): { calls: { args: Record<string, unknown>; path: string }[]; run: AgentRunFunction } => {
@@ -276,5 +277,30 @@ describe(runVoiceTurn, () => {
         const patches = store.calls.filter((call) => call.path === paths.patchThread);
 
         expect(patches.at(-1)?.args).toMatchObject({ key: "t1", status: "idle" });
+    });
+});
+
+describe(parseIdentity, () => {
+    it("decodes a base64url-encoded x-lunora-identity header (delegates to decodeIdentityHeader)", () => {
+        expect.assertions(1);
+
+        const claims = { name: "名前 🎌" };
+
+        expect(parseIdentity(encodeIdentityHeader(claims))).toStrictEqual(claims);
+    });
+
+    it("still decodes a legacy raw-JSON header value", () => {
+        expect.assertions(1);
+
+        const claims = { email: "user@example.com" };
+
+        expect(parseIdentity(JSON.stringify(claims))).toStrictEqual(claims);
+    });
+
+    it("returns undefined for null/malformed input rather than throwing", () => {
+        expect.assertions(2);
+
+        expect(parseIdentity(null)).toBeUndefined();
+        expect(parseIdentity("{not json")).toBeUndefined();
     });
 });

@@ -42,6 +42,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
@@ -220,10 +221,14 @@ const createShardClient = (namespace: ShardNamespaceLike, options: ShardClientOp
             // `ctx.auth` from these headers independently of the system flag, so the
             // call can be trusted AND carry the user's RLS/ownership context.
             if (options.as) {
-                headers["x-lunora-userid"] = options.as.userId;
+                // HTTP header values are WebIDL `ByteString`s, so a raw non-Latin-1
+                // userId/claim (CJK/Cyrillic/Arabic name, emoji, …) would throw on
+                // `new Request(...)` below; base64url-encode when needed. See
+                // shared/identity-header.ts.
+                headers["x-lunora-userid"] = encodeUserIdHeader(options.as.userId);
 
                 if (options.as.claims) {
-                    headers["x-lunora-identity"] = JSON.stringify(options.as.claims);
+                    headers["x-lunora-identity"] = encodeIdentityHeader(options.as.claims);
                 }
             }
 

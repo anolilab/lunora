@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { decodeIdentityHeader } from "../../../shared/identity-header";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
 import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -585,7 +586,7 @@ describe("createWorker", () => {
         const identityHeader = shard.calls[0]!.request.headers.get("x-lunora-identity");
 
         expect(identityHeader).not.toBeNull();
-        expect(JSON.parse(identityHeader!)).toEqual({ email: "u@example.com", roles: ["admin"] });
+        expect(decodeIdentityHeader(identityHeader)).toEqual({ email: "u@example.com", roles: ["admin"] });
     });
 
     it("does not invoke resolveIdentity when fanOut request would 400 (no coordinator)", async () => {
@@ -655,7 +656,7 @@ describe("createWorker", () => {
         const { headers } = fanOut.mock.calls[0]![1];
 
         expect(headers["x-lunora-userid"]).toBe("user_42");
-        expect(JSON.parse(headers["x-lunora-identity"]!)).toEqual({ email: "u@example.com" });
+        expect(decodeIdentityHeader(headers["x-lunora-identity"])).toEqual({ email: "u@example.com" });
     });
 
     it("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {

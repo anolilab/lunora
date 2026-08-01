@@ -1,6 +1,7 @@
 import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
+import { decodeIdentityHeader, encodeIdentityHeader } from "../../../shared/identity-header";
 import { createDispatchLogger } from "../src/create-dispatch-logger";
 import { createDispatchRunner } from "../src/create-dispatch-runner";
 
@@ -72,7 +73,7 @@ describe("createDispatchRunner request shape", () => {
 });
 
 describe("createDispatchRunner identity forwarding", () => {
-    it("forwards x-lunora-userid and JSON-encoded claims when an identity is configured", async () => {
+    it("forwards x-lunora-userid and base64url-encoded claims when an identity is configured", async () => {
         expect.assertions(2);
 
         const fetchImpl = vi.fn<typeof fetch>(okJson);
@@ -83,7 +84,29 @@ describe("createDispatchRunner identity forwarding", () => {
         const { headers } = captureCall(fetchImpl);
 
         expect(headers["x-lunora-userid"]).toBe("user_1");
-        expect(JSON.parse(headers["x-lunora-identity"] as string)).toStrictEqual({ role: "admin", sub: "user_1" });
+        expect(decodeIdentityHeader(headers["x-lunora-identity"] as string)).toStrictEqual({ role: "admin", sub: "user_1" });
+    });
+
+    it("encodes non-Latin-1 claims so the header value stays a valid ByteString", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = vi.fn<typeof fetch>(okJson);
+        const identity = { claims: { name: "名前 🎌" }, userId: "user_1" };
+
+        await createDispatchRunner({ env: ENV, fetchImpl, identity, label: "@lunora/queue" })(REF);
+
+        const { headers } = captureCall(fetchImpl);
+        const identityHeader = headers["x-lunora-identity"] as string;
+        let isByteStringSafe = identityHeader.length > 0;
+
+        for (let index = 0; index < identityHeader.length; index += 1) {
+            if ((identityHeader.codePointAt(index) ?? 0) > 255) {
+                isByteStringSafe = false;
+            }
+        }
+
+        expect(isByteStringSafe).toBe(true);
+        expect(identityHeader).toBe(encodeIdentityHeader({ name: "名前 🎌" }));
     });
 
     it("sends only the userId header when no claims are given", async () => {

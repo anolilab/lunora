@@ -37,6 +37,7 @@
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
 import type { DatabaseWriterLike } from "@lunora/shard-engine";
 
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { LunoraError } from "./errors";
 
 /**
@@ -84,11 +85,13 @@ const buildIdentityHeaders = (options: CrossShardRelationOptions): Record<string
     const headers: Record<string, string> = { "content-type": "application/json" };
 
     if (options.userId !== undefined && options.userId.length > 0) {
-        headers["x-lunora-userid"] = options.userId;
+        // Base64url-encoded when non-Latin-1 (HTTP header values are WebIDL
+        // `ByteString`s); see shared/identity-header.ts.
+        headers["x-lunora-userid"] = encodeUserIdHeader(options.userId);
     }
 
     if (options.identity !== undefined) {
-        headers["x-lunora-identity"] = JSON.stringify(options.identity);
+        headers["x-lunora-identity"] = encodeIdentityHeader(options.identity);
     }
 
     return headers;

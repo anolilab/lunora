@@ -1,4 +1,5 @@
 import { fromBase64 } from "../../../shared/base64";
+import { decodeIdentityHeader } from "../../../shared/identity-header";
 import { buildModelMessages } from "./model-messages";
 import { toFunctionReference } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentMessageRow, AgentRunFunction, AgentStreamGenerate } from "./types";
@@ -394,20 +395,12 @@ const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResu
     }
 };
 
-/** Parse the JSON identity envelope forwarded on the `x-lunora-identity` upgrade header. */
-const parseIdentity = (raw: string | null): Record<string, unknown> | undefined => {
-    if (!raw) {
-        return undefined;
-    }
-
-    try {
-        const parsed: unknown = JSON.parse(raw);
-
-        return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
-    } catch {
-        return undefined;
-    }
-};
+/**
+ * Parse the identity envelope forwarded on the `x-lunora-identity` upgrade
+ * header. Delegates to {@link decodeIdentityHeader} (base64url-encoded, with a
+ * fail-soft sniffing fallback for a legacy raw-JSON header value).
+ */
+const parseIdentity = (raw: string | null): Record<string, unknown> | undefined => decodeIdentityHeader(raw);
 
 /** Read the `.text` field off a Workers AI transcription result, tolerating shape drift. */
 const readTranscriptionText = (result: unknown): string => {

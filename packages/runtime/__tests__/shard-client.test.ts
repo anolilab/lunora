@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { encodeIdentityHeader } from "../../../shared/identity-header";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 import type { ShardFunctionReference } from "../src/shard-client";
 import { createShardClient } from "../src/shard-client";
@@ -104,7 +105,33 @@ describe("createShardClient", () => {
         // reach `internal*`, the identity so RLS/ownership sees the real user.
         expect(calls[0]?.headers["x-lunora-system"]).toBe("1");
         expect(calls[0]?.headers["x-lunora-userid"]).toBe("u1");
-        expect(calls[0]?.headers["x-lunora-identity"]).toBe(JSON.stringify({ email: "a@b.c" }));
+        expect(calls[0]?.headers["x-lunora-identity"]).toBe(encodeIdentityHeader({ email: "a@b.c" }));
+    });
+
+    it("encodes non-Latin-1 `.as()` claims so the header value stays a valid ByteString", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = createNamespace(() => ok(null));
+
+        await createShardClient(namespace)
+            .as({ claims: { name: "名前 🎌" }, userId: "u1" })
+            .forShard("u1")
+            .call("mcp:listNodes", {});
+
+        const identityHeader = calls[0]?.headers["x-lunora-identity"] ?? "";
+        let isByteStringSafe = identityHeader.length > 0;
+
+        for (let index = 0; index < identityHeader.length; index += 1) {
+            if ((identityHeader.codePointAt(index) ?? 0) > 255) {
+                isByteStringSafe = false;
+            }
+        }
+
+        // Every code unit must be <= 255 (WebIDL `ByteString`-safe) — this is the
+        // literal property `new Request(...)` enforces at the real fetch call below;
+        // a raw `JSON.stringify({ name: "名前 🎌" })` would violate it.
+        expect(isByteStringSafe).toBe(true);
+        expect(identityHeader).toBe(encodeIdentityHeader({ name: "名前 🎌" }));
     });
 
     it("drops the system flag when the caller opts out", async () => {
