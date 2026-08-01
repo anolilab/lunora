@@ -34,6 +34,7 @@ import {
     SEED_ENDPOINT,
     serveJsonHandler,
     studioAssetsStamp,
+    transportRejectionReason,
 } from "@lunora/config/studio-host";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
@@ -43,31 +44,6 @@ const pathnameOf = (url: string): string => {
     const queryIndex = url.indexOf("?");
 
     return queryIndex === -1 ? url : url.slice(0, queryIndex);
-};
-
-/** Loopback hostnames the studio server accepts in the `Host` header (sans port). */
-const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
-
-/**
- * Anti-DNS-rebinding guard: the studio HTML embeds the worker admin token and the
- * server reverse-proxies the worker's privileged `/_lunora/admin/*` surface, so a
- * page served from `http://evil.example:&lt;port>` that DNS-rebinds `evil.example`
- * to 127.0.0.1 would become same-origin and could read the token + drive admin
- * RPC. Browsers always send the *attacker's* original hostname in the `Host`
- * header even after a rebind, so rejecting any non-loopback Host literal blocks
- * the attack while leaving real loopback access (`localhost`/`127.0.0.1`/`[::1]`)
- * untouched. Returns `true` when the request is from a trusted loopback host.
- */
-const isLoopbackHost = (hostHeader: string | undefined): boolean => {
-    if (hostHeader === undefined || hostHeader === "") {
-        // A missing Host header can't be trusted as loopback — reject.
-        return false;
-    }
-
-    // Strip the optional `:port` suffix. IPv6 literals are bracketed (`[::1]:6173`).
-    const withoutPort = hostHeader.startsWith("[") ? hostHeader.slice(0, hostHeader.indexOf("]") + 1) : (hostHeader.split(":")[0] ?? hostHeader);
-
-    return LOOPBACK_HOST_NAMES.has(withoutPort);
 };
 
 /** Forward an HTTP request to the worker and pipe its response back. */
@@ -256,17 +232,35 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     const server: Server = createServer((request, response) => {
         const pathname = pathnameOf(request.url ?? "/");
 
-        // Anti-DNS-rebinding: on a loopback bind, reject any request whose Host
-        // header isn't an exact loopback literal BEFORE serving the token-bearing
-        // HTML or proxying the worker admin surface. A non-loopback bind never
-        // embeds the token and refuses proxy/mutating endpoints below, so it can
-        // serve the read-only shell to the LAN host that the browser sends here.
-        if (isLoopback && !isLoopbackHost(request.headers.host)) {
-            response.statusCode = 403;
-            response.setHeader("Content-Type", "text/plain");
-            response.end("Lunora studio: refusing a request whose Host is not a loopback literal (DNS-rebinding guard).");
+        // Transport gate: on a loopback bind, reject before serving the
+        // token-bearing HTML or proxying the worker admin surface. Shared with
+        // the Vite dev route (`@lunora/config/studio-host`'s
+        // `transportRejectionReason`) so the two hosts can't diverge again —
+        // it also refuses a non-loopback socket peer and a proxied
+        // (`X-Forwarded-*`/`Forwarded`) request, not just a non-loopback Host
+        // literal, because a relayed client must not receive the token or
+        // reach the admin proxy either. A non-loopback bind never embeds the
+        // token and refuses proxy/mutating endpoints below, so it can serve
+        // the read-only shell to the LAN host that the browser sends here.
+        //
+        // The forwarding-header refusal 403s every port-forwarded dev
+        // environment that legitimately proxies from loopback (Codespaces,
+        // devcontainers, Gitpod, Cloud Workstations, ngrok, Docker reverse
+        // proxies), so it names the specific header it saw (response body +
+        // a `warnOnce` through `options.logger`, so the cause shows up in the
+        // terminal running `lunora dev`, not just as an opaque 403 in the
+        // browser) and can be opted out of with `LUNORA_STUDIO_ALLOW_FORWARDED=1`
+        // once you've confirmed the forwarding is your own trusted tunnel.
+        if (isLoopback) {
+            const rejection = transportRejectionReason(request, options.logger);
 
-            return;
+            if (rejection !== undefined) {
+                response.statusCode = 403;
+                response.setHeader("Content-Type", "text/plain");
+                response.end(rejection);
+
+                return;
+            }
         }
 
         // Worker proxy first. On a non-loopback bind the proxied `/_lunora/admin/*`
@@ -318,8 +312,11 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     });
 
     server.on("upgrade", (request, socket, head) => {
-        // Mirror the HTTP anti-rebinding + loopback-only-proxy guards on the WS path.
-        if (!isLoopback || !isLoopbackHost(request.headers.host)) {
+        // Mirror the HTTP transport gate + loopback-only-proxy guard on the WS
+        // path. There is no response object to carry a reason here, so a
+        // rejection just destroys the socket (matches the pre-existing
+        // behaviour of this path).
+        if (!isLoopback || transportRejectionReason(request, options.logger) !== undefined) {
             socket.destroy();
 
             return;

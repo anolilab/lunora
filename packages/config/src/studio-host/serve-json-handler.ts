@@ -13,6 +13,8 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { headerValue } from "./transport-guard";
+
 /** Max request body the local-dev endpoints accept (1 MB) — guards dev against a runaway upload. */
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -65,13 +67,6 @@ const respondJson = (response: ServerResponse, status: number, body: unknown): v
     response.statusCode = status;
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.end(JSON.stringify(body));
-};
-
-/** A single header value, lower-cased and trimmed; `undefined` when absent or array-valued. */
-const headerValue = (raw: string | string[] | undefined): string | undefined => {
-    const value = Array.isArray(raw) ? raw[0] : raw;
-
-    return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 };
 
 /** Allowed `Sec-Fetch-Site` values — anything else is a cross-origin navigation. */

@@ -343,6 +343,41 @@ describe("studioPlugin", () => {
         expect(response.statusCode).toBe(403);
     });
 
+    it("logs a warnOnce naming the forwarding header it saw (Codespaces/devcontainers/etc. surface a reason, not just an opaque 403)", () => {
+        expect.assertions(1);
+
+        const plugin = studioPlugin();
+        let middleware: ((request: unknown, response: ServerResponse, next: () => void) => void) | undefined;
+        const warnOnce = vi.fn<(message: string) => void>();
+
+        const server = {
+            config: {
+                base: "/",
+                logger: { info: vi.fn<(message: string) => void>(), warnOnce },
+                server: { host: undefined },
+            },
+            httpServer: { listening: false, once: vi.fn<() => void>() },
+            middlewares: {
+                use: (function_: typeof middleware) => {
+                    middleware = function_;
+                },
+            },
+            transformIndexHtml: vi.fn<(url: string, html: string) => Promise<string>>(async (_url: string, html: string) => html),
+        } as unknown as ViteDevServer;
+
+        (plugin.configureServer as (s: ViteDevServer) => unknown)(server);
+
+        const { response } = makeResponse();
+
+        middleware?.(
+            { headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, socket: { remoteAddress: "127.0.0.1" }, url: STUDIO_PATH },
+            response,
+            vi.fn(),
+        );
+
+        expect(warnOnce).toHaveBeenCalledWith(expect.stringContaining(`"x-forwarded-for"`));
+    });
+
     it("rejects a cross-origin POST to schema-edit (CSRF)", () => {
         expect.assertions(1);
 
