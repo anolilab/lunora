@@ -46,6 +46,8 @@ import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
+import { optionalWriterOverride } from "../optional-writer-override";
+import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
@@ -130,26 +132,6 @@ interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
     page: Record<string, unknown>[];
-}
-
-/** Structural mirror of `@lunora/shard-engine`'s `RankPageRowKey`. */
-interface RankPageRowKeyLike {
-    partitionKey: string;
-    rowId: string;
-    sortValues: ReadonlyArray<unknown>;
-}
-
-/** Structural mirror of `@lunora/shard-engine`'s `RankPageRow`. */
-interface RankPageRowLike {
-    doc: Record<string, unknown>;
-    key: RankPageRowKeyLike;
-}
-
-/** Structural mirror of `@lunora/shard-engine`'s `ShardRankPageResult` — the `rankPageRows` return shape. */
-interface ShardRankPageResultLike {
-    directions: ReadonlyArray<"asc" | "desc">;
-    hasMore: boolean;
-    rows: ReadonlyArray<RankPageRowLike>;
 }
 
 interface TableReaderLike {
@@ -1065,15 +1047,10 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         return baseWhere;
     };
 
-    // `rankBefore` is the only analytical method that may be absent (the D1
-    // twin omits it); capture it so the truthy check narrows into the wrapper
-    // without a non-null assertion.
+    // `rankBefore`/`rankPageRows` are the two analytical methods that may be
+    // absent (the D1/sql-store twin omits both) — captured here so
+    // `optionalWriterOverride` below can narrow each without a non-null assertion.
     const baseRankBefore = base.rankBefore;
-
-    // `rankPageRows` (plan 254) is likewise optional — the D1/sql-store twin
-    // omits it too (only the shard-local engine implements the cross-shard
-    // rank companion) — captured the same way so the conditional override
-    // below narrows without a non-null assertion.
     const baseRankPageRows = base.rankPageRows;
 
     const wrapped: RlsDatabase = {
@@ -1536,42 +1513,29 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             );
         },
 
-        // `rankBefore` is the one optional method (the D1 twin omits it).
-        ...(baseRankBefore
-            ? {
-                  rankBefore: (tableName: string, indexName: string, options: RankBeforeArgs) => {
-                      requireUnrestrictedReadBase(tableName, "rankBefore");
+        // `rankBefore`/`rankPageRows` are the two optional methods (the D1/sql-store
+        // twin omits both) — see `optionalWriterOverride`. `rankPageRows` fails
+        // closed for the same reason `rankPage` does: its rows carry partition
+        // rank keys that cannot be reduced under a row policy.
+        ...optionalWriterOverride("rankBefore", baseRankBefore, (rankBefore) => (tableName: string, indexName: string, options: RankBeforeArgs) => {
+            requireUnrestrictedReadBase(tableName, "rankBefore");
 
-                      // Route to the policy/non-policy writer; both carry
-                      // `rankBefore` when `base` does (the guard spreads `raw`).
-                      const target = route(tableName);
+            // Route to the policy/non-policy writer; both carry `rankBefore` when `base` does (the guard spreads `raw`).
+            const target = route(tableName);
 
-                      return (target.rankBefore ?? baseRankBefore)(tableName, indexName, options);
-                  },
-              }
-            : {}),
+            return (target.rankBefore ?? rankBefore)(tableName, indexName, options);
+        }),
+        ...optionalWriterOverride("rankPageRows", baseRankPageRows, (rankPageRows) => (tableName: string, indexName: string, options?: RankPageArgs) => {
+            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPageRows");
 
-        // `rankPageRows` (plan 254) is likewise optional (the D1/sql-store twin
-        // omits it) — only synthesized when `base` actually carries one,
-        // mirroring the `rankBefore` conditional above. Same reasoning as
-        // `rankPage`: the returned rows carry partition rank keys that cannot
-        // be reduced under a row policy, so it fails closed the same way.
-        ...(baseRankPageRows
-            ? {
-                  rankPageRows: (tableName: string, indexName: string, options?: RankPageArgs) => {
-                      const baseWhere = requireUnrestrictedReadBase(tableName, "rankPageRows");
+            // Route to the policy/non-policy writer; both carry `rankPageRows` when `base` does (the guard spreads `raw`).
+            const target = route(tableName);
 
-                      // Route to the policy/non-policy writer; both carry
-                      // `rankPageRows` when `base` does (the guard spreads `raw`).
-                      const target = route(tableName);
-
-                      return (target.rankPageRows ?? baseRankPageRows)(tableName, indexName, {
-                          ...options,
-                          baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere),
-                      });
-                  },
-              }
-            : {}),
+            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, {
+                ...options,
+                baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere),
+            });
+        }),
     };
 
     // SECURITY: the generated runtime glues a per-table facade
