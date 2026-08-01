@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import type { SqlExec } from "@lunora/shard-engine";
+import { describe, expect, it, vi } from "vitest";
 
 import {
     ensureFunctionMetricsTables,
@@ -22,6 +23,31 @@ import createSqliteExec from "./_helpers/node-sqlite";
 const dispatch = (overrides: Partial<Parameters<typeof recordFunctionMetric>[1]> = {}) => {
     return { durationMs: 10, errored: false, path: "posts:list", ts: 1_000_000, ...overrides };
 };
+
+/**
+ * A brand-new `SqlExec` object bound to the SAME underlying storage as
+ * `harness` — simulating a fresh isolate reattaching to a durable shard after
+ * hibernation. Object identity differs from `harness.sql`, so any
+ * `WeakSet`/`WeakMap` memoization keyed on the handle starts cold, while the
+ * SQL it runs lands in the same tables `harness.sql` already wrote.
+ */
+const freshHandleOver = (harness: ReturnType<typeof createSqliteExec>): SqlExec => ({
+        exec: (query: string, ...parameters: unknown[]) => {
+            const rows = harness.raw(query, ...parameters);
+
+            return {
+                one: () => {
+                    if (rows.length !== 1) {
+                        throw new Error(`expected exactly one row, received ${String(rows.length)}`);
+                    }
+
+                    return rows[0]!;
+                },
+                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                toArray: () => rows,
+            };
+        },
+    } as unknown as SqlExec);
 
 describe("ensureFunctionMetricsTables", () => {
     it("is idempotent, so read and write paths can both call it defensively", () => {
@@ -460,6 +486,79 @@ describe("bounded reads", () => {
         expect(buckets.at(-1)?.bucketMs).toBe((FUNCTION_METRICS_READ_LIMIT + 49) * 60_000);
         // Still oldest-first, so it plots left to right.
         expect(buckets[0]!.bucketMs).toBeLessThan(buckets.at(-1)!.bucketMs);
+    });
+});
+
+describe("per-handle memoization (OBS-02)", () => {
+    it("issues no ALTER TABLE and no COUNT(*) on the second dispatch for an already-seen path", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        // Warm the handle: creates the tables, backfills columns, and marks
+        // "posts:list" as a known path.
+        recordFunctionMetric(sql, dispatch({ path: "posts:list" }));
+
+        const original = sql.exec.bind(sql);
+        const seen: string[] = [];
+
+        vi.spyOn(sql, "exec").mockImplementation((query: string, ...parameters: unknown[]) => {
+            seen.push(query);
+
+             
+            return (original as any)(query, ...parameters);
+        });
+
+        recordFunctionMetric(sql, dispatch({ path: "posts:list" }));
+
+        expect(seen.some((query) => query.includes("ALTER TABLE"))).toBe(false);
+        expect(seen.some((query) => query.includes("COUNT(*)"))).toBe(false);
+    });
+
+    it("re-ensures and re-verifies against durable state on a fresh post-hibernation handle", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+
+        // First "isolate".
+        recordFunctionMetric(harness.sql, dispatch({ path: "posts:list" }));
+
+        // Second "isolate": a brand-new handle over the same storage. The
+        // WeakSet/WeakMap caches from the first handle must not leak across —
+        // a stale memo here would skip a needed CREATE on genuinely fresh
+        // storage, or (worse) admit a path without re-checking the cap.
+        const fresh = freshHandleOver(harness);
+
+        expect(() => {
+            recordFunctionMetric(fresh, dispatch({ path: "posts:list" }));
+        }).not.toThrow();
+
+        // Both dispatches landed in the SAME durable row.
+        const [row] = readFunctionMetrics(fresh);
+
+        expect(row?.calls).toBe(2);
+    });
+
+    it("re-verifies the distinct-path cap against durable state on a fresh post-hibernation handle", () => {
+        expect.assertions(1);
+
+        const harness = createSqliteExec();
+
+        ensureFunctionMetricsTables(harness.sql);
+
+        for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES (?)`, `seed:${String(index)}`);
+        }
+
+        // A fresh handle has no local cache of what's tracked — it must fall
+        // back to the durable count rather than assuming an empty local cache
+        // means the cap hasn't been reached.
+        const fresh = freshHandleOver(harness);
+
+        recordFunctionMetric(fresh, dispatch({ path: "attacker:random" }));
+
+        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'attacker:random'`)).toStrictEqual([]);
     });
 });
 
