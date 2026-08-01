@@ -76,27 +76,66 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     ["SUBSCRIPTION_CANCELLED", "packages/client/src/lunora-client.ts"],
 ]);
 
+// `@visulima/task-runner`'s build-cache restore materializes a cached `dist`
+// at a sibling `<pkg>/dist.restoring-<hash>` path before atomically renaming
+// it onto the real `dist` (also `.old-`/`.trash-`/`.failed-` at other points
+// in the swap) — a transient directory name never equal to the plain "dist"
+// already in SKIP_DIRECTORIES. Running this repo-wide walk alongside CI's
+// parallel build-cache activity for dozens of other packages can catch one
+// of these mid-swap.
+const TRANSIENT_BUILD_CACHE_DIR = /\.(?:restoring|old|trash|failed)-/u;
+
+/** True for a filesystem race — the entry existed at `readdirSync` time but is gone by the time it's inspected. */
+const isMissingEntry = (error: unknown): boolean => error instanceof Error && "code" in error && error.code === "ENOENT";
+
 /** Recursively collect `.ts`/`.tsx` source files under `dir`, skipping build/vendor/test directories. */
 const collectSourceFiles = (dir: string): string[] => {
-    const entries = readdirSync(dir);
+    let entries: string[];
+
+    try {
+        entries = readdirSync(dir);
+    } catch (error) {
+        // `dir` itself was a transient build-cache directory that finished its
+        // rename/removal between the parent's readdirSync and this recursive
+        // call — nothing to walk, not a real gap in the codebase.
+        if (isMissingEntry(error)) {
+            return [];
+        }
+
+        throw error;
+    }
+
     const files: string[] = [];
 
+    /* eslint-disable vitest/no-conditional-tests -- filesystem walk, not a test-behavior branch; every branch below (the skip-list check, the transient-directory check, the file-type check) is inherent to recursing a directory tree */
     for (const entry of entries) {
-        if (SKIP_DIRECTORIES.has(entry)) {
+        if (SKIP_DIRECTORIES.has(entry) || TRANSIENT_BUILD_CACHE_DIR.test(entry)) {
             continue;
         }
 
         const fullPath = join(dir, entry);
-        const stats = statSync(fullPath);
 
-        /* eslint-disable vitest/no-conditional-tests -- filesystem walk, not a test-behavior branch; the file-type check is inherent to recursing a directory tree */
+        let stats;
+
+        try {
+            stats = statSync(fullPath);
+        } catch (error) {
+            // Same race as above, one level up: the entry vanished between this
+            // directory's readdirSync and the stat of one of its children.
+            if (isMissingEntry(error)) {
+                continue;
+            }
+
+            throw error;
+        }
+
         if (stats.isDirectory()) {
             files.push(...collectSourceFiles(fullPath));
         } else if (/\.tsx?$/.test(entry) && !entry.endsWith(".d.ts")) {
             files.push(fullPath);
         }
-        /* eslint-enable vitest/no-conditional-tests */
     }
+    /* eslint-enable vitest/no-conditional-tests */
 
     return files;
 };
@@ -134,9 +173,7 @@ describe("error catalog registration", () => {
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
 
-            expect(content, `Expected ${code} to still appear in ${relativeFile} — update or remove the allowlist entry if it moved.`).toContain(
-                `"${code}"`,
-            );
+            expect(content, `Expected ${code} to still appear in ${relativeFile} — update or remove the allowlist entry if it moved.`).toContain(`"${code}"`);
         }
     });
 });
