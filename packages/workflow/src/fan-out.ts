@@ -24,7 +24,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { BRANCH_MARKER_KEY, hasBranchMarker } from "../../../shared/branch-marker";
+import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { NonRetryableError } from "./errors";
 import type {
     BranchCompensationParams,
@@ -313,7 +313,7 @@ const createSpawn =
         // Reject a caller-supplied reserved branch marker at the trust boundary —
         // only `createParallel`'s internal injection may set `__lunoraBranch`.
         if (hasBranchMarker(params)) {
-            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
+            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`);
         }
 
         const childId = deps.nextChildId(options?.id);
@@ -442,5 +442,3 @@ export {
     signalBranchParentSafe,
     stripBranchMarker,
 };
-
-export {BRANCH_MARKER_KEY} from "../../../shared/branch-marker";

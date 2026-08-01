@@ -31,6 +31,7 @@ import {
 } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
@@ -1172,7 +1173,7 @@ describe("shardDO admin introspection", () => {
     });
 
     it("rejects (400) createWorkflowInstance params carrying the reserved branch-marker key, and never calls create()", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const created: { id?: string; params?: unknown }[] = [];
 
@@ -1201,6 +1202,11 @@ describe("shardDO admin introspection", () => {
 
         expect(response.status).toBe(400);
         expect(created).toHaveLength(0);
+
+        // Shared across all five create-surface rejections (plan 262 review) —
+        // the admin-rpc message must carry the same reason text as
+        // workflow/runtime/agent, not just the same status code.
+        await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringContaining(BRANCH_MARKER_REJECTION) } });
     });
 
     it("reports a workflow instance's status, output, and error", async () => {

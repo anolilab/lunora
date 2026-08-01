@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import createWorkflows from "../src/create-workflows";
-import { BRANCH_MARKER_KEY } from "../src/fan-out";
 import type { WorkflowBindingLike, WorkflowCreateOptions, WorkflowInstanceLike } from "../src/types";
 
 const fakeInstance = (id: string): WorkflowInstanceLike => {
@@ -70,7 +70,7 @@ describe("createWorkflows", () => {
     });
 
     it("rejects create() params carrying the reserved branch marker without touching the binding", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
@@ -83,11 +83,15 @@ describe("createWorkflows", () => {
 
         expect((error as Error).name).toBe("LunoraError");
         expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        // Shared across all five create-surface rejections (plan 262 review) —
+        // @lunora/workflow's own message must carry the same reason text as
+        // runtime/agent/do, not just the same error code.
+        expect((error as Error).message).toContain(BRANCH_MARKER_REJECTION);
         expect(binding.create).not.toHaveBeenCalled();
     });
 
     it("rejects createBatch() when any entry carries the reserved branch marker without touching the binding", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
@@ -100,6 +104,7 @@ describe("createWorkflows", () => {
 
         expect((error as Error).name).toBe("LunoraError");
         expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        expect((error as Error).message).toContain(BRANCH_MARKER_REJECTION);
         expect(binding.createBatch).not.toHaveBeenCalled();
     });
 });

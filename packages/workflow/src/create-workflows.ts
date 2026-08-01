@@ -5,7 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { BRANCH_MARKER_KEY, hasBranchMarker } from "../../../shared/branch-marker";
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions, WorkflowHandle, WorkflowInstanceLike, Workflows } from "./types";
 
 /**
@@ -19,7 +19,7 @@ import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions
  */
 const rejectReservedParams = (options?: WorkflowCreateOptions): void => {
     if (hasBranchMarker(options?.params)) {
-        throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`);
     }
 };
 

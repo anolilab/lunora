@@ -2,7 +2,7 @@ import { isLunoraError, toErrorBody } from "@lunora/errors";
 
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
-import { hasBranchMarker } from "../../../shared/branch-marker";
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
@@ -2394,7 +2394,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // every other create surface, or a forged marker could reach a child's
         // `event.payload` and spoof events into an arbitrary workflow instance.
         if (hasBranchMarker(args)) {
-            throw new LunoraError(`${label} params may not contain the reserved workflow branch-marker key`, {
+            throw new LunoraError(`${label} params ${BRANCH_MARKER_REJECTION}`, {
                 code: "BAD_REQUEST",
                 status: 400,
             });

@@ -20,7 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { hasBranchMarker } from "../../../shared/branch-marker";
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -278,7 +278,7 @@ const startChannelRun = async (
     // `create()`. Thrown (not acked): a forged marker must not be reported as
     // handled, or the provider would never redeliver it once the bug is fixed.
     if (hasBranchMarker(run)) {
-        throw new LunoraError("BAD_REQUEST", "@lunora/agent: inbound channel run params may not contain the reserved workflow branch-marker key");
+        throw new LunoraError("BAD_REQUEST", `@lunora/agent: inbound channel run params ${BRANCH_MARKER_REJECTION}`);
     }
 
     // Sanitize the id alone (the `channel-` prefix is already instance-id-safe);

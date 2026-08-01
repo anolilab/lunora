@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { hasBranchMarker } from "../../../shared/branch-marker";
+import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import type { BranchOutcome, FanOutDeps } from "../src/fan-out";
 import {
     branch,
-    BRANCH_MARKER_KEY,
     createParallel,
     createSpawn,
     errorOutcome,
@@ -339,7 +338,7 @@ describe("createSpawn", () => {
     });
 
     it("rejects a caller-supplied reserved branch marker without touching the step API", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const step = makeStep();
         const { create, deps } = makeDeps(step);
@@ -350,6 +349,8 @@ describe("createSpawn", () => {
 
         expect((error as Error).name).toBe("LunoraError");
         expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        // Shared across all five create-surface rejections (plan 262 review).
+        expect((error as Error).message).toContain(BRANCH_MARKER_REJECTION);
         expect(step.do).not.toHaveBeenCalled();
         expect(create).not.toHaveBeenCalled();
     });

@@ -25,3 +25,16 @@ export const BRANCH_MARKER_KEY = "__lunoraBranch";
 
 /** True when caller-supplied workflow params carry the reserved branch-marker key. */
 export const hasBranchMarker = (params: unknown): boolean => typeof params === "object" && params !== null && Object.hasOwn(params, BRANCH_MARKER_KEY);
+
+/**
+ * The shared rejection-reason fragment every create surface must state when it
+ * refuses a caller-supplied branch marker — kept in one place so the five call
+ * sites (`@lunora/workflow`'s `create`/`createBatch`/`createSpawn`,
+ * `@lunora/runtime`'s scheduler/cron dispatch, `@lunora/agent`'s inbound
+ * email/channel/run handles, and `@lunora/do`'s admin-rpc) state the same
+ * contract instead of independently-drifting prose. Each site composes it with
+ * its own subject and package-prefix convention, e.g.
+ * `` `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}` `` or
+ * `` `${label} params ${BRANCH_MARKER_REJECTION}` ``.
+ */
+export const BRANCH_MARKER_REJECTION: string = `may not contain the reserved workflow branch-marker key ("${BRANCH_MARKER_KEY}")`;

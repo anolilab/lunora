@@ -31,7 +31,7 @@ import type {
 } from "@lunora/shard-engine";
 import { ADMIN_FUNCTION_PREFIX, tableFromDepKey } from "@lunora/shard-engine";
 
-import { hasBranchMarker } from "../../../shared/branch-marker";
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { decodeIdentityHeader } from "../../../shared/identity-header";
 
 /** Recovers the process exit code embedded in a container `stop` message as `(exit &lt;n>)`. */
@@ -357,7 +357,7 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
     // otherwise reach a child's `event.payload` and spoof events into an
     // arbitrary workflow instance.
     if (hasBranchMarker(args["params"])) {
-        throw new LunoraError("BAD_REQUEST", "createWorkflowInstance: params may not contain the reserved workflow branch-marker key");
+        throw new LunoraError("BAD_REQUEST", `createWorkflowInstance: params ${BRANCH_MARKER_REJECTION}`);
     }
 
     return { exportName, id, params: args["params"] };
