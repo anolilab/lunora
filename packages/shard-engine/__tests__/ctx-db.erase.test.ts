@@ -1,9 +1,22 @@
+import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { TransactionHeadroomTracker } from "../src/transaction-headroom";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
+
+/** The error code from awaiting `act`, or undefined when it resolved. */
+const codeOf = async (act: () => Promise<unknown>): Promise<string | undefined> => {
+    try {
+        await act();
+    } catch (error) {
+        return isLunoraError(error) ? error.code : "NOT_A_LUNORA_ERROR";
+    }
+
+    return undefined;
+};
 
 const fixedTime = 1_700_000_000_000;
 
@@ -127,6 +140,70 @@ describe("ctx-db.deleteAll", () => {
         const writer = setupWriter();
 
         await expect(writer.deleteAll("nope")).rejects.toThrow("unknown table: nope");
+    });
+
+    it("ignores a tiny transaction meter — the erasure primitive stays uncapped and meter-exempt (plan 207)", async () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, messagesSchema);
+
+        // Seed UNMETERED (no headroom) so setup itself can't trip the tiny
+        // limits the deleteAll writer below is built with.
+        const seedWriter = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            schema: messagesSchema,
+            sql,
+        }) as EraseWriter;
+
+        const documents = Array.from({ length: 25 }, (_unused, index) => message(index));
+
+        await seedWriter.insertMany("messages", documents);
+
+        // A ceiling far below the 25 rows deleteAll must erase: both the
+        // paging `findMany` reads (maxReadRows) and the per-row deletes
+        // (maxWrittenRows) would trip it if deleteAll were metered like every
+        // other write path.
+        const meteredWriter = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            headroom: new TransactionHeadroomTracker({ maxReadRows: 50, maxWrittenBytes: 1024 * 1024, maxWrittenRows: 10 }),
+            schema: messagesSchema,
+            sql,
+        }) as EraseWriter;
+
+        await expect(meteredWriter.deleteAll("messages")).resolves.toStrictEqual({ deleted: 25 });
+
+        const remaining = await seedWriter.count("messages");
+
+        expect(remaining).toBe(0);
+    });
+
+    it("the same tiny limits DO stop an ordinary metered write loop — the meter itself still works (plan 207)", async () => {
+        expect.assertions(1);
+
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, messagesSchema);
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            headroom: new TransactionHeadroomTracker({ maxReadRows: 50, maxWrittenBytes: 1024 * 1024, maxWrittenRows: 10 }),
+            schema: messagesSchema,
+            sql,
+        }) as EraseWriter;
+
+        const code = await codeOf(async () => {
+            for (let index = 0; index < 25; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- the point is a sequential runaway loop
+                await writer.insert("messages", message(index));
+            }
+        });
+
+        expect(code).toBe("TRANSACTION_LIMIT_EXCEEDED");
     });
 });
 

@@ -1,5 +1,5 @@
-import type { DatabaseWriterLike, SchemaLike, TtlSweepSpec } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations, selectExpiredIds } from "@lunora/shard-engine";
+import type { DatabaseWriterLike, SchemaLike, TransactionHeadroomTracker, TransactionLimits, TtlSweepSpec } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS, createShardCtxDb as createShardContextDatabase, runShardMigrations, selectExpiredIds } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
@@ -167,6 +167,113 @@ describe("ttl sweep", () => {
 
             expect(softDeleted).not.toBeNull();
             expect(softDeleted?.["deletedAt"]).toStrictEqual(expect.any(Number));
+        });
+    });
+
+    describe("alarm-path headroom (plan 207 step 2)", () => {
+        const ADMIN_TOKEN = "s3cret-admin";
+
+        const adminRequest = (functionPath: string, args: Record<string, unknown>, token?: string): Request => {
+            const headers: Record<string, string> = { "content-type": "application/json" };
+
+            if (token !== undefined) {
+                headers.authorization = `Bearer ${token}`;
+            }
+
+            return new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers,
+                method: "POST",
+            });
+        };
+
+        /**
+         * Unlike `TtlShard` above, this variant actually forwards the `headroom`
+         * `pollTtlSweeps` threads through `deleteRowThroughWriter` into a REAL
+         * metered writer — proving the value-threading, not just the plumbing.
+         * `transactionLimits()` is overridden tiny so a sweep can be driven past
+         * it deterministically.
+         */
+        class MeteredTtlShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; RPCs never dispatch in this test
+            public override handleRpc(): Promise<unknown> {
+                return Promise.reject(new Error("handleRpc must not run"));
+            }
+
+            /** Test-only: `pollTtlSweeps` is protected; drive it directly rather than through the whole `alarm()` tick. */
+            public runPollTtlSweeps(): Promise<number | undefined> {
+                return this.pollTtlSweeps();
+            }
+
+            protected override deleteRowThroughWriter(table: string, id: string, headroom?: TransactionHeadroomTracker): Promise<void> {
+                const writer = createShardContextDatabase({
+                    broadcast: (delta) => {
+                        this.recordChangedTable(delta.table);
+                    },
+                    headroom,
+                    schema: ttlSchema,
+                    sql: this.sql as never,
+                });
+
+                return writer.delete(id, table);
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- resolved TTL policies for this schema
+            protected override ttlSweeps(): ReadonlyArray<TtlSweepSpec> {
+                return [{ field: "expiresAt", table: "sessions" }];
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- deliberately tiny so a sweep pass can be driven past the ceiling
+            protected override transactionLimits(): Partial<TransactionLimits> {
+                return { maxWrittenRows: 3 };
+            }
+        }
+
+        it("stops a sweep pass at the transaction limit, keeps the rows it already deleted, and re-arms near-immediately instead of throwing", async () => {
+            expect.assertions(6);
+
+            const writer = setupWriter();
+            const past = NOW - 1000;
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await writer.insert("sessions", { _id: `s${String(index)}`, expiresAt: past, token: `t${String(index)}` }, { allowExplicitId: true });
+            }
+
+            const state: ShardDOState = {
+                acceptWebSocket() {},
+                getWebSockets() {
+                    return [];
+                },
+                storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new MeteredTtlShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const before = Date.now();
+
+            // Must NOT throw — the limit is caught and handled inside pollTtlSweeps.
+            const nextDueAt = await shard.runPollTtlSweeps();
+
+            // Partial progress: the tiny ceiling stopped the pass well short of
+            // all 10 rows, but the rows deleted before the trip STAY deleted —
+            // `selectExpiredIds` never re-selects them, so that IS the resumable
+            // checkpoint (no separate cursor needed).
+            const remaining = await writer.query("sessions").collect();
+
+            expect(remaining.length).toBeGreaterThan(0);
+            expect(remaining.length).toBeLessThan(10);
+
+            // Near-immediate re-arm — NOT the normal 30 s TTL_SWEEP_INTERVAL_MS
+            // cadence a completed pass would report.
+            expect(nextDueAt).toBeDefined();
+            expect((nextDueAt ?? 0) - before).toBeLessThan(5000);
+
+            // Warned (batch full), not recorded as a genuine shape/source failure.
+            const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}, ADMIN_TOKEN));
+            const body = await response.json<{ result: { entries: { functionPath?: string; level: string; message: string }[] } }>();
+
+            expect(response.status).toBe(200);
+            expect(body.result.entries).toContainEqual(expect.objectContaining({ functionPath: "ttl:sweep", level: "warn" }));
         });
     });
 });

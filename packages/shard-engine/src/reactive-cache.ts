@@ -354,7 +354,13 @@ class ReactiveCache {
             return;
         }
 
-        // Snapshot the pairs: dropping an entry mutates `rangeIndex` underneath.
+        // NOT a snapshot — this iterates `byRange` live. `dropEntry` below can
+        // delete OTHER not-yet-visited pairs from this same map (an entry can
+        // hold several ranges on `table`; dropping it via one range's key set
+        // can empty another range's key set and remove it from `byRange` too).
+        // That is safe: `Map` iteration only ever yields keys present at the
+        // moment it reaches them, so a pair deleted before its turn is simply
+        // skipped rather than double-processed or corrupting the iterator.
         for (const [range, keys] of byRange) {
             // `keysTouchRanges` carries the conservative rule: absent keys, or a
             // range over an index the write produced no key for, count as

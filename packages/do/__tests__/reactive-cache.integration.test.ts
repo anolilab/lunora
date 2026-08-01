@@ -5,7 +5,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
-import type { SchemaLike, SocketAttachment, SqlExec, SubscriptionEnvelope } from "@lunora/shard-engine";
+import type { DatabaseWriterLike, SchemaLike, SocketAttachment, SqlExec, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -627,5 +627,187 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         // The handler ran AT LEAST once during the refresh — proves cache
         // was empty when refresh kicked in.
         expect(sequence.filter((s) => s === "query").length).toBeGreaterThanOrEqual(1);
+    });
+});
+
+describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan 206)", () => {
+    /**
+     * A table with an index, so a `.withIndex(...).eq(...)` read can be
+     * provably confined to one slice — the case `runCachedQuery`'s ranges
+     * thunk (wired via `getCtxDbReadRangeHook`) exists to narrow.
+     */
+    const rangeSchema: SchemaLike = {
+        tables: {
+            messages: {
+                indexes: [{ fields: ["channelId"], name: "by_channel" }],
+                shape: {
+                    body: { kind: "string" },
+                    channelId: { kind: "string" },
+                },
+            },
+        },
+    };
+
+    /**
+     * Subclass wiring a REAL ctx-db through `getCtxDbReadHook()` AND
+     * `getCtxDbReadRangeHook()` — the pairing a codegen subclass's
+     * `createShardCtxDb(...)` call is meant to supply — so an index-narrowed
+     * read actually reaches `runCachedQuery`'s ranges thunk, and a write goes
+     * through the real invalidation path (`cache.invalidate(table, id,
+     * indexKeys)`) instead of the other describe blocks' hand-rolled
+     * `mutationTablesToInvalidate` shortcut.
+     */
+    class RangeCachingShard extends ShardDO {
+        public readonly writer: DatabaseWriterLike;
+
+        public handlers = new Map<string, (writer: DatabaseWriterLike) => Promise<unknown>>();
+
+        public execCount = new Map<string, number>();
+
+        public constructor(state: ShardDOState, env: unknown, sql: SqlExec, options: ShardDOOptions = {}) {
+            super(state, env, options);
+
+            this.writer = createShardContextDatabase({
+                cache: this.reactiveCache,
+                onIndexUse: this.getCtxDbIndexUseHook(),
+                onRead: this.getCtxDbReadHook(),
+                onReadRange: this.getCtxDbReadRangeHook(),
+                schema: rangeSchema,
+                sql,
+            });
+        }
+
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            return this.runCachedQuery(functionPath, args, async () => {
+                const handler = this.handlers.get(functionPath);
+
+                if (!handler) {
+                    throw new Error(`no handler for ${functionPath}`);
+                }
+
+                this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+                return handler(this.writer);
+            });
+        }
+
+        /** Test-only: expose the protected `reactiveCache` field for assertions. */
+        public cacheRef(): typeof this.reactiveCache {
+            return this.reactiveCache;
+        }
+    }
+
+    const newRangeShard = (): RangeCachingShard => {
+        const sql = makeSql();
+
+        runShardMigrations(sql, rangeSchema);
+
+        return new RangeCachingShard(createFakeState(), {}, sql, { reactiveCache: {} });
+    };
+
+    it("a write inside range A evicts query A's cache entry and does NOT evict query B's", async () => {
+        expect.assertions(4);
+
+        const shard = newRangeShard();
+
+        shard.handlers.set("messages:byChannelA", async (writer) =>
+            writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect(),
+        );
+        shard.handlers.set("messages:byChannelB", async (writer) =>
+            writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "B"))
+                .collect(),
+        );
+
+        await shard.handleRpc("messages:byChannelA", {});
+        await shard.handleRpc("messages:byChannelB", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(2);
+
+        // A write INSIDE range A (channelId "A") — must evict query A's entry.
+        await shard.writer.insert("messages", { body: "hi", channelId: "A" });
+
+        // Query A's entry is gone; query B's — a DISJOINT slice on the same
+        // table — survives. That is the whole point of range-precise
+        // invalidation over the prior whole-table-dependency behavior.
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // Confirm B is still served from cache (a poisoned handler would throw
+        // if `runCachedQuery` re-executed it) and A re-executes.
+        shard.handlers.set("messages:byChannelB", async () => {
+            throw new Error("byChannelB should still be cached");
+        });
+
+        await expect(shard.handleRpc("messages:byChannelB", {})).resolves.toBeDefined();
+
+        const beforeA = shard.execCount.get("messages:byChannelA") ?? 0;
+
+        await shard.handleRpc("messages:byChannelA", {});
+
+        expect(shard.execCount.get("messages:byChannelA")).toBe(beforeA + 1);
+    });
+
+    it("a write outside every cached range does not evict any entry", async () => {
+        expect.assertions(1);
+
+        const shard = newRangeShard();
+
+        shard.handlers.set("messages:byChannelA", async (writer) =>
+            writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect(),
+        );
+
+        await shard.handleRpc("messages:byChannelA", {});
+        await shard.writer.insert("messages", { body: "hi", channelId: "Z" });
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+    });
+
+    // Regression for the missed-invalidation gap: a query that reads the SAME
+    // table through BOTH a provable range (`.withIndex(...).eq(...)`, which
+    // reports through `onReadRange` and deps nothing on its own) AND a by-id
+    // read (`writer.get(id)`, which reports through `onRead` and marks the
+    // table unnarrowable). Before the fix, `ReadFootprint.ranges()` drops the
+    // table's slice entirely once it is marked unnarrowable, so the cache
+    // entry ends up with deps `{messages:<seededId>}` and an EMPTY range set —
+    // an insert of a brand-new row into the very same range then matches
+    // neither the per-id dep nor any range dep, and the stale entry survives.
+    // `runCachedQuery`'s whole-table `SCAN_DEP` fallback (mirroring
+    // `executeSubscription`'s `footprint.tables` fallback) closes that gap.
+    it("a mixed range + get(id) read on the same table falls back to whole-table invalidation on an insert inside the range", async () => {
+        expect.assertions(2);
+
+        const shard = newRangeShard();
+
+        // Seed a row in channel A so `get(id)` has something to read
+        // alongside the range scan.
+        const seeded = await shard.writer.insert("messages", { body: "seed", channelId: "A" });
+
+        shard.handlers.set("messages:mixed", async (writer) => {
+            const ranged = await writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect();
+            const byId = await writer.get(seeded);
+
+            return { byId, ranged };
+        });
+
+        await shard.handleRpc("messages:mixed", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // A write INSIDE the range that was also read by id. Pre-fix this
+        // evicts nothing (missed invalidation); post-fix the whole-table
+        // fallback dep catches it.
+        await shard.writer.insert("messages", { body: "new", channelId: "A" });
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
     });
 });

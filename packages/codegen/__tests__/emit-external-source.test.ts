@@ -41,7 +41,7 @@ const PLAIN = `
 
 describe("emitShard — external-source ingest", () => {
     it("emits the poll override, arming constructor, client memo, import and config seam for a sourced schema", () => {
-        expect.assertions(11);
+        expect.assertions(14);
 
         const shard = emitShard({ schema: discover(SOURCED) });
 
@@ -64,6 +64,14 @@ describe("emitShard — external-source ingest", () => {
         // actually due instead of spinning at the 2 s global-shape floor.
         expect(shard).toContain("protected override async pollExternalSources(): Promise<number | undefined>");
         expect(shard).toContain("nextDueAt = nextDueAt === undefined ? sourceNextDueAt : Math.min(nextDueAt, sourceNextDueAt);");
+        // Plan 207 step 2: each table's writer gets its OWN fresh per-work-item
+        // meter — an alarm tick has no `/rpc` dispatch to fall back to.
+        expect(shard).toContain("headroom: this.alarmHeadroom()");
+        // A meter cap mid-batch is "batch full", not a genuine source failure: it
+        // warns (not `recordExternalSourceError`) and leaves the table due so the
+        // shared alarm re-arms promptly instead of throttling to `refresh.everyMs`.
+        expect(shard).toContain('error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED"');
+        expect(shard).toContain('level: "warn"');
     });
 
     it("stays byte-identical (none of the ingest surface) for a non-sourced schema", () => {

@@ -229,10 +229,17 @@ const buildIndexRange = (
             return undefined;
         }
 
-        // `>` must clear every row whose bound component equals the value,
-        // including those with trailing compound components — appending the
-        // high sentinel lifts the inclusive bound just past all of them.
-        lo = parsed.lowerExclusive ? at + KEY_HIGH : at;
+        // `>` must clear rows whose bound component EQUALS the value while
+        // still admitting rows whose value merely EXTENDS it as a prefix (a
+        // string index: `gt("name", "Al")` must still match `"Alice"`). A raw
+        // `at + KEY_HIGH` sorts above every such extension too — `"6" <
+        // KEY_HIGH` — which silently drops them from the range and leaves the
+        // written row's subscriber permanently stale. Separator-then-high
+        // instead sorts BELOW every char an extension can start with (the
+        // separator is the lowest emitted char) and ABOVE the bare bound
+        // itself, so it excludes exactly the equal-and-shorter keys while
+        // admitting every prefix extension.
+        lo = parsed.lowerExclusive ? at + KEY_SEPARATOR + KEY_HIGH : at;
     }
 
     if (parsed.upper !== undefined) {
@@ -297,14 +304,32 @@ const keysTouchRanges = (ranges: ReadonlyArray<KeyRange> | undefined, keys: Read
         return true;
     }
 
+    // Group once by index rather than re-filtering `keys` for every range in
+    // the loop below — a write can carry one key per index (one per declared
+    // index on the table) but a cached entry can hold many ranges over the
+    // same index (e.g. several disjoint windows), so the old per-range
+    // `.filter()` re-scanned the same small array once per range for no
+    // benefit.
+    const byIndex = new Map<string, IndexKeyEntry[]>();
+
+    for (const entry of keys) {
+        const bucket = byIndex.get(entry.index);
+
+        if (bucket) {
+            bucket.push(entry);
+        } else {
+            byIndex.set(entry.index, [entry]);
+        }
+    }
+
     // A write is only provably outside the read slice when every range the
     // query read is expressed over an index we actually computed a key for.
     // A range over an index missing from `keys` (unencodable component) is
     // unprovable, so it counts as touched.
     return ranges.some((range) => {
-        const matching = keys.filter((entry) => entry.index === range.index);
+        const matching = byIndex.get(range.index);
 
-        if (matching.length === 0) {
+        if (!matching || matching.length === 0) {
             return true;
         }
 

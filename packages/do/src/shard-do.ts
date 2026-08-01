@@ -92,6 +92,7 @@ import type {
     QueueMetadata,
     QueuesResult,
     ReactiveCacheOptions,
+    ReadFootprint,
     RelayHost,
     RelayMember,
     ResolvedShape,
@@ -134,6 +135,7 @@ import {
     ConflictError,
     createDependencyTracker,
     createFanoutCounters,
+    createReadFootprint,
     createRelayLink,
     DATA_MIGRATION_STATE_TABLE,
     DEFAULT_MAX_RELAYS,
@@ -700,6 +702,14 @@ const MAX_HELD_SPANS_PER_TRACE = 500;
 const WIDE_EVENT_NAME = "lunora.dispatch";
 
 /**
+ * Flatten a {@link ReadFootprint.ranges} snapshot into the flat array
+ * `ReactiveCache.run`'s `ranges` thunk expects. `undefined` (nothing
+ * narrowable) becomes `[]` — the thunk's own default — rather than a special
+ * case the caller has to know about.
+ */
+const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRange[] => (byTable ? [...byTable.values()].flat() : []);
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement `handleRpc` and may emit deltas via
@@ -1234,6 +1244,17 @@ abstract class ShardDO {
     private currentTracker: DependencyTracker | undefined;
 
     /**
+     * In-flight range footprint (the `onReadRange` channel) for the
+     * currently-executing cached query. Set by `runCachedQuery` alongside
+     * `currentTracker` so `getCtxDbReadRangeHook` — and the range-marking half
+     * of `getCtxDbReadHook` — can stamp it without threading it explicitly
+     * through every generated handler signature. `ReactiveCache.run`'s ranges
+     * thunk reads it lazily, AFTER the handler resolves, so it always sees the
+     * footprint's final state. Cleared in the same `finally` as `currentTracker`.
+     */
+    private currentReadFootprint: ReadFootprint | undefined;
+
+    /**
      * Tables the in-flight dispatch full-scanned (read via `SCAN_DEP`, no index
      * / point lookup). Allocated at the top of each `/rpc` dispatch and drained
      * into `recordFunctionCall` once the handler returns, so the durable
@@ -1473,8 +1494,22 @@ abstract class ShardDO {
         return this.withTriggerTrace("alarm", async () => this.runner.handleAlarm());
     }
 
-    /** Subclasses implement function dispatch. */
-    public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
+    /**
+     * Subclasses implement function dispatch.
+     *
+     * `headroom` is an optional BY-VALUE override, mirroring
+     * {@link ShardDO.deleteRowThroughWriter}'s pattern: the main `/rpc` dispatch
+     * (`handleFetchCloudflare`) captures its freshly-minted tracker in a LOCAL and
+     * passes it here explicitly, so the ctx this dispatch builds never depends on
+     * `this.currentTransactionHeadroom` still holding the right value by the time
+     * the (possibly `await`-interleaved) handler runs — a concurrent dispatch's
+     * `finally` clearing that shared field could otherwise leave this one
+     * unmetered mid-flight. Callers that dispatch through here without minting
+     * their own tracker (`dispatchLifecycle`, `handleRunAs`) omit it and the
+     * codegen subclass falls back to `this.transactionHeadroom()`, unchanged from
+     * before this parameter existed.
+     */
+    public abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
 
     /**
      * The registered function paths to dispatch when a socket connects/disconnects.
@@ -2133,9 +2168,15 @@ abstract class ShardDO {
      * The base class can't build a writer without the user's `schema.ts`, so it
      * reports the table as unknown; the codegen-generated subclass overrides
      * this to call `writer.delete(id)` on a live `createShardCtxDb(...)` writer.
+     *
+     * `headroom` is an optional BY-VALUE override: {@link ShardDO.runShardBulkDelete}
+     * (a normal `/rpc` dispatch) omits it, so the override falls back to
+     * `this.transactionHeadroom()` — the per-dispatch meter every other write
+     * already uses. {@link ShardDO.pollTtlSweeps} (an alarm work item, no dispatch
+     * in flight) passes its own fresh tracker explicitly instead.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected deleteRowThroughWriter(_table: string, _id: string): Promise<void> {
+    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void> {
         return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${_table}`, { status: 404 }));
     }
 
@@ -3011,6 +3052,17 @@ abstract class ShardDO {
      * cadence, so freshly-written rows expire within a bounded window) while any
      * TTL table exists, or `undefined` when there are none — so a DO with no TTL
      * table never arms this tier.
+     *
+     * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
+     * spec, every batch) — not per-row or per-spec — because the ceiling exists to
+     * bound one alarm tick's total isolate cost, not any single table's. A
+     * `TRANSACTION_LIMIT_EXCEEDED` mid-batch is "batch full", not a genuine
+     * failure: `selectExpiredIds` never re-selects an already-deleted row, so
+     * deletion IS the resumable checkpoint here — no separate cursor is needed.
+     * The sweep stops immediately, logs a `warn` (not `recordShapeError`, which
+     * would surface as a genuine failure), and returns `Date.now()` so the shared
+     * alarm re-arms promptly via `nextPollAlarmTarget`'s existing due-now floor,
+     * rather than waiting out the full `TTL_SWEEP_INTERVAL_MS` cadence.
      */
     protected async pollTtlSweeps(): Promise<number | undefined> {
         const specs = this.ttlSweeps();
@@ -3021,6 +3073,7 @@ abstract class ShardDO {
 
         const sql = this.sql as SqlExec;
         const now = Date.now();
+        const headroom = this.alarmHeadroom();
 
         for (const spec of specs) {
             let batches = 0;
@@ -3030,10 +3083,12 @@ abstract class ShardDO {
                 const page = selectExpiredIds(sql, spec, now, TTL_SWEEP_BATCH);
 
                 for (const id of page.ids) {
-                    // Sequential: serialise writes to avoid OCC contention on this DO
-                    // (same reasoning as `runShardBulkDelete`).
-                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
-                    await this.deleteRowThroughWriter(spec.table, id);
+                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkDelete`)
+                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom);
+
+                    if (limitHit) {
+                        return Date.now();
+                    }
                 }
 
                 hasMore = page.hasMore;
@@ -3096,6 +3151,24 @@ abstract class ShardDO {
      * with empty dep sets, so writes never invalidate them and stale
      * results stick around — the {@link ReactiveCache} class is contract-
      * neutral about who fills `deps`.
+     *
+     * Also allocates a fresh {@link ReadFootprint} alongside the tracker,
+     * stored on `this.currentReadFootprint` so `getCtxDbReadRangeHook()` —
+     * and the range-marking half of `getCtxDbReadHook()` — can stamp it. Its
+     * `ranges()` is handed to `reactiveCache.run` as a LAZY 4th argument (a
+     * thunk, evaluated only after `run()` resolves), the same deferral
+     * `deps` already relies on: the footprint is only complete once the
+     * handler has actually run. Subclasses that also want range-precise
+     * invalidation should pass `getCtxDbReadRangeHook()` as `onReadRange` on
+     * the same `createShardCtxDb(...)` call — mirroring `onRead` above. A
+     * subclass that only wires `onRead` still works: `ranges()` degrades to
+     * `undefined` and every read is treated as a whole-table dependency, per
+     * `ReactiveCache.run`'s own default. When `onReadRange` IS wired, a table
+     * `footprint.ranges()` could not narrow (any by-id/scan read, or a
+     * provable range mixed with one) still falls back to a whole-table
+     * `SCAN_DEP`, stamped after `run()` resolves — see the fallback in this
+     * method's body. Only a table read EXCLUSIVELY through provable ranges
+     * gets range-precise invalidation instead.
      */
     protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
         if (!this.reactiveCache) {
@@ -3113,6 +3186,13 @@ abstract class ShardDO {
         const tracker = createDependencyTracker();
 
         this.currentTracker = tracker;
+
+        // Same snapshot/restore discipline as `currentTracker` above, for the
+        // ranges channel.
+        const previousFootprint = this.currentReadFootprint;
+        const footprint = createReadFootprint();
+
+        this.currentReadFootprint = footprint;
 
         // Detect a cache hit cheaply by diffing the cache's lifetime hit
         // counter across the `run` call — a hit means the callback (and thus
@@ -3138,8 +3218,49 @@ abstract class ShardDO {
                 : // eslint-disable-next-line unicorn/no-null -- fold userId/claims into the discriminator; missing fields serialize as null so the shape stays canonical
                   stableStringify({ claims: claims ?? null, userId: userId ?? null });
 
+        // Wraps `run` so that, once the handler has actually executed and the
+        // footprint is final, every table it touched that `footprint.ranges()`
+        // could NOT narrow gets a whole-table `SCAN_DEP` stamped into the same
+        // tracker `deps` set the cache indexes by — mirroring the whole-table
+        // fallback `executeSubscription` gets for free from `footprint.tables`
+        // (see `writeTouchesMemo` in `subscription-range-gate.ts`, which treats
+        // any table in a subscription's memo without a narrowed range as
+        // "assume touched"). Two reads land here: a table read only through an
+        // unprovable path (scan / by-id), which the tracker already deps via
+        // `getCtxDbReadHook`, and — the gap this closes — a table read through
+        // BOTH a provable range (`onReadRange`, deps nothing on its own) AND a
+        // by-id read (`onRead`, which marks the table unnarrowable so
+        // `ReadFootprint.ranges()` drops its slices). That mix used to leave
+        // the cache entry with deps `{table:id}` and ranges `[]`: an insert of
+        // a NEW row into the range matched neither and the stale entry
+        // survived. A table `ranges()` DID narrow is deliberately left alone —
+        // adding a fallback there would defeat the range-precise invalidation
+        // this cache exists to provide. This does not touch `ReadFootprint`'s
+        // unnarrowable semantics (which subscriptions also rely on); it only
+        // changes what `runCachedQuery` derives FROM that footprint.
+        //
+        // Ordering relies on `ReactiveCache.run`'s own contract: it awaits
+        // `run()` in full, THEN calls the `ranges` thunk, and only THEN reads
+        // `deps` to index the entry. `tracker.collect()` below hands the cache
+        // a live `Set` reference, so stamping it here — after the real
+        // handler resolved but before either later step — lands in time.
+        const runWithRangeFallback = async (): Promise<R> => {
+            const result = await run();
+            const narrowed = footprint.ranges();
+
+            for (const table of footprint.tables) {
+                if (!narrowed?.has(table)) {
+                    tracker.recordRead(table, SCAN_DEP);
+                }
+            }
+
+            return result;
+        };
+
         try {
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), run);
+            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), runWithRangeFallback, () =>
+                flattenReadRanges(footprint.ranges()),
+            );
 
             this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
             this.currentRequestReadTables = tablesFromDeps(tracker.collect());
@@ -3147,6 +3268,7 @@ abstract class ShardDO {
             return result;
         } finally {
             this.currentTracker = previous;
+            this.currentReadFootprint = previousFootprint;
         }
     }
 
@@ -3163,10 +3285,21 @@ abstract class ShardDO {
      * full-scan attribution — and unlike the tracker, it's collected even when
      * the reactive cache is off, since the causal signal is independent of
      * caching.
+     *
+     * It ALSO marks the table unnarrowable on {@link currentReadFootprint},
+     * mirroring `executeSubscription`'s wiring (which hands a single
+     * `ReadFootprint`'s `onRead`/`onReadRange` pair straight to `buildCtx`).
+     * `ctx-db.ts`'s reader calls this `onRead` and `onReadRange` mutually
+     * exclusively per read — a provable index slice fires ONLY `onReadRange`,
+     * everything else (by-id, scan, an unprovable slice) fires ONLY this
+     * `onRead` — so folding the footprint's `onRead` in here is exactly the
+     * "read this table outside a range" signal {@link ReadFootprint.ranges}
+     * needs to drop that table from the narrowed set.
      */
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
         return (table, idOrScan) => {
             this.currentTracker?.recordRead(table, idOrScan ?? SCAN_DEP);
+            this.currentReadFootprint?.onRead(table, idOrScan ?? SCAN_DEP);
 
             // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
             // predicated (indexed) `findMany` calls `onRead(table)` with no id
@@ -3179,6 +3312,23 @@ abstract class ShardDO {
             if (idOrScan === SCAN_DEP) {
                 this.currentScannedTables?.add(table);
             }
+        };
+    }
+
+    /**
+     * Returns an `onReadRange` callback suitable to hand to
+     * `createShardCtxDb`'s `onReadRange` option, alongside `getCtxDbReadHook()`
+     * as `onRead` on the same call — the pairing `executeSubscription` already
+     * uses via `ReadFootprint`. Stamps the in-flight footprint (set by
+     * `runCachedQuery`) when one exists and is a no-op otherwise, so subclasses
+     * can wire this hook unconditionally regardless of whether the cache is
+     * enabled. Without this wiring `runCachedQuery`'s ranges thunk always
+     * observes an empty footprint and every cached query degrades to the prior
+     * whole-table dependency — safe, just not range-precise.
+     */
+    protected getCtxDbReadRangeHook(): (range: KeyRange) => void {
+        return (range) => {
+            this.currentReadFootprint?.onReadRange(range);
         };
     }
 
@@ -3240,6 +3390,23 @@ abstract class ShardDO {
      * drain would take the refresh branch and lose its own ceiling entirely.
      */
     protected subscriptionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
+    }
+
+    /**
+     * A fresh budget for one alarm-driven work item — one external-source
+     * table's tick, or one TTL sweep pass.
+     *
+     * Alarm work runs with no client waiting and no `/rpc` dispatch in flight,
+     * so `transactionHeadroom()`'s per-dispatch tracker is `undefined` there —
+     * leaving external-source ingest and TTL sweeps completely unmetered, the
+     * exact isolate-exhaustion class the meter exists to bound. Handed to the
+     * writer BY VALUE, the same pattern as `subscriptionHeadroom()` and for the
+     * same reason: an ambient instance-field flag would race a concurrently
+     * in-flight `/rpc` dispatch, or a sibling alarm work item, clearing or
+     * substituting the wrong tracker mid-flight.
+     */
+    protected alarmHeadroom(): TransactionHeadroomTracker {
         return new TransactionHeadroomTracker(this.transactionLimits());
     }
 
@@ -4006,7 +4173,18 @@ abstract class ShardDO {
         // ctx-db read hook) so `recordFunctionCall` can persist the causal
         // attribution. Fresh per request; drained below.
         this.currentScannedTables = new Set<string>();
-        this.currentTransactionHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+
+        // Captured in a LOCAL, not just the instance field: `handleRpc` below
+        // receives it BY VALUE (see its docstring), so this dispatch's ctx-build
+        // never depends on `this.currentTransactionHeadroom` still pointing at
+        // THIS tracker by the time an `await`-interleaved concurrent dispatch's
+        // `finally` clears it. Still assigned to the field too — the fallback
+        // `dispatchLifecycle`/`handleRunAs` (which mint no tracker of their own)
+        // and any other reader of `transactionHeadroom()` keep working exactly as
+        // before this parameter existed.
+        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+
+        this.currentTransactionHeadroom = dispatchHeadroom;
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the
@@ -4076,7 +4254,7 @@ abstract class ShardDO {
             // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
             // values. `payload.args` stays in wire form for the request log/metrics
             // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
-            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>);
+            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
@@ -4226,7 +4404,17 @@ abstract class ShardDO {
             this.currentRequestSystem = false;
             this.currentRequestTraceparent = undefined;
             this.currentScannedTables = undefined;
-            this.currentTransactionHeadroom = undefined;
+            // Identity-guarded, not an unconditional clear: `handleRpc` above is
+            // already value-threaded with `dispatchHeadroom` for the ctx-build
+            // itself, but the field is still the fallback `dispatchLifecycle` /
+            // `handleRunAs` (and `transactionHeadroom()` readers generally) use.
+            // An unconditional clear here would let THIS dispatch's `finally` wipe
+            // a DIFFERENT, still-in-flight dispatch's tracker out from under it —
+            // the exact shared-field race this whole mechanism exists to avoid.
+            // Only clear it if it still points at the tracker THIS dispatch set.
+            if (this.currentTransactionHeadroom === dispatchHeadroom) {
+                this.currentTransactionHeadroom = undefined;
+            }
             this.currentIndexHits = undefined;
             this.currentRequestReadTables = undefined;
             this.currentRequestCacheHit = undefined;
@@ -7947,6 +8135,36 @@ abstract class ShardDO {
         } catch {
             // A failed arm clears the flag so a later seed/tick retries.
             this.globalPollScheduled = false;
+        }
+    }
+
+    /**
+     * Delete one expired row through {@link ShardDO.deleteRowThroughWriter},
+     * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
+     * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
+     * that method's own complexity down. Returns `true` when the limit was hit
+     * (the caller must stop the sweep pass) and logs a `warn` recording it; `false`
+     * on an ordinary successful delete. Any OTHER thrown error still propagates —
+     * only the meter's own signal is contained here.
+     */
+    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker): Promise<boolean> {
+        try {
+            await this.deleteRowThroughWriter(table, id, headroom);
+
+            return false;
+        } catch (error) {
+            if (error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED") {
+                this.logs.push({
+                    functionPath: "ttl:sweep",
+                    level: "warn",
+                    message: `TTL sweep for "${table}" hit the transaction limit mid-batch; resuming next tick: ${error.message}`,
+                    timestamp: Date.now(),
+                });
+
+                return true;
+            }
+
+            throw error;
         }
     }
 
