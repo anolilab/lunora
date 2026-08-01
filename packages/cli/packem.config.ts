@@ -9,6 +9,17 @@ export default defineConfig({
         dts: {
             oxc: true,
         },
+        // `commands/eval/handler.ts` does a genuinely dynamic `import()` of an
+        // arbitrary, runtime-discovered `*.eval.ts` file (never a glob
+        // candidate — the path is a `file://` URL built from a directory walk).
+        // `@rollup/plugin-dynamic-import-vars` otherwise tries to turn every
+        // non-literal `import()` argument into a glob and hard-fails when it
+        // can't statically resolve one; excluding the one file that needs a
+        // real runtime import keeps the plugin doing its normal job everywhere
+        // else in the CLI.
+        dynamicVars: {
+            exclude: ["**/commands/eval/handler.ts"],
+        },
         license: {
             path: "./LICENSE.md",
         },
