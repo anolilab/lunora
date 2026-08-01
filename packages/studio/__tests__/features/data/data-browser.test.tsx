@@ -1439,3 +1439,288 @@ describe("dataBrowser — facets", () => {
         expect(screen.getByTestId("db-row").textContent).toContain("again");
     });
 });
+
+interface ShardSwitchRow {
+    __id__: string;
+    text: string;
+}
+
+/**
+ * Two independent shard fixtures — `""` (the default/root shard) serving table
+ * `inbox`, and `"s2"` serving a DIFFERENT table `archive` — so a test can drive
+ * an atomic table+shard switch (the shape a saved-query apply or a cross-shard
+ * deep link produces: table, shard, and search all change in ONE URL push) and
+ * tell which shard a request actually reached from `options.shardKey`.
+ */
+const SHARD_SWITCH_FIXTURES: Record<string, { rows: ShardSwitchRow[]; table: string }> = {
+    "": { rows: [{ __id__: "a1", text: "alpha-hello" }], table: "inbox" },
+    s2: { rows: [{ __id__: "b1", text: "beta-world" }], table: "archive" },
+};
+
+const createShardSwitchClient = (): MockClientHooks =>
+    createMockClient({
+        query: (reference, args, options): unknown => {
+            const shard = (options as { shardKey?: string } | undefined)?.shardKey ?? "";
+            const fixture = SHARD_SWITCH_FIXTURES[shard];
+
+            if (fixture === undefined) {
+                throw new Error(`unknown shard: ${shard}`);
+            }
+
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: fixture.table, rowCount: fixture.rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.writeRow) {
+                const { id, op } = args as { id?: string; op: string };
+
+                if (op === "delete" && id !== undefined) {
+                    fixture.rows = fixture.rows.filter((row) => row["__id__"] !== id);
+                }
+
+                return { id: id ?? null, op };
+            }
+
+            // readTablePage
+            const { search = "", table } = args as { search?: string; table: string };
+
+            if (table !== fixture.table) {
+                throw new Error(`unknown table "${table}" on shard "${shard}"`);
+            }
+
+            const needle = search.trim().toLowerCase();
+            const matched = needle === "" ? fixture.rows : fixture.rows.filter((row) => row.text.toLowerCase().includes(needle));
+
+            return { columns: ["__id__", "text"], rows: matched, total: matched.length };
+        },
+    });
+
+/**
+ * Test host that can drive an ATOMIC table+shard+search switch — `table`,
+ * `search`, and `shardKey` all change inside ONE event handler (one React
+ * commit), the way the real Table editor's "apply saved query" flow pushes a
+ * saved view's table, shard, and search as a single URL update.
+ * `onSelectTable` (a plain in-app table click) deliberately leaves the shard
+ * alone, matching production.
+ */
+const ShardSwitchDataBrowser = ({ pageSize }: { pageSize?: number }): ReactElement => {
+    const [table, setTable] = useState<string | undefined>(undefined);
+    const [search, setSearch] = useState<string | undefined>(undefined);
+    const [shardKey, setShardKey] = useState<string | undefined>(undefined);
+
+    const onSelectTable = (next: string, options?: { search?: string }): void => {
+        setTable(next);
+        setSearch(options?.search);
+    };
+
+    const applyShardSwitch = (): void => {
+        setTable("archive");
+        setSearch(undefined);
+        setShardKey("s2");
+    };
+
+    return (
+        <>
+            <button data-testid="apply-shard-switch" onClick={applyShardSwitch} type="button">
+                apply saved query
+            </button>
+            <DataBrowser editable initialSearch={search} initialShardKey={shardKey} onSelectTable={onSelectTable} pageSize={pageSize} tableParam={table} />
+        </>
+    );
+};
+
+describe("dataBrowser — table switch reset (STUDIO-01)", () => {
+    it("issues the first read for the new table with ITS OWN search, not the previous table's leftover search", async () => {
+        expect.assertions(1);
+
+        const mock = createShardSwitchClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ShardSwitchDataBrowser pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-inbox"));
+        await screen.findByText("alpha-hello");
+
+        // Type a search for table A, then switch WITHOUT waiting for its 300ms
+        // debounce to settle — the reset must discard it outright, not merely win
+        // a race against it.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "alpha" } });
+        fireEvent.click(screen.getByTestId("apply-shard-switch"));
+
+        await screen.findByText("beta-world");
+
+        const archiveRead = mock.query.mock.calls.find(
+            (call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { table: string }).table === "archive",
+        ) as [unknown, { search?: string; table: string }, unknown] | undefined;
+
+        // The very first read for the new table already carries ITS search
+        // ("") — never table A's leftover "alpha".
+        expect(archiveRead?.[1].search).toBe("");
+    });
+
+    it("targets the NEW shard for a delete issued right after a switch that also changes shard", async () => {
+        expect.assertions(1);
+
+        const mock = createShardSwitchClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ShardSwitchDataBrowser pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-inbox"));
+        await screen.findByText("alpha-hello");
+
+        fireEvent.click(screen.getByTestId("apply-shard-switch"));
+        await screen.findByText("beta-world");
+
+        // Select and delete the new table's row as soon as it's on screen — the
+        // earliest an operator could possibly click after the switch.
+        fireEvent.click(screen.getByTestId("db-select-all"));
+        await screen.findByTestId("grid-selection-count");
+
+        fireEvent.click(screen.getByTestId("grid-selection-delete"));
+        fireEvent.click(screen.getByTestId("grid-selection-delete-confirm"));
+
+        await waitFor(() => {
+            const deletes = mock.query.mock.calls.filter(
+                (call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
+            );
+
+            if (deletes.length === 0) {
+                throw new Error("delete not issued yet");
+            }
+        });
+
+        const deletes = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete");
+
+        // Every delete targets the NEW shard ("s2") — the old code's own comment
+        // claimed this couldn't happen, and it could: the debounced shard used to
+        // lag the table-derived selection by up to 400ms.
+        expect(deletes.every((call) => (call[2] as { shardKey?: string } | undefined)?.shardKey === "s2")).toBe(true);
+    });
+});
+
+// Mirrors `MAX_BULK_DELETE_BATCHES` in `use-data-browser.tsx` (not exported —
+// this test drives the client-side loop-exhaustion path directly).
+const MAX_BULK_DELETE_BATCHES = 200;
+
+/**
+ * A `messages` table pre-loaded with more matching rows than
+ * `MAX_BULK_DELETE_BATCHES × bulkCap` can drain in one bulk-delete run, so the
+ * client's own batch loop runs out before the server ever reports
+ * `hasMore: false` — exercising the STUDIO-02 truncation path, distinct from
+ * `createFilterableClient`'s ordinary (server-completes) multi-batch drain.
+ */
+const createCapExhaustingClient = (rowCount: number, bulkCap: number): MockClientHooks => {
+    let rows = Array.from({ length: rowCount }, (_, index) => {
+        return { __id__: `m${index.toString()}`, status: "active", text: `row-${index.toString()}` };
+    });
+
+    return createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.deleteRows) {
+                const batch = rows.slice(0, bulkCap);
+                const doomed = new Set(batch.map((row) => row["__id__"]));
+
+                rows = rows.filter((row) => !doomed.has(row["__id__"]));
+
+                return { deleted: batch.length, hasMore: rows.length > 0 };
+            }
+
+            const { limit = 50, offset = 0, table } = args as { limit?: number; offset?: number; table: string };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            return { columns: ["__id__", "status", "text"], rows: rows.slice(offset, offset + limit), total: rows.length };
+        },
+    });
+};
+
+describe("dataBrowser — bulk delete cap exhaustion (STUDIO-02)", () => {
+    it("surfaces a truncation message when the client's batch cap is hit before the server reports done", async () => {
+        expect.assertions(3);
+
+        // 205 matching rows, capped at 1 row/call → needs 205 round-trips to
+        // finish; the client stops itself at 200.
+        const mock = createCapExhaustingClient(MAX_BULK_DELETE_BATCHES + 5, 1);
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length === 0) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        const errorElement = await screen.findByTestId("db-write-error");
+
+        expect(errorElement.textContent).toBe("Stopped after 200 batches — rows still match this delete. Run it again to remove the rest.");
+
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.deleteRows);
+
+        expect(bulk).toHaveLength(MAX_BULK_DELETE_BATCHES);
+
+        // 205 rows − 200×1 deleted = 5 left; the refetch this triggers shows them
+        // rather than a page that quietly still looks "done".
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 5) {
+                throw new Error("page not refetched yet");
+            }
+        });
+
+        expect(screen.getAllByTestId("db-row")).toHaveLength(5);
+    });
+
+    it("still reports clean success (no writeError) when the delete finishes under the cap", async () => {
+        expect.assertions(1);
+
+        const mock = createFilterableClient(1);
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length > 0) {
+                throw new Error("rows not deleted yet");
+            }
+        });
+
+        expect(screen.queryByTestId("db-write-error")).toBeNull();
+    });
+});

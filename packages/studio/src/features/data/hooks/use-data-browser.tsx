@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
@@ -264,6 +264,13 @@ const resolveStagedChanges = (page: TablePage | null, staged: StagedEditsModel["
 /** Whether a column is editable in place — every column but the meta ones. */
 const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
 
+/**
+ * Why `drainBulk` stopped: `"completed"` when the server reported no more
+ * matching rows; `"cap-hit"` when the client's own `MAX_BULK_DELETE_BATCHES`
+ * loop ran out first — matching rows may still remain.
+ */
+type BulkDrainOutcome = "cap-hit" | "completed";
+
 const useDataBrowser = ({
     initialFilters,
     initialOrderBy,
@@ -332,24 +339,15 @@ const useDataBrowser = ({
     // selections.
     const [sorting, setSorting] = useState<SortingState>(() => fromOrderBy(initialOrderBy));
 
-    // Search box value. Debounced into a server-side `search` (filters across the
-    // WHOLE table, not just the loaded page), which re-fetches from offset 0.
+    // Search box value; debounced (below, into `search`) after the structured
+    // filters / facets / staged-edit state it resets alongside on a table switch
+    // are all in scope.
     const [filter, setFilter] = useState<string>(initialSearch ?? "");
-    const search = useDebounced(filter.trim(), 300);
 
-    // The shard the reads target, debounced so typing a key settles before
-    // refetching the table list + page rather than firing per keystroke. Page-bound
-    // actions (preview, facet fetch, row write/delete, bulk delete) target this same
-    // settled shard so a write can never hit a different shard than the one whose
-    // rows are on screen during the debounce window. The live `shardKey` is only the
-    // input value + the share-link descriptor.
-    const debouncedShard = useDebounced(shardKey.trim(), 400);
-
-    // Structured column filters. Held in a ref too so a write's bulk-delete reads
-    // the current value without threading it through; the page query reads the
-    // state directly via `pageArgs`.
+    // Structured column filters. `bulkDelete` / `toggleFacet` read this state
+    // directly (both are recreated every render and read it synchronously, never
+    // across an `await`), same as the page query via `pageArgs`.
     const [filters, setFilters] = useState<EditableFilter[]>(() => toEditableFilters(initialFilters ?? []));
-    const filtersRef = useMirroredRef<EditableFilter[]>(filters);
 
     // Facets (Datasette-style per-column value/count summaries): the columns the
     // operator has toggled into the facet sidebar, each with its loaded summary.
@@ -371,6 +369,83 @@ const useDataBrowser = ({
     const stagedEdits = useStagedEdits();
     const [editingCell, setEditingCell] = useState<null | { column: string; rowId: string }>(null);
     const [committing, setCommitting] = useState<boolean>(false);
+
+    // Tracks the table the local view has been (re-)seeded for. Seeded with the
+    // mount `tableParam` so the first render is a no-op (the `useState`
+    // initializers above already hydrated from the URL).
+    const [seededTableParameter, setSeededTableParameter] = useState<string | undefined>(tableParam);
+    const isTableSwitch = tableParam !== seededTableParameter;
+
+    // Re-seed the per-table local view state whenever the open table changes — an
+    // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
+    // values come from the new URL (empty on a plain switch, the id on an FK-nav,
+    // the saved view on a deep link), so the table and its view never disagree.
+    //
+    // Done RENDER-TIME (the "adjusting state when a prop changes" pattern), not in
+    // an effect: an effect — even a synchronous one, even one that skips the old
+    // `queueMicrotask` hop — always lets render N commit with the PREVIOUS table's
+    // state before it can reset anything for render N+1, and a delete clicked in
+    // that committed window reads the previous table's `debouncedShard`. Calling
+    // these setters here makes React discard this render and retry synchronously
+    // with the reset state already applied, so `pageArgs`/`countArgs` and
+    // `debouncedShard` below are correct on the first render that ever commits
+    // after a switch — no write-window where a click can still reach the old
+    // table/shard.
+    //
+    // `selectedTable` is derived from `tableParam`, so there is no separate
+    // reconcile/"select the URL's table" step — opening the URL's table is
+    // implicit. Reads `initialFilters`/`initialOrderBy`/`initialSearch`/
+    // `initialShardKey` DIRECTLY (this render's props), not through a mirrored
+    // ref: unlike the effect this replaces, this block is gated by a plain
+    // condition re-evaluated every render (`tableParam !== seededTableParameter`)
+    // rather than an effect dependency array, so it can only ever fire on a real
+    // `tableParam` change. The URL-mirror round trip from the user's OWN typing
+    // (which changes `initialSearch` etc. without changing `tableParam`) can't
+    // retrigger it, so there is no staleness hazard here to route around with a
+    // ref the way the mirror effect below still has to.
+    if (isTableSwitch) {
+        setSeededTableParameter(tableParam);
+        setSorting(fromOrderBy(initialOrderBy));
+        setFilter(initialSearch ?? "");
+
+        const nextFilters = toEditableFilters(initialFilters ?? []);
+
+        setFilters(nextFilters);
+        // Re-seed the shard from the new URL too, so a switch that also changes
+        // shard (a saved query / cross-shard deep link) points reads AND writes
+        // at the URL's shard instead of leaving the previous table's shard live.
+        setShardKey(initialShardKey ?? "");
+        clearFacets();
+        stagedEdits.clear();
+        setEditingCell(null);
+        setOffset(0);
+    }
+
+    // The raw input each debounced mirror below reflects for THIS render: on a
+    // table switch, the new table's URL values directly — the `filter`/`shardKey`
+    // STATE above only catches up once React retries this render, and feeding
+    // `useDebounced` the stale state on THIS pass would bake the stale value into
+    // its own internal (persistent) `debounced` state via its `resetKey` snap (see
+    // `useDebounced`'s doc comment). Otherwise, the live state as usual.
+    const filterInput = isTableSwitch ? (initialSearch ?? "") : filter;
+    const shardInput = isTableSwitch ? (initialShardKey ?? "") : shardKey;
+
+    // Search box value, debounced into a server-side `search` (filters across the
+    // WHOLE table, not just the loaded page), which re-fetches from offset 0.
+    //
+    // The shard the reads target, debounced so typing a key settles before
+    // refetching the table list + page rather than firing per keystroke. Page-bound
+    // actions (preview, facet fetch, row write/delete, bulk delete) target this same
+    // settled shard so a write can never hit a different shard than the one whose
+    // rows are on screen during the debounce window. The live `shardKey` is only the
+    // input value + the share-link descriptor.
+    //
+    // Both key their `resetKey` on `tableParam`: a table switch snaps them straight
+    // to the new table's values (via `filterInput`/`shardInput` above) with NO
+    // trailing debounce window, instead of continuing to serve the previous
+    // table's search predicate / shard for up to 300–400ms after the switch.
+    const search = useDebounced(filterInput.trim(), 300, tableParam);
+    const debouncedShard = useDebounced(shardInput.trim(), 400, tableParam);
 
     // ── Reads via TanStack Query: a one-shot fetch plus a live WS push into the
     // cache (the same model as every other studio panel). The table list follows
@@ -475,7 +550,7 @@ const useDataBrowser = ({
     // drops it entirely. With no table selected the hook seeds the slot without
     // fetching (a null fetcher).
     const toggleFacet = (column: string): void => {
-        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(debouncedShard, selectedTable, filtersRef.current, search));
+        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(debouncedShard, selectedTable, filters, search));
     };
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
@@ -518,24 +593,19 @@ const useDataBrowser = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: `useMirroredRef` handles are stable, and listing them would say this effect depends on identities it deliberately does not
     }, [debouncedShard, selectedTable, filters, search]);
 
-    // Tracks the table the local view has been (re-)seeded for. Declared before the
-    // mirror effect below so that effect can tell whether the view it's about to
-    // mirror belongs to the current `tableParam` yet. Seeded with the mount
-    // `tableParam` so the first run is a no-op (the `useState` initializers already
-    // hydrated from the URL); the re-seed effect advances it on each table change.
-    const seededTableRef = useRef(tableParam);
-
     // Mirror the active view (shard / search / filters / sort) to the host so it can
     // write it into the URL — making every view a real, shareable link. The shard /
     // search are debounced, so it tracks the displayed view; the table itself is
     // mirrored separately by `onSelectTable`.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern.
-        if (selectedTable === null || onViewChangeRef.current === undefined || seededTableRef.current !== tableParam) {
-            // On a `tableParam` change this effect runs (via `selectedTable`) BEFORE
-            // the re-seed effect below has cleared the previous table's
-            // filters/sort/search. Skipping until the re-seed for this table has run
-            // stops us writing the stale view back into the clean / FK-nav URL.
+        if (selectedTable === null || onViewChangeRef.current === undefined || seededTableParameter !== tableParam) {
+            // The render-time reset above keeps `seededTableParameter` in lockstep with
+            // `tableParam` on every COMMITTED render, so this branch is a defensive
+            // invariant rather than a live gate now (there's no longer a committed
+            // render where a switch has landed but the reset hasn't) — kept so a
+            // future change to the reset can't silently reintroduce the stale-URL-
+            // write hazard the two-effect version had to route around.
             return;
         }
 
@@ -548,56 +618,7 @@ const useDataBrowser = ({
         // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the ref is a `useMirroredRef` handle — stable by construction; depending on `onViewChange` itself is what caused the navigate loop this pattern exists to avoid
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: the ref handle is stable, and depending on `onViewChange` is exactly the loop this avoids
-    }, [selectedTable, tableParam, filters, sorting, search, debouncedShard]);
-
-    // The URL's view params, mirrored to refs so the re-seed effect can read the
-    // CURRENT values while depending on `tableParam` alone (depending on the params
-    // themselves would re-seed — wiping a half-typed filter — every time the user's
-    // own edit mirrors back to the URL).
-    const initialFiltersRef = useMirroredRef(initialFilters);
-    const initialOrderByRef = useMirroredRef(initialOrderBy);
-    const initialSearchRef = useMirroredRef(initialSearch);
-    const initialShardKeyRef = useMirroredRef(initialShardKey);
-
-    // Re-seed the per-table local view state whenever the open table changes — an
-    // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
-    // values come from the new URL (empty on a plain switch, the id on an FK-nav,
-    // the saved view on a deep link), so the table and its view never disagree.
-    // Skipped on first mount (the `useState` initializers already hydrated from the
-    // URL); `seededTableRef` (declared above, seeded with the mount `tableParam`)
-    // makes the first run a no-op.
-    //
-    // `selectedTable` is derived from `tableParam`, so there is no separate
-    // reconcile/"select the URL's table" step — opening the URL's table is implicit.
-    useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- URL → view sync: when the open table (a URL value, not a user event) changes, re-seed the per-table view from the new URL. It can't be a render-time computation: `filter` is debounced input state and the resets span several `useState`s + the facet/staged hooks.
-        if (seededTableRef.current === tableParam) {
-            return;
-        }
-
-        seededTableRef.current = tableParam;
-
-        // Defer out of the effect's synchronous run (the resets touch several state
-        // setters across hooks) — matching the prior reconcile pattern.
-        queueMicrotask(() => {
-            const nextFilters = toEditableFilters(initialFiltersRef.current ?? []);
-
-            setSorting(fromOrderBy(initialOrderByRef.current));
-            setFilter(initialSearchRef.current ?? "");
-            setFilters(nextFilters);
-            filtersRef.current = nextFilters;
-            // Re-seed the shard from the new URL too, so a switch that also changes
-            // shard (a saved query / cross-shard deep link) points reads AND writes
-            // at the URL's shard instead of leaving the previous table's shard live.
-            setShardKey(initialShardKeyRef.current ?? "");
-            clearFacets();
-            stagedEdits.clear();
-            setEditingCell(null);
-            setOffset(0);
-        });
-        // Fire only on a real `tableParam` change; the URL params are read via refs above.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tableParam]);
+    }, [selectedTable, tableParam, seededTableParameter, filters, sorting, search, debouncedShard]);
 
     const goToPage = (nextOffset: number): void => {
         if (selectedTable === null) {
@@ -700,6 +721,14 @@ const useDataBrowser = ({
     // call; the loop is bounded by `MAX_BULK_DELETE_BATCHES` so it can never run
     // unbounded. Sequential by design: each call's deletes shrink the set the
     // next read sees, so the round-trips can't be parallelised.
+    //
+    // Running out of batches before the server reports `hasMore: false` means
+    // rows still match the predicate — the loop just stopped asking. Falling
+    // through to the same `setOffset(0); pageQuery.refetch();` as a clean finish
+    // would look like success (the visible page empties or shrinks along with
+    // whatever DID get deleted) while leaving the operator with no signal that
+    // more rows are still out there, so this reports the outcome and surfaces a
+    // truncation notice on `writeError` instead of staying silent.
     const drainBulk = async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<void> => {
         if (selectedTable === null) {
             return;
@@ -708,17 +737,24 @@ const useDataBrowser = ({
         setWriteError(null);
 
         try {
+            let outcome: BulkDrainOutcome = "cap-hit";
+
             for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
                 // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
                 const result = (await client.query(ref, args, callOptions(debouncedShard))) as BulkDeleteResult;
 
                 if (!result.hasMore) {
+                    outcome = "completed";
                     break;
                 }
             }
 
             setOffset(0);
             pageQuery.refetch();
+
+            if (outcome === "cap-hit") {
+                setWriteError(`Stopped after ${MAX_BULK_DELETE_BATCHES.toString()} batches — rows still match this delete. Run it again to remove the rest.`);
+            }
         } catch (error) {
             setWriteError((error as Error).message);
         }
@@ -781,7 +817,7 @@ const useDataBrowser = ({
     };
 
     const bulkDelete = (): void => {
-        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filtersRef.current), search, table: selectedTable }));
+        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filters), search, table: selectedTable }));
     };
 
     const emptyTable = (): void => {
