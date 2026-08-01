@@ -1354,7 +1354,7 @@ class TabCoordinator {
     get isRunning(): boolean;
     broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string): void;
     broadcastSubscriptionError(key: string, error: SubscriptionError): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number): void;
 }
 ```
 

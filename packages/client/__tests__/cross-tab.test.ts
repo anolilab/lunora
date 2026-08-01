@@ -11,7 +11,7 @@ type RawMessage = { tabId: string; ts: number; type: "claim-leadership" | "heart
 /** Wire shape of a leader's `subscription-data` / `subscription-settled` broadcast, for raw test-side sends simulating a leader tab. */
 type RawLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
-    | { cursor?: number; epoch?: string; key: string; tabId: string; type: "subscription-settled" };
+    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" };
 
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -212,6 +212,42 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
             coordinator.stop();
         }
     });
+
+    it("broadcastSubscriptionSettled carries lastMutationId on the wire when supplied, and omits it when not", async () => {
+        expect.assertions(2);
+
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const coordinator = new TabCoordinator({ channelName, heartbeatInterval: HEARTBEAT_INTERVAL_MS, leaderTimeout: LEADER_TIMEOUT_MS });
+        const rogue = new BroadcastChannel(channelName);
+        const received: RawLeaderMessage[] = [];
+
+        rogue.addEventListener("message", (event: MessageEvent<RawLeaderMessage>): void => {
+            received.push(event.data);
+        });
+
+        try {
+            coordinator.start();
+            await delay(LEADER_TIMEOUT_MS + 20);
+
+            // A custom-mutator watermark rides along so a follower's `@lunora/db`
+            // `onCheckpoint` gate can advance too, not just cursor/epoch.
+            coordinator.broadcastSubscriptionSettled("q:1::{}::", 12, "epoch-2", 7);
+            // No `lastMutationId` supplied — a plain `useQuery` subscription with
+            // no custom-mutator watermark to forward.
+            coordinator.broadcastSubscriptionSettled("q:2::{}::", 1);
+
+            await delay(20);
+
+            const withId = received.find((m) => m.type === "subscription-settled" && m.key === "q:1::{}::");
+            const withoutId = received.find((m) => m.type === "subscription-settled" && m.key === "q:2::{}::");
+
+            expect(withId).toMatchObject({ lastMutationId: 7 });
+            expect(withoutId && "lastMutationId" in withoutId).toBe(false);
+        } finally {
+            rogue.close();
+            coordinator.stop();
+        }
+    });
 });
 
 describe("lunoraClient — cross-tab follower drops confirmed optimistic layers (CLIENT-01)", () => {
@@ -264,11 +300,15 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
 
             client.subscribe(fnRef("q:list"), {}, (value) => received.push(value));
 
-            await client.mutation(fnRef("m:set"), {}, {
-                optimisticUpdate: (store) => {
-                    store.setQuery(fnRef("q:list"), {}, 42);
+            await client.mutation(
+                fnRef("m:set"),
+                {},
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("q:list"), {}, 42);
+                    },
                 },
-            });
+            );
 
             // The constant `setQuery` layer masks the (still-unknown) server value.
             expect(received.at(-1)).toBe(42);
@@ -315,6 +355,42 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
             // raw leader value — the historical no-cursor behavior, preserved for
             // backward compat with a mixed-version deploy.
             expect(received.at(-1)).toBe(6);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a follower's onCheckpoint fires with the leader-broadcast lastMutationId on a subscription-settled frame", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const checkpoints: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            // The leader relays a `settled` frame (no value change, cursor advanced)
+            // carrying the custom-mutator watermark it already applied — without
+            // forwarding `lastMutationId`, a follower's `@lunora/db` `onCheckpoint`
+            // gate would never see this confirmed write and would hang.
+            rogue.postMessage({
+                cursor: 10,
+                epoch: "epoch-1",
+                key,
+                lastMutationId: 7,
+                tabId: "leader-tab",
+                type: "subscription-settled",
+            } satisfies RawLeaderMessage);
+
+            await delay(30);
+
+            expect(checkpoints).toStrictEqual([{ checkpoint: 10, mutationId: 7 }]);
         } finally {
             rogue.close();
             client.close();
