@@ -15,6 +15,59 @@ const colList = (keys: string[]): string => `(${keys.map((key) => escapeIdentifi
 /** Build a `(?, ?, …)` string for INSERT value placeholders. */
 const valueList = (count: number): string => `(${Array.from({ length: count }).fill("?").join(", ")})`;
 
+/** A value every {@link SqliteAdapter} implementation accepts as a bound parameter. */
+type BindValue = bigint | number | string | Uint8Array | null;
+
+/**
+ * Normalize a diff row value into a type every adapter's `exec`/`query` can
+ * bind, so a value the underlying driver rejects never reaches it and aborts
+ * the whole `applyDiff` transaction — `better-sqlite3` in particular throws
+ * `TypeError: can only bind numbers, strings, bigints, buffers, and null` on
+ * anything else, which previously took the ENTIRE diff's transaction down
+ * with it (including unrelated rows in the same batch) rather than just the
+ * one bad column.
+ *
+ * - `null`/`undefined` → SQL `NULL`.
+ * - `number` / `bigint` / `string` → pass through unchanged.
+ * - `boolean` → `1` / `0` (SQLite has no native boolean type).
+ * - `Uint8Array` (incl. `Buffer`) → pass through unchanged (a supported bind type).
+ * - Plain objects and arrays → `JSON.stringify`'d. The column is declared
+ * `TEXT` by `LocalMirror#ensureTableSchema`'s affinity inference, so the
+ * value reads back as a **string** — callers that stored an object/array
+ * must `JSON.parse` it themselves.
+ * - Anything else (function, symbol, …) → `String(value)`, as a last-resort
+ * fallback so an exotic value type still can't abort the batch.
+ */
+// eslint-disable-next-line sonarjs/function-return-type -- normalizing onto the adapter's supported bind-value union IS the point; every branch returns a member of `BindValue`
+const normalizeBindValue = (value: unknown): BindValue => {
+    if (value === null || value === undefined) {
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL, not JS undefined
+        return null;
+    }
+
+    if (typeof value === "number" || typeof value === "bigint" || typeof value === "string") {
+        return value;
+    }
+
+    if (typeof value === "boolean") {
+        return value ? 1 : 0;
+    }
+
+    if (value instanceof Uint8Array) {
+        return value;
+    }
+
+    if (typeof value === "object") {
+        return JSON.stringify(value);
+    }
+
+    // Function, symbol, etc. — no sane SQL representation. `String()` (not
+    // template-literal interpolation, which `no-base-to-string` also flags)
+    // is the explicit, intentional stringification here.
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- intentional last-resort stringification of an otherwise-unbindable value; see the docblock above
+    return String(value);
+};
+
 // ── Internal (no transaction) ─────────────────────────────────────────────
 
 /**
@@ -45,7 +98,7 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
                 }
 
                 const sql = `INSERT OR REPLACE INTO ${table} ${colList(keys)} VALUES ${valueList(keys.length)}`;
-                const values = keys.map((k) => data[k]);
+                const values = keys.map((k) => normalizeBindValue(data[k]));
 
                 database.exec(sql, values);
                 break;
@@ -58,7 +111,7 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
                 }
 
                 const sql = `UPDATE ${table} SET ${setClause(keys)} WHERE ${pk} = ?`;
-                const values = [...keys.map((k) => data[k]), change.id];
+                const values = [...keys.map((k) => normalizeBindValue(data[k])), change.id];
 
                 database.exec(sql, values);
                 break;
@@ -107,4 +160,4 @@ const applyDiffsToDatabase = (database: SqliteAdapter, diffs: ReadonlyArray<Tabl
     });
 };
 
-export { applyDiffsToDatabase as applyDiffsToDb, applyDiffToDatabase as applyDiffToDb, escapeIdentifier };
+export { applyDiffsToDatabase as applyDiffsToDb, applyDiffToDatabase as applyDiffToDb, escapeIdentifier, normalizeBindValue };

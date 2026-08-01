@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { normalizeBindValue } from "../src/diff-applier";
 import type { SqliteAdapter } from "../src/index";
 import { applyDiffsToDb, applyDiffToDb, createTableDiff, LocalMirror, subscribeToMirror } from "../src/index";
 import type { SubscriptionClient } from "../src/subscribe-mirror";
@@ -157,6 +158,53 @@ const createTestAdapter = (): SqliteAdapter => {
         },
     };
 };
+
+// ─── normalizeBindValue ──────────────────────────────────────────────────
+//
+// Every adapter's `exec`/`query` accepts numbers, bigints, strings,
+// buffers, and null. `normalizeBindValue` maps a diff row's arbitrary JS
+// value onto that set so nothing reaches the adapter and aborts the whole
+// `applyDiff` transaction — `better-sqlite3` in particular throws
+// `TypeError: can only bind numbers, strings, bigints, buffers, and null`
+// on anything else (see the real-engine coverage in `adapters.test.ts`'s
+// "column affinity" describe block for the end-to-end, no-throw proof).
+
+describe(normalizeBindValue, () => {
+    it("passes numbers, bigints, and strings through unchanged", () => {
+        expect(normalizeBindValue(42)).toBe(42);
+        expect(normalizeBindValue(1.5)).toBe(1.5);
+        expect(normalizeBindValue(9_007_199_254_740_993n)).toBe(9_007_199_254_740_993n);
+        expect(normalizeBindValue("hello")).toBe("hello");
+    });
+
+    it("maps null and undefined to SQL NULL", () => {
+        expect(normalizeBindValue(null)).toBeNull();
+        expect(normalizeBindValue(undefined)).toBeNull();
+    });
+
+    it("maps booleans to 0/1", () => {
+        expect(normalizeBindValue(true)).toBe(1);
+        expect(normalizeBindValue(false)).toBe(0);
+    });
+
+    it("passes a Uint8Array/Buffer through unchanged", () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+
+        expect(normalizeBindValue(bytes)).toBe(bytes);
+    });
+
+    it("JSON-encodes plain objects and arrays", () => {
+        expect(normalizeBindValue({ a: 1 })).toBe(JSON.stringify({ a: 1 }));
+        expect(normalizeBindValue([1, "two", null])).toBe(JSON.stringify([1, "two", null]));
+    });
+
+    it("falls back to String() for exotic values instead of throwing", () => {
+        const fn = () => "unused";
+
+        expect(normalizeBindValue(fn)).toBe(String(fn));
+        expect(() => normalizeBindValue(Symbol("x"))).not.toThrow();
+    });
+});
 
 // ─── Diff → adapter application ─────────────────────────────────────────
 

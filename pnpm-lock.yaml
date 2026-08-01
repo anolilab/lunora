@@ -3644,12 +3644,21 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@testing-library/dom':
+        specifier: catalog:frontend
+        version: 10.4.1
+      '@testing-library/react':
+        specifier: catalog:frontend
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
       '@types/react':
         specifier: catalog:frontend
         version: 19.2.17
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.2.3(@types/react@19.2.17)
       '@visulima/packem':
         specifier: catalog:build
         version: 2.0.0-alpha.96(cc679e917598a73d1e27ff046616351e)
@@ -3659,9 +3668,15 @@ importers:
       esbuild:
         specifier: catalog:build
         version: 0.28.1
+      jsdom:
+        specifier: catalog:frontend
+        version: 29.1.1(@noble/hashes@2.2.0)
       react:
         specifier: 19.2.8
         version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
