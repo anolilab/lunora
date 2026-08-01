@@ -45,14 +45,14 @@ const KEY_TAKING_METHODS = new Set<string>([
  * id minted server-side (issue #284):
  *
  * - `requireUnmodifiedReach: true` — a key rebuilt by an intervening call (a
- *   `storeFile(...)` helper returning a SHA-256 of the bytes) is not
- *   caller-controlled input reaching the sink verbatim, so it is not recorded.
- *   See `isUnmodifiedArgumentPassthrough`.
+ * `storeFile(...)` helper returning a SHA-256 of the bytes) is not
+ * caller-controlled input reaching the sink verbatim, so it is not recorded.
+ * See `isUnmodifiedArgumentPassthrough`.
  * - `functions` (optional; defaults to `[]`, matching `discoverOwnerFieldWrites`)
- *   attaches each access's enclosing procedure's `visibility` — `internal`
- *   procedures have no untrusted caller by construction, so the lint drops them
- *   to INFO instead of ERROR rather than dropping them entirely: a PUBLIC
- *   procedure that forwards raw `args` into one is still the real vector.
+ * attaches each access's enclosing procedure's `visibility` — `internal`
+ * procedures have no untrusted caller by construction, so the lint drops them
+ * to INFO instead of ERROR rather than dropping them entirely: a PUBLIC
+ * procedure that forwards raw `args` into one is still the real vector.
  */
 const discoverStorageKeyAccesses = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): StorageKeyAccessIR[] => {
     // Keyed on file + export because two modules may export the same name.

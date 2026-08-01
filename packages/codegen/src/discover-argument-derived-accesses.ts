@@ -46,7 +46,9 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
     // Some sinks (storage keys) only care about caller-controlled input reaching
     // the sink UNMODIFIED — a value rebuilt by an intervening call (a
     // content-addressed hash, an encoder) is no longer the bytes the caller chose,
-    // even though it textually references `args`. See `isUnmodifiedArgumentPassthrough`.
+    // even though it textually references `args`.
+    // eslint-disable-next-line no-secrets/no-secrets -- the referenced helper name below, not a credential
+    // See `isUnmodifiedArgumentPassthrough`.
     if (config.requireUnmodifiedReach === true && !isUnmodifiedArgumentPassthrough(key)) {
         return undefined;
     }
@@ -101,6 +103,7 @@ export interface ArgumentDerivedAccessConfig {
     matchReceiver: (receiverText: string) => boolean;
     /** The sink methods this binding cares about (the property-access name). */
     methods: ReadonlySet<string>;
+
     /**
      * When `true`, also require the sink argument to reach the sink UNMODIFIED —
      * see {@link isUnmodifiedArgumentPassthrough}. A value rebuilt by an
