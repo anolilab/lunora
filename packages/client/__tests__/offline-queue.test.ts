@@ -244,6 +244,72 @@ describe("offlineQueue — persistence", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["old-session-write", "boot-time-write"]);
     });
 
+    it("hydrate respects maxItems — evicts the oldest restored entries down to the cap (CLIENT-03)", async () => {
+        expect.assertions(4);
+
+        const persistence = createInMemoryPersistence();
+
+        // Persist maxItems(3) + 5 = 8 records, oldest ("m0") first.
+        for (let index = 0; index < 8; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- deterministic FIFO persist order across records is the point of this fixture
+            await persistence.append({ args: {}, functionPath: `m${String(index)}`, id: `id-${String(index)}` });
+        }
+
+        const onEvict = vi.fn<(entry: { functionPath: string }, error: Error & { code?: string }) => void>();
+        const queue = new OfflineQueue({ maxItems: 3 }, { onEvict, persistence });
+
+        await queue.hydrate();
+
+        // The in-memory queue never exceeds maxItems, regardless of how many
+        // records the durable store held.
+        expect(queue.size).toBe(3);
+
+        // The evicted ones are the OLDEST (m0..m4) — FIFO order preserved, the
+        // newest 3 (m5, m6, m7) survive.
+        const drained = queue.drain();
+
+        expect(drained.map((d) => d.functionPath)).toEqual(["m5", "m6", "m7"]);
+
+        // Each eviction fired onEvict with OFFLINE_QUEUE_OVERFLOW, oldest-first.
+        expect(onEvict).toHaveBeenCalledTimes(5);
+        expect(onEvict.mock.calls.map((call) => call[0].functionPath)).toEqual(["m0", "m1", "m2", "m3", "m4"]);
+    });
+
+    it("hydrate overflow un-persists the evicted entries, and a subsequent enqueue overflows exactly once more (CLIENT-03)", async () => {
+        expect.assertions(4);
+
+        const persistence = createInMemoryPersistence();
+
+        for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- deterministic FIFO persist order across records is the point of this fixture
+            await persistence.append({ args: {}, functionPath: `m${String(index)}`, id: `id-${String(index)}` });
+        }
+
+        const queue = new OfflineQueue({ maxItems: 2 }, { persistence });
+
+        await queue.hydrate();
+
+        expect(queue.size).toBe(2);
+
+        // The 3 evicted records (m0, m1, m2) are gone from durable storage too —
+        // only the surviving pair remains.
+        const persisted = await persistence.load();
+
+        expect(persisted.map((m) => m.functionPath).toSorted((a, b) => a.localeCompare(b))).toEqual(["m3", "m4"]);
+
+        // A single live enqueue past the (already-at-cap) queue evicts exactly
+        // one MORE entry (the oldest surviving one, "m3") — the cap holds going
+        // forward, no double-counting or leftover slack from the hydrate-time
+        // trim, and no spurious extra eviction beyond the one this enqueue causes.
+        queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
+
+        expect(queue.size).toBe(2);
+
+        const drained = queue.drain();
+
+        expect(drained.map((d) => d.functionPath)).toEqual(["m4", "new"]);
+    });
+
     it("hydrate re-appends nothing and skips ids already queued", async () => {
         expect.assertions(1);
 
