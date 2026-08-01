@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -146,5 +147,67 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         const response = await dispatchWithEnv(worker, { args: {}, id: "job-4", workflow: "AGENT_MISSING" }, {});
 
         expect(response.status).toBe(500);
+    });
+
+    it("rejects (400) scheduled workflow args carrying the reserved branch-marker key, and never calls create()", async () => {
+        expect.assertions(3);
+
+        const created: { params?: Record<string, unknown> }[] = [];
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (options: { params?: Record<string, unknown> }) => {
+                    created.push(options);
+
+                    return { id: "wf-1" };
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        // A forged marker in the scheduled args (e.g. forwarded from a public
+        // mutation's `ctx.scheduler.runAfter(workflowRef, args)`) must be rejected
+        // at this trust boundary, the same as every other workflow create surface.
+        const response = await dispatchWithEnv(
+            worker,
+            {
+                args: { __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" }, prompt: "digest" },
+                id: "job-5",
+                workflow: "AGENT_SUPPORT",
+            },
+            env,
+        );
+
+        expect(response.status).toBe(400);
+        expect(created).toHaveLength(0);
+
+        // Shared across all five create-surface rejections (plan 262 review) —
+        // the runtime's message must carry the same reason text as
+        // workflow/agent/do, not just the same status code.
+        const body: { error: { message: string } } = await response.json();
+
+        expect(body.error.message).toContain(BRANCH_MARKER_REJECTION);
+    });
+
+    it("starts an ordinary scheduled workflow unaffected by the branch-marker guard", async () => {
+        expect.assertions(2);
+
+        const created: { params?: Record<string, unknown> }[] = [];
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (options: { params?: Record<string, unknown> }) => {
+                    created.push(options);
+
+                    return { id: "wf-1" };
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(worker, { args: { prompt: "digest" }, id: "job-6", workflow: "AGENT_SUPPORT" }, env);
+
+        expect(response.status).toBe(200);
+        expect(created).toStrictEqual([{ params: { prompt: "digest" } }]);
     });
 });
