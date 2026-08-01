@@ -31,8 +31,12 @@ import type {
  */
 
 // ---------------------------------------------------------------------------
-// Real-shaped Vectorize fake (namespace-scoped storage + cosine scoring) —
-// mirrors `end-to-end.test.ts`'s `createStatefulVectorizeIndex`.
+// Real-shaped Vectorize fake (namespace-scoped storage + cosine scoring) — a
+// TRIMMED COPY of `end-to-end.test.ts`'s `createStatefulVectorizeIndex`, not
+// a mirror: this one drops that fixture's metadata-`filter` handling and its
+// `returnValues` gating, since neither is exercised by this spike. If this
+// prototype graduates into real code, both copies should unify into one
+// `__tests__/vectors/fixtures.ts` helper instead of drifting independently.
 // ---------------------------------------------------------------------------
 
 const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
@@ -265,22 +269,39 @@ describe("plan 238 spike: .withVectorIndex() prototype over the real createVecto
     });
 
     it("load-bearing: a namespace-scoped query does NOT return another tenant's near-perfect match", async () => {
-        expect.assertions(3);
+        expect.assertions(6);
 
         const index = createStatefulVectorizeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
 
-        // Tenant A's own (weaker) match.
+        // Tenant A's own match.
         await vectors.upsert("docs", { embed, id: "a-1", input: "a rainbow of colors", metadata: {}, namespace: "tenant-a" });
 
-        // Tenant B's document is deliberately near-IDENTICAL wording to tenant
-        // A's query — if namespace scoping silently no-op'd, this would rank
-        // #1, ahead of tenant A's own weaker match. A test that used unrelated
-        // tenant-B data could pass by accident (it just wouldn't score high
-        // enough to matter); this one can only pass if the namespace filter
-        // actually partitions the index.
+        // Tenant B's document uses BYTE-IDENTICAL wording to tenant A's query,
+        // so its embedding is identical too — cosine similarity TIES at 1.0
+        // for both ids (not "b-1 would outrank a-1"; a same-score full-pipeline
+        // result could still mask a broken namespace filter behind V8's stable
+        // sort keeping insertion order, i.e. a-1 first, by accident). A test
+        // that used unrelated tenant-B data could pass by accident too (it
+        // just wouldn't score high enough to matter); this one can only pass
+        // if the namespace filter actually partitions the index.
         await vectors.upsert("docs", { embed, id: "b-1", input: "a rainbow of colors", metadata: {}, namespace: "tenant-b" });
 
+        // --- Stage 1 in isolation ---------------------------------------------
+        // Assert directly on the UN-HYDRATED `vectors.query()` output, before
+        // stage 2's tenant-aware hydration exists to mask a regression here.
+        // This is the assertion that actually distinguishes "the namespace
+        // filter partitions" from "the namespace filter is dead and hydration
+        // happened to catch it" — it fails on its own if `createVectors.query`
+        // ever stops forwarding `namespace` to the index, independent of
+        // whatever stage 2 does below.
+        const raw = await vectors.query("docs", { embed, input: "a rainbow of colors", namespace: "tenant-a", topK: 5 });
+
+        expect(raw.matches).toHaveLength(1);
+        expect(raw.matches[0]?.id).toBe("a-1");
+        expect(raw.matches.some((match) => match.id === "b-1")).toBe(false);
+
+        // --- Full pipeline, for integration coverage on top of stage 1 -------
         const store = createPolicyAwareStore([
             { body: "a rainbow of colors", id: "a-1", tenantId: "tenant-a", title: "Rainbow (tenant A)" },
             { body: "a rainbow of colors", id: "b-1", tenantId: "tenant-b", title: "Rainbow (tenant B)" },
@@ -302,22 +323,66 @@ describe("plan 238 spike: .withVectorIndex() prototype over the real createVecto
         expect(resultsForA.some((entry) => entry.document.id === "b-1")).toBe(false);
     });
 
-    it("defense in depth: RLS-shaped hydration refuses a cross-tenant id even if the namespace filter is bypassed", () => {
+    it("defense in depth: the reader drops an id present in Vectorize's matches but absent from hydration", async () => {
         expect.assertions(2);
 
-        // Simulates stage 1 having somehow returned a cross-tenant id (e.g. a
-        // misconfigured/omitted namespace on the write side — see the design
-        // doc's "critical finding" about `packages/codegen/src/emit.ts` not
-        // threading a namespace today). Stage 2 must still refuse it.
+        // Stage 1 stub: simulates the namespace filter having been bypassed —
+        // `query()` returns tenant B's id even though the caller only asked
+        // for tenant A's namespace (e.g. a misconfigured/omitted namespace on
+        // the write side — see the design doc's "critical finding" about
+        // `packages/codegen/src/emit.ts` not threading a namespace today).
+        // Routed through the real `withVectorIndexPrototype`, this exercises
+        // the prototype's stage-3 zip/drop loop directly: an id present in
+        // `result.matches` but absent from `store.findMany`'s result must be
+        // excluded from the final output. (Calling `store.findMany` directly,
+        // as the previous version of this test did, only proves the fake's
+        // own filter predicate filters — it exercises no prototype code at
+        // all, and specifically not stage 3.)
+        const leakyVectors = {
+            query: async () => ({
+                count: 2,
+                matches: [
+                    { id: "a-1", metadata: undefined, namespace: "tenant-a", score: 1 },
+                    { id: "b-1", metadata: undefined, namespace: "tenant-b", score: 1 },
+                ],
+            }),
+        } as unknown as ReturnType<typeof createVectors>;
+
         const store = createPolicyAwareStore([
             { body: "a rainbow of colors", id: "a-1", tenantId: "tenant-a", title: "Rainbow (tenant A)" },
             { body: "a rainbow of colors", id: "b-1", tenantId: "tenant-b", title: "Rainbow (tenant B)" },
         ]);
 
-        // Stage 1 "leaked" both ids to the caller scoped to tenant-a.
-        const hydrated = store.findMany(["a-1", "b-1"], "tenant-a");
+        const results = await withVectorIndexPrototype({
+            callerTenantId: "tenant-a",
+            indexName: "docs",
+            near: "a rainbow of colors",
+            store,
+            topK: 5,
+            vectors: leakyVectors,
+        });
 
-        expect(hydrated).toHaveLength(1);
-        expect(hydrated[0]?.id).toBe("a-1");
+        expect(results).toHaveLength(1);
+        expect(results[0]?.document.id).toBe("a-1");
+    });
+
+    it("topK actually slices the candidate set, not just an unreached ceiling", async () => {
+        expect.assertions(2);
+
+        const index = createStatefulVectorizeIndex();
+        const vectors = createVectors({ indexes: { docs: index } });
+
+        // a-1 is an exact match to the query text (score ties at 1.0, always
+        // ranks first); a-2 shares partial wording with the query; a-3 is
+        // topically unrelated. With `topK: 2` against 3 candidates, a-3 (the
+        // weakest match) must be the one dropped.
+        await vectors.upsert("docs", { embed, id: "a-1", input: "a rainbow of colors", metadata: {}, namespace: "tenant-a" });
+        await vectors.upsert("docs", { embed, id: "a-2", input: "a rainbow of paint", metadata: {}, namespace: "tenant-a" });
+        await vectors.upsert("docs", { embed, id: "a-3", input: "quiet blue skies", metadata: {}, namespace: "tenant-a" });
+
+        const raw = await vectors.query("docs", { embed, input: "a rainbow of colors", namespace: "tenant-a", topK: 2 });
+
+        expect(raw.matches).toHaveLength(2);
+        expect(raw.matches.some((match) => match.id === "a-3")).toBe(false);
     });
 });

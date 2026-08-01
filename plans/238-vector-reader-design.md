@@ -34,9 +34,14 @@ ctx.db.docs
     .first()
     .unique()
     .collectWithScores(); // { document: TDocument; score: number }[] — reuses
-// 236's ScoredDocument shape verbatim (SearchReader's
-// field name, NOT GeoReader's distanceMeters — see
-// "Score semantics" below for why)
+// SearchReader's inline `{ document, score }` return shape
+// (data-model.ts:313), NOT GeoReader's inline
+// `{ distanceMeters, document }` shape (data-model.ts:356) — see
+// "Score semantics" below for why. Neither shape is a named type
+// today (data-model.ts exports no `ScoredDocument`); if this
+// reader ships for real, extracting one shared name — or just
+// reusing SearchReader's return type directly — is worth doing
+// then, rather than inventing a third ad hoc shape.
 ```
 
 - `indexName` is typed against the table's declared vector indexes (mirrors
@@ -88,13 +93,19 @@ call, not per row.
 
 ## Score semantics — reuse 236, but note the metric wrinkle
 
-`SearchReader.collectWithScores()` returns `{ document, score }` (relevance,
-descending — `data-model.ts:304-317`). `GeoReader.collectWithScores()` returns
-`{ distanceMeters, document }` (physical distance, ascending —
-`data-model.ts:346-360`) because a geo match is a real distance, not an
-abstract score. Vectorize's own match record is already shaped `{ id, score,
-metadata? }` (`packages/platform/src/bindings.ts:237-243`) — so the vector
-reader's `collectWithScores()` reuses **`SearchReader`'s shape and field name**
+`SearchReader.collectWithScores()` returns an inline `{ document, score }[]`
+(relevance, descending — `data-model.ts:304-317`, method at `:313`).
+`GeoReader.collectWithScores()` returns an inline
+`{ distanceMeters: null | number; document }[]` (physical distance, ascending
+— `data-model.ts:346-360`, method at `:356`) — `distanceMeters` is `null`,
+not omitted, for `.within()` box matches, which have no point-distance metric
+(`data-model.ts:349-355`). Neither is a named, exported type — both are
+anonymous object-literal return types local to their own method signature, and
+the two shapes don't even share a field in common (`score` vs
+`distanceMeters`). A geo match is a real distance, not an abstract score.
+Vectorize's own match record is already shaped `{ id, score, metadata? }`
+(`packages/platform/src/bindings.ts:237-243`) — so the vector reader's
+`collectWithScores()` reuses **`SearchReader`'s inline shape and field name**
 (`{ document, score }`), not geo's `distanceMeters` — this is the "236's score
 field name" the plan asks to confirm, and it is the natural fit since Vectorize
 already calls it `score`.
@@ -276,9 +287,14 @@ The prototype implements the 3-stage read pipeline above as a local function
 
 1. **Real `createVectors`** (`packages/bindings/src/vectors/create-vectors.ts`)
    over a stateful `VectorizeIndexLike` fake with real namespace-scoped storage
-    - cosine scoring (same shape as the existing end-to-end fixture — a fresh,
-      self-contained copy in the new test file rather than an import, so the spike
-      doesn't create a cross-test-file dependency).
+   and cosine scoring — a **trimmed copy** of `end-to-end.test.ts`'s
+   `createStatefulVectorizeIndex` fixture, not a mirror of it: this copy drops
+   that fixture's metadata-`filter` handling and its `returnValues` gating,
+   neither of which this spike exercises. Kept as a local, self-contained copy
+   in the new test file rather than an import, so the spike doesn't create a
+   cross-test-file dependency — but if this prototype graduates, the two
+   copies should unify into one `__tests__/vectors/fixtures.ts` helper instead
+   of continuing to drift independently.
 2. **A policy-aware document store fake** — a small in-memory table with a
    `tenantId` column and a `findMany`-shaped lookup that filters by both `id
 IN (...)` _and_ `tenantId === callerTenant`, standing in for RLS-scoped
@@ -295,25 +311,45 @@ IN (...)` _and_ `tenantId === callerTenant`, standing in for RLS-scoped
   hydrated to full documents (not bare Vectorize metadata), ordered
   best-match-first, each paired with its `score`.
 - **The load-bearing test — cross-namespace-no-leak**: tenant B is seeded with
-  a document deliberately constructed to be the _closest possible match_ to
-  tenant A's query text (near-identical wording) — a weak version of this test
-  could pass by accident if tenant B's data just happened to score low.
-  Querying tenant A's namespace asserts tenant B's near-perfect-match id is
-  **absent** from the result set, even though it would rank #1 if namespace
-  scoping silently no-op'd. This proves the namespace filter (pipeline stage
-    1. actually partitions, not just that "some filtering exists somewhere."
-- **Defense-in-depth, independently**: a second variant calls the hydration
-  stage directly with an id list that includes a cross-tenant id (simulating
-  "the namespace filter was somehow bypassed") and asserts the RLS-shaped
-  `findMany` fake still refuses to return the other tenant's row — proving
-  layer 2 holds even if layer 1 didn't, matching the design's two-layer claim
-  above.
+  a document using **byte-identical wording** to tenant A's query text, so
+  both ids' embeddings — and therefore their cosine scores — **tie at 1.0**.
+  (Not "tenant B's match would rank #1, ahead of tenant A's" — that framing
+  was wrong; a real near-duplicate ties rather than outranks under this
+  fixture's exact-text-reuse trick.) The test asserts directly on the
+  **un-hydrated** output of `vectors.query()` — before stage 2's tenant-aware
+  hydration exists to mask a regression — that tenant B's id is absent.
+  This is the assertion that actually distinguishes "the namespace filter
+  partitions" from "the namespace filter is dead and hydration caught it
+  anyway": routing the same scenario only through the full 3-stage pipeline
+  (as an earlier version of this test did) is confounded, because stage 2's
+  RLS-shaped `findMany` filters by `tenantId` independently of stage 1's
+  namespace filter — the final result excludes tenant B's row either way, so
+  that alone can't tell you which layer did the work. This version was
+  confirmed to fail (temporarily forcing `createVectors.query` to drop
+  `namespace`, reverted after) precisely when the namespace filter regresses;
+  the test also still runs the full pipeline afterward for integration
+  coverage, but the un-hydrated assertion is what makes the test load-bearing.
+- **Defense-in-depth, independently**: a second variant stubs stage 1
+  (`vectors.query`) to deliberately return a cross-tenant id — simulating "the
+  namespace filter was somehow bypassed" — and routes it through the real
+  `withVectorIndexPrototype`, asserting the pipeline's stage-3 zip/drop loop
+  excludes the id that stage 2's RLS-shaped `findMany` didn't hydrate. (An
+  earlier version of this test called the hydration fake's `findMany`
+  directly and asserted on its output — that only proved the fake's own
+  `tenantId` filter predicate filters by `tenantId`, exercising no prototype
+  code and specifically not stage 3, so it was tautological. This version
+  exercises the pipeline.)
+- **topK actually slices**: a third variant seeds three candidates and queries
+  with `topK` below the candidate count, asserting the result set is capped
+  and the weakest-scoring candidate is the one dropped — the original two
+  tests only ever ran `topK: 5` against 1-2 candidates, so topK's cap never
+  actually engaged in either of them.
 
 ### Pass/fail
 
-All four assertions pass — see the FILES CHANGED / test run below. `pnpm
---filter "@lunora/bindings" run test -- vector-reader-spike` is the direct
-command; `@lunora/ai` and `@lunora/server`'s suites plus
+All assertions pass across all four tests in the file — see the FILES CHANGED
+/ test run below. `pnpm --filter "@lunora/bindings" run test -- vector-reader-spike`
+is the direct command; `@lunora/ai` and `@lunora/server`'s suites plus
 `@lunora/server`'s `lint:types` also verified untouched-and-green per the
 plan's COMMANDS, since the prototype changes neither package.
 
