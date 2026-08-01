@@ -3391,11 +3391,27 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `DanglingReference` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `DanglingReferenceResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `DatabaseInstrumentation` (type)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `DatabaseTally` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `DatabaseTelemetryDeps` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ErrorIssue` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3447,6 +3463,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `FoldedTraces` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `FunctionMetricBucket` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3459,7 +3479,15 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `HostSpanLike` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `HostTracingLike` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `HostTracingResolver` (type)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3527,6 +3555,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `MetricEvent` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `MetricHistoryOptions` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3535,7 +3567,15 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `MetricHistoryResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `MetricHistorySeries` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `MetricKind` (type)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3547,11 +3587,31 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `QueryInsightBucket` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `QueryInsightEntry` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `QueryInsightsResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `QueryStatEntry` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `REQUEST_LOG_TABLE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ReadIssuesOptions` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `ReadRequestLogOptions` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3563,11 +3623,19 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `RequestLogEntry` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `RequestLogResult` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `RequestLogWriteOptions` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `RequestOutcome` (type)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3599,7 +3667,27 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `SpanEvent` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanEventPoint` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3612,6 +3700,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `TraceSummary` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `TracedFetchDeps` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 

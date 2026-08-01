@@ -117,6 +117,27 @@ type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: S
 const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 ```
 
+### `DanglingReference` (interface)
+
+```ts
+interface DanglingReference {
+    column: string;
+    id: string;
+    key: string;
+    table: string;
+}
+```
+
+### `DanglingReferenceResult` (interface)
+
+```ts
+interface DanglingReferenceResult {
+    references: DanglingReference[];
+    scanned: number;
+    truncated: boolean;
+}
+```
+
 ### `DatabaseInstrumentation` (type)
 
 ```ts
@@ -133,6 +154,38 @@ interface DatabaseTally {
     perOperation: Record<string, number>;
     spansEmitted: number;
     spansTruncated: boolean;
+}
+```
+
+### `DatabaseTelemetryDeps` (interface)
+
+```ts
+interface DatabaseTelemetryDeps {
+    anchor: TraceAnchor;
+    functionPath: string;
+    mode: DatabaseInstrumentation;
+    record: (span: SpanEvent) => void;
+    shardKey: string | undefined;
+    tally: DatabaseTally;
+    userId: () => string | undefined;
+}
+```
+
+### `ErrorIssue` (interface)
+
+```ts
+interface ErrorIssue {
+    assignee?: string;
+    count: number;
+    culprit: string;
+    firstSeen: number;
+    hash: string;
+    lastSeen: number;
+    sampleMessage: string;
+    severity?: IssueSeverity;
+    stateUpdatedAt?: number;
+    status: IssueStatus;
+    title: string;
 }
 ```
 
@@ -215,6 +268,15 @@ const FUNCTION_METRICS_SCANS_TABLE = "__lunora_metrics_scans";
 const FUNCTION_METRICS_TABLE = "__lunora_metrics";
 ```
 
+### `FoldedTraces` (interface)
+
+```ts
+interface FoldedTraces {
+    total: number;
+    traces: TraceSummary[];
+}
+```
+
 ### `FunctionMetricBucket` (interface)
 
 ```ts
@@ -246,12 +308,27 @@ interface FunctionMetricIndexHit {
 }
 ```
 
+### `HostSpanLike` (interface)
+
+```ts
+interface HostSpanLike {
+    readonly isTraced: boolean;
+    setAttribute: (key: string, value: boolean | number | string | undefined) => void;
+}
+```
+
 ### `HostTracingLike` (interface)
 
 ```ts
 interface HostTracingLike {
     enterSpan: <T>(name: string, callback: (span: HostSpanLike) => T) => T;
 }
+```
+
+### `HostTracingResolver` (type)
+
+```ts
+type HostTracingResolver = () => HostTracingLike | Promise<HostTracingLike | undefined> | undefined;
 ```
 
 ### `ISSUE_SEVERITIES` (const)
@@ -386,6 +463,21 @@ class MetricBuffer {
 }
 ```
 
+### `MetricEvent` (interface)
+
+```ts
+interface MetricEvent {
+    attributes?: LogFields;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    shardKey?: string;
+    traceId?: string;
+    ts: number;
+    value: number;
+}
+```
+
 ### `MetricHistoryOptions` (interface)
 
 ```ts
@@ -409,6 +501,14 @@ interface MetricHistoryPoint {
 }
 ```
 
+### `MetricHistoryResult` (interface)
+
+```ts
+interface MetricHistoryResult {
+    series: MetricHistorySeries[];
+}
+```
+
 ### `MetricHistorySeries` (interface)
 
 ```ts
@@ -420,6 +520,12 @@ interface MetricHistorySeries {
     points: MetricHistoryPoint[];
     shardKey?: string;
 }
+```
+
+### `MetricKind` (type)
+
+```ts
+type MetricKind = "counter" | "gauge" | "histogram";
 ```
 
 ### `MetricSeries` (interface)
@@ -452,6 +558,42 @@ interface MetricsDeps {
 }
 ```
 
+### `QueryInsightBucket` (interface)
+
+```ts
+interface QueryInsightBucket {
+    avgDurationMs: number;
+    bucketMs: number;
+    execCount: number;
+}
+```
+
+### `QueryInsightEntry` (interface)
+
+```ts
+interface QueryInsightEntry {
+    avgDurationMs: number;
+    execCount: number;
+    normalizedSql: string;
+    p50DurationMs: number;
+    p95DurationMs: number;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+```
+
+### `QueryInsightsResult` (interface)
+
+```ts
+interface QueryInsightsResult {
+    buckets: QueryInsightBucket[];
+    capped: boolean;
+    entries: QueryInsightEntry[];
+    trackedStatements: number;
+}
+```
+
 ### `QueryStatEntry` (interface)
 
 ```ts
@@ -468,6 +610,32 @@ interface QueryStatEntry {
 
 ```ts
 const REQUEST_LOG_TABLE = "__lunora_reqlog__";
+```
+
+### `ReadIssuesOptions` (interface)
+
+```ts
+interface ReadIssuesOptions {
+    functionPathPrefix?: string;
+    limit?: number;
+    shardKey?: string;
+    status?: IssueStatus;
+    userId?: string;
+}
+```
+
+### `ReadRequestLogOptions` (interface)
+
+```ts
+interface ReadRequestLogOptions {
+    functionPathPrefix?: string;
+    limit?: number;
+    outcome?: RequestOutcome;
+    shardKey?: string;
+    sinceSeq?: number;
+    tableTouched?: string;
+    userId?: string;
+}
 ```
 
 ### `RecordAuthEventInput` (interface)
@@ -494,6 +662,27 @@ interface RecordFunctionMetricInput {
 }
 ```
 
+### `RequestLogEntry` (interface)
+
+```ts
+interface RequestLogEntry {
+    cacheHit?: boolean;
+    durationMs: number;
+    errorMessage?: string;
+    functionPath: string;
+    identity?: Record<string, unknown>;
+    outcome: RequestOutcome;
+    redactedArgs?: unknown;
+    seq: number;
+    shardKey?: string;
+    subscriptionsReRun: number;
+    tablesRead: string[];
+    tablesWritten: string[];
+    ts: number;
+    userId?: string;
+}
+```
+
 ### `RequestLogResult` (interface)
 
 ```ts
@@ -509,6 +698,12 @@ interface RequestLogWriteOptions {
     captureRaw?: boolean;
     retention?: number;
 }
+```
+
+### `RequestOutcome` (type)
+
+```ts
+type RequestOutcome = "error" | "ok";
 ```
 
 ### `SecurityAuditResult` (interface)
@@ -573,6 +768,42 @@ interface SpanCollector {
 }
 ```
 
+### `SpanEvent` (interface)
+
+```ts
+interface SpanEvent {
+    attributes?: LogFields;
+    durationMs: number;
+    events?: SpanEventPoint[];
+    error?: {
+        message: string;
+        type: string;
+    };
+    functionPath: string;
+    kind?: OtlpSpanKind;
+    links?: SpanLink[];
+    name: string;
+    ok: boolean;
+    parentSpanId: string;
+    dispatch?: boolean;
+    shardKey?: string;
+    spanId: string;
+    startTs: number;
+    traceId: string;
+    userId?: string;
+}
+```
+
+### `SpanEventPoint` (interface)
+
+```ts
+interface SpanEventPoint {
+    attributes?: LogFields;
+    name: string;
+    ts: number;
+}
+```
+
 ### `SpanHandle` (interface)
 
 ```ts
@@ -587,6 +818,32 @@ interface SpanHandle {
         spanId: string;
         traceId: string;
     };
+}
+```
+
+### `SpanKind` (type)
+
+```ts
+type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanOptions` (interface)
+
+```ts
+interface SpanOptions {
+    attributes?: LogFields;
+    kind?: OtlpSpanKind;
+    links?: SpanLink[];
 }
 ```
 
@@ -631,6 +888,19 @@ interface TraceSummary {
     spans: TraceSpan[];
     startTs: number;
     traceId: string;
+}
+```
+
+### `TracedFetchDeps` (interface)
+
+```ts
+interface TracedFetchDeps {
+    anchor: TraceAnchor;
+    functionPath: string;
+    propagate?: ((url: URL) => boolean) | boolean;
+    record: (span: SpanEvent) => void;
+    shardKey: string | undefined;
+    userId: () => string | undefined;
 }
 ```
 

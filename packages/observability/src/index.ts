@@ -31,16 +31,26 @@ export type {
     ContextFetch,
     ContextMetrics,
     ContextTracer,
+    HostSpanLike,
     HostTracingLike,
+    HostTracingResolver,
+    MetricEvent,
+    MetricKind,
     MetricsDeps,
     SpanCollection,
     SpanCollector,
+    SpanEvent,
+    SpanEventPoint,
     SpanHandle,
+    SpanKind,
+    SpanLink,
+    SpanOptions,
     TraceAnchor,
+    TracedFetchDeps,
     TracerDeps,
 } from "./context-telemetry";
 export { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
-export type { DatabaseInstrumentation, DatabaseTally } from "./database-telemetry";
+export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps } from "./database-telemetry";
 export { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
 export type { FunctionMetricBucket, FunctionMetricBucketsResult, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
@@ -69,11 +79,23 @@ export type { LogEntry, LogLevel } from "./log-buffer";
 export { LogBuffer } from "./log-buffer";
 export type { MetricSeries } from "./metric-buffer";
 export { MetricBuffer } from "./metric-buffer";
-export type { MetricHistoryOptions, MetricHistoryPoint, MetricHistorySeries } from "./metric-history";
+export type { MetricHistoryOptions, MetricHistoryPoint, MetricHistoryResult, MetricHistorySeries } from "./metric-history";
 export { readMetricHistory, recordMetricHistory } from "./metric-history";
-export type { QueryStatEntry } from "./query-metrics";
+export type { QueryInsightBucket, QueryInsightEntry, QueryInsightsResult, QueryStatEntry } from "./query-metrics";
 export { readQueryInsights, readQueryMetrics, recordQueryMetric } from "./query-metrics";
-export type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
+export type {
+    AppendRequestLogEntry,
+    ContextLogLevel,
+    ErrorIssue,
+    IssuesResult,
+    LogEventInput,
+    ReadIssuesOptions,
+    ReadRequestLogOptions,
+    RequestLogEntry,
+    RequestLogResult,
+    RequestLogWriteOptions,
+    RequestOutcome,
+} from "./request-log";
 export {
     appendRequestLogEntry,
     emitLogEvent,
@@ -86,7 +108,8 @@ export {
 } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
-export type { TraceSpan, TraceSummary } from "./span-buffer";
+export type { FoldedTraces, TraceSpan, TraceSummary } from "./span-buffer";
 export { foldTraces, SpanBuffer } from "./span-buffer";
+export type { DanglingReference, DanglingReferenceResult } from "./storage-correlation";
 export { findDanglingReferences } from "./storage-correlation";
 export { resolveTraceAnchor } from "./trace-context";
