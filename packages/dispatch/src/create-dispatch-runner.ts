@@ -10,6 +10,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -116,11 +117,13 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
         // shard reconstructs identity from these headers independently of the
         // system flag, so a server dispatch can still carry a userId for RLS.
         if (options.identity?.userId !== undefined) {
-            headers["x-lunora-userid"] = options.identity.userId;
+            // Base64url-encoded when non-Latin-1 (HTTP header values are WebIDL
+            // `ByteString`s); see shared/identity-header.ts.
+            headers["x-lunora-userid"] = encodeUserIdHeader(options.identity.userId);
         }
 
         if (options.identity?.claims !== undefined) {
-            headers["x-lunora-identity"] = JSON.stringify(options.identity.claims);
+            headers["x-lunora-identity"] = encodeIdentityHeader(options.identity.claims);
         }
 
         const response = await fetchImpl(url, {

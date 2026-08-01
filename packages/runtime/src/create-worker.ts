@@ -5,6 +5,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { RestExposure } from "../../../shared/rest-surface";
@@ -1429,6 +1430,15 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * Read the optional caller identity a server-initiated dispatch may forward on
  * the `x-lunora-userid` / `x-lunora-identity` headers, returning the shape
  * `dispatchToShard` threads to the shard (or `undefined` when neither is set).
+ *
+ * Deliberately opaque: both values are captured as raw strings and later copied
+ * verbatim back onto the outbound shard request's headers (see the
+ * `dispatchToShard` header block below) without being decoded here. The inbound
+ * request is itself `@lunora/dispatch`'s own `fetch` to this worker, which
+ * already encodes via `encodeUserIdHeader`/`encodeIdentityHeader` — so the
+ * string captured here is already `ByteString`-safe and needs no
+ * decode-then-re-encode round trip; it's the shard's `parseIdentityHeader` /
+ * voice DO's identity parser that ultimately decode it.
  */
 const readForwardedIdentity = (request: Request): { identity?: string; userId?: string } | undefined => {
     const forwardedUserId = request.headers.get("x-lunora-userid");
@@ -1666,7 +1676,11 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
         return { claims: null, headers, identity: null, userId: null };
     }
 
-    headers["x-lunora-userid"] = identity.userId;
+    // Base64url-encoded when `userId` has any non-Latin-1 code unit — otherwise
+    // forwarded unchanged. HTTP header values are WebIDL `ByteString`s, so a raw
+    // id containing e.g. a CJK/emoji character would throw on `new Request(...)`
+    // at the shard fetch below; see shared/identity-header.ts.
+    headers["x-lunora-userid"] = encodeUserIdHeader(identity.userId);
 
     // Forward an optional token-expiry so the DO can drop a socket whose
     // credential has lapsed (the client then reconnects, re-resolving identity).
@@ -1686,7 +1700,12 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     const claims = Object.keys(extra).length > 0 ? extra : null;
 
     if (claims) {
-        headers["x-lunora-identity"] = JSON.stringify(claims);
+        // UTF-8 -> base64url so any non-Latin-1 claim (a CJK/Cyrillic/Arabic name,
+        // an emoji, …) stays a valid WebIDL `ByteString` header value. Decoded on
+        // the shard side by `parseIdentityHeader` (delegates to
+        // `decodeIdentityHeader`, which also still accepts a legacy raw-JSON
+        // value). See shared/identity-header.ts.
+        headers["x-lunora-identity"] = encodeIdentityHeader(claims);
     }
 
     return { claims, headers, identity, userId };

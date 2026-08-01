@@ -205,6 +205,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { decodeUserIdHeader } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -4119,7 +4120,10 @@ abstract class ShardDO {
         // values. Cleared on exit so the next request starts fresh.
         this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
         this.currentResponseBookmark = undefined;
-        this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
+        // `decodeUserIdHeader` inverts the runtime's `encodeUserIdHeader`: a
+        // Latin-1-safe id is forwarded unchanged, a non-Latin-1 one arrives
+        // base64url-encoded behind a leading `=` sentinel. See shared/identity-header.ts.
+        this.currentRequestUserId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
         // Custom-mutator push identity: a stable per-device client id plus a
         // monotonic per-client sequence. Present only on custom-mutator pushes;
@@ -8662,7 +8666,7 @@ abstract class ShardDO {
         // hibernation and can be replayed to the connection-lifecycle hooks at
         // connect/close — including `webSocketClose`, when the socket carries no
         // request of its own.
-        const userId = request.headers.get("x-lunora-userid") ?? undefined;
+        const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
         // Optional credential expiry (epoch ms) forwarded by the runtime. A
         // malformed value is ignored (the socket simply never auto-expires).

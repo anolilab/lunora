@@ -31,6 +31,8 @@ import type {
 } from "@lunora/shard-engine";
 import { ADMIN_FUNCTION_PREFIX, tableFromDepKey } from "@lunora/shard-engine";
 
+import { decodeIdentityHeader } from "../../../shared/identity-header";
+
 /** Recovers the process exit code embedded in a container `stop` message as `(exit &lt;n>)`. */
 const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
 
@@ -1086,28 +1088,19 @@ const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs =>
 const bookmarkHeaders = (bookmark: string | undefined): Record<string, string> | undefined => (bookmark ? { "x-d1-bookmark": bookmark } : undefined);
 
 /**
- * Decode the JSON envelope shipped on the `x-lunora-identity` header.
- * Malformed payloads collapse to `undefined` rather than throwing — the
- * shard should still serve requests whose identity claims didn't round-trip.
+ * Decode the envelope shipped on the `x-lunora-identity` header. Malformed
+ * payloads collapse to `undefined` rather than throwing — the shard should
+ * still serve requests whose identity claims didn't round-trip.
+ *
+ * Delegates to {@link decodeIdentityHeader} (base64url-encoded, with a
+ * fail-soft sniffing fallback for a legacy raw-JSON header value — see
+ * shared/identity-header.ts). Kept as a named wrapper — rather than importing
+ * `decodeIdentityHeader` directly at call sites — so this file's own
+ * name/signature stays the stable public surface for `shard-do.ts` and
+ * anything else depending on it.
  * @returns the decoded identity object, or `undefined` when the header is absent or malformed
  */
-const parseIdentityHeader = (raw: string | null): Record<string, unknown> | undefined => {
-    if (!raw) {
-        return undefined;
-    }
-
-    try {
-        const parsed = JSON.parse(raw) as unknown;
-
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            return parsed as Record<string, unknown>;
-        }
-    } catch {
-        // fall through to undefined
-    }
-
-    return undefined;
-};
+const parseIdentityHeader = (raw: string | null): Record<string, unknown> | undefined => decodeIdentityHeader(raw);
 
 /**
  * Parse the `x-lunora-client-seq` header into a positive integer mutation

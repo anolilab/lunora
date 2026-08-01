@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { decodeIdentityHeader } from "../../../shared/identity-header";
 import type { ExecutionContextLike, ResolvedIdentity } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { IdentityContractLike, IdentityResolver } from "../src/identity-resolvers";
@@ -212,7 +213,7 @@ describe("identity contract trust boundary", () => {
         await worker.fetch(rpc(), {}, fakeContext);
 
         expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBe("user_42");
-        expect(JSON.parse(shard.calls[0]!.request.headers.get("x-lunora-identity")!)).toEqual({ tenantId: "t_1" });
+        expect(decodeIdentityHeader(shard.calls[0]!.request.headers.get("x-lunora-identity"))).toEqual({ tenantId: "t_1" });
     });
 
     it("downgrades a contract-violating identity to anonymous (onInvalid: 'anonymous')", async () => {

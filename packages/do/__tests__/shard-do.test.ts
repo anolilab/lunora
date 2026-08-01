@@ -1,6 +1,7 @@
 import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do";
@@ -618,6 +619,22 @@ describe("shardDO identity capture", () => {
         expect(shard.observedUserId).toBe("user_42");
     });
 
+    it("decodes a base64url-encoded x-lunora-userid (non-Latin-1) back to the original id via getCurrentUserId()", async () => {
+        expect.assertions(1);
+
+        const userId = "田中太郎";
+
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: { "content-type": "application/json", "x-lunora-userid": encodeUserIdHeader(userId) },
+                method: "POST",
+            }),
+        );
+
+        expect(shard.observedUserId).toBe(userId);
+    });
+
     it("parses x-lunora-identity JSON envelope into a plain object", async () => {
         expect.assertions(1);
 
@@ -649,6 +666,47 @@ describe("shardDO identity capture", () => {
 
         expect(response.status).toBe(200);
         expect(shard.observedIdentity).toBeUndefined();
+    });
+
+    it("parses a base64url-encoded x-lunora-identity to the SAME object the legacy raw-JSON header produces (rollout order-independence)", async () => {
+        expect.assertions(2);
+
+        // Latin-1-only claims deliberately: a raw (unencoded) legacy header can
+        // only ever carry Latin-1-safe content in the first place — that's the
+        // bug this plan fixes — so the equivalence is only meaningful for content
+        // both forms can actually transport.
+        const claims = { email: "user@example.com", roles: ["admin"] };
+
+        const legacyResponse = shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": JSON.stringify(claims),
+                    "x-lunora-userid": "user_42",
+                },
+                method: "POST",
+            }),
+        );
+
+        await legacyResponse;
+
+        const legacyObserved = shard.observedIdentity;
+
+        const encodedResponse = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": encodeIdentityHeader(claims),
+                    "x-lunora-userid": encodeUserIdHeader("user_42"),
+                },
+                method: "POST",
+            }),
+        );
+
+        expect(encodedResponse.status).toBe(200);
+        expect(shard.observedIdentity).toEqual(legacyObserved);
     });
 
     it("clears identity headers between requests so they don't leak across clients", async () => {

@@ -4,6 +4,7 @@ import { createAi } from "@lunora/ai";
 import { createDispatchRunner } from "@lunora/dispatch";
 
 import { toBase64 } from "../../../shared/base64";
+import { decodeUserIdHeader } from "../../../shared/identity-header";
 import { createStreamGenerate } from "./generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunFunction, AgentStreamGenerate } from "./types";
@@ -136,7 +137,7 @@ class VoiceSessionDO {
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- workerd provides the Web Crypto global; this DO never runs under Node
         const connectionId = crypto.randomUUID();
         const identity = parseIdentity(request.headers.get("x-lunora-identity"));
-        const userId = request.headers.get("x-lunora-userid") ?? undefined;
+        const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
 
         (server as unknown as HibernatableWebSocket).serializeAttachment?.({
             connectionId,
