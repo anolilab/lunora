@@ -13,7 +13,7 @@ import { createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UploadAuthzContext } from "../src/upload-handler";
-import { createUploadHandler } from "../src/upload-handler";
+import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 
 const ENDPOINT = "https://test.local/upload";
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
@@ -100,7 +100,10 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     let handler: ReturnType<typeof createUploadHandler>;
 
     beforeEach(() => {
-        handler = createUploadHandler({ storage: new MemoryStorage({ path: "/upload" }) });
+        // `silent` keeps these upload-flow tests (unrelated to the authorize
+        // warning below) quiet — see the dedicated "default-open authorize"
+        // describe block for coverage of the warning itself.
+        handler = createUploadHandler({ silent: true, storage: new MemoryStorage({ path: "/upload" }) });
     });
 
     afterEach(() => {
@@ -276,6 +279,92 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             await expect(adapter.upload(makeFile(50_000))).rejects.toThrow(/403/u);
 
             wire.restore();
+        });
+    });
+
+    describe("default-open authorize warning", () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it("warns once (at construction, not per request) when authorize is omitted", async () => {
+            expect.hasAssertions();
+
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            const openHandler = createUploadHandler({ storage: new MemoryStorage({ path: "/upload" }) });
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0]?.[0]).toMatch(/no `authorize`/u);
+
+            // Multiple requests against the SAME handler must not add more warnings.
+            await openHandler.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+            await openHandler.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not warn when `silent: true` is passed", () => {
+            expect.hasAssertions();
+
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            createUploadHandler({ silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+
+        it("does not warn when `public: true` is passed", () => {
+            expect.hasAssertions();
+
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            createUploadHandler({ public: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+
+        it("does not warn when `authorize` is provided", () => {
+            expect.hasAssertions();
+
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            createUploadHandler({ authorize: () => true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("default upload size cap", () => {
+        it("rejects an upload above the default cap (no maxFileSize configured)", async () => {
+            expect.hasAssertions();
+
+            const openHandler = createUploadHandler({ silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            // TUS declares the total size up-front via `Upload-Length` on the
+            // `create` (POST) request, so this rejects before any body bytes
+            // would need to be sent.
+            const response = await openHandler.fetch(
+                new Request(ENDPOINT, {
+                    headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(DEFAULT_MAX_UPLOAD_BYTES + 1) },
+                    method: "POST",
+                }),
+            );
+
+            expect(response.status).toBe(413);
+        });
+
+        it("honors an explicit maxFileSize below the default, both rejecting and accepting relative to it", async () => {
+            expect.hasAssertions();
+
+            const tight = createUploadHandler({ maxFileSize: 1024, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            const tooBig = await tight.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "2048" }, method: "POST" }));
+
+            expect(tooBig.status).toBe(413);
+
+            const withinCap = await tight.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "512" }, method: "POST" }));
+
+            expect(withinCap.status).toBe(201);
         });
     });
 });

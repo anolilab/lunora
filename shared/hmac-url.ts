@@ -35,6 +35,14 @@ const MAX_SIGNED_URL_TTL_SECONDS: number = 7 * 24 * 60 * 60;
 // Hoisted to module scope so the literal isn't recompiled on every call.
 const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
 
+// Matches any C0 control character (codes 0-31 inclusive), which covers CR and
+// LF among others. Built from code points rather than a \u escape literal in
+// the regex source, so the intent stays unambiguous in review and no
+// editor/tool can silently turn the escape text into a literal control byte
+// sitting inside this source file.
+const CONTROL_CHAR_CODES: number[] = Array.from({ length: 32 }, (_, index) => index);
+const CONTROL_CHAR_RE = new RegExp(`[${CONTROL_CHAR_CODES.map((code) => String.fromCodePoint(code)).join("")}]`, "u");
+
 const toBase64Url = (bytes: Uint8Array): string => {
     // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
     // so building the binary string in one `fromCodePoint` call is safe and
@@ -99,6 +107,33 @@ const extractHost = (input: string): string => {
     }
 };
 
+/**
+ * Reject a free-text value bound into an HMAC canonical if it contains any C0
+ * control character (codes 0-31), which includes CR and LF. The canonical is
+ * newline-delimited (`field\nfield\n...`), so a non-terminal free-text field
+ * (e.g. a signed-URL `key`) that itself contains a raw newline can shift where
+ * later fields (e.g. `exp`) get re-split on verify: two different `(key, exp)`
+ * pairs can then canonicalize to byte-identical strings under the SAME valid
+ * signature. Call this on every non-terminal free-text canonical field before
+ * signing, and again on the decoded value before verifying (inside the
+ * existing malformed-input `catch`, so a rejected value surfaces as
+ * `"malformed"` rather than an uncaught throw).
+ */
+const assertCanonicalSafe = (value: string): void => {
+    if (CONTROL_CHAR_RE.test(value)) {
+        throw new TypeError("hmac-url: value must not contain control characters (including CR/LF)");
+    }
+};
+
+/**
+ * Predicate form of the same C0-control-character check `assertCanonicalSafe`
+ * throws on. The canonical home for "is this value canonical-unsafe" so
+ * callers that need a boolean (rather than a thrown `TypeError`) — e.g.
+ * `@lunora/storage`'s `validateKey`, which raises its own `LunoraError` — share
+ * this single detector instead of re-deriving `CONTROL_CHAR_RE` from scratch.
+ */
+const hasControlChar = (value: string): boolean => CONTROL_CHAR_RE.test(value);
+
 /** Sign `canonical` with the secret's HMAC key, returning the base64url signature. */
 const signCanonical = async (secret: string, canonical: string): Promise<string> => {
     const cryptoKey = await importHmacKey(secret);
@@ -119,4 +154,4 @@ const verifyCanonical = async (secret: string, canonical: string, sigBytes: Uint
     return crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonical));
 };
 
-export { extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical };
+export { assertCanonicalSafe, extractHost, fromBase64Url, hasControlChar, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical };

@@ -294,4 +294,28 @@ describe("signedUrl", () => {
         await expect(verifySignedUrl(rewritten.toString(), "shh")).resolves.toMatchObject({ reason: "bad_signature", valid: false });
         await expect(verifySignedUrl(rewritten.toString(), "shh", { expectedHost: "https://cdn.example.com" })).resolves.toMatchObject({ valid: true });
     });
+
+    it("rejects a key containing a raw newline at sign time (BINDINGS-01)", async () => {
+        expect.assertions(1);
+
+        // The canonical is `method\nhost\nkey\nexp[\nct]` — `key` is not its
+        // last field, so a raw \n could shift where `exp` re-splits on verify.
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", key: "uploads/x\n9999999999\nGET", secret: "shh" })).rejects.toThrow(/control character/);
+    });
+
+    it("rejects a key containing a carriage return at sign time", async () => {
+        expect.assertions(1);
+
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", key: "uploads/x\ry", secret: "shh" })).rejects.toThrow(/control character/);
+    });
+
+    it("still signs and verifies a normal key unaffected by the control-char guard", async () => {
+        expect.assertions(2);
+
+        const url = await buildSignedUrl({ baseUrl: "https://cdn.test", key: "uploads/x.png", secret: "shh" });
+        const result = await verifySignedUrl(url, "shh");
+
+        expect(result.valid).toBe(true);
+        expect(result.key).toBe("uploads/x.png");
+    });
 });

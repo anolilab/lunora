@@ -24,6 +24,14 @@ import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 /** Resumable upload wire protocols the handler can speak. */
 type UploadProtocol = "chunked-rest" | "multipart" | "tus";
 
+/**
+ * Default ceiling applied to `maxFileSize` when the caller doesn't supply one
+ * (100 MiB). Without SOME cap, an unauthenticated or loosely-authorized
+ * handler accepts an unbounded request body — pass an explicit `maxFileSize`
+ * to raise or lower this for your app.
+ */
+const DEFAULT_MAX_UPLOAD_BYTES: number = 100 * 1024 * 1024;
+
 // Derive the visulima handler option/storage types from the class constructors
 // so we never import `@visulima/storage`'s internal `BaseStorage` / `UploadFile`
 // symbols (they are not part of the fetch-handler entry's public surface).
@@ -55,12 +63,35 @@ interface CreateUploadHandlerOptions {
      * returning `false` **or throwing** yields a `403`. Omit only for a fully
      * public bucket — the whole point of this handler over the admin path is
      * that uploads are gated by *your* per-user policy, not an admin token.
+     *
+     * Omitting it mounts an unauthenticated, unbounded-write endpoint, so
+     * doing so logs a one-time warning (per handler) unless `silent`/`public`
+     * says the omission is intentional.
      */
     authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
-    /** Maximum accepted file size in bytes (forwarded to the multipart parser). */
+
+    /**
+     * Maximum accepted file size in bytes. Forwarded to the multipart parser
+     * (protocol `"multipart"`) and, for `"tus"`/`"chunked-rest"`, enforced by
+     * this handler itself against the request's declared size (`Upload-Length`
+     * / `Content-Length`) — see {@link declaredUploadSize}. Defaults to
+     * {@link DEFAULT_MAX_UPLOAD_BYTES} (100 MiB) — pass this to raise or lower
+     * the ceiling; there is no unbounded option.
+     */
     maxFileSize?: number;
     /** Which protocol to speak. Default `"tus"` (the resumable, pause/resume-capable one). */
     protocol?: UploadProtocol;
+
+    /**
+     * Set when omitting `authorize` is intentional (a fully public upload
+     * bucket) — suppresses the one-time "no authorize gate" warning that would
+     * otherwise print when the handler is constructed. Has no effect when
+     * `authorize` is provided.
+     */
+    public?: boolean;
+
+    /** Suppress the one-time default-open-authorize warning. Alias of `public`. */
+    silent?: boolean;
     /** The storage provider the bytes land in (R2 in prod, memory in tests). */
     storage: UploadStorage;
 }
@@ -118,6 +149,59 @@ const denyResponse = (protocol: UploadProtocol): Response => {
     return Response.json({ error: { code: "FORBIDDEN", message: "Upload denied by authorization policy", name: "ForbiddenError" } }, { headers, status: 403 });
 };
 
+const tooLargeResponse = (protocol: UploadProtocol): Response => {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+
+    if (protocol === "tus") {
+        headers["Tus-Resumable"] = TUS_RESUMABLE;
+    }
+
+    return Response.json(
+        { error: { code: "REQUEST_ENTITY_TOO_LARGE", message: "Upload exceeds the configured maxFileSize", name: "RequestEntityTooLargeError" } },
+        { headers, status: 413 },
+    );
+};
+
+/**
+ * Best-effort declared upload size read off the request, checked against
+ * `maxFileSize` before the request reaches the underlying protocol handler.
+ *
+ * Why not lean on `@visulima/storage` itself? Its `UploadOptions.maxFileSize`
+ * only bounds the multipart-form parser (protocol `"multipart"`); the
+ * `"tus"`/`"chunked-rest"` protocols instead validate against the storage
+ * provider's own `maxUploadSize` — captured into a validator closure once, at
+ * STORAGE construction time. `createUploadHandler` receives an
+ * already-constructed `storage`, so it cannot tighten that cap after the
+ * fact; this pre-check is what actually enforces `maxFileSize` for those two
+ * protocols. TUS's create (`POST`) declares the total size via
+ * `Upload-Length`; REST/other single-shot requests carry it in
+ * `Content-Length`.
+ *
+ * Deliberately skipped for `"multipart"`: there, `Content-Length` covers the
+ * whole multipart body (boundaries + field headers, not just file bytes), so
+ * comparing it to `maxFileSize` would false-reject a file that's actually
+ * within the cap — the library's own accurate `maxFileSize` forwarding
+ * already covers that protocol.
+ *
+ * Known gap: a TUS upload created with `Upload-Defer-Length` (no declared
+ * total up front) is not covered by this pre-check.
+ */
+const declaredUploadSize = (request: Request, protocol: UploadProtocol): number | undefined => {
+    if (protocol === "multipart") {
+        return undefined;
+    }
+
+    const raw = request.headers.get("Upload-Length") ?? request.headers.get("Content-Length");
+
+    if (raw === null) {
+        return undefined;
+    }
+
+    const parsed = Number(raw);
+
+    return Number.isFinite(parsed) ? parsed : undefined;
+};
+
 const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHandlerOptions): { fetch: (request: Request) => Promise<Response> } => {
     if (protocol === "chunked-rest") {
         return new Rest(handlerOptions);
@@ -137,17 +221,33 @@ const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHand
  */
 const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler => {
     const protocol = options.protocol ?? "tus";
+    const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_UPLOAD_BYTES;
 
     const handlerOptions: UploadHandlerOptions = {
+        maxFileSize,
         storage: options.storage,
-        ...(options.maxFileSize === undefined ? {} : { maxFileSize: options.maxFileSize }),
     };
 
     const handler = instantiateHandler(protocol, handlerOptions);
 
     const { authorize } = options;
 
+    if (authorize === undefined && !options.silent && !options.public) {
+        // One-time warning per handler instance — mirrors `@lunora/notify`'s
+        // one-time unsafe-default warn (`packages/notify/src/notify.ts`).
+        // eslint-disable-next-line no-console -- one-time misconfiguration warning, mirrors other unsafe-default fallbacks
+        console.warn(
+            "@lunora/storage: createUploadHandler() has no `authorize` — this mounts an unauthenticated, unbounded-write endpoint. Pass an RLS `authorize` gate, or set `public: true` (or `silent: true`) to confirm this bucket is intentionally open.",
+        );
+    }
+
     const fetch = async (request: Request): Promise<Response> => {
+        const declaredSize = declaredUploadSize(request, protocol);
+
+        if (declaredSize !== undefined && declaredSize > maxFileSize) {
+            return tooLargeResponse(protocol);
+        }
+
         if (authorize !== undefined) {
             try {
                 const allowed = await authorize({ method: request.method, protocol, request, url: new URL(request.url) });
@@ -189,4 +289,4 @@ const createR2UploadStorage = (options: R2UploadStorageOptions & { secretAccessK
     });
 
 export type { CreateUploadHandlerOptions, R2UploadStorageOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadStorage };
-export { createR2UploadStorage, createUploadHandler };
+export { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES };

@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { hasControlChar } from "../../../shared/hmac-url";
 import { toHex, trimTrailingSlashes } from "./internal";
 import { buildPresignedUrl } from "./presigned-url";
 import { buildSignedUrl } from "./signed-url";
@@ -214,6 +215,17 @@ const validateKey = (key: string): void => {
 
     if (key.includes("\0")) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains NUL byte");
+    }
+
+    // CR/LF (and other C0 controls) in a key would let a signed-URL canonical
+    // (`shared/hmac-url.ts`, host\nkey\nexp\n...) re-split so a different
+    // `exp` reads back for the same signature — reject at the point the key
+    // enters storage, not just when a signed URL happens to be minted for it.
+    // `hasControlChar` is the canonical detector from `shared/hmac-url.ts`, so
+    // this stays in lockstep with the HMAC canonical's own guard instead of a
+    // byte-similar copy that can drift.
+    if (hasControlChar(key)) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains a control character (including CR/LF)");
     }
 
     if (key.startsWith("/")) {

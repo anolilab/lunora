@@ -17,7 +17,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../shared/hmac-url";
+import { assertCanonicalSafe, extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../shared/hmac-url";
 import { trimTrailingSlashes } from "./internal";
 import type { SignedUrlOptions } from "./types";
 
@@ -76,6 +76,12 @@ export const buildSignedUrl = async (
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,
     // so drop it for GET to keep GET canonicals unchanged.
     const contentType = method === "PUT" ? args.contentType : undefined;
+
+    // The canonical is newline-delimited and `key` is not its last field, so a
+    // key containing a raw CR/LF could shift `exp` (and `contentType`) on
+    // re-split — reject it here rather than minting a URL two different keys
+    // could both satisfy. See `shared/hmac-url.ts#assertCanonicalSafe`.
+    assertCanonicalSafe(args.key);
 
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(args.baseUrl);
@@ -165,6 +171,9 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
             .split("/")
             .map((segment) => decodeURIComponent(segment))
             .join("/");
+        // A percent-decoded key carrying a raw CR/LF is rejected the same as a
+        // decode failure — see the build-side comment on `assertCanonicalSafe`.
+        assertCanonicalSafe(key);
         sigBytes = fromBase64Url(sig);
     } catch {
         return { reason: "malformed", valid: false };

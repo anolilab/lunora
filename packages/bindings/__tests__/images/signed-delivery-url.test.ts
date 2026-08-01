@@ -178,6 +178,22 @@ describe("buildSignedImageUrl / verifySignedImageUrl", () => {
         expect(result.key).toBe("a.png");
     });
 
+    it("rejects a key containing a raw newline at sign time (BINDINGS-01)", async () => {
+        expect.assertions(1);
+
+        // The canonical is `host\nkey\nexp\ntransform` — `key` is not its last
+        // field, so a raw \n in it could shift where `exp` re-splits on verify,
+        // letting an attacker-influenced key smuggle a different expiry under
+        // the same signature.
+        await expect(buildSignedImageUrl({ baseUrl: BASE, key: "uploads/avatar.png\n9999999999\n", secret: SECRET })).rejects.toThrow(/control character/);
+    });
+
+    it("rejects a key containing a carriage return at sign time", async () => {
+        expect.assertions(1);
+
+        await expect(buildSignedImageUrl({ baseUrl: BASE, key: "uploads/avatar\r.png", secret: SECRET })).rejects.toThrow(/control character/);
+    });
+
     it("round-trips a key that has a leading slash (canonical/URL mismatch regression)", async () => {
         // A leading-slash key was previously signed with the slash in the
         // canonical but built into the URL without it, so verify always returned

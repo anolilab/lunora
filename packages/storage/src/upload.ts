@@ -7,4 +7,4 @@
  * `@lunora/react` / `@lunora/vue` / … `useUpload` re-exports) on the client.
  */
 export type { CreateUploadHandlerOptions, R2UploadStorageOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadStorage } from "./upload-handler";
-export { createR2UploadStorage, createUploadHandler } from "./upload-handler";
+export { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "./upload-handler";
