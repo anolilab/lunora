@@ -928,26 +928,51 @@ class LunoraClient {
                         this.connections.delete(key);
                     }
                 },
-                onSubscriptionData: (key, data) => {
+                onSubscriptionData: (key, data, cursor, epoch) => {
                     // A follower tab received the authoritative server value from
                     // the leader. Update serverBase and re-fold any local optimistic
                     // layers so the displayed value reflects both the new base and
                     // the follower's own pending writes.
                     const state = this.subscriptions.get(key);
 
-                    if (state) {
-                        state.serverBase = data;
+                    if (!state) {
+                        return;
+                    }
 
-                        const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
+                    state.serverBase = data;
 
-                        state.lastValue = folded;
+                    // `cursor` rides the broadcast only from a CLIENT-01-aware
+                    // leader tab. When present, advance this follower's own resume
+                    // cursor/epoch and run the SAME confirmed-layer drop + notify
+                    // tail `handleDataMessage` uses on the leader — so a follower's
+                    // optimistic overlay (per-call or `setQuery`) is released the
+                    // moment the confirming frame arrives instead of staying masked
+                    // forever (CLIENT-01). A mixed-version deploy where the leader
+                    // hasn't shipped the cursor yet falls through to the historical
+                    // fold-and-notify-without-drop behavior below — backward
+                    // compatible with a cursor-less wire frame.
+                    if (cursor !== undefined) {
+                        state.serverCursor = cursor;
 
-                        for (const callback of state.callbacks) {
-                            try {
-                                callback(folded);
-                            } catch {
-                                /* user callback threw — ignore */
-                            }
+                        if (epoch !== undefined) {
+                            state.serverEpoch = epoch;
+                        }
+
+                        dropConfirmedLayers(state, cursor);
+                        notifySubscription(state, state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers));
+
+                        return;
+                    }
+
+                    const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
+
+                    state.lastValue = folded;
+
+                    for (const callback of state.callbacks) {
+                        try {
+                            callback(folded);
+                        } catch {
+                            /* user callback threw — ignore */
                         }
                     }
                 },
@@ -962,6 +987,18 @@ class LunoraClient {
                                 /* user callback threw — ignore */
                             }
                         }
+                    }
+                },
+                onSubscriptionSettled: (key, cursor, epoch) => {
+                    // The leader's `settled` checkpoint advanced with no value
+                    // change — reuse the exact same tail the leader itself runs
+                    // (ack + advance cursor/epoch + drop confirmed layers +
+                    // notify) so a follower's `setQuery`/per-call overlay a
+                    // byte-identical write just confirmed gets released here too.
+                    const state = this.subscriptions.get(key);
+
+                    if (state) {
+                        this.ackAndAdvanceCursor(state, cursor, epoch);
                     }
                 },
             });
@@ -4875,7 +4912,7 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 
-            this.tabCoordinator.broadcastSubscriptionData(key, payload);
+            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch);
         }
     }
 
@@ -4926,6 +4963,16 @@ class LunoraClient {
         // checkpoint callback never (un)subscribes to this same state mid-flush.
         for (const onCheckpoint of state.checkpointCallbacks) {
             onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+        }
+
+        // Cross-tab: propagate the checkpoint advance to follower tabs too, or a
+        // `setQuery`/per-call optimistic overlay this byte-identical write just
+        // confirmed would stay masked on a follower until the next VISIBLE data
+        // frame (see `onSubscriptionSettled` in the constructor).
+        if (this.tabCoordinator?.isLeader()) {
+            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+
+            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch);
         }
     }
 
