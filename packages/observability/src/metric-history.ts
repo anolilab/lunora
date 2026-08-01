@@ -82,6 +82,14 @@ interface MetricHistorySeries {
 
 /** {@link readMetricHistory} result: every tracked series with its buckets. */
 interface MetricHistoryResult {
+    /**
+     * True when the distinct-series cap has been reached, so the caller can say
+     * "showing N of a capped set" rather than implying totality — mirrors
+     * `readQueryInsights`'s `capped`. Series past the cap are still charted; only
+     * a genuinely new one arriving at capacity evicts the coldest existing series
+     * (see `recordMetricHistory`).
+     */
+    capped: boolean;
     series: MetricHistorySeries[];
 }
 
@@ -179,11 +187,58 @@ const knownBucketsFor = (sql: SqlExec): Set<string> => {
  * omitted field keeps the historical behaviour.
  */
 interface MetricHistoryOptions {
-    /** Distinct series tracked before a brand-new one is dropped (default {@link METRIC_HISTORY_MAX_SERIES}). */
+    /** Distinct series tracked before the least-recently-updated one is evicted to admit a new one (default {@link METRIC_HISTORY_MAX_SERIES}). */
     maxSeries?: number;
     /** Minute-buckets kept per series before older rows are trimmed (default {@link METRIC_HISTORY_BUCKET_RETENTION}). */
     retentionBuckets?: number;
 }
+
+/**
+ * Admit a brand-new `key` against the distinct-series cap, evicting the
+ * least-recently-updated series (smallest `MAX(last_ts)`) when at capacity —
+ * the durable mirror of `MetricBuffer.push`'s in-memory LRU policy. Mirrors
+ * `function-metrics.ts`'s `admitPath` and `query-metrics.ts`'s
+ * `admitStatement`. Only called for a series `recordMetricHistory` has
+ * confirmed is not yet tracked (an already-tracked series always keeps
+ * accumulating past the cap, so it never reaches this check).
+ *
+ * Split out of {@link recordMetricHistory} to keep that function's cognitive
+ * complexity in bounds — this is the one branch-heavy part of it.
+ */
+const admitNewSeries = (sql: SqlExec, cache: Set<string>, maxSeries: number): void => {
+    const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
+
+    if (seriesCountRow.n < maxSeries) {
+        return;
+    }
+
+    // At capacity: evict the least-recently-updated series to admit this
+    // genuinely new one. A brand-new series arriving right after a deploy (or
+    // the incident being charted) must not go permanently unrecorded — only
+    // the coldest existing series pays for it.
+    const evictRow = runSql<{ series_key: string }>(
+        sql,
+        `SELECT series_key FROM "${METRIC_HISTORY_TABLE}" GROUP BY series_key ORDER BY MAX(last_ts) ASC LIMIT 1`,
+    ).toArray()[0];
+
+    if (evictRow === undefined) {
+        return;
+    }
+
+    runSql(sql, `DELETE FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ?`, evictRow.series_key);
+
+    // Drop the evicted series' entries from the known-bucket cache so a later
+    // write for it re-checks durable state rather than skipping straight to an
+    // upsert that would resurrect rows this eviction just deleted. Cache keys
+    // are `${seriesKey}\u0000${bucketMs}` (see `cacheKey` in `recordMetricHistory`).
+    const evictedPrefix = `${evictRow.series_key}\u0000`;
+
+    for (const cachedKey of cache) {
+        if (cachedKey.startsWith(evictedPrefix)) {
+            cache.delete(cachedKey);
+        }
+    }
+};
 
 /**
  * Fold one measurement into its `(series, minute)` bucket. Runs per
@@ -236,11 +291,7 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
         const seriesTracked = runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ? LIMIT 1`, key).toArray().length > 0;
 
         if (!seriesTracked) {
-            const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
-
-            if (seriesCountRow.n >= maxSeries) {
-                return;
-            }
+            admitNewSeries(sql, cache, maxSeries);
         }
     }
 
@@ -337,10 +388,14 @@ const parseAttributes = (raw: string): LogFields | undefined => {
  * trend line reads oldest→newest.
  *
  * `options.sinceMs`, when set, returns only buckets at or after this epoch-ms —
- * the studio's time-window selector.
+ * the studio's time-window selector. `options.maxSeries`, mirroring the write
+ * side's tunable, is only used to compute `capped` — it does not affect which
+ * rows are read.
  */
-const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): MetricHistoryResult => {
+const readMetricHistory = (sql: SqlExec, options: { maxSeries?: number; sinceMs?: number } = {}): MetricHistoryResult => {
     ensureMetricHistoryTable(sql);
+
+    const maxSeries = options.maxSeries ?? METRIC_HISTORY_MAX_SERIES;
 
     const rows =
         options.sinceMs === undefined
@@ -387,7 +442,9 @@ const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): Me
         series.points.sort((a, b) => a.bucketMs - b.bucketMs);
     }
 
-    return { series: [...bySeries.values()] };
+    const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
+
+    return { capped: seriesCountRow.n >= maxSeries, series: [...bySeries.values()] };
 };
 
 export { readMetricHistory, recordMetricHistory };

@@ -370,7 +370,22 @@ const admitPath = (sql: SqlExec, path: string): boolean => {
     const pathCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`).one();
 
     if (pathCountRow.n >= FUNCTION_METRICS_MAX_PATHS) {
-        return false;
+        // At capacity: evict the coldest path (smallest `last_called_at`) to
+        // admit this genuinely new one, mirroring `metric-history.ts`'s
+        // series-cap eviction and `MetricBuffer.push`'s in-memory LRU policy.
+        // Without this, a deploy that renames/removes functions would
+        // permanently fill the accumulator with dead paths and refuse every
+        // path introduced afterward — including the app's own new functions.
+        const evictRow = runSql<{ path: string }>(sql, `SELECT path FROM "${FUNCTION_METRICS_TABLE}" ORDER BY last_called_at ASC LIMIT 1`).toArray()[0];
+
+        if (evictRow === undefined) {
+            return false;
+        }
+
+        runSql(sql, `DELETE FROM "${FUNCTION_METRICS_TABLE}" WHERE path = ?`, evictRow.path);
+        runSql(sql, `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?`, evictRow.path);
+        runSql(sql, `DELETE FROM "${FUNCTION_METRICS_SCANS_TABLE}" WHERE path = ?`, evictRow.path);
+        known.delete(evictRow.path);
     }
 
     known.add(path);
