@@ -422,6 +422,164 @@ describe("lunoraCollectionOptions (list source)", () => {
 });
 
 /**
+ * Plan 266 S4 — the `list` path's `onRows` compensator resolves the checkpoint
+ * gate off `client.confirmedMutationWatermark`, a PROVISIONAL signal advanced
+ * by the RPC ack the moment a write is accepted, independent of whether that
+ * write's rows have actually synced via a `data` frame yet. Two writes to the
+ * same list, HTTP-ack-races-WS-broadcast: write A (mutationId 5) and write B
+ * (mutationId 6) are BOTH acked before A's `data` frame (reflecting only A's
+ * row) arrives — the compensator reads the watermark (6) rather than what
+ * THIS frame actually represents, dropping B's still-unsynced overlay early.
+ *
+ * The fix threads a frame-carried watermark (fed by `onCheckpoint`, which a
+ * fixed client now fires from a `data` frame's own `lastMutationId` BEFORE
+ * `onRows`, not just from `settled` frames) and prefers it over the
+ * compensator once any such watermark has been observed.
+ */
+describe("lunoraCollectionOptions (list source) — data-frame watermark race (plan 266 S4)", () => {
+    it("a data frame reflecting only A's write must not resolve B's still-unsynced overlay merely because B's RPC ack raced ahead", async () => {
+        expect.assertions(1);
+
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        // Both A (5) and B (6) have already been acked over HTTP by the time
+        // the WS frame below arrives — the provisional signal is at 6.
+        watermark.mockReturnValue(6);
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+        };
+
+        const order: string[] = [];
+        const pendingA = options.checkpoints.awaitMutationId(5).then(() => order.push("A"));
+        const pendingB = options.checkpoints.awaitMutationId(6).then(() => order.push("B"));
+
+        // A fixed client fires `onCheckpoint` with the FRAME's own watermark
+        // (5 — this frame reflects only A's commit) before `onRows` — see
+        // `handleDataMessage`'s ordering.
+        onCheckpoint?.({ checkpoint: 12, mutationId: 5 });
+        onRows([{ _creationTime: 0, _id: "a", text: "A" }]);
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // A's overlay legitimately drops (A's row IS in this frame). B's must
+        // NOT — its own rows haven't synced, only its ack has. Against
+        // baseline (pre-fix) `onRows` unconditionally resolves off the
+        // provisional watermark (6), dropping B's overlay too — this is the
+        // repro failure.
+        expect(order).toStrictEqual(["A"]);
+
+        void pendingA;
+        void pendingB;
+    });
+
+    it("a genuinely-zero frame watermark does not permanently disable the RPC-ack fallback (thermos H1)", async () => {
+        expect.assertions(1);
+
+        // Every socket announces a clientId unconditionally, and a fresh
+        // `__client_watermark` row reads back 0 (not "no row") — so the
+        // VERY FIRST frame this session legitimately carries `mutationId: 0`.
+        // A sticky `frameWatermark ?? fallback` design reads that `0` as
+        // "already have an authoritative answer" forever after, since `0` is
+        // not nullish — disabling the compensator for every later write.
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+        };
+
+        // The first (seed) frame: nothing confirmed yet for this client.
+        onCheckpoint?.({ checkpoint: 1, mutationId: 0 });
+        onRows([{ _creationTime: 0, _id: "m1", text: "seed" }]);
+
+        // A LATER frame carrying no watermark of its own (e.g. an unstamped
+        // delta from an un-upgraded server) must fall back to the client's
+        // provisional RPC-ack watermark — not resolve against a stale `0`
+        // forever. `confirmedMutationWatermark` now reports 5 (a real write
+        // was acked since the seed frame).
+        watermark.mockReturnValue(5);
+
+        const order: string[] = [];
+        const pending = options.checkpoints.awaitMutationId(5).then(() => order.push("resolved"));
+
+        onRows([{ _creationTime: 0, _id: "m1", text: "seed" }, { _creationTime: 0, _id: "m2", text: "new" }]);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(order).toStrictEqual(["resolved"]);
+
+        void pending;
+    });
+
+    it("a follower's onRows falls back to the RPC-ack watermark instead of a stale leader-era value (thermos H2)", async () => {
+        expect.assertions(1);
+
+        // A demoted leader's own writes now go over HTTP RPC; the cross-tab
+        // `subscription-data` broadcast that drives a follower's `onRows`
+        // deliberately never carries `lastMutationId` (plan 266 S3's
+        // clientId-scoping lives on the SETTLED path only). A sticky
+        // watermark left over from before demotion would resolve every
+        // later `onRows` against that stale value instead of ever falling
+        // back — hanging every follower-issued write for the full
+        // CHECKPOINT_FALLBACK_MS.
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+        };
+
+        // While still leader: a real frame-carried watermark arrives and
+        // resolves normally.
+        onCheckpoint?.({ checkpoint: 1, mutationId: 3 });
+        onRows([{ _creationTime: 0, _id: "m1", text: "leader-era" }]);
+
+        // Demotion: no more onCheckpoint calls ever arrive for this
+        // subscription. A follower-issued write's watermark (7) must still
+        // resolve via the compensator, not the stale leader-era "3".
+        watermark.mockReturnValue(7);
+
+        const order: string[] = [];
+        const pending = options.checkpoints.awaitMutationId(7).then(() => order.push("resolved"));
+
+        onRows([{ _creationTime: 0, _id: "m1", text: "leader-era" }, { _creationTime: 0, _id: "m2", text: "follower-write" }]);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(order).toStrictEqual(["resolved"]);
+
+        void pending;
+    });
+});
+
+/**
  * The scope/sync lifecycle for a `scopeBy` collection: a sync restart (after gc
  * cleanup) must re-open the last scope, and a `scope(...)` issued before sync
  * first starts must still deliver the source's initial snapshot.

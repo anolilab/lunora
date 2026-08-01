@@ -3904,7 +3904,7 @@ const selectShapeRows: (sql: SqlExec, table: string, effectiveWhere: WhereInput 
 ### `sendDeltaFrames` (const)
 
 ```ts
-const sendDeltaFrames: (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string) => boolean;
+const sendDeltaFrames: (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string, lastMutationId?: number) => boolean;
 ```
 
 ### `serializeSqlValue` (const)

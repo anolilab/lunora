@@ -7576,6 +7576,13 @@ abstract class ShardDO {
 
             const attachment = this.readAttachment(ws);
 
+            // Read once per socket per flush, not once per affected
+            // subscription below — the value depends only on this socket's
+            // announced `clientId`/`userId`, identical for every subscription
+            // on it, so re-reading it per subscription was a redundant
+            // `SELECT … FROM __client_watermark` per subscription per flush.
+            const clientWatermark = this.socketClientWatermark(ws);
+
             for (const [subId, query] of Object.entries(attachment.subs)) {
                 const { functionPath } = query;
 
@@ -7633,7 +7640,7 @@ abstract class ShardDO {
                     // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
                     await awaitWsDrain(ws);
 
-                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch);
+                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch, clientWatermark);
                 } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
@@ -7711,7 +7718,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch);
+        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketClientWatermark(ws));
     }
 
     /**
@@ -8612,8 +8619,23 @@ abstract class ShardDO {
      * persist its resume position and replay it as `sinceSeq` on reconnect
      * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
      * to the pre-cursor format.
+     *
+     * `clientWatermark` is this socket's `socketClientWatermark(ws)` — read
+     * ONCE by the caller and passed in, not recomputed here. A single
+     * write-flush can call this method many times for the same socket (once
+     * per affected subscription — see `refreshOne`), and the watermark
+     * depends only on `ws`, never on `subId`/`outcome`, so recomputing it per
+     * subscription was a redundant `SELECT … FROM __client_watermark` per
+     * subscription per socket per flush.
      */
-    private pushSubscriptionData(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, cursor?: number, epoch?: string): void {
+    private pushSubscriptionData(
+        ws: ShardSocketLike,
+        subId: string,
+        outcome: SubscriptionOutcome,
+        cursor: number | undefined,
+        epoch: string | undefined,
+        clientWatermark: number | undefined,
+    ): void {
         let memos = this.subMemos.get(ws);
 
         if (!memos) {
@@ -8647,8 +8669,7 @@ abstract class ShardDO {
             // So emit a lightweight `settled` frame (carrying the cursor/epoch)
             // unconditionally, with `lastMutationId` only when this socket has a
             // watermark. An old client ignores the unknown frame.
-            const settledWatermark = this.socketClientWatermark(ws);
-            const watermarkField = settledWatermark === undefined ? "" : `,"lastMutationId":${String(settledWatermark)}`;
+            const watermarkField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
 
             trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)}${watermarkField}${cursorSuffix}}`);
 
@@ -8666,6 +8687,21 @@ abstract class ShardDO {
                 ? undefined
                 : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
 
+        // Stamp this socket's per-mutator watermark on the plain `data` frame
+        // the same way the `settled` branch above does, so the client's
+        // checkpoint gate can trust what THIS frame's rows actually reflect
+        // instead of a provisional RPC-ack signal that can race ahead of it
+        // (plan 266 finding d: write A's data frame arriving after write B's
+        // ack has already landed, but before B's own rows synced, must not
+        // resolve B's overlay early). The delta branch below stamps the SAME
+        // watermark on every delta frame it sends (not a follow-up: a
+        // `@lunora/db` list collection is exactly the id-keyed shape the
+        // delta path targets, so after the first snapshot EVERY subsequent
+        // write for it goes out as deltas — leaving them unstamped would
+        // starve the checkpoint gate of a frame-carried watermark for the
+        // common case, not a rare one).
+        const lastMutationIdField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
+
         // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once
         // the frame(s) for this value actually leave the socket. `ws.send` throws
         // when the socket has closed or its outbound buffer is gone. Advancing the
@@ -8678,8 +8714,8 @@ abstract class ShardDO {
         // tracking stays accurate even when delivery failed.
         const delivered =
             deltas === undefined
-                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`)
-                : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix);
+                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${lastMutationIdField}${cursorSuffix}}`)
+                : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix, clientWatermark);
 
         memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), ranges: outcome.ranges, tables: outcome.tables });
     }
