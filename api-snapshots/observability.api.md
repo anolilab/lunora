@@ -704,7 +704,7 @@ const dispatchRootSpan: (input: {
 ### `emitLogEvent` (const)
 
 ```ts
-const emitLogEvent: (input: LogEventInput) => void;
+const emitLogEvent: (input: LogEventInput, options?: RequestLogWriteOptions) => void;
 ```
 
 ### `emitRequestLogEvent` (const)
@@ -879,6 +879,12 @@ const recordMetricHistory: (sql: SqlExec, event: MetricEvent, exemplarTraceId?: 
 
 ```ts
 const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rowsRead: number, rowsWritten: number, now?: number) => void;
+```
+
+### `redactArgs` (const)
+
+```ts
+const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ```
 
 ### `resolveTraceAnchor` (const)

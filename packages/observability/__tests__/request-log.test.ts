@@ -236,7 +236,7 @@ describe("request-log module", () => {
 
 describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
     it("folds error rows sharing a fingerprint into one Issue with count + first/last seen", () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const database = createSqliteExec();
 
@@ -252,8 +252,44 @@ describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
             expect(issues[0]!.culprit).toBe("messages:list");
             expect(issues[0]!.firstSeen).toBe(1000);
             expect(issues[0]!.lastSeen).toBe(2000);
-            // The newest folded row seeds the representative sample.
-            expect(issues[0]!.sampleMessage).toBe("User 67890 not found");
+            // The newest folded row seeds the representative sample — redacted like
+            // the durable row: `@visulima/redact`'s standardRules masks a bare
+            // 5-digit run as `<DL>`, same as the stored `error_message`.
+            expect(issues[0]!.sampleMessage).toBe("User <DL> not found");
+            expect(issues[0]!.sampleMessage).not.toContain("67890");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("keeps three different-length numeric IDs in one Issue via the write-time fingerprint, despite length-sensitive redaction", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            // Pre-redaction, `messageBucketFor` normalizes ANY digit run to `<n>`,
+            // so all three collapse to one bucket today (verified directly against
+            // `fingerprintError`: all three raw messages hash identically). But
+            // `@visulima/redact`'s `standardRules` is length-sensitive — a bare
+            // digit run redacts to `<DL>` at 5-6 digits and `<BANKACC>` at 10, and
+            // is left alone at 1 digit — so if grouping recomputed the hash from
+            // the (redacted) stored message instead of using the write-time
+            // fingerprint, this Issue would split into three. It must not.
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "User 5 not found", functionPath: "messages:list", outcome: "error", ts: 1000 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "User 55555 not found", functionPath: "messages:list", outcome: "error", ts: 2000 }));
+            appendRequestLogEntry(
+                database.sql,
+                entry({ errorMessage: "User 5555555555 not found", functionPath: "messages:list", outcome: "error", ts: 3000 }),
+            );
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(1);
+            expect(issues[0]!.count).toBe(3);
+            // The representative sample (newest row) is redacted, like the stored row.
+            expect(issues[0]!.sampleMessage).toBe("User <BANKACC> not found");
+            expect(issues[0]!.sampleMessage).not.toMatch(/\d/);
         } finally {
             database.close();
         }
@@ -467,6 +503,50 @@ describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
     });
 });
 
+describe("errorMessage redaction reaches every sink, grouping stays keyed on the raw message", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("masks a PII-bearing errorMessage at the durable row, the Logpush event, and the Issues sampleMessage alike", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const raw = entry({
+                errorMessage: "contact alice@example.com to resolve order 12345",
+                functionPath: "billing:charge",
+                outcome: "error",
+                ts: 1000,
+            });
+
+            appendRequestLogEntry(database.sql, raw);
+            emitRequestLogEvent(raw);
+
+            // Sink 1: the durable `__lunora_reqlog__` row.
+            const [row] = readRequestLog(database.sql);
+
+            expect(row!.errorMessage).not.toContain("alice@example.com");
+
+            // Sink 2: the console/Logpush event.
+            const event = JSON.parse(error.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+
+            expect(event.error as string).not.toContain("alice@example.com");
+
+            // Sink 3: the Issues panel / AI-prompt sampleMessage.
+            const [issue] = readErrorIssues(database.sql);
+
+            expect(issue!.sampleMessage).not.toContain("alice@example.com");
+            // Grouping still keys off the RAW pre-redaction message — a stable hash.
+            expect(issue!.hash).toMatch(/^[0-9a-f]{16}$/);
+        } finally {
+            database.close();
+        }
+    });
+});
+
 describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
     afterEach(() => {
         vi.restoreAllMocks();
@@ -599,5 +679,40 @@ describe("emitLogEvent (ctx.log → console)", () => {
 
         expect(error).toHaveBeenCalledTimes(1);
         expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("masks a PII-bearing structured fields bag on the console line", () => {
+        expect.assertions(3);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitLogEvent({
+            args: ["charged", { email: "a@b.com", token: "abc-123" }],
+            fields: { email: "a@b.com", token: "abc-123" },
+            functionPath: "pay:charge",
+            level: "info",
+            message: "charged",
+            ts: 1000,
+        });
+
+        const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+        const fields = event.fields as Record<string, unknown>;
+
+        expect(fields.email).not.toBe("a@b.com");
+        expect(fields.token).not.toBe("abc-123");
+        // Keys survive — only the values are masked, matching args/identity/error.
+        expect(Object.keys(fields).toSorted((a, b) => a.localeCompare(b))).toEqual(["email", "token"]);
+    });
+
+    it("captureRaw (via options) emits an un-redacted fields bag", () => {
+        expect.assertions(1);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitLogEvent({ args: [], fields: { email: "a@b.com" }, functionPath: "pay:charge", level: "info", message: "charged", ts: 1000 }, { captureRaw: true });
+
+        const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+
+        expect(event.fields).toEqual({ email: "a@b.com" });
     });
 });

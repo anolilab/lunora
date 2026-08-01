@@ -61,6 +61,23 @@ class ScanningShard extends ShardDO {
 }
 
 /**
+ * A shard whose `handleRpc` throws an error message carrying PII (an email plus
+ * a digit-run, the same shape the request-log redaction test uses), to prove
+ * the function-metrics sink gets the same `redactArgs` treatment as the
+ * request-log sinks rather than persisting/caching the raw message.
+ */
+class PiiErrorShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; routes by functionPath only
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        if (functionPath === "billing:charge") {
+            throw new Error("contact alice@example.com to resolve order 12345");
+        }
+
+        return { ok: true };
+    }
+}
+
+/**
  * A shard whose `handleRpc` raises a {@link ConflictError}: `occ:bump` throws an
  * optimistic-concurrency conflict (the contention signal counted as a write
  * conflict), `unique:insert` throws a unique-constraint breach (a 409 that is
@@ -477,6 +494,39 @@ describe("shardDO persisted metrics", () => {
 
             expect(byPath.get("messages:list")).toMatchObject({ calls: 2, errors: 0, lastErrorMessage: null });
             expect(byPath.get("boom:explode")).toMatchObject({ calls: 1, errors: 1, lastErrorMessage: "boom" });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("redacts a PII-bearing error message at the function-metrics sink — the durable column AND getFunctionStats alike", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new PiiErrorShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(userRequest("billing:charge"));
+
+            // Sink 1: the durable `__lunora_metrics.last_error_message` column —
+            // this is the sink the redaction PR missed; it must not carry the raw
+            // email/order-id even though args/identity and the request-log's own
+            // error column were already redacted.
+            const [row] = database.raw(`SELECT last_error_message FROM "${FUNCTION_METRICS_TABLE}"`) as [{ last_error_message: string }];
+
+            expect(row.last_error_message).not.toContain("alice@example.com");
+            expect(row.last_error_message).not.toContain("12345");
+
+            // Sink 2: the in-memory `functionStats` cache served by
+            // `__lunora_admin__:getFunctionStats` — fed by the SAME redacted
+            // string, so it can't drift from the durable column.
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getFunctionStats"));
+            const body = await response.json<{ result: { functions: FunctionCallStat[] } }>();
+            const stat = body.result.functions.find((function_) => function_.path === "billing:charge");
+
+            expect(stat?.lastErrorMessage).not.toContain("alice@example.com");
+            expect(stat?.lastErrorMessage).not.toContain("12345");
         } finally {
             database.close();
         }
