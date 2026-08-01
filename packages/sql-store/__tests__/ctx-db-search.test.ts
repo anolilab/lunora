@@ -353,6 +353,32 @@ describe("global search provisioning", () => {
 
             expect(rows.map((document) => document["_id"])).toStrictEqual(["b"]);
         });
+
+        it("prefix-matches a final token ending in an astral (surrogate-pair) character (plan 272)", async () => {
+            expect.assertions(1);
+
+            // U+10437 (𐐷, DESERET SMALL LETTER YEE) is a surrogate pair in
+            // UTF-16 — the exact shape `searchTermRange` must derive a
+            // code-point-correct upper bound for, not a code-unit one.
+            const astral = String.fromCodePoint(0x1_04_37);
+
+            createNotesTable();
+            insertNote("a", `${astral}ord some other text`);
+            insertNote("b", "unrelated document");
+
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            const rows = await runSqlSearch(
+                exec,
+                dialect,
+                notesDefinition,
+                "notes",
+                { definition: BY_BODY, field: "body", filters: [], hasQuery: true, indexName: "by_body", query: astral },
+                10,
+            );
+
+            expect(rows.map((document) => document["_id"])).toStrictEqual(["a"]);
+        });
     });
 
     // Plan 269: RLS installs a `.filter()` predicate at `query()` time, BEFORE
