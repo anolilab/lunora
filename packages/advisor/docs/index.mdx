@@ -210,22 +210,16 @@ order. Each finding has `level`, `name`, `title`, `detail`, `description`,
 
 The runtime tier reads `shardTraffic`, `tableScans`, `indexHits`, and
 `tableSamples` off the `LintContext`. The Studio backend fills those from each
-shard's durable counters. As an alternative feeder,
-`loadAnalyticsRuntimeMetrics` reconstructs the same arrays from the Analytics
-Engine SQL API:
+shard's durable counters.
 
-```ts
-import { fromServerSchema, loadAnalyticsRuntimeMetrics, runAdvisor } from "@lunora/advisor";
-
-import schema from "./lunora/schema";
-
-// `client` is an `@lunora/bindings/analytics` SQL client (anything with `query(sql)`).
-const metrics = await loadAnalyticsRuntimeMetrics(client, { dataset: "ANALYTICS" });
-const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { source: "runtime" });
-```
-
-A missing metric degrades to an empty array rather than throwing, so a partially
-configured read path still returns what it can.
+An Analytics-Engine-backed alternative feeder, `loadAnalyticsRuntimeMetrics`,
+exists in source (`src/ae-metrics.ts`) but is **quarantined** — not exported
+from `@lunora/advisor`'s package root, and not importable by consumers of the
+published package. Nothing in the runtime writes the AE events it would read,
+so wiring it up today would silently read as "no dead indexes" rather than "no
+data" for the `index_utilization` lint. It stays internal, as groundwork for a
+future writer, until that gap closes — see the docblock atop `ae-metrics.ts`
+for the full read contract.
 
 ## Health map — score, verdicts, baseline
 
