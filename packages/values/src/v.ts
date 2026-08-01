@@ -229,9 +229,25 @@ interface StringColumnValidator extends ColumnValidator<string, string> {
     max: (max: number) => StringColumnValidator;
     /** Require at least `min` characters (`minLength`). */
     min: (min: number) => StringColumnValidator;
-    /** Require the value to match `pattern` (JSON Schema `pattern` set from `pattern.source`). */
+
+    /**
+     * Require the value to match `pattern` (JSON Schema `pattern` set from
+     * `pattern.source`; emitted `pattern` does not encode `pattern.flags` — a
+     * case-insensitive `/i` regex, for instance, emits a flag-less JSON Schema
+     * pattern). A `g`/`y`-flagged `pattern` is tested statelessly (its
+     * `lastIndex` is never consulted or advanced), so a single validator
+     * instance gives the same answer for the same input on every call.
+     */
     pattern: (pattern: RegExp) => StringColumnValidator;
-    /** Require a valid URL, parseable by the WHATWG `URL` constructor (`format: "uri"`). */
+
+    /**
+     * Require a valid `http:`/`https:` URL (`format: "uri"`). Parseable by the
+     * WHATWG `URL` constructor is necessary but not sufficient — schemes such as
+     * `javascript:`, `data:`, `file:`, and `vbscript:` all parse successfully but
+     * are rejected here, since accepting them lets a validated "link" field carry
+     * an XSS payload straight into an anchor's `href` or `window.location` at
+     * render time.
+     */
     url: () => StringColumnValidator;
 }
 
@@ -359,8 +375,24 @@ interface InternalArrayColumnValidator<T> extends InternalColumnValidator<T[]> {
  */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/u;
 
-/** True when `value` parses as a WHATWG URL. */
-const isValidUrl = (value: string): boolean => URL.canParse(value);
+/**
+ * True when `value` parses as a WHATWG URL AND uses the `http:`/`https:`
+ * scheme. An allowlist rather than a denylist deliberately — `URL.canParse`
+ * alone accepts any scheme the parser recognizes (`javascript:`, `data:`,
+ * `file:`, `vbscript:`, …), and a denylist would need to name every dangerous
+ * scheme up front and stay current as new ones appear. http(s)-only covers the
+ * overwhelming majority of "validate a link" use cases and fails closed on
+ * everything else.
+ */
+const isValidUrl = (value: string): boolean => {
+    if (!URL.canParse(value)) {
+        return false;
+    }
+
+    const { protocol } = new URL(value);
+
+    return protocol === "http:" || protocol === "https:";
+};
 
 // Declared as a function (not an arrow expression) so TypeScript treats its
 // `: never` return as a control-flow assertion — callers rely on this to narrow
@@ -571,11 +603,22 @@ const createValidator = <T>(
                     message: `expected string length === ${String(length)}`,
                     schema: { maxLength: length, minLength: length },
                 }) as InternalStringColumnValidator;
-            self.pattern = (pattern) =>
-                self.check((value) => pattern.test(value), {
+            self.pattern = (pattern) => {
+                // `g`/`y`-flagged regexes are stateful: `RegExp.prototype.test`
+                // advances `lastIndex` on match and resumes from it next call, so
+                // reusing the caller's `RegExp` instance directly across requests
+                // makes the same input alternate between passing and failing
+                // depending on call order. Strip `g`/`y` once here into a fresh,
+                // non-advancing `RegExp` so `.test()` is a pure function of its
+                // input; the JSON Schema `pattern` still comes from the original
+                // `pattern.source` (flags are never encoded there regardless).
+                const stable = pattern.global || pattern.sticky ? new RegExp(pattern.source, pattern.flags.replaceAll(/[gy]/gu, "")) : pattern;
+
+                return self.check((value) => stable.test(value), {
                     message: `expected string matching ${pattern.toString()}`,
                     schema: { pattern: pattern.source },
                 }) as InternalStringColumnValidator;
+            };
             self.email = () =>
                 self.check((value) => EMAIL_PATTERN.test(value), {
                     message: "expected a valid email address",

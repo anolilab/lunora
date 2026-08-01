@@ -70,6 +70,21 @@ describe("string refinements", () => {
 
             expect(toJsonSchema(v.string().pattern(/^[a-z]+$/u))).toStrictEqual({ pattern: "^[a-z]+$", type: "string" });
         });
+
+        it("accepts a matching string consistently across repeated calls with a global-flagged regex", () => {
+            expect.assertions(3);
+
+            // A `g`-flagged RegExp is stateful: `.test()` advances `lastIndex` on
+            // match and resumes from it next call. A single `.pattern()` validator
+            // is built once and its regex reused across every `.parse()` call, so
+            // without neutralizing the flag this alternates true/false/true/... on
+            // the exact same input instead of returning a consistent answer.
+            const validator = v.string().pattern(/^[a-z]+$/gu);
+
+            expect(validator.parse("abc")).toBe("abc");
+            expect(validator.parse("abc")).toBe("abc");
+            expect(validator.parse("abc")).toBe("abc");
+        });
     });
 
     describe(".email()", () => {
@@ -103,6 +118,30 @@ describe("string refinements", () => {
             expect.assertions(1);
 
             expect(toJsonSchema(v.string().url())).toStrictEqual({ format: "uri", type: "string" });
+        });
+
+        it("accepts http(s) URLs", () => {
+            expect.assertions(2);
+
+            const validator = v.string().url();
+
+            expect(validator.parse("http://example.com")).toBe("http://example.com");
+            expect(validator.parse("https://example.com")).toBe("https://example.com");
+        });
+
+        it("rejects dangerous non-http(s) schemes even though they parse as a valid URL", () => {
+            expect.assertions(4);
+
+            // `URL.canParse` alone returns true for all of these — they are
+            // syntactically valid URLs, just not ones safe to drop into
+            // `<a href>`/`window.location` after "validating" them as a link.
+            const validator = v.string().url();
+
+            // eslint-disable-next-line no-script-url -- intentional dangerous-scheme fixture, never executed
+            expect(() => validator.parse("javascript:alert(1)")).toThrow(ValidationError);
+            expect(() => validator.parse("data:text/html,x")).toThrow(ValidationError);
+            expect(() => validator.parse("file:///x")).toThrow(ValidationError);
+            expect(() => validator.parse("vbscript:msgbox(1)")).toThrow(ValidationError);
         });
     });
 
