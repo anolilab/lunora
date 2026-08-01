@@ -63,7 +63,7 @@ export interface UploadApi {
     /** Whether the upload is currently paused. */
     isPaused: Signal<boolean>;
 
-    /** Pause the in-flight upload (TUS / chunked-REST only support this mid-upload). */
+    /** Pause the in-flight upload (TUS / chunked-REST only support this mid-upload). A no-op unless `status() === "uploading"`. */
     pause: () => void;
 
     /** Upload progress, as the adapter reports it (0–100). */
@@ -72,7 +72,7 @@ export interface UploadApi {
     /** The resolved upload result, or `undefined` before it finishes. */
     result: Signal<UploadResult | undefined>;
 
-    /** Resume a paused upload. */
+    /** Resume a paused upload. A no-op unless `status() === "paused"`. */
     resume: () => void;
 
     /** Start (or restart) the upload for `file`. Also resolves/rejects with the same result the `result`/`error` signals settle to. */
@@ -137,15 +137,38 @@ export const upload = (options: UploadOptions): UploadApi => {
         status.set("error");
     });
 
-    const start = (file: File): Promise<UploadResult> => adapter.upload(file);
+    const start = (file: File): Promise<UploadResult> => {
+        // A (re)start is a fresh attempt: clear the previous attempt's terminal
+        // signals so a retry can't render a stale error/result/progress alongside
+        // the new upload's status (see UploadApi.start — "Start (or restart)").
+        error.set(undefined);
+        result.set(undefined);
+        progress.set(0);
+        isPaused.set(false);
+        status.set("uploading");
+
+        return adapter.upload(file);
+    };
 
     const pause = (): void => {
+        // A no-op unless an upload is actually in flight — calling `pause()`
+        // from `"idle"`/`"success"`/`"error"` must not stamp `"paused"` over a
+        // terminal state that has nothing to pause.
+        if (status() !== "uploading") {
+            return;
+        }
+
         adapter.pause();
         isPaused.set(true);
         status.set("paused");
     };
 
     const resume = (): void => {
+        // A no-op unless the upload is actually paused — mirrors `pause()`'s guard.
+        if (status() !== "paused") {
+            return;
+        }
+
         // `adapter.resume()` is async (it may re-probe the upload offset before
         // resuming); route failure into the same `error`/`status` signals a
         // failed `start()` would, rather than an unhandled rejection.
