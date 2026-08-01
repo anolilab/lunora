@@ -403,6 +403,22 @@ interface ShardConnection {
     wsState: WSState;
 }
 
+/**
+ * The subset of a connection's own state {@link LunoraClient.openManagedSocket}
+ * manages directly: the live socket (the identity-guard's comparand), the
+ * fail-fast connect-timeout, and the keepalive heartbeat with its half-open
+ * watchdog (plan 217). `ShardConnection` satisfies this structurally, so the
+ * shard socket passes itself straight through; `subscribeScheduledJobs`
+ * constructs a small matching record so it inherits the same guarantees
+ * instead of hand-rolling a second, divergent implementation (CLIENT-05).
+ */
+interface ManagedSocketState {
+    connectTimer: ReturnType<typeof setTimeout> | undefined;
+    heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    lastFrameAt: number;
+    socket: undefined | WebSocket;
+}
+
 const deriveWsUrl = (url: string): string => {
     if (url.startsWith("https://")) {
         return `wss://${url.slice("https://".length)}`;
@@ -2337,9 +2353,31 @@ class LunoraClient {
         const base = joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH);
         const reconnect = createReconnect(this.reconnectOptions);
 
-        let socket: undefined | WebSocket;
+        // This subscription's own connection state — the identity-guard
+        // comparand `openManagedSocket` re-checks before every action, exactly
+        // like the shard socket's `ShardConnection`. Built on the same shared
+        // helper (plan 217's connect-timeout + heartbeat/watchdog, plan 231's
+        // identity guard) instead of a second, hand-rolled implementation
+        // (CLIENT-05).
+        const conn: ManagedSocketState = {
+            connectTimer: undefined,
+            heartbeatTimer: undefined,
+            lastFrameAt: 0,
+            socket: undefined,
+        };
+
         let timer: ReturnType<typeof setTimeout> | undefined;
         let closed = false;
+
+        /** Arm the next reconnect attempt, unless `unsubscribe()` already ran. */
+        const scheduleReconnect = (): void => {
+            if (closed) {
+                return;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
+            timer = setTimeout(connect, reconnect.next());
+        };
 
         const openWith = (token: string | undefined): void => {
             if (closed || this.WebSocketImpl === undefined) {
@@ -2348,35 +2386,27 @@ class LunoraClient {
 
             const url = token === undefined ? base : `${base}?token=${encodeURIComponent(token)}`;
 
-            socket = new this.WebSocketImpl(url);
+            this.openManagedSocket(conn, url, this.connectTimeoutMs, {
+                onClose: () => {
+                    scheduleReconnect();
+                },
+                onMessage: (event: MessageEvent) => {
+                    // `lastFrameAt` is stamped by `openManagedSocket` itself
+                    // (its `message` listener) for every caller — nothing to
+                    // do here beyond parsing.
+                    try {
+                        const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
 
-            socket.addEventListener("open", () => {
-                reconnect.reset();
-            });
-
-            socket.addEventListener("message", (event: MessageEvent) => {
-                try {
-                    const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
-
-                    if (message.type === "jobs" && Array.isArray(message.records)) {
-                        onJobs(message.records);
+                        if (message.type === "jobs" && Array.isArray(message.records)) {
+                            onJobs(message.records);
+                        }
+                    } catch {
+                        /* a non-JSON frame — ignore */
                     }
-                } catch {
-                    /* a non-JSON frame — ignore */
-                }
-            });
-
-            socket.addEventListener("close", () => {
-                socket = undefined;
-
-                if (!closed) {
-                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
-                    timer = setTimeout(connect, reconnect.next());
-                }
-            });
-
-            socket.addEventListener("error", () => {
-                /* the runtime follows up with close; reconnect handles it there */
+                },
+                onOpen: () => {
+                    reconnect.reset();
+                },
             });
         };
 
@@ -2387,10 +2417,7 @@ class LunoraClient {
             try {
                 token = await provider();
             } catch {
-                if (!closed) {
-                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the retry re-enters `connect`, declared just below
-                    timer = setTimeout(connect, reconnect.next());
-                }
+                scheduleReconnect();
 
                 return;
             }
@@ -2432,7 +2459,14 @@ class LunoraClient {
                 clearTimeout(timer);
             }
 
-            socket?.close();
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
+            this.stopHeartbeat(conn);
+
+            conn.socket?.close();
         };
     }
 
@@ -4314,44 +4348,101 @@ class LunoraClient {
         this.openSocket(conn, shardKey, token);
     }
 
-    /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
-    private openSocket(conn: ShardConnection, shardKey: string | undefined, token: string | undefined): void {
-        if (this.WebSocketImpl === undefined) {
-            return;
+    /**
+     * Construct one WebSocket connection attempt and wire the shared
+     * lifecycle guarantees around it — the fail-fast connect-timeout, the
+     * identity guard that stops a superseded attempt's late `open`/`message`/
+     * `close`/`error` from touching a connection a newer attempt already
+     * owns, and (once open) the keepalive heartbeat with its half-open
+     * watchdog (plan 217). One call opens ONE attempt; the caller owns
+     * reconnect scheduling from `onClose` — mirrors the shard's existing
+     * `ensureSocket` / `handleDisconnect` split, now shared with
+     * `subscribeScheduledJobs` so it stops re-living the bug that split
+     * already fixed once (CLIENT-05).
+     *
+     * The identity guard is `conn.socket !== socket`, re-checked before every
+     * action below. `conn.socket` is reassigned to a new attempt's socket
+     * synchronously — right here, before `open` ever fires — so an older
+     * attempt's guard trips the instant it's superseded, even if its
+     * underlying socket only fires its real `close`/`error` much later. This
+     * ordering is load-bearing: preserve it exactly.
+     */
+    private openManagedSocket(
+        conn: ManagedSocketState,
+        url: string,
+        connectTimeoutMs: number,
+        handlers: {
+            onClose: (event?: { code?: number }) => void;
+            onMessage: (event: MessageEvent) => void;
+            onOpen: () => void;
+        },
+    ): void {
+        const { WebSocketImpl } = this;
+
+        if (WebSocketImpl === undefined) {
+            // Unreachable: every caller already checked `this.WebSocketImpl
+            // !== undefined` before reaching here.
+            throw new LunoraError("INTERNAL", "no WebSocket implementation available");
         }
 
-        // Intentional mutation of the shared, long-lived connection record so
-        // the open/close/error handlers all observe the same state machine
-        // (mirrors `handleDisconnect`).
-        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
-        const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey, token));
+        // Intentional mutation of the shared, caller-owned connection record
+        // so the handlers below and the caller's own bookkeeping observe the
+        // same state machine (mirrors `handleDisconnect`).
+        /* eslint-disable no-param-reassign -- mutate the shared connection state machine in place */
+        const socket = new WebSocketImpl(url);
 
         conn.socket = socket;
 
-        // Fail-fast connect timeout: if the handshake doesn't reach `open` within
-        // `connectTimeoutMs` (a hung proxy / cold worker that never upgrades),
-        // force-close the socket so `close` → `handleDisconnect` arms the normal
-        // reconnect/backoff and surfaces `offline` — instead of the live channel
-        // hanging on the browser's much longer default. Cleared on `open`/disconnect.
-        if (this.connectTimeoutMs > 0) {
+        /** Generic teardown shared by every disconnect trigger below (timeout, close, error): stop the heartbeat and release this attempt's identity slot so a later real event on this same socket is ignored. */
+        const teardown = (): void => {
+            this.stopHeartbeat(conn);
+
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
+            if (conn.socket === socket) {
+                conn.socket = undefined;
+            }
+        };
+
+        /** The two-step disconnect sequence every trigger below runs: tear down this attempt's bookkeeping, then hand the (optional) close event to the caller. */
+        const disconnect = (event?: { code?: number }): void => {
+            teardown();
+            handlers.onClose(event);
+        };
+
+        // Fail-fast connect timeout: if the handshake doesn't reach `open`
+        // within `connectTimeoutMs` (a hung proxy / cold worker that never
+        // upgrades), force-close the socket and report it through `onClose`
+        // so the caller's normal reconnect/backoff takes over — instead of
+        // the live channel hanging on the browser's much longer default.
+        // Cleared on `open`/disconnect.
+        if (connectTimeoutMs > 0) {
             conn.connectTimer = setTimeout(() => {
                 conn.connectTimer = undefined;
 
-                // Only act if THIS socket is still the connection's current,
-                // still-connecting socket. A newer reconnect socket (or an
-                // already-resolved open/close) must be left untouched.
-                if (conn.socket !== socket || conn.wsState !== "connecting") {
+                // Only act if THIS socket is still the connection's current
+                // one. A newer reconnect socket (or an already-resolved
+                // open/close) must be left untouched. `conn.socket !== socket`
+                // alone is sufficient here (no additional `wsState !==
+                // "connecting"` check needed): `open` below clears
+                // `connectTimer` synchronously, before setting `wsState =
+                // "open"`, so once a socket has reached `open` this timer can
+                // never fire for it — it was already cancelled.
+                if (conn.socket !== socket) {
                     return;
                 }
 
                 try {
                     socket.close();
                 } catch {
-                    /* a stuck socket may throw on close — the disconnect below still arms reconnect */
+                    /* a stuck socket may throw on close — onClose below still arms reconnect */
                 }
 
-                this.handleDisconnect(conn);
-            }, this.connectTimeoutMs);
+                disconnect();
+            }, connectTimeoutMs);
         }
 
         socket.addEventListener("open", (): void => {
@@ -4367,85 +4458,35 @@ class LunoraClient {
                 conn.connectTimer = undefined;
             }
 
-            conn.wsState = "open";
-            conn.wasEverConnected = true;
-            conn.reconnect.reset();
             // Fresh (re)connect — start the half-open watchdog window clean
             // rather than carrying over a stale timestamp from before a
-            // disconnect/reconnect cycle (see `ShardConnection.lastFrameAt`).
+            // disconnect/reconnect cycle.
             conn.lastFrameAt = Date.now();
-            this.emitConnectionStatus();
 
-            // Announce the connection (and its app context) before resubscribing,
-            // so the server's `onConnect` hooks run with context in place and the
-            // context is recorded for replay to `onDisconnect` at close.
-            this.sendConnectEnvelope(conn);
+            handlers.onOpen();
 
-            // Resubscribe everyone bound to this shard.
-            this.markShardPendingAck(shardKey);
-
-            for (const state of this.subscriptions.all()) {
-                if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
-                    this.sendSubscribeIfOpen(state);
-                }
-            }
-
-            // Re-send shape subscriptions bound to this shard. Each carries its
-            // last applied checkpoint, so the server resumes (or re-seeds when the
-            // cursor fell below retention / the epoch forked).
-            this.resendShapeSubscriptions(shardKey);
-
-            // Flush any unsubscribes that piled up while the socket was down.
-            if (conn.pendingUnsubscribes.length > 0) {
-                const pending = conn.pendingUnsubscribes;
-
-                conn.pendingUnsubscribes = [];
-
-                for (const { id, type } of pending) {
-                    sendOn(conn, { id, type });
-                }
-            }
-
-            // Flush stream-start frames queued while we were (re)connecting.
-            // Reconnect-after-close: in-flight streams have already torn down
-            // on the server, so the only entries here are brand-new ones that
-            // raced the connect.
-            if (conn.pendingStreams && conn.pendingStreams.length > 0) {
-                const pending = conn.pendingStreams;
-
-                conn.pendingStreams = [];
-
-                for (const message of pending) {
-                    sendOn(conn, message);
-                }
-            }
-
-            // Rejoin every whisper topic registered for this shard so ephemeral
-            // channels survive a socket bounce.
-            const byTopic = this.whisperHandlers.get(connectionKey(shardKey));
-
-            if (byTopic) {
-                for (const topic of byTopic.keys()) {
-                    sendOn(conn, { topic, type: "whisper_subscribe" });
-                }
-            }
-
-            this.flushOfflineQueue(shardKey).catch(() => undefined);
-
-            this.startHeartbeat(conn);
+            this.startHeartbeat(conn, disconnect);
         });
 
         socket.addEventListener("message", (event: MessageEvent): void => {
             // Ignore a late message from a socket the connection already moved
-            // past (see `open`/`close`/`error` above) — `handleServerMessage`
-            // looks the connection up by shard key, not by socket identity, so
-            // without this guard a stale socket's frame would stamp the newer
-            // socket's `lastFrameAt` and defeat the heartbeat watchdog.
+            // past (see `open`/`close`/`error` above) — without this guard a
+            // stale socket's frame would stamp the newer socket's `lastFrameAt`
+            // and defeat the heartbeat watchdog.
             if (conn.socket !== socket) {
                 return;
             }
 
-            this.handleServerMessage(event.data, shardKey);
+            // Any inbound frame — including the plain-string `lunora-pong`
+            // keepalive reply, which `handleServerMessage`'s JSON.parse guard
+            // silently drops — proves the socket is still alive. Stamp it
+            // unconditionally, before delegating to the caller's handler, so
+            // the heartbeat watchdog (see `startHeartbeat`) can tell a
+            // half-open socket from a healthy one. One writer, co-located
+            // with the reader below, for every caller of this helper.
+            conn.lastFrameAt = Date.now();
+
+            handlers.onMessage(event);
         });
 
         socket.addEventListener("close", (event?: { code?: number }): void => {
@@ -4456,15 +4497,7 @@ class LunoraClient {
                 return;
             }
 
-            // Close code 4001 is the server's `token_expired` signal: notify
-            // listeners so the app can refresh its credential before the
-            // (always-armed) reconnect re-resolves identity. The event is
-            // optional — some WS doubles fire `close` without one.
-            if (event?.code === 4001) {
-                this.notifyTokenExpired();
-            }
-
-            this.handleDisconnect(conn);
+            disconnect(event);
         });
 
         socket.addEventListener("error", (): void => {
@@ -4476,14 +4509,107 @@ class LunoraClient {
 
             // Some WebSocket implementations (notably misbehaving proxies and
             // certain test doubles) fire `error` without a follow-up `close`.
-            // Treat error in `connecting`/`open` as a disconnect ourselves to
-            // make sure the reconnect timer always arms; `handleDisconnect` is
-            // idempotent via the `wsState === "idle"` checks downstream.
-            if (conn.wsState === "connecting" || conn.wsState === "open") {
-                this.handleDisconnect(conn);
-            }
+            // Report it through `onClose` too so the caller's reconnect always
+            // arms; `onClose` is idempotent downstream (mirrors
+            // `handleDisconnect`'s `wsState === "idle"` checks).
+            disconnect();
         });
         /* eslint-enable no-param-reassign */
+    }
+
+    /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
+    private openSocket(conn: ShardConnection, shardKey: string | undefined, token: string | undefined): void {
+        if (this.WebSocketImpl === undefined) {
+            return;
+        }
+
+        this.openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.connectTimeoutMs, {
+            onClose: (event) => {
+                // Close code 4001 is the server's `token_expired` signal: notify
+                // listeners so the app can refresh its credential before the
+                // (always-armed) reconnect re-resolves identity. The event is
+                // optional — some WS doubles fire `close` without one, and a
+                // synthesized disconnect (connect-timeout, watchdog, bare error)
+                // never carries one either.
+                if (event?.code === 4001) {
+                    this.notifyTokenExpired();
+                }
+
+                this.handleDisconnect(conn);
+            },
+            onMessage: (event) => {
+                this.handleServerMessage(event.data, shardKey);
+            },
+            onOpen: () => {
+                // Intentional mutation of the shared, long-lived connection
+                // record so the rest of the client observes the same state
+                // machine (mirrors `handleDisconnect`).
+                /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+                conn.wsState = "open";
+                conn.wasEverConnected = true;
+                /* eslint-enable no-param-reassign */
+                conn.reconnect.reset();
+                this.emitConnectionStatus();
+
+                // Announce the connection (and its app context) before resubscribing,
+                // so the server's `onConnect` hooks run with context in place and the
+                // context is recorded for replay to `onDisconnect` at close.
+                this.sendConnectEnvelope(conn);
+
+                // Resubscribe everyone bound to this shard.
+                this.markShardPendingAck(shardKey);
+
+                for (const state of this.subscriptions.all()) {
+                    if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
+                        this.sendSubscribeIfOpen(state);
+                    }
+                }
+
+                // Re-send shape subscriptions bound to this shard. Each carries its
+                // last applied checkpoint, so the server resumes (or re-seeds when the
+                // cursor fell below retention / the epoch forked).
+                this.resendShapeSubscriptions(shardKey);
+
+                // Flush any unsubscribes that piled up while the socket was down.
+                if (conn.pendingUnsubscribes.length > 0) {
+                    const pending = conn.pendingUnsubscribes;
+
+                    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                    conn.pendingUnsubscribes = [];
+
+                    for (const { id, type } of pending) {
+                        sendOn(conn, { id, type });
+                    }
+                }
+
+                // Flush stream-start frames queued while we were (re)connecting.
+                // Reconnect-after-close: in-flight streams have already torn down
+                // on the server, so the only entries here are brand-new ones that
+                // raced the connect.
+                if (conn.pendingStreams && conn.pendingStreams.length > 0) {
+                    const pending = conn.pendingStreams;
+
+                    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                    conn.pendingStreams = [];
+
+                    for (const message of pending) {
+                        sendOn(conn, message);
+                    }
+                }
+
+                // Rejoin every whisper topic registered for this shard so ephemeral
+                // channels survive a socket bounce.
+                const byTopic = this.whisperHandlers.get(connectionKey(shardKey));
+
+                if (byTopic) {
+                    for (const topic of byTopic.keys()) {
+                        sendOn(conn, { topic, type: "whisper_subscribe" });
+                    }
+                }
+
+                this.flushOfflineQueue(shardKey).catch(() => undefined);
+            },
+        });
     }
 
     private handleDisconnect(conn: ShardConnection): void {
@@ -4544,18 +4670,24 @@ class LunoraClient {
     }
 
     /**
-     * Begin the keepalive heartbeat on an open connection. Each tick first
-     * checks the half-open watchdog (see {@link ShardConnection.lastFrameAt}):
-     * if no frame at all has arrived within `heartbeatIntervalMs * 2.5`, the far
-     * end has gone quiet without the socket ever firing `close` — force it
-     * closed so `handleDisconnect` arms the normal reconnect/backoff instead of
-     * every live query on it silently staling forever. Otherwise it sends a
-     * {@link WS_KEEPALIVE_PING} text frame the server answers from its
-     * hibernation auto-response without waking the DO. A no-op when the
-     * heartbeat is disabled (an interval of zero or less); idempotent — any
-     * existing timer is cleared first so a reconnect can't leak intervals.
+     * Begin the keepalive heartbeat on an open connection attempt — the only
+     * caller is {@link openManagedSocket}'s own `open` handler, so both the
+     * shard socket and `subscribeScheduledJobs` share this one implementation
+     * instead of each hand-rolling their own (plan 217, generalized).
+     *
+     * Each tick first checks the half-open watchdog (see
+     * {@link ManagedSocketState.lastFrameAt}): if no frame at all has arrived
+     * within `heartbeatIntervalMs * 2.5`, the far end has gone quiet without
+     * the socket ever firing `close` — force it closed and report it through
+     * `onWatchdogTrip` (the caller's `onClose`) so the normal reconnect/backoff
+     * takes over instead of every live query on it silently staling forever.
+     * Otherwise it sends a {@link WS_KEEPALIVE_PING} text frame the server
+     * answers from its hibernation auto-response without waking the DO. A
+     * no-op when the heartbeat is disabled (an interval of zero or less);
+     * idempotent — any existing timer is cleared first so a reconnect can't
+     * leak intervals.
      */
-    private startHeartbeat(conn: ShardConnection): void {
+    private startHeartbeat(conn: ManagedSocketState, onWatchdogTrip: () => void): void {
         this.stopHeartbeat(conn);
 
         if (this.heartbeatIntervalMs <= 0) {
@@ -4564,23 +4696,23 @@ class LunoraClient {
 
         // eslint-disable-next-line no-param-reassign -- store the timer on the shared connection record so stopHeartbeat can clear it
         conn.heartbeatTimer = setInterval(() => {
-            if (conn.wsState !== "open" || !conn.socket) {
+            if (!conn.socket) {
                 return;
             }
 
             const { socket } = conn;
 
             if (Date.now() - conn.lastFrameAt > this.heartbeatIntervalMs * 2.5) {
-                // Mirrors the fail-fast connect-timeout pattern in `ensureSocket`:
-                // a stuck socket may throw on close, but the disconnect call
-                // below still arms reconnect either way.
+                // Mirrors the fail-fast connect-timeout pattern in
+                // `openManagedSocket`: a stuck socket may throw on close, but
+                // the watchdog-trip report below still arms reconnect either way.
                 try {
                     socket.close();
                 } catch {
-                    /* a stuck socket may throw on close — the disconnect below still arms reconnect */
+                    /* a stuck socket may throw on close — the report below still arms reconnect */
                 }
 
-                this.handleDisconnect(conn);
+                onWatchdogTrip();
 
                 return;
             }
@@ -4596,7 +4728,7 @@ class LunoraClient {
 
     /** Clear a connection's keepalive timer, if any. Safe to call repeatedly. */
     // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with startHeartbeat
-    private stopHeartbeat(conn: ShardConnection): void {
+    private stopHeartbeat(conn: ManagedSocketState): void {
         if (conn.heartbeatTimer !== undefined) {
             clearInterval(conn.heartbeatTimer);
             // eslint-disable-next-line no-param-reassign -- mutate the shared connection record to release the timer
@@ -4671,17 +4803,9 @@ class LunoraClient {
     }
 
     private handleServerMessage(raw: unknown, shardKey?: string): void {
-        // Any inbound frame — including the plain-string `lunora-pong` keepalive
-        // reply, which the JSON.parse guard below silently drops — proves the
-        // socket is still alive. Stamp it unconditionally, before the parsing
-        // below, so the heartbeat watchdog (see `startHeartbeat`) can tell a
-        // half-open socket from a healthy one.
-        const conn = this.getConnection(shardKey);
-
-        if (conn) {
-            conn.lastFrameAt = Date.now();
-        }
-
+        // `lastFrameAt` is stamped by `openManagedSocket` itself (its `message`
+        // listener) before this handler is ever invoked — nothing to do here
+        // beyond parsing.
         const text = decodeServerFrame(raw);
 
         if (text === undefined) {
