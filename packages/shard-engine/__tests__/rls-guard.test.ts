@@ -123,6 +123,36 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
     });
 });
 
+describe("guardWriter — optional analytical methods omitted on the underlying writer (D1/sql-store twin) (plan 254)", () => {
+    // `rankBefore` and `rankPageRows` are both optional on the real writer type
+    // (only the shard-local engine implements them; the D1/sql-store backend
+    // omits both) — the `...raw` spread must not leave an unguarded copy
+    // behind, and the guard must not synthesize a call that reaches into a
+    // method the raw writer never had (a TypeError, not a denial).
+    const optionalMethods = ["rankBefore", "rankPageRows"] as const;
+
+    it.each(optionalMethods)("does not synthesize %s when the raw writer omits it, and does not throw", (method) => {
+        expect.assertions(2);
+
+        const full = createFakeWriter();
+        // Omit `method` up front (rather than deleting it after the fact) so
+        // the fake writer never has the key at all, matching the D1/sql-store
+        // twin's actual shape rather than a shard-local writer with a key
+        // deleted off it.
+        const raw = Object.fromEntries(Object.entries(full).filter(([key]) => key !== method)) as Partial<FakeWriter>;
+
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as Record<string, unknown>;
+
+        expect(guarded[method]).toBeUndefined();
+        // Calling through the `...raw` spread's own copy (if any leaked) would
+        // either throw RlsRequiredError (still gated, acceptable) or a
+        // TypeError (the regression this test guards against) — assert the
+        // property itself is gone rather than calling it, since `undefined`
+        // is the only correct shape for "this writer doesn't support it".
+        expect(method in guarded).toBe(false);
+    });
+});
+
 describe("guardWriter — id-based methods with a pinned table (by-id facade)", () => {
     // `delete`/`get` pin the table at arg[1]; `patch`/`replace` carry a
     // body at arg[1] and pin at arg[2]. Each entry calls with the correct shape.

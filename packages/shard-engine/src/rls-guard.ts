@@ -94,7 +94,7 @@ interface GuardableWriter {
     rank: (tableName: string, indexName: string, options: unknown) => unknown;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
-    rankPageRows: (tableName: string, indexName: string, options?: unknown) => unknown;
+    rankPageRows?: (tableName: string, indexName: string, options?: unknown) => unknown;
     replace: (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => unknown;
     restore?: (id: string, expectedTable?: string) => unknown;
     wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => unknown;
@@ -229,6 +229,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
     };
 
     const baseRankBefore = base.rankBefore;
+    const baseRankPageRows = base.rankPageRows;
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
@@ -362,11 +363,6 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.rankPage(tableName, indexName, options);
         },
-        rankPageRows: (tableName: string, indexName: string, options?: unknown) => {
-            guardTable(tableName);
-
-            return base.rankPageRows(tableName, indexName, options);
-        },
         replace: async (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => {
             await guardById(id, expectedTable);
 
@@ -387,6 +383,14 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
             guardTable(tableName);
 
             return baseRankBefore(tableName, indexName, options);
+        };
+    }
+
+    if (baseRankPageRows) {
+        guarded["rankPageRows"] = (tableName: string, indexName: string, options?: unknown) => {
+            guardTable(tableName);
+
+            return baseRankPageRows(tableName, indexName, options);
         };
     }
 

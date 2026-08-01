@@ -263,6 +263,22 @@ const enableRankPageRows = (database: FakeDatabase, rows: (Record<string, unknow
 };
 
 /**
+ * Mirrors `@lunora/shard-engine`'s `guardWriter` contract for `rankPageRows`
+ * ONLY: the key is present on the returned writer if and only if `raw`
+ * carries it — never unconditionally, and never as a stub that would
+ * TypeError on a writer that omits it (the exact shape plan 254 restores;
+ * see `rls-guard.test.ts`'s "optional analytical methods omitted..." suite for
+ * the direct regression test against the real `guardWriter`). We don't import
+ * `@lunora/shard-engine` here — wrong dependency direction, mirrors
+ * `rls-secure-by-default.test.ts`'s own inline guard for the same reason.
+ */
+const withRlsGuardShape = (writer: FakeDatabase["writer"]): FakeDatabase["writer"] => {
+    const { rankPageRows, ...rest } = writer;
+
+    return rankPageRows ? { ...rest, rankPageRows } : rest;
+};
+
+/**
  * Install a chainable `query()` reader on the fake writer — the legacy
  * iterator-style reader that masking's `wrapReader` wraps. Mirrors `@lunora/do`'s
  * reader surface (`withIndex` / `order` / `filter` / terminal `collect` etc.) so
@@ -1239,6 +1255,23 @@ describe("mask — value oracle via rank reads fails closed (plan 209)", () => {
         // rankBefore D1-twin-omission test above.
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe("undefined");
     });
+
+    it("does not surface rankPageRows() when mask() is composed OVER a guard-shaped writer that omits it (plan 254)", async () => {
+        expect.assertions(1);
+
+        // The realistic production shape: under `.rls("required")`, the `ctx.db`
+        // that flows into `mask()` is ALREADY the output of `@lunora/shard-engine`'s
+        // `guardWriter`, not a bare fake. This is the exact composition the
+        // original bug broke — `guardWriter` used to install `rankPageRows`
+        // unconditionally, so it was always present (and would TypeError on
+        // call) even when the raw writer never had it.
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+        const guarded = withRlsGuardShape(database.writer);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(({ ctx }) => typeof (ctx as unknown as TestContext).db.rankPageRows);
+
+        await expect(handler.handler({ auth: { roles: [], userId: "u1" }, db: guarded }, {})).resolves.toBe("undefined");
+    });
 });
 
 describe("mask — bare-index-scan / rank declaration oracle fails closed (plan 250)", () => {
@@ -1790,8 +1823,8 @@ describe("mask — guarded-read coverage (every MaskDatabase read method)", () =
         const coveredNames = READ_METHODS_WITH_WHERE.map((entry) => entry.name).toSorted((a, b) => a.localeCompare(b));
 
         expect(coveredNames).toStrictEqual(
-            ["aggregate", "count", "findFirst", "findFirstOrThrow", "findMany", "groupBy", "rank", "rankBefore", "rankPage", "rankPageRows"].toSorted(
-                (a, b) => a.localeCompare(b),
+            ["aggregate", "count", "findFirst", "findFirstOrThrow", "findMany", "groupBy", "rank", "rankBefore", "rankPage", "rankPageRows"].toSorted((a, b) =>
+                a.localeCompare(b),
             ),
         );
     });
