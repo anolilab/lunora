@@ -4,11 +4,18 @@
  * Why not R2's native S3 presigned URLs? A presigned URL is a self-contained
  * bearer credential: anyone holding it reaches the object directly on R2's S3
  * endpoint, bypassing the Worker. Lunora signs URLs that resolve back through
- * your own Worker (`publicBaseUrl` → `GET /storage/:key`), so the request still
- * passes your app's gates — auth/session checks, per-object policy, rate limits,
- * audit — before {@link verifySignedUrl} validates the signature + expiry and
- * the Worker streams the R2 body. App-gating is the point; the trade-off is the
- * object bytes flow through the Worker rather than straight off R2.
+ * your own Worker (`publicBaseUrl` at the Worker's own origin, e.g.
+ * `GET /:key` on a dedicated hostname), so the request still passes your app's
+ * gates — auth/session checks, per-object policy, rate limits, audit — before
+ * {@link verifySignedUrl} validates the signature + expiry and the Worker
+ * streams the R2 body. App-gating is the point; the trade-off is the object
+ * bytes flow through the Worker rather than straight off R2.
+ *
+ * `publicBaseUrl` must NOT carry a path (a bare origin, optionally with a
+ * trailing slash) — {@link buildSignedUrl} rejects a subpath base, because the
+ * signature binds only host + key and {@link verifySignedUrl} reconstructs the
+ * key from the full URL pathname, so a subpath base would make every minted
+ * URL fail verification.
  *
  * Reach for native S3 presigned URLs instead when you want clients to hit R2
  * directly (large downloads, no per-request app logic) — see `buildPresignedUrl`
@@ -25,6 +32,12 @@ import type { SignedUrlOptions } from "./types";
 // base64url codec, bounded key cache, host extraction, and sign/verify live in
 // `shared/hmac-url.ts` (shared byte-for-byte with `@lunora/bindings` images).
 const LEADING_SLASH_RE = /^\//;
+
+// A `baseUrl` pathname consisting only of slashes (`""`, `"/"`, `"//"`, …) is
+// not a "path" for the subpath-base guard below — `trimTrailingSlashes`
+// collapses any run of trailing slashes to the bare origin when the URL is
+// built, so e.g. `https://cdn.test//` must be accepted like the bare origin.
+const ONLY_SLASHES_RE = /^\/+$/u;
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
@@ -49,8 +62,11 @@ const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: num
  * the signing secret MUST NOT be shared across buckets/tenants — host binding
  * narrows replay surface but is not a substitute for per-tenant key isolation.
  *
- * The Worker handling `GET /storage/:key` should call {@link verifySignedUrl}
- * to validate the signature + expiry before streaming the R2 body.
+ * The Worker route handling the signed download/upload (mounted at
+ * `publicBaseUrl`'s origin, e.g. `GET /:key`) should call
+ * {@link verifySignedUrl} to validate the signature + expiry before streaming
+ * the R2 body. `baseUrl` must be a bare origin (no path) — see the module
+ * docstring.
  */
 export const buildSignedUrl = async (
     args: SignedUrlOptions & {
@@ -76,6 +92,28 @@ export const buildSignedUrl = async (
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,
     // so drop it for GET to keep GET canonicals unchanged.
     const contentType = method === "PUT" ? args.contentType : undefined;
+
+    // A path on `baseUrl` would be prepended to the key in the minted URL's
+    // pathname (`${base}/${safeKey}`), but `verifySignedUrl` reconstructs the
+    // key from the ENTIRE `url.pathname` and can't know the base prefix — so a
+    // base mounted at a subpath makes every minted URL fail verification. The
+    // signature only binds host + key, not the base path, so we can't recover
+    // it on verify; reject it loudly here instead of silently minting dead URLs
+    // (see `ONLY_SLASHES_RE` above for the trailing-slash carve-out).
+    let basePath = "";
+
+    try {
+        basePath = new URL(args.baseUrl).pathname;
+    } catch {
+        // Non-absolute baseUrl (host-only form handled by `extractHost`): no path.
+    }
+
+    if (basePath !== "" && !ONLY_SLASHES_RE.test(basePath)) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/storage: baseUrl must not carry a path ("${basePath}") — the key is verified from the full URL pathname, so a subpath base would make every signed URL fail verification`,
+        );
+    }
 
     // The canonical is newline-delimited and `key` is not its last field, so a
     // key containing a raw CR/LF could shift `exp` (and `contentType`) on
