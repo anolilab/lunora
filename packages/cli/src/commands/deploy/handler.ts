@@ -533,7 +533,7 @@ const localDevVariables = (cwd: string): Map<string, string> => {
 };
 
 /**
- * `wrangler secret put <name>` is Cloudflare's write-only channel — the
+ * `wrangler secret put &lt;name>` is Cloudflare's write-only channel — the
  * value never comes back. A previous version of this function minted a fresh
  * value for every key and piped it straight to `secret put`, without binding
  * it to anything the caller could see: the only trace was a key-name log
@@ -602,6 +602,26 @@ const pushMintableSecrets = async (
     }
 
     return { minted, ok: true };
+};
+
+/**
+ * Fold newly-minted secret values into `.dev.vars` via the same surgical
+ * upsert `env generate --set` uses. A no-op when nothing was minted (every
+ * missing key already had a usable local value).
+ */
+const persistMintedSecrets = (cwd: string, minted: ReadonlyArray<{ key: string; value: string }>): void => {
+    if (minted.length === 0) {
+        return;
+    }
+
+    const devVariablesPath = join(cwd, DEV_VARS_FILE);
+    let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+
+    for (const entry of minted) {
+        raw = upsertDevVariableLine(raw, entry.key, entry.value);
+    }
+
+    writeFileSync(devVariablesPath, raw, "utf8");
 };
 
 /**
@@ -686,16 +706,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         // secret this function doesn't record is permanently lost (Cloudflare
         // secrets are write-only), so recording it is not conditional on the
         // rest of the batch succeeding.
-        if (minted.length > 0) {
-            const devVariablesPath = join(cwd, DEV_VARS_FILE);
-            let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
-
-            for (const entry of minted) {
-                raw = upsertDevVariableLine(raw, entry.key, entry.value);
-            }
-
-            writeFileSync(devVariablesPath, raw, "utf8");
-        }
+        persistMintedSecrets(cwd, minted);
 
         if (!ok) {
             return "failed to push required secret(s) — set them manually and re-deploy";
