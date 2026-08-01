@@ -182,6 +182,34 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
 };
 
 /**
+ * True when `expression` — or its single-hop initializer — is NOT itself a call
+ * (a `CallExpression` or `new` expression) that could transform the value before
+ * it reaches the sink. `isArgumentDerived` deliberately also matches "a helper
+ * call embedding `args.*`" (e.g. `hash(args.key)`, `deriveKey(args)`) so taint
+ * detection stays fail-open; that is right for most sinks, but wrong for a rule
+ * whose entire premise is that the caller controls the exact bytes reaching the
+ * sink. A content-addressed key — the return of a server-side `storeFile(...)`
+ * helper, itself the SHA-256 of the uploaded bytes — textually references
+ * `args` (it IS the arg) yet is not attacker-chosen, because the call in
+ * between recomputed it from data the server already trusts.
+ *
+ * Only a direct member/element-access chain, a template literal, or a binary
+ * concatenation reaches here as "unmodified" — a wrapping call anywhere between
+ * the sink argument and its (at most single-hop) `args`/`ctx` root means the
+ * value was derived, not merely forwarded, so the rule should not treat it as
+ * caller-controlled input reaching the sink verbatim.
+ */
+export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
+    if (Node.isCallExpression(node) || Node.isNewExpression(node)) {
+        return false;
+    }
+
+    const initializer = singleHopInitializer(node);
+
+    return initializer === undefined || !(Node.isCallExpression(initializer) || Node.isNewExpression(initializer));
+};
+
+/**
  * True when `node` is scoped by a server-trusted `ctx` value — directly, through
  * one local `const` hop (symmetric with {@link isArgumentDerived}), or through a
  * locally-bound ctx identity composed into the key. A storage/kv key such as

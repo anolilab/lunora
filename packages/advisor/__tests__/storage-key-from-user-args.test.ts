@@ -34,4 +34,35 @@ describe("storage_key_from_user_args", () => {
         expect(storageKeyFromUserArgs.run({ schema: schema() })).toHaveLength(0);
         expect(storageKeyFromUserArgs.run({ schema: schema(), storageKeyAccesses: [] })).toHaveLength(0);
     });
+
+    // Issue #284: both real-world false positives were `internalAction`s
+    // receiving a content-addressed storage id minted server-side. An
+    // `internal*` procedure has no untrusted caller by construction, so the
+    // "any caller can read/overwrite/delete another user's object" premise is
+    // false there — mirrors `owner_field_from_args_not_auth`'s visibility split.
+    it("drops an internal procedure's access to INFO and redirects it at the public callers", () => {
+        expect.assertions(5);
+
+        const storageKeyAccesses: AdvisorStorageKeyAccess[] = [
+            { exportName: "extractDocumentText", file: "agent/extraction", line: 104, method: "getUrl", visibility: "internal" },
+            { exportName: "getDoc", file: "docs", line: 4, method: "get", visibility: "public" },
+        ];
+        const findings = storageKeyFromUserArgs.run({ schema: schema(), storageKeyAccesses });
+
+        expect(findings[0]).toMatchObject({ level: "INFO", metadata: { visibility: "internal" } });
+        expect(findings[0]?.detail).toContain("Audit the PUBLIC procedures");
+        expect(findings[0]?.detail).toContain("expected for an `internal` procedure");
+
+        // The public-facing case is untouched and still blocks.
+        expect(findings[1]).toMatchObject({ level: "ERROR", metadata: { visibility: "public" } });
+        expect(findings[1]?.detail).toContain("any caller can read/overwrite/delete another user's object");
+    });
+
+    it("keeps ERROR when the feeder could not attribute a visibility", () => {
+        expect.assertions(1);
+
+        const storageKeyAccesses: AdvisorStorageKeyAccess[] = [{ exportName: "helper", file: "lib", line: 3, method: "get" }];
+
+        expect(storageKeyFromUserArgs.run({ schema: schema(), storageKeyAccesses })[0]).toMatchObject({ level: "ERROR" });
+    });
 });

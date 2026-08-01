@@ -17,4 +17,12 @@ export interface AdvisorStorageKeyAccess {
     line: number;
     /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
     method: string;
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures are not
+     * reachable by a caller, so the "any caller can read/overwrite/delete
+     * another user's object" premise does not hold there and the finding drops
+     * to `INFO` (mirrors `AdvisorOwnerFieldWrite.visibility`). `undefined` when
+     * the feeder could not attribute the access to a registered procedure.
+     */
+    visibility?: "internal" | "public";
 }

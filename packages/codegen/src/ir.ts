@@ -1315,6 +1315,15 @@ export interface StorageKeyAccessIR {
     line: number;
     /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
     method: string;
+
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures have no
+     * untrusted caller by construction — see `owner_field_from_args_not_auth`'s
+     * identical split — so `storage_key_from_user_args` drops the finding to
+     * INFO rather than ERROR there. `undefined` when the access sits outside any
+     * registered procedure the feeder could attribute it to.
+     */
+    visibility?: "internal" | "public";
 }
 
 /**

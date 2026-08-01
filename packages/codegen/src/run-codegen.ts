@@ -598,7 +598,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   shapes,
                   softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
                   sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
-                  storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory),
+                  storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory, functions),
                   storageUploads: discoverStorageUploads(project, lunoraDirectory),
                   vectorNamespaceAccesses: discoverVectorNamespaceAccesses(project, lunoraDirectory),
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
