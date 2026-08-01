@@ -8,9 +8,9 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import type { JSX } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AuthUIConfig } from "../../src/core";
+import type { AuthClient, AuthUIConfig } from "../../src/core";
 import { resetFlowWarnings } from "../../src/core";
-import { MagicLinkCard, SignInCard, SignUpCard } from "../../src/solid";
+import { MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard } from "../../src/solid";
 import { AuthUIProvider } from "../../src/solid/provider";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
 
@@ -24,6 +24,9 @@ const renderCard = (card: () => JSX.Element, authClient: AuthUIConfig["authClien
 afterEach(() => {
     resetFlowWarnings();
     vi.restoreAllMocks();
+    // jsdom keeps the URL across tests otherwise, and the reset-password suite
+    // below relies on a clean starting point.
+    globalThis.history.pushState({}, "", "/");
 });
 
 describe("solid SignInCard", () => {
@@ -114,5 +117,41 @@ describe("solid theme", () => {
 
         expect(card.style.getPropertyValue("--primary")).toBe("rebeccapurple");
         expect(card.style.getPropertyValue("--border")).toBe("");
+    });
+});
+
+describe("solid ResetPasswordCard reads the token from the URL", () => {
+    it("submits the ?token= from the URL when no prop is passed", () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=abc");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        renderCard(() => <ResetPasswordCard />, client);
+
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.input(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "abc" }));
+    });
+
+    it("lets an explicit prop win over the URL", () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=from-url");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        renderCard(() => <ResetPasswordCard token="from-prop" />, client);
+
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.input(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
     });
 });

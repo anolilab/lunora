@@ -7,6 +7,7 @@
     import type { AuthUIConfig } from "../../src/core";
     import AuthUIProvider from "../../src/svelte/AuthUIProvider.svelte";
     import MagicLinkCard from "../../src/svelte/MagicLinkCard.svelte";
+    import ResetPasswordCard from "../../src/svelte/ResetPasswordCard.svelte";
     import SignInCard from "../../src/svelte/SignInCard.svelte";
     import SignUpCard from "../../src/svelte/SignUpCard.svelte";
 
@@ -15,11 +16,13 @@
         card,
         nav,
         theme,
+        token,
     }: {
         authClient: AuthUIConfig["authClient"];
-        card: "magic-link" | "sign-in" | "sign-up";
+        card: "magic-link" | "reset-password" | "sign-in" | "sign-up";
         nav: AuthUIConfig["nav"];
         theme?: AuthUIConfig["theme"];
+        token?: string;
     } = $props();
 </script>
 
@@ -28,6 +31,8 @@
         <SignInCard />
     {:else if card === "sign-up"}
         <SignUpCard />
+    {:else if card === "reset-password"}
+        <ResetPasswordCard {token} />
     {:else}
         <MagicLinkCard />
     {/if}

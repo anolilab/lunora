@@ -15,6 +15,7 @@
     import ForgotPasswordCard from "./ForgotPasswordCard.svelte";
     import MagicLinkCard from "./MagicLinkCard.svelte";
     import ResetPasswordCard from "./ResetPasswordCard.svelte";
+    import ResetPasswordOtpCard from "./ResetPasswordOtpCard.svelte";
     import SignInCard from "./SignInCard.svelte";
     import SignUpCard from "./SignUpCard.svelte";
     import TwoFactorCard from "./TwoFactorCard.svelte";
@@ -27,7 +28,7 @@
         view?: string;
     } = $props();
 
-    const { plugins, viewPaths } = useAuthUI();
+    const { forgotPasswordMethod, plugins, viewPaths } = useAuthUI();
 </script>
 
 <!--
@@ -47,7 +48,11 @@
 {:else if view === viewPaths.magicLink && plugins.magicLink}
     <MagicLinkCard />
 {:else if view === viewPaths.resetPassword}
-    <ResetPasswordCard />
+    {#if forgotPasswordMethod === "otp"}
+        <ResetPasswordOtpCard />
+    {:else}
+        <ResetPasswordCard />
+    {/if}
 {:else if view === viewPaths.signUp}
     <SignUpCard />
 {:else if view === viewPaths.twoFactor && plugins.twoFactor}

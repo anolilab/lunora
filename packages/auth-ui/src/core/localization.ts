@@ -33,6 +33,7 @@ interface Localization {
     avatarUploadFailed: string;
     avatarWrongType: string;
     backToSignIn: string;
+    backupCodeLabel: string;
     backupCodes: string;
     backupCodeSignIn: string;
     backupCodesRegenerate: string;
@@ -133,6 +134,7 @@ interface Localization {
     remove: string;
     resetPassword: string;
     resetPasswordDone: string;
+    resetPasswordOtpDescription: string;
     revoke: string;
     revokeAccess: string;
     revokeOthers: string;
@@ -165,6 +167,7 @@ interface Localization {
     twoFactorScan: string;
     twoFactorSecret: string;
     twoFactorSetup: string;
+    twoFactorUseAuthenticator: string;
     /** Fallback when a session has neither a user-agent nor an IP. */
     unknownDevice: string;
     usernameAvailable: string;
@@ -206,6 +209,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     avatarUploadFailed: "Could not upload that image. Try again.",
     avatarWrongType: "Choose a PNG, JPEG, WebP, GIF, or AVIF image.",
     backToSignIn: "Back to sign in",
+    backupCodeLabel: "Backup code",
     backupCodes: "Save these backup codes somewhere safe:",
     backupCodeSignIn: "Use a backup code",
     backupCodesRegenerate: "Regenerate backup codes",
@@ -306,6 +310,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     remove: "Remove",
     resetPassword: "Set new password",
     resetPasswordDone: "Your password has been updated. You can sign in now.",
+    resetPasswordOtpDescription: "Enter the code we emailed you, then choose a new password.",
     revoke: "Revoke",
     revokeAccess: "Revoke access",
     revokeOthers: "Sign out other sessions",
@@ -338,6 +343,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     twoFactorScan: "Scan this with your authenticator app, then enter the 6-digit code.",
     twoFactorSecret: "Or enter this key manually:",
     twoFactorSetup: "Two-factor authentication",
+    twoFactorUseAuthenticator: "Use your authenticator app instead",
     unknownDevice: "Unknown device",
     usernameAvailable: "That username is available.",
     usernameChecking: "Checking…",

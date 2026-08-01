@@ -16,6 +16,7 @@ import ForgotPasswordCard from "./ForgotPasswordCard.vue";
 import MagicLinkCard from "./MagicLinkCard.vue";
 import { useAuthUIContextRef } from "./provider";
 import ResetPasswordCard from "./ResetPasswordCard.vue";
+import ResetPasswordOtpCard from "./ResetPasswordOtpCard.vue";
 import SignInCard from "./SignInCard.vue";
 import SignUpCard from "./SignUpCard.vue";
 import TwoFactorCard from "./TwoFactorCard.vue";
@@ -38,7 +39,7 @@ const context = useAuthUIContextRef();
  * gate for when they are mounted directly.
  */
 const card = computed<Component>(() => {
-    const { plugins, viewPaths } = context.value;
+    const { forgotPasswordMethod, plugins, viewPaths } = context.value;
 
     switch (props.view) {
         case viewPaths.acceptInvitation: {
@@ -62,7 +63,7 @@ const card = computed<Component>(() => {
         }
 
         case viewPaths.resetPassword: {
-            return ResetPasswordCard;
+            return forgotPasswordMethod === "otp" ? ResetPasswordOtpCard : ResetPasswordCard;
         }
 
         case viewPaths.signUp: {

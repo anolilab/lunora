@@ -3,13 +3,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient } from "../../src/core";
 import { pushToast, resetToasts } from "../../src/core";
-import { AuthUIProvider, ConsentCard, ErrorToaster, OrganizationLogoCard, SignUpCard, TwoFactorSetupCard } from "../../src/react";
+import {
+    AuthUIProvider,
+    ConsentCard,
+    ErrorToaster,
+    OrganizationLogoCard,
+    ResetPasswordCard,
+    ResetPasswordOtpCard,
+    SignUpCard,
+    TwoFactorCard,
+    TwoFactorSetupCard,
+} from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
 // One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetToasts();
+    // jsdom keeps the URL across tests otherwise, and the reset-password suite
+    // below relies on a clean starting point.
+    globalThis.history.pushState({}, "", "/");
 });
 
 describe("errorToaster", () => {
@@ -158,6 +171,133 @@ describe("two-factor setup without a password", () => {
 
         await waitFor(() => {
             expect(screen.queryByText("Set a password before turning on two-factor authentication.")).toBeNull();
+        });
+    });
+});
+
+describe("resetPasswordCard reads the token from the URL", () => {
+    const renderCard = (client: AuthClient) =>
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ResetPasswordCard />
+            </AuthUIProvider>,
+        );
+
+    it("submits the ?token= from the URL when no prop is passed", async () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=abc");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        renderCard(client);
+
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Set new password" }));
+
+        await waitFor(() => {
+            expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "abc" }));
+        });
+    });
+
+    it("lets an explicit prop win over the URL", async () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=from-url");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ResetPasswordCard token="from-prop" />
+            </AuthUIProvider>,
+        );
+
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Set new password" }));
+
+        await waitFor(() => {
+            expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
+        });
+    });
+});
+
+describe("resetPasswordOtpCard", () => {
+    it("redeems the emailed code and sets a new password", async () => {
+        expect.assertions(1);
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { emailOtp: { resetPassword }, getSession: vi.fn() } as unknown as AuthClient;
+
+        render(
+            <AuthUIProvider authClient={client} discover={false} forgotPassword={{ method: "otp" }} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ResetPasswordOtpCard />
+            </AuthUIProvider>,
+        );
+
+        fireEvent.change(screen.getByLabelText("Email"), { target: { value: "ada@example.com" } });
+        fireEvent.change(screen.getByLabelText("Verification code"), { target: { value: "123456" } });
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Set new password" }));
+
+        await waitFor(() => {
+            expect(resetPassword).toHaveBeenCalledWith({ email: "ada@example.com", otp: "123456", password: "hunter2hunter2" });
+        });
+    });
+});
+
+describe("twoFactorCard backup-code toggle", () => {
+    const renderCard = (client: AuthClient) =>
+        render(
+            <AuthUIProvider authClient={client} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }} plugins={{ twoFactor: true }}>
+                <TwoFactorCard />
+            </AuthUIProvider>,
+        );
+
+    it("switches to the backup-code form and submits it instead of the TOTP one", async () => {
+        expect.assertions(2);
+
+        const verifyTotp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const verifyBackupCode = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), twoFactor: { verifyBackupCode, verifyTotp } } as unknown as AuthClient;
+
+        renderCard(client);
+
+        fireEvent.click(screen.getByRole("button", { name: "Use a backup code" }));
+        fireEvent.change(screen.getByLabelText("Backup code"), { target: { value: "abc-def-ghi" } });
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+        await waitFor(() => {
+            expect(verifyBackupCode).toHaveBeenCalledWith(expect.objectContaining({ code: "abc-def-ghi" }));
+        });
+
+        expect(verifyTotp).not.toHaveBeenCalled();
+    });
+
+    it("switches back to the authenticator form", async () => {
+        expect.assertions(2);
+
+        const verifyTotp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const verifyBackupCode = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), twoFactor: { verifyBackupCode, verifyTotp } } as unknown as AuthClient;
+
+        renderCard(client);
+
+        fireEvent.click(screen.getByRole("button", { name: "Use a backup code" }));
+        fireEvent.click(screen.getByRole("button", { name: "Use your authenticator app instead" }));
+
+        expect(screen.getByLabelText("Verification code")).toBeDefined();
+
+        fireEvent.change(screen.getByLabelText("Verification code"), { target: { value: "123456" } });
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+        await waitFor(() => {
+            expect(verifyTotp).toHaveBeenCalledWith(expect.objectContaining({ code: "123456" }));
         });
     });
 });

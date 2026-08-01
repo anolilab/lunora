@@ -8,7 +8,7 @@ import { fireEvent, render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ThemeTokens } from "../../src/core";
+import type { AuthClient, ThemeTokens } from "../../src/core";
 import { pushToast, resetFlowWarnings, resetToasts } from "../../src/core";
 import ErrorToaster from "../../src/svelte/ErrorToaster.svelte";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
@@ -20,6 +20,9 @@ afterEach(() => {
     // up in whichever test renders <ErrorToaster> next.
     resetToasts();
     vi.restoreAllMocks();
+    // jsdom keeps the URL across tests otherwise, and the reset-password suite
+    // below relies on a clean starting point.
+    globalThis.history.pushState({}, "", "/");
 });
 
 describe("svelte SignInCard", () => {
@@ -114,6 +117,42 @@ describe("svelte theme", () => {
 
         expect(card.style.getPropertyValue("--primary")).toBe("rebeccapurple");
         expect(card.style.getPropertyValue("--border")).toBe("");
+    });
+});
+
+describe("svelte ResetPasswordCard reads the token from the URL", () => {
+    it("submits the ?token= from the URL when no prop is passed", async () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=abc");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const authClient = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        render(Harness, { props: { authClient, card: "reset-password", nav: fakeNav() } });
+
+        await fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        await fireEvent.input(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        await fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "abc" }));
+    });
+
+    it("lets an explicit prop win over the URL", async () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=from-url");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const authClient = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        render(Harness, { props: { authClient, card: "reset-password", nav: fakeNav(), token: "from-prop" } });
+
+        await fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        await fireEvent.input(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        await fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
     });
 });
 
