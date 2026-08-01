@@ -342,16 +342,50 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
                 return rows.map((row) => maskRow(row, columns, context));
             },
-            // `score`/`distanceMeters` carry no column value — same reasoning that
-            // lets `count`/`rank` pass through the mask wrapper below — so only the
-            // `document` half of each pair goes through the normal per-row mask
-            // path (the SAME `maskRow` helper `collect` uses, not a hand-rolled
-            // pass); the ranking value stays in the clear.
+            // SECURITY (geo-distance oracle): `score` carries no column value — the
+            // FTS half of this pair is already closed off upstream, because
+            // `.search(field, …)` NAMES its column and `assertIndexFieldsAllowed`
+            // (below, via `withSearchIndex`) throws `MASK_UNSUPPORTED` before a
+            // search over a masked field ever runs, so a returned `score` can only
+            // ever reflect a non-masked field. `score` therefore passes through in
+            // the clear, same reasoning that lets `count`/`rank` pass through the
+            // mask wrapper below.
+            //
+            // `distanceMeters`, in contrast, IS a value oracle: `withGeoIndex`'s
+            // `.near(point, radius)` builder names no column (there is nothing for
+            // `assertIndexFieldsAllowed` to guard), so a caller can run a geo query
+            // against a table with a masked `v.geoPoint()` column, see the
+            // `document`'s location masked to `null`, and still receive the EXACT
+            // haversine distance from their probe point to the hidden coordinate.
+            // Three such probes trilaterate the masked point exactly. This module
+            // has no schema → geo-index-field map to prove the queried index isn't
+            // built over a masked column, so — like a throwing `MaskFn` — it fails
+            // closed: `distanceMeters` is withheld on every row returned by a
+            // masked table's `collectWithScores()`, regardless of which column is
+            // masked. This is the conservative, always-on floor for when the
+            // caller hasn't supplied `MaskOptions.indexFields`; a sibling change
+            // (mask index-oracle) adds a precise `withGeoIndex` declaration guard
+            // that throws `MASK_UNSUPPORTED` when `indexFields` proves the geo
+            // field itself is masked — once both land, the precise guard fires
+            // first for provable cases and this null-out remains the fallback for
+            // everything else. We don't throw here outright: this wrapper can't
+            // tell whether the geo field specifically is masked vs. some unrelated
+            // masked column on the same table, and throwing would break geo
+            // scoring for every masked table rather than just the vulnerable ones.
+            // Nulling `distanceMeters` degrades gracefully instead — the geo query
+            // still runs and returns rows, only the distance is withheld.
             collectWithScores: async () => {
                 const rows = await reader.collectWithScores();
 
                 return rows.map((row) => {
-                    return { ...row, document: maskRow(row.document, columns, context) };
+                    const masked: ScoredDocument = { ...row, document: maskRow(row.document, columns, context) };
+
+                    if ("distanceMeters" in masked) {
+                        // eslint-disable-next-line unicorn/no-null -- fail closed: withhold the geo-distance oracle, mirrors the null sentinel used elsewhere in this file
+                        masked.distanceMeters = null;
+                    }
+
+                    return masked;
                 });
             },
             // SECURITY (value oracle): the predicate must see the MASKED row, not
