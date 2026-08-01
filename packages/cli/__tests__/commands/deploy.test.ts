@@ -994,7 +994,7 @@ export const backfillNames = defineMigration({
 
         describe("missing-secret gate", () => {
             it("mints a missing secret, records it in .dev.vars, and never logs the value", async () => {
-                expect.assertions(5);
+                expect.assertions(6);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
@@ -1013,6 +1013,9 @@ export const backfillNames = defineMigration({
                 });
 
                 expect(result.code).toBe(0);
+                // The result carries the (filename-only) record location so the caller
+                // (the end-of-deploy summary) can point at it too.
+                expect(result.mintedSecretsFile).toBe(".dev.vars");
 
                 const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
 
@@ -1028,6 +1031,52 @@ export const backfillNames = defineMigration({
                 expect([...errors, ...infos, ...successes].join("\n")).not.toContain(mintedValue);
                 // The success line names the key and points at the file — never the value.
                 expect(successes.some((line) => line.includes("LUNORA_ADMIN_TOKEN") && line.includes(".dev.vars"))).toBe(true);
+            });
+
+            it("the end-of-deploy summary points at the file a minted secret was recorded into", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { infos, logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                // The summary is where an operator looks after a long deploy — it must
+                // name the file too, not just the log line printed minutes earlier.
+                expect(infos.some((line) => line.includes("secrets:") && line.includes(".dev.vars"))).toBe(true);
+                expect(infos.some((line) => line.includes("deploy complete") || line.includes("worker:"))).toBe(true);
+            });
+
+            it("--env production's summary points at the .dev.vars.production sibling, not the bare file", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { infos, logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(infos.some((line) => line.includes("secrets:") && line.includes(".dev.vars.production"))).toBe(true);
+                // Never claims the bare, environment-agnostic file for a named --env.
+                expect(infos.some((line) => line.includes("secrets:") && !line.includes(".dev.vars.production"))).toBe(false);
             });
 
             it("writes the minted secret file owner-only (mode 0o600), not world-readable", async () => {

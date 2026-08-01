@@ -19,6 +19,14 @@ interface DeploySummaryInputs {
     logger: Logger;
     /** True when `--migrate` ran data migrations as part of this deploy. */
     migrated?: boolean;
+
+    /**
+     * The `.dev.vars`-shaped filename (never a value) a secret minted during
+     * this deploy was recorded into, if any — surfaced here too because the
+     * summary is where an operator actually looks after a long deploy, not
+     * scrollback from a log line that printed minutes earlier.
+     */
+    mintedSecretsFile?: string;
 }
 
 /**
@@ -27,7 +35,7 @@ interface DeploySummaryInputs {
  * non-zero exit.
  */
 const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
-    const { cwd, env, logger, migrated } = inputs;
+    const { cwd, env, logger, migrated, mintedSecretsFile } = inputs;
 
     try {
         const link = readLinkedProject(cwd);
@@ -48,6 +56,10 @@ const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
 
         if (migrated) {
             logger.info("  migrations: applied");
+        }
+
+        if (mintedSecretsFile !== undefined) {
+            logger.info(`  secrets: generated value(s) recorded in ${mintedSecretsFile}`);
         }
 
         logger.info("  studio:  lunora view --remote");
