@@ -303,6 +303,114 @@ describe("schedulerDO — live subscriptions", () => {
     });
 });
 
+describe("schedulerDO — bounded listing", () => {
+    /** Directly seed `id:&lt;prefix>-NNNN` headers, bypassing /schedule for speed with large counts. */
+    const seedHeaders = (state: ReturnType<typeof createFakeState>, count: number, options: { pool?: string; prefix?: string } = {}): void => {
+        const prefix = options.prefix ?? "job";
+
+        for (let index = 0; index < count; index += 1) {
+            const id = `${prefix}-${String(index).padStart(4, "0")}`;
+            const record: ScheduleRecord = {
+                args: {},
+                enqueuedAt: Date.now(),
+                functionPath: "f",
+                id,
+                scheduledFor: Date.now() + 60_000,
+                ...(options.pool === undefined ? {} : { pool: options.pool }),
+            };
+
+            state.storageMap.set(`id:${id}`, record);
+        }
+    };
+
+    it("gET /list returns at most 100 records with truncated: true when more are pending", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+
+        seedHeaders(state, 150);
+
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const response = await scheduler.fetch(get("/list"));
+        const body = await response.json<{ records: ScheduleRecord[]; truncated: boolean }>();
+
+        expect(body.records).toHaveLength(100);
+        expect(body.truncated).toBe(true);
+        expect(new Set(body.records.map((record) => record.id)).size).toBe(100);
+    });
+
+    it("gET /list returns truncated: false when the backlog is at or under the page size", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+
+        seedHeaders(state, 42);
+
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const response = await scheduler.fetch(get("/list"));
+        const body = await response.json<{ records: ScheduleRecord[]; truncated: boolean }>();
+
+        expect(body.records).toHaveLength(42);
+        expect(body.truncated).toBe(false);
+    });
+
+    it("a broadcastChange-triggering mutation carries the bounded { records, truncated } shape", async () => {
+        expect.assertions(3);
+
+        const state = createFakeStateWithSockets();
+
+        seedHeaders(state, 150);
+
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // Simulate an already-connected subscriber (as the sibling live-subscription
+        // tests do above — the real `/ws` upgrade needs a runtime `WebSocketPair`,
+        // which the node-mock test environment doesn't provide; that path is only
+        // exercisable under the opt-in `workerd` project. handleWebSocketUpgrade()'s
+        // seed message is built from the same listRecords() call and put through the
+        // same JSON.stringify shape as broadcastChange() below, so this still covers
+        // the wire format both paths emit.)
+        state.acceptWebSocket?.(createFakeSocket() as never);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "new", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+
+        const changeMessage = JSON.parse(state.sockets[0]?.sent.at(-1) ?? "{}") as { records: ScheduleRecord[]; truncated: boolean; type: string };
+
+        expect(changeMessage.type).toBe("jobs");
+        expect(changeMessage.truncated).toBe(true);
+        expect(changeMessage.records).toHaveLength(100);
+    });
+
+    it("gET /status and GET /pool report EXACT counts (not capped) across >100 headers in two pools", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+
+        seedHeaders(state, 60, { pool: "a", prefix: "a-job" });
+        seedHeaders(state, 70, { pool: "b", prefix: "b-job" });
+        // handleStatus()'s poolRows scan needs a durable `pool:<name>` row per pool.
+        state.storageMap.set("pool:a", { inFlight: 0, maxConcurrency: 5 });
+        state.storageMap.set("pool:b", { inFlight: 0, maxConcurrency: 5 });
+
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        const statusResponse = await scheduler.fetch(get("/status"));
+        const status = await statusResponse.json<{ backlog: number; pools: { name: string; queued: number }[] }>();
+
+        expect(status.backlog).toBe(130);
+
+        const poolAResponse = await scheduler.fetch(get("/pool?name=a"));
+        const poolA = await poolAResponse.json<{ queued: number }>();
+
+        expect(poolA.queued).toBe(60);
+
+        const poolBResponse = await scheduler.fetch(get("/pool?name=b"));
+        const poolB = await poolBResponse.json<{ queued: number }>();
+
+        expect(poolB.queued).toBe(70);
+    });
+});
+
 describe("schedulerDO — retry / dead-letter pipeline", () => {
     /** Keys in the fake storage matching a prefix. */
     const keysWithPrefix = (state: ReturnType<typeof createFakeState>, prefix: string): string[] =>
