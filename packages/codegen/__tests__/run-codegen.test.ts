@@ -182,6 +182,79 @@ export default defineSchema({
             expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
         });
 
+        it("rejects a defineShape whose table isn't a string literal when the project masks a column (fail closed on a non-literal shape table)", () => {
+            expect.assertions(1);
+
+            // `tableLiteralFrom` (discover-shapes.ts) returns `undefined` for any
+            // `table` that isn't a plain string-literal AST node — a hoisted `const
+            // t = "users"` passed as `table: t` is exactly that case. Without this
+            // guard the shape would silently skip the mask collision check and ship
+            // "users".email raw to every subscribed client.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                export const listUsers = query.use(mask({ users: { email: "redact" } })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                const t = "users";
+                export const allUsers = defineShape({ table: t, where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/allUsers" has a non-literal `table`/u);
+        });
+
+        it("does not throw for a defineShape whose table isn't a string literal when the project masks no columns (no over-firing)", () => {
+            expect.assertions(1);
+
+            // Same non-literal `table` as above, but the project declares no
+            // `.use(mask(...))` anywhere — nothing for the shape to leak, so the
+            // fail-closed guard must not fire just because the table is dynamic.
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                const t = "users";
+                export const allUsers = defineShape({ table: t, where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+        });
+
+        it("rejects a shape when a mask() policies argument is a hoisted reference (fail closed on a non-literal mask policy)", () => {
+            expect.assertions(1);
+
+            // `extractMaskColumns`/`extractMaskColumnMetadata` (discover-mask-procedures.ts)
+            // both return `[]` when `mask(...)`'s first argument isn't an object
+            // literal, so `mask(sharedPolicies)` contributes ZERO masked columns to
+            // `maskMetadata` — a shape over "users" then collides with nothing and
+            // would ship raw. The shape's `table` is a plain string literal here, so
+            // this exercises the mask-side (not the shape-side) non-literal signal.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                const sharedPolicies = { users: { email: "redact" } };
+                export const listUsers = query.use(mask(sharedPolicies)).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const allUsers = defineShape({ table: "users", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u);
+        });
+
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
             expect.assertions(3);
 

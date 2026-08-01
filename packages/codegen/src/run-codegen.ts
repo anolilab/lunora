@@ -42,7 +42,7 @@ import discoverImageDeliveryUrlAccesses from "./discover-image-delivery-url-acce
 import discoverInserts from "./discover-inserts";
 import discoverKvKeyAccesses from "./discover-kv-key-accesses";
 import discoverMailRecipientAccesses from "./discover-mail-recipient-accesses";
-import discoverMaskProcedures, { discoverMaskMetadata, discoverMaskStrategies } from "./discover-mask-procedures";
+import discoverMaskProcedures, { discoverMaskHasNonLiteralPolicy, discoverMaskMetadata, discoverMaskStrategies } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
 import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
@@ -279,21 +279,42 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  * the same secure-by-default posture RLS's `.rls("required")` denial takes
  * for a policy-less table.
  *
- * Cross-checks two ALREADY-discovered, project-wide static facts —
- * `discoverShapes`' `ShapeIR.table` and `discoverMaskMetadata`'s masked
- * `(table, column)` pairs — rather than reading any runtime tag/registry, so
- * this rejects the collision at build time, before a single Durable Object
- * ships. Runs unconditionally (both inputs are computed regardless of the
- * `lint` option), because a security invariant must not be optional the way
- * an advisor lint finding is.
+ * Cross-checks project-wide static facts — `discoverShapes`' `ShapeIR.table`,
+ * `discoverMaskMetadata`'s masked `(table, column)` pairs, and
+ * `discoverMaskHasNonLiteralPolicy`'s "codegen couldn't read every mask policy"
+ * signal — rather than reading any runtime tag/registry, so this rejects the
+ * collision at build time, before a single Durable Object ships. Runs
+ * unconditionally (all three inputs are computed regardless of the `lint`
+ * option), because a security invariant must not be optional the way an
+ * advisor lint finding is.
  *
- * Known gap (shared with the `mask_uncovered_pii_column` advisor lint and the
- * studio mask-preview metadata this reuses): a `mask(policies)` call whose
- * `policies` argument is a variable reference rather than an inline object
- * literal contributes no columns to `discoverMaskMetadata`, so a collision
- * hidden behind one is not caught here.
+ * Two inputs codegen can't statically resolve to a certain answer, handled by
+ * failing closed rather than silently passing:
+ *
+ * - A shape's `table` isn't a string literal (e.g. `defineShape({ table: t,
+ *   ... })` for a hoisted `t`) — `ShapeIR.table` is `undefined`, and codegen
+ *   cannot rule out that `t` names a masked table. Only enforced when the
+ *   project masks at least one column somewhere — a mask-free project has
+ *   nothing such a shape could leak, so it's let through unconditionally.
+ * - A `mask(policies)` call's `policies` argument is a variable reference
+ *   rather than an inline object literal (e.g. `mask(sharedPolicies)`) — it
+ *   contributes zero columns to `maskMetadata`, so the per-table lookup below
+ *   has no evidence for whichever table(s) it actually masks. Once codegen
+ *   can't enumerate every masked column, it can't clear ANY shape, so this
+ *   fires unconditionally whenever the project declares both such a call and
+ *   at least one shape.
  */
-const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: MaskMetadataIR): void => {
+const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: MaskMetadataIR, hasNonLiteralMaskPolicy: boolean): void => {
+    if (hasNonLiteralMaskPolicy && shapes.length > 0) {
+        const shapeList = shapes.map((shape) => `"${shape.exportName}"`).join(", ");
+
+        throw new LunoraError(
+            "MASK_UNSUPPORTED",
+            `This project declares a \`mask(...)\` policy whose argument isn't a plain object literal (e.g. \`mask(sharedPolicies)\` referencing a hoisted variable), so codegen can't enumerate which columns it masks. Because the project also declares replication shape(s) (${shapeList}), codegen can't verify none of them replicate a table that policy masks — inline the mask(...) policies object literal so codegen can verify it, or remove the affected shape(s).`,
+            { status: 422 },
+        );
+    }
+
     const maskedColumnsByTable = new Map<string, string[]>();
 
     for (const column of maskMetadata.columns) {
@@ -303,8 +324,25 @@ const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: 
         maskedColumnsByTable.set(column.table, columns);
     }
 
+    const projectHasMaskedColumns = maskMetadata.columns.length > 0;
+
     for (const shape of shapes) {
         if (shape.table === undefined) {
+            // Codegen couldn't statically prove which table this shape targets — its
+            // `table` config value isn't a string literal (see `tableLiteralFrom`).
+            // A mask-free project has nothing this shape could leak, so it's let
+            // through; a project that masks ANY column can't rule out this shape
+            // targeting one of them, and a shape runs no procedure (so
+            // `.use(mask(...))` never applies to it) — fail closed rather than risk
+            // replicating a masked column raw.
+            if (projectHasMaskedColumns) {
+                throw new LunoraError(
+                    "MASK_UNSUPPORTED",
+                    `defineShape "${shape.exportName}" has a non-literal \`table\` (a variable or expression, not a string literal), so codegen can't statically verify it doesn't replicate a table that masks a column. This project masks at least one column elsewhere, so the combination can't be proven safe — change "${shape.exportName}"'s \`table\` to a plain string literal so codegen can verify it, or remove the mask(s) on the table it targets.`,
+                    { status: 422 },
+                );
+            }
+
             continue;
         }
 
@@ -588,8 +626,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Fail closed (plan 208, Phase 1): a `defineShape` runs no procedure, so
     // masking never applies to its replicated rows — reject the combination
     // before it ships rather than replicate a masked column raw. Unconditional
-    // (not gated behind `lint`), unlike the advisories below.
-    assertNoMaskedShapeTable(shapes, maskMetadata);
+    // (not gated behind `lint`), unlike the advisories below. Also covers the
+    // two cases codegen can't prove safe rather than prove unsafe — a shape's
+    // non-literal `table` and a mask() call's non-literal `policies` — via
+    // `discoverMaskHasNonLiteralPolicy`; see `assertNoMaskedShapeTable`'s
+    // docblock.
+    assertNoMaskedShapeTable(shapes, maskMetadata, discoverMaskHasNonLiteralPolicy(project, lunoraDirectory));
 
     // Read-only storage access-rule metadata (the studio's access-rules view),
     // statically discovered from every `.use(storageRules(...))` chain and

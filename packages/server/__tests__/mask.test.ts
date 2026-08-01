@@ -1164,3 +1164,68 @@ describe("mask — per-table facade (no mask bypass)", () => {
         expect(usersEntry).not.toBe(originalUsers);
     });
 });
+
+describe("mask — guarded-read coverage (every MaskDatabase read method)", () => {
+    /**
+     * Every read method on `MaskDatabase` (`../src/mask/middleware.ts`) that
+     * accepts a `where`/`baseWhere`-shaped filter and so must reject one that
+     * targets a masked column — the value/presence oracle every test above
+     * verifies one method at a time. `MaskDatabase` is a structural interface
+     * with no runtime manifest to enumerate automatically, so this list is
+     * hand-maintained: ADD NEW READ METHODS HERE when `middleware.ts` grows
+     * one. A method added to the writer surface without wiring it through
+     * `assertWhereAllowed`/`assertReductionAllowed`/`assertRankWhereAllowed`
+     * passes through unmasked-column values would still turn this suite red,
+     * because the entry below drives the same masked "ssn" column through it
+     * and asserts the rejection — omitting a method here is the only way to
+     * silently reintroduce the gap this file exists to prevent.
+     *
+     * `get`/`lookupById`/`query` are deliberately excluded — none of the three
+     * takes a `where`/`baseWhere` filter (they resolve by id or return a
+     * chainable reader tested separately via the index-reader describe block
+     * above), so there is no filter-oracle surface to assert here.
+     */
+    const maskedWhere = { ssn: { eq: "123-45-6789" } };
+
+    const READ_METHODS_WITH_WHERE: ReadonlyArray<{ invoke: (db: TestContext["db"]) => Promise<unknown>; name: string }> = [
+        { invoke: (db) => db.findMany("users", { where: maskedWhere }), name: "findMany" },
+        { invoke: (db) => db.findFirst("users", { where: maskedWhere }), name: "findFirst" },
+        { invoke: (db) => db.findFirstOrThrow("users", { where: maskedWhere }), name: "findFirstOrThrow" },
+        { invoke: (db) => db.count("users", { where: maskedWhere }), name: "count" },
+        { invoke: (db) => db.aggregate("users", { op: "count", where: maskedWhere }), name: "aggregate" },
+        { invoke: (db) => db.groupBy("users", { by: ["status"], where: maskedWhere }), name: "groupBy" },
+        { invoke: (db) => db.rank("users", "by_ssn", { row: "u1", where: maskedWhere }), name: "rank" },
+        { invoke: (db) => db.rankPage("users", "by_ssn", { where: maskedWhere }), name: "rankPage" },
+        // `rankBefore` is optional on `MaskDatabase` (the D1 twin omits it) — wrap
+        // in `Promise.resolve` so a fake writer missing the seam unifies with the
+        // other entries' `Promise<unknown>` instead of `Promise<unknown> | undefined`.
+        { invoke: (db) => Promise.resolve(db.rankBefore?.("users", "by_ssn", { rowId: "u1", where: maskedWhere })), name: "rankBefore" },
+    ];
+
+    it.each(READ_METHODS_WITH_WHERE)("$name(...) with a where on a masked column throws MASK_UNSUPPORTED", async ({ invoke }) => {
+        expect.assertions(1);
+
+        const rows = [{ _id: "u1", ssn: "123-45-6789", status: "active", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankBefore(database, rows);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) => invoke((ctx as unknown as TestContext).db));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("the coverage table lists every MaskDatabase read method that declares a where/baseWhere-shaped filter", () => {
+        expect.assertions(1);
+
+        // Guards the guard: if `middleware.ts`'s `MaskDatabase` interface grows a
+        // new filterable read method, this name list must grow with it — this
+        // assertion is the tripwire a reviewer (or this test file's own drift)
+        // would otherwise miss silently.
+        const coveredNames = READ_METHODS_WITH_WHERE.map((entry) => entry.name).toSorted();
+
+        expect(coveredNames).toStrictEqual(
+            ["aggregate", "count", "findFirst", "findFirstOrThrow", "findMany", "groupBy", "rank", "rankBefore", "rankPage"].toSorted(),
+        );
+    });
+});

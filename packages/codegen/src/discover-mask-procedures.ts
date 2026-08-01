@@ -489,6 +489,41 @@ const discoverMaskStrategies = (project: Project, lunoraDirectory: string): Mask
     return rows;
 };
 
-export { discoverMaskMetadata, discoverMaskStrategies };
+/**
+ * True when the project declares at least one `mask(...)` call whose policies
+ * argument IS PRESENT but isn't a plain object literal — e.g. a hoisted
+ * `mask(sharedPolicies)`. {@link extractMaskColumns}/{@link extractMaskColumnMetadata}
+ * both return `[]` for that call (a variable reference can't be statically
+ * enumerated), so every masked-column consumer derived from
+ * {@link discoverMaskMetadata} is blind to whichever table(s) it actually
+ * masks. `assertNoMaskedShapeTable` (in `run-codegen.ts`) uses this to fail
+ * closed rather than clear a `defineShape` it can't actually prove safe.
+ *
+ * Deliberately kept OUT of {@link MaskMetadataIR} — that IR is JSON-embedded
+ * verbatim into the generated `LUNORA_MASK_METADATA` literal and type-checked
+ * against `@lunora/do`'s hand-mirrored `MaskPoliciesResult`; adding a field
+ * here would embed it in that literal and trip the generated file's
+ * excess-property check under strict TS. This stays a standalone signal
+ * consumed only by the codegen-time guard, never emitted.
+ */
+const discoverMaskHasNonLiteralPolicy = (project: Project, lunoraDirectory: string): boolean => {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
+
+        for (const receiver of exportedProcedureChains(sourceFile)) {
+            for (const maskCall of maskCallsInChain(receiver)) {
+                const argument = maskCall.getArguments()[0];
+
+                if (argument !== undefined && !Node.isObjectLiteralExpression(argument)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+};
+
+export { discoverMaskHasNonLiteralPolicy, discoverMaskMetadata, discoverMaskStrategies };
 
 export default discoverMaskProcedures;
