@@ -285,6 +285,15 @@ export const ERROR_CATALOG = {
     UNKNOWN_ADMIN_OP: { status: 404, title: "Unknown admin operation" },
 
     /**
+     * `@lunora/platform-cloudflare`'s `SocketHost.accept` guard — a caller
+     * supplied more accept-time tags (or a longer tag) than Cloudflare's
+     * `acceptWebSocket` budget allows once the host's own identity tag is
+     * reserved. Caller-actionable and safe (names counts, not internals) —
+     * not `internal`.
+     */
+    SOCKET_TAG_BUDGET_EXCEEDED: { status: 400, title: "Socket tag budget exceeded" },
+
+    /**
      * `@lunora/shard-engine`'s relay hub (cross-shard shape relay coordination).
      * Mirrors `SHARD_ERROR`/`SHARD_UNAVAILABLE` above: operational status for an
      * app's own relay topology, not a secret — not `internal`.

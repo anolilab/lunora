@@ -28,6 +28,17 @@
  * — optional. Presence declares that the host can retag a live socket. Hosts
  * that cannot (Cloudflare) omit both methods, and callers that need to
  * retag must instead close and re-accept the socket with new tags.
+ *
+ * **Reserved-slot budget.** A host may reserve some of its accept-time tag
+ * slots for its own bookkeeping — Cloudflare's adapter prepends one identity
+ * tag (so `idFor` survives hibernation) before every `acceptWebSocket` call.
+ * Cloudflare's own cap is 10 tags per socket, 256 characters each
+ * (developers.cloudflare.com/durable-objects/api/state/), so with one slot
+ * reserved a portable caller should assume **at most 9 usable tags, each
+ * bounded to at most 256 characters** — a budget-exceeding `accept` call
+ * fails loudly on the host that enforces it (see
+ * {@link SocketHost.accept}) rather than passing silently on hosts with no
+ * cap and only failing, opaquely, on Cloudflare.
  */
 
 /**
@@ -88,6 +99,14 @@ export interface SocketHost {
      * survive recycling too and must be honoured by
      * {@link SocketHost.getSockets}. Returns a handle the engine can
      * send/close through.
+     *
+     * Portable callers should assume a budget of **at most 9 usable tags, each
+     * at most 256 characters** — some hosts (Cloudflare) reserve one tag slot
+     * of their own 10-tag cap for bookkeeping; see this file's module-header
+     * "Reserved-slot budget" note. A host that enforces a cap rejects an
+     * over-budget call rather than accepting it and silently dropping or
+     * truncating tags, which would break {@link SocketHost.getSockets}'s
+     * exactness requirement.
      */
     accept: (socket: unknown, attachment?: unknown, tags?: ReadonlyArray<string>) => SocketHandle;
 
