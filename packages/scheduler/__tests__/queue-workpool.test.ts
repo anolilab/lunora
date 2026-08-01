@@ -109,6 +109,34 @@ describe("createQueueWorkpool", () => {
         // @ts-expect-error -- exercising the JS-caller guard
         expect(() => createQueueWorkpool({})).toThrow(/queue/u);
     });
+
+    it("rejects an enqueueBatch over the 100-message cap naming the limit and the actual count", async () => {
+        expect.assertions(2);
+
+        const queue = fakeQueue();
+        const pool = createQueueWorkpool({ queue });
+        const jobs = Array.from({ length: 101 }, (_unused, index) => {
+            return { ref: fnRef(`jobs:${String(index)}`) };
+        });
+
+        await expect(pool.enqueueBatch(jobs)).rejects.toThrow(/exceeds 100 \(got 101\)/u);
+        expect(queue.batches).toHaveLength(0);
+    });
+
+    it("passes an enqueueBatch of exactly 100 jobs through to the binding unchanged", async () => {
+        expect.assertions(2);
+
+        const queue = fakeQueue();
+        const pool = createQueueWorkpool({ queue });
+        const jobs = Array.from({ length: 100 }, (_unused, index) => {
+            return { ref: fnRef(`jobs:${String(index)}`) };
+        });
+
+        await pool.enqueueBatch(jobs);
+
+        expect(queue.batches).toHaveLength(1);
+        expect(queue.batches[0]).toHaveLength(100);
+    });
 });
 
 describe("createQueueConsumer", () => {

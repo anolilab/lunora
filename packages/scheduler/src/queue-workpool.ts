@@ -33,6 +33,16 @@ import type {
     QueueWorkpoolOptions,
 } from "./types";
 
+/**
+ * Cloudflare Queues hard ceiling on a single `sendBatch` call: 100 messages
+ * (also capped at 1 MB total / 256 KB per message — see the Cloudflare Queues
+ * limits documentation). Mirrors `@lunora/queue`'s `create-queues.ts` guard of
+ * the same name and value; duplicated rather than shared because the two
+ * packages have no dependency edge and a `shared/` file for one integer is
+ * overkill.
+ */
+const MAX_QUEUE_BATCH = 100;
+
 /** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
 const trimTrailingSlashes = (value: string): string => {
     let end = value.length;
@@ -66,6 +76,13 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
         jobs: ReadonlyArray<{ args?: Record<string, unknown>; ref: FunctionReference; shardKey?: string }>,
         sendOptions?: QueueSendOptionsLike,
     ): Promise<void> => {
+        if (jobs.length > MAX_QUEUE_BATCH) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/scheduler: enqueueBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(jobs.length)}) — split across calls`,
+            );
+        }
+
         const messages = jobs.map((job) => {
             return { body: { args: job.args, functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
         });
