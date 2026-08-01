@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useShardKey } from "../../src/hooks/use-shard-key";
@@ -14,7 +15,13 @@ const Probe = ({
 }): React.ReactElement => {
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initial, delayMs);
 
-    onReady(setShardKey);
+    // Hand the setter back to the test via an effect, not during render — render
+    // must stay pure (React can replay or discard it), so the callback fires
+    // from a committed effect instead.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-data-to-parent -- test harness: the hook must run inside a component, so the effect is the only channel to surface its setter to the test.
+        onReady(setShardKey);
+    });
 
     return (
         <div>
