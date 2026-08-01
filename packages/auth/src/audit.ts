@@ -43,6 +43,11 @@ type AuthAuditEvent =
     | "password-reset"
     | "session-revoke"
     | "sign-in"
+    // A sign-in-family endpoint that only DISPATCHES (mints a provider
+    // redirect URL, or sends a magic-link email) — nobody is authenticated
+    // yet. Split out from `sign-in` (plan 280) so a caller can't mistake it
+    // for a completed authentication.
+    | "sign-in-initiated"
     | "sign-out"
     | "sign-up"
     | "token-refresh"
@@ -67,6 +72,19 @@ interface AuthAuditEntry {
     outcome: AuthAuditOutcome;
     /** Monotonic per-database cursor — strictly increasing, never reused. */
     seq: number;
+
+    /**
+     * The identifier (email or username) a sign-in-family request ATTEMPTED,
+     * read from the request body. Present for both successful and failed
+     * attempts — unlike `actorEmail` (which requires an authenticated
+     * session), this is what lets a FAILED credential-stuffing attempt be
+     * grouped by target. Same redaction exemption as `actorEmail`: a
+     * top-level column, not a `detail` key, because `AUDIT_REDACT_RULES`
+     * scrubs email-shaped values inside `detail` regardless of key name —
+     * putting it there would erase exactly this datum. Length-capped to 320
+     * chars (RFC 5321) since it carries attacker-controlled request-body text.
+     */
+    targetEmail?: string;
     /** Wall-clock millis when the event was recorded. */
     ts: number;
     /** Client User-Agent, when present on the request. */
@@ -81,6 +99,8 @@ interface AppendAuthAuditEntry {
     event: string;
     ip?: string;
     outcome: AuthAuditOutcome;
+    /** See {@link AuthAuditEntry.targetEmail}. */
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }
@@ -142,6 +162,16 @@ const text = (value: unknown): string | undefined => {
  * Create the `__lunora_auth_audit__` table. `seq` is an `AUTOINCREMENT` primary
  * key giving the database a monotonic cursor the Security page pages through.
  * Idempotent, so read and write paths can call it defensively.
+ *
+ * `target_email` is added via a guarded `ALTER TABLE` rather than baked only
+ * into the `CREATE`, mirroring `@lunora/observability`'s
+ * `ensureRequestLogTable`/`ensureFunctionMetricsTables` — `CREATE TABLE IF NOT
+ * EXISTS` only helps a table that doesn't exist yet, so a database whose audit
+ * table predates this column needs the `ALTER` to gain it. SQLite has no `ADD
+ * COLUMN IF NOT EXISTS`; the duplicate-column error from a re-run (or from the
+ * column already existing on the freshly-created schema above) is swallowed —
+ * anything else re-throws, so a genuinely broken executor is not silently
+ * papered over.
  */
 const ensureAuthAuditTable = async (executor: SqlExecutor): Promise<void> => {
     await executor.run(
@@ -152,12 +182,23 @@ const ensureAuthAuditTable = async (executor: SqlExecutor): Promise<void> => {
             outcome TEXT NOT NULL,
             actor_id TEXT,
             actor_email TEXT,
+            target_email TEXT,
             ip TEXT,
             user_agent TEXT,
             detail TEXT
         )`,
         [],
     );
+
+    try {
+        await executor.run(`ALTER TABLE "${AUTH_AUDIT_TABLE}" ADD COLUMN target_email TEXT`, []);
+    } catch (error) {
+        const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+        if (!message.includes("duplicate column")) {
+            throw error;
+        }
+    }
 };
 
 /**
@@ -180,13 +221,14 @@ const appendAuthAuditEntry = async (
     }
 
     await executor.run(
-        `INSERT INTO "${AUTH_AUDIT_TABLE}" (ts, event, outcome, actor_id, actor_email, ip, user_agent, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO "${AUTH_AUDIT_TABLE}" (ts, event, outcome, actor_id, actor_email, target_email, ip, user_agent, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             entry.ts,
             entry.event,
             entry.outcome,
             entry.actorId ?? SQL_NULL,
             entry.actorEmail ?? SQL_NULL,
+            entry.targetEmail ?? SQL_NULL,
             entry.ip ?? SQL_NULL,
             entry.userAgent ?? SQL_NULL,
             detail === undefined ? SQL_NULL : JSON.stringify(detail),
@@ -208,11 +250,19 @@ const appendAuthAuditEntry = async (
  * paged past `sinceSeq`, up to `limit` (clamped to [1, 10000]). Parses each row's
  * `detail` JSON back into an object. Creates the table first so reads on a
  * never-audited database return `[]` instead of throwing.
+ *
+ * `limit` is NaN-safe: a non-finite/non-number value (e.g. a caller passing
+ * `Number.NaN`, or an upstream boundary that failed to reject one) falls back
+ * to {@link DEFAULT_READ_LIMIT} rather than reaching `Math.min`/`Math.max`,
+ * which both propagate `NaN` and would otherwise bind it as the SQL `LIMIT`
+ * parameter. This is the library-level fix; `#readAudit` (`./auth-do`) also
+ * rejects a non-numeric `limit` at the boundary with a 400 — this clamp is the
+ * safety net for every OTHER caller of this function too.
  */
 const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOptions = {}): Promise<AuthAuditEntry[]> => {
     await ensureAuthAuditTable(executor);
 
-    const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_READ_LIMIT, MAX_READ_LIMIT));
+    const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(options.limit as number, MAX_READ_LIMIT)) : DEFAULT_READ_LIMIT;
     const clauses: string[] = ["seq > ?"];
     const parameters: unknown[] = [options.sinceSeq ?? 0];
 
@@ -229,7 +279,7 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
     parameters.push(limit);
 
     const rows = await executor.all(
-        `SELECT seq, ts, event, outcome, actor_id, actor_email, ip, user_agent, detail FROM "${AUTH_AUDIT_TABLE}" WHERE ${clauses.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
+        `SELECT seq, ts, event, outcome, actor_id, actor_email, target_email, ip, user_agent, detail FROM "${AUTH_AUDIT_TABLE}" WHERE ${clauses.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
         parameters,
     );
 
@@ -243,6 +293,7 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
 
         const actorId = text(row["actor_id"]);
         const actorEmail = text(row["actor_email"]);
+        const targetEmail = text(row["target_email"]);
         const ip = text(row["ip"]);
         const userAgent = text(row["user_agent"]);
         const detail = text(row["detail"]);
@@ -253,6 +304,10 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
 
         if (actorEmail !== undefined) {
             base.actorEmail = actorEmail;
+        }
+
+        if (targetEmail !== undefined) {
+            base.targetEmail = targetEmail;
         }
 
         if (ip !== undefined) {
