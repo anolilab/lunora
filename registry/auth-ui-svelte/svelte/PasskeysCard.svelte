@@ -18,7 +18,7 @@
 </script>
 
 {#if enabled}
-    <AuthCard title={t.passkeys}>
+    <AuthCard headingLevel={2} title={t.passkeys}>
         <FormBanner error={$res.error} />
         {#if $res.loading}
             <p class="lunora-auth-card__description">…</p>

@@ -37,7 +37,7 @@ const nextId = (prefix: string): string => {
     standalone: true,
     template: `
         @if (enabled()) {
-            <lunora-auth-card [title]="t.organizations">
+            <lunora-auth-card [title]="t.organizations" [headingLevel]="2">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
                     <p class="lunora-auth-card__description">…</p>
@@ -120,7 +120,7 @@ class OrganizationsCardComponent {
     standalone: true,
     template: `
         @if (enabled()) {
-            <lunora-auth-card [title]="t.members">
+            <lunora-auth-card [title]="t.members" [headingLevel]="2">
                 <lunora-auth-banner [error]="state().error" />
 
                 @if (state().loading) {
@@ -222,7 +222,7 @@ class MembersCardComponent {
     standalone: true,
     template: `
         @if (enabled()) {
-            <lunora-auth-card [title]="t.organizationSettings">
+            <lunora-auth-card [title]="t.organizationSettings" [headingLevel]="2">
                 @if (state().loading) {
                     <p class="lunora-auth-card__description">…</p>
                 } @else {

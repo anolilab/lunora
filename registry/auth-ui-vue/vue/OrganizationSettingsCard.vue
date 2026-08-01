@@ -29,7 +29,7 @@ const { actions, state } = useController((context_) =>
 </script>
 
 <template>
-    <AuthCard v-if="enabled" :title="t.organizationSettings">
+    <AuthCard v-if="enabled" :headingLevel="2" :title="t.organizationSettings">
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>
         <form v-else class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />

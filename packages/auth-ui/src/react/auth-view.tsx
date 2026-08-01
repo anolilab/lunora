@@ -123,7 +123,7 @@ interface AuthViewProps {
 }
 
 const AuthView = ({ view }: AuthViewProps = {}): ReactElement => {
-    const { forgotPasswordMethod, plugins, viewPaths } = useAuthUI();
+    const { forgotPasswordMethod, plugins, signUp, viewPaths } = useAuthUI();
 
     /*
      * A lookup keyed by the resolved segment, not a `switch` over
@@ -144,14 +144,18 @@ const AuthView = ({ view }: AuthViewProps = {}): ReactElement => {
         [viewPaths.forgotPassword]: () => <ForgotPasswordCard />,
         [viewPaths.magicLink]: () => (plugins.magicLink ? <MagicLinkCard /> : <SignInCard />),
         [viewPaths.resetPassword]: () => (forgotPasswordMethod === "otp" ? <ResetPasswordOtpCard /> : <ResetPasswordCard />),
-        [viewPaths.signUp]: () => <SignUpCard />,
+        [viewPaths.signUp]: () => (signUp ? <SignUpCard /> : <SignInCard />),
         [viewPaths.twoFactor]: () => (plugins.twoFactor ? <TwoFactorCard /> : <SignInCard />),
         [viewPaths.verifyEmail]: () => <VerifyEmailCard />,
     };
 
     // An unrecognized segment falls back to sign-in rather than rendering
-    // nothing, because a typo'd auth URL should still let someone in.
-    const render = view === undefined ? undefined : routes[view];
+    // nothing, because a typo'd auth URL should still let someone in. The
+    // own-key check matters because `view` is URL input: a plain object
+    // literal inherits `Object.prototype`, so a segment like "valueOf" or
+    // "constructor" would otherwise resolve to an inherited member instead of
+    // falling through.
+    const render = view !== undefined && Object.hasOwn(routes, view) ? routes[view] : undefined;
 
     return render === undefined ? <SignInCard /> : render();
 };

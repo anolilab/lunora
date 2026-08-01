@@ -2,6 +2,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
+import { resolveAfterSignIn } from "./redirect-to";
 import type { FormController } from "./types";
 import { email as validateEmail } from "./validators";
 
@@ -16,7 +17,7 @@ const createMagicLinkController = (context: ControllerContext): FormController<M
         submit: async (values, context_) => {
             assertOk(
                 await context_.authClient.signIn.magicLink({
-                    callbackURL: context_.redirects.afterSignIn,
+                    callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
                     email: values.email.trim(),
                 }),
             );

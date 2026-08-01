@@ -10,7 +10,7 @@ import { ChangeDetectionStrategy, Component, computed } from "@angular/core";
 
 import { isFlowEnabled } from "../core/flow-gate";
 import type { TwoFactorSetupActions, TwoFactorSetupState } from "../core/two-factor-setup";
-import { createTwoFactorSetupController } from "../core/two-factor-setup";
+import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
 import { injectAuthUIContext } from "./provider";
@@ -40,8 +40,15 @@ import { injectAuthUIContext } from "./provider";
             } @else if (state().step === "verify") {
                 <lunora-auth-card [title]="t.twoFactorSetup" [description]="t.twoFactorScan">
                     <lunora-auth-banner [error]="state().error" />
-                    @if (state().totpUri !== undefined) {
-                        <code class="lunora-auth-code">{{ state().totpUri }}</code>
+                    <!--
+                        The setup key, not the raw otpauth:// URI: this package
+                        ships no QR encoder, so there is nothing to scan, and
+                        most authenticators reject a pasted otpauth:// string
+                        anyway — the key is the only path that reliably works.
+                    -->
+                    @if (secret() !== undefined) {
+                        <p class="lunora-auth-note">{{ t.twoFactorSecret }}</p>
+                        <code class="lunora-auth-code">{{ secret() }}</code>
                     }
                     @if (state().backupCodes.length > 0) {
                         <p class="lunora-auth-card__description">{{ t.backupCodes }}</p>
@@ -88,6 +95,7 @@ class TwoFactorSetupCardComponent {
     private readonly bridge = controllerSignal(createTwoFactorSetupController, { context: this.context });
     protected readonly state: Signal<TwoFactorSetupState> = this.bridge.state;
     protected readonly actions: TwoFactorSetupActions = this.bridge.actions;
+    protected readonly secret = computed(() => totpSecret(this.state().totpUri));
 }
 
 export { TwoFactorSetupCardComponent };

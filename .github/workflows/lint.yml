@@ -240,12 +240,6 @@
             - "name": "Lint (prettier)"
               "run": "pnpm run lint:prettier"
 
-            # The auth-ui-* registry items are generated from @lunora/auth-ui's
-            # source by scripts/sync-auth-ui-registry.mjs; fail if they've drifted
-            # (someone edited src without re-running the sync).
-            - "name": "Lint (auth-ui registry sync)"
-              "run": "pnpm run lint:registry:sync"
-
     "package-json-sort":
         "name": "Lint (package.json sort)"
         "if": "needs.files-changed.outputs.package_json_lintable == 'true'"
@@ -304,6 +298,42 @@
             - "name": "Scan for secrets"
               "run": "pnpm exec vis secrets"
 
+    # The auth-ui-* registry items are generated from @lunora/auth-ui's source by
+    # scripts/sync-auth-ui-registry.mjs. This used to be the last step of the
+    # `prettier` job, which meant it was skipped whenever a PR's diff had no
+    # frontend-lintable file, and masked whenever an earlier step in that job
+    # failed — drift landed on `alpha` despite the check nominally existing.
+    # No `if` path-filter, same as `secrets` above: the script only needs
+    # `node` + the repo's `prettier` dependency (no package builds), so an
+    # unconditional run costs well under a minute and closes the skip class
+    # outright.
+    "registry-sync":
+        "name": "Lint (auth-ui registry sync)"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Lint (auth-ui registry sync)"
+              "run": "pnpm run lint:registry:sync"
+
     "yaml-lint":
         "name": "Lint (yaml)"
         "if": "needs.files-changed.outputs.yaml_lintable == 'true'"
@@ -329,7 +359,7 @@
     # Single required check for the Lint workflow.
     "lint-required-check":
         "name": "Check Lint Run"
-        "needs": ["files-changed", "eslint", "types", "fallow", "api-surface", "prettier", "package-json-sort", "secrets", "yaml-lint"]
+        "needs": ["files-changed", "eslint", "types", "fallow", "api-surface", "prettier", "package-json-sort", "secrets", "registry-sync", "yaml-lint"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

@@ -11,7 +11,7 @@
     const { actions, state: form } = controllerStore(createDeleteAccountController);
 </script>
 
-<AuthCard description={t.deleteAccountWarning} title={t.deleteAccount}>
+<AuthCard description={t.deleteAccountWarning} headingLevel={2} title={t.deleteAccount}>
     <form
         class="lunora-auth-form"
         novalidate

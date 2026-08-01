@@ -74,7 +74,7 @@ const onSocial = (provider: string): void => {
             <AuthLink :href="forgotPasswordHref">{{ t.forgotPasswordLink }}</AuthLink>
             <SubmitButton :pending="state.status === 'submitting'">{{ t.signIn }}</SubmitButton>
         </form>
-        <template #footer>
+        <template v-if="context.signUp" #footer>
             <AuthLink :href="signUpHref">{{ t.noAccount }}</AuthLink>
         </template>
     </AuthCard>

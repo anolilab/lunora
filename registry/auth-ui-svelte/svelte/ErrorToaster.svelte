@@ -30,23 +30,26 @@
 <!--
     `polite`, not `assertive`: these are failures the user can retry, not
     something that should interrupt a screen reader mid-sentence.
+
+    Mounted unconditionally — including with no toasts yet. A live region only
+    announces changes made AFTER it exists in the accessibility tree; gating
+    the whole wrapper on `toasts.length > 0` meant the very first toast landed
+    before assistive tech was watching the region, so it went unannounced.
 -->
-{#if toasts.length > 0}
-    <div aria-live="polite" class="lunora-auth-toaster">
-        {#each toasts as toast (toast.id)}
-            <div class="lunora-auth-toast" role="status">
-                <span class="lunora-auth-toast__message">{toast.message}</span>
-                <button
-                    aria-label="Dismiss"
-                    class="lunora-auth-toast__dismiss"
-                    onclick={() => {
-                        dismissToast(toast.id);
-                    }}
-                    type="button"
-                >
-                    ×
-                </button>
-            </div>
-        {/each}
-    </div>
-{/if}
+<div aria-live="polite" class="lunora-auth-toaster">
+    {#each toasts as toast (toast.id)}
+        <div class="lunora-auth-toast" role="status">
+            <span class="lunora-auth-toast__message">{toast.message}</span>
+            <button
+                aria-label="Dismiss"
+                class="lunora-auth-toast__dismiss"
+                onclick={() => {
+                    dismissToast(toast.id);
+                }}
+                type="button"
+            >
+                ×
+            </button>
+        </div>
+    {/each}
+</div>

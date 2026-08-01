@@ -1,5 +1,6 @@
 import type { JSX } from "solid-js";
 import { createUniqueId, For, Index, Show } from "solid-js";
+import { Dynamic } from "solid-js/web";
 
 import { providerLabel } from "../core/labels";
 import type { PasswordRequirement } from "../core/password-policy";
@@ -13,6 +14,13 @@ interface AuthCardProps {
     children: JSX.Element;
     description?: string;
     footer?: JSX.Element;
+
+    /**
+     * The title's heading level (default 1) — see the React `AuthCard`'s doc
+     * comment for why a settings/organization composition passes `2` rather
+     * than letting every card render an `h1`.
+     */
+    headingLevel?: 1 | 2 | 3;
     title: string;
 }
 
@@ -30,7 +38,9 @@ const themeStyle = (): Record<string, string> | undefined => {
 const AuthCard = (props: AuthCardProps): JSX.Element => (
     <section class="lunora-auth-card" style={themeStyle()}>
         <header class="lunora-auth-card__header">
-            <h1 class="lunora-auth-card__title">{props.title}</h1>
+            <Dynamic class="lunora-auth-card__title" component={`h${String(props.headingLevel ?? 1)}` as "h1" | "h2" | "h3"}>
+                {props.title}
+            </Dynamic>
             <Show when={props.description !== undefined}>
                 <p class="lunora-auth-card__description">{props.description}</p>
             </Show>

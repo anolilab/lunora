@@ -72,6 +72,26 @@ const readRedirectTo = (parameter = "redirectTo"): string | undefined => {
 const resolveAfterSignIn = (fallback: string): string => readRedirectTo() ?? fallback;
 
 /**
+ * Merge `parameters` into `path`'s existing query.
+ *
+ * Parsed rather than appended: blindly appending a second `?` mangles the URL
+ * (its own parameters become part of the *first* query's last value), and
+ * `URLSearchParams.set` overwrites rather than duplicating a key that already
+ * exists — so a caller-supplied value always wins over whatever `path` already
+ * carried, never silently loses to a second occurrence.
+ */
+const mergeQuery = (path: string, parameters: Readonly<Record<string, string>>): string => {
+    const [base, existing = ""] = path.split("?");
+    const merged = new URLSearchParams(existing);
+
+    for (const [key, value] of Object.entries(parameters)) {
+        merged.set(key, value);
+    }
+
+    return `${base ?? path}?${merged.toString()}`;
+};
+
+/**
  * Carry `redirectTo` onto an intermediate step's URL.
  *
  * Sign-in can hand off to a second factor before it finishes, and that hop is a
@@ -88,17 +108,12 @@ const withRedirectTo = (path: string): string => {
     }
 
     /*
-     * Parsed rather than appended: an app whose `redirects.twoFactor` already
+     * Merged rather than appended: an app whose `redirects.twoFactor` already
      * carries a `redirectTo` would otherwise end up with two, and
      * `URLSearchParams.get` returns the first — so the configured value would
      * win over the invitation target this function exists to carry.
      */
-    const [base, existing = ""] = path.split("?");
-    const parameters = new URLSearchParams(existing);
-
-    parameters.set("redirectTo", target);
-
-    return `${base ?? path}?${parameters.toString()}`;
+    return mergeQuery(path, { redirectTo: target });
 };
 
-export { isSafeRedirect, readRedirectTo, resolveAfterSignIn, withRedirectTo };
+export { isSafeRedirect, mergeQuery, readRedirectTo, resolveAfterSignIn, withRedirectTo };

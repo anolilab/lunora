@@ -138,6 +138,18 @@ describe("discovered config fields", () => {
         expect(context.organization.teams).toBe(true);
         expect(context.organization.roles).toBe(true);
     });
+
+    it("closes the sign-up gate when the server discloses disableSignUp", () => {
+        expect.assertions(1);
+
+        expect(contextFor(stub(), payload({ signUp: false })).signUp).toBe(false);
+    });
+
+    it("defaults the sign-up gate open when discovery never answered", () => {
+        expect.assertions(1);
+
+        expect(contextFor(stub()).signUp).toBe(true);
+    });
 });
 
 describe("discoverAuthConfig", () => {

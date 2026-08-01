@@ -149,6 +149,20 @@ const AuthUIProvider = ({
     // The discovered payload is a fresh object per fetch but settles exactly
     // once, so keying on its content keeps the memo from churning on re-renders
     // while still rebuilding the context when the answer lands.
+    //
+    // Known, accepted trade-off (plan 278 §5 S3): a rebuilt `core` rebuilds
+    // every controller memoized on it (see `use-controller.ts`), which loses
+    // whatever the user already typed into an in-flight form if discovery
+    // settles after they started. `/ui-config` is a same-origin GET fired on
+    // mount, so on a healthy deployment this window is narrow — well under
+    // typical human typing latency — but a password manager's autofill can
+    // still race it, since autofill can land within the same tick as mount.
+    // Fixing it needs either a stable accessor threaded through
+    // `ControllerContext`'s public shape (a ripple through every controller
+    // and all five ports) or a generic seed/hydrate seam on `Controller` that
+    // would have to make sense for every domain controller's state, not just
+    // form fields — both bigger than this plan's scope. See
+    // `__tests__/react/discovery-rebuild.test.tsx` for the measured repro.
     const discoveryKey = JSON.stringify(discovery.config ?? null);
 
     const core = useMemo<ControllerContext>(
