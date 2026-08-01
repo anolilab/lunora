@@ -311,6 +311,30 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             });
 
+            // This is a regression fence, not a bug reproduction: nine tags plus
+            // one host-reserved identity tag lands exactly at Cloudflare's
+            // documented 10-tag `acceptWebSocket` cap
+            // (developers.cloudflare.com/durable-objects/api/state/), so it
+            // passes today on every host and starts failing the moment the
+            // Cloudflare adapter (or any future host with its own cap) grows a
+            // second reserved slot without updating the portable budget this
+            // asserts. See `packages/platform/src/socket-host.ts`'s
+            // "Reserved-slot budget" note.
+            it("accepts the portable budget of nine caller tags", async () => {
+                expect.assertions(9);
+
+                const host = await createHost();
+                const tags = Array.from({ length: 9 }, (_unused, index) => `tag-${String(index)}`);
+                const socket = host.socket.accept(rawSocket(host), {}, tags);
+                const idOf = (s: SocketHandle): string => host.socket.idFor(s);
+
+                for (const tag of tags) {
+                    expect(host.socket.getSockets(tag).map(idOf)).toStrictEqual([idOf(socket)]);
+                }
+
+                host.cleanup?.();
+            });
+
             // Enumeration yields handles while the runtime's message/close
             // callbacks yield raw sockets. A host that cannot bridge the two
             // forces every caller back onto the provider socket type, which is
