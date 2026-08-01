@@ -6,7 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DataBrowserProps } from "../../../src/features/data/data-browser";
 import { DataBrowser } from "../../../src/features/data/data-browser";
+import { useMirroredRef } from "../../../src/hooks/use-mirrored-ref";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import { dataViewToSearch, searchToDataView } from "../../../src/lib/data-view-params";
+import type { DataView } from "../../../src/lib/saved-queries";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -1722,5 +1725,309 @@ describe("dataBrowser — bulk delete cap exhaustion (STUDIO-02)", () => {
         });
 
         expect(screen.queryByTestId("db-write-error")).toBeNull();
+    });
+});
+
+interface SameTableRow {
+    __id__: string;
+    category: string;
+    text: string;
+}
+
+/**
+ * Two shard fixtures for the SAME table name (`messages`), so a test can drive
+ * a saved-query apply that changes shard/search/filters while the URL's `table`
+ * param never changes — the same-table dead spot STUDIO-274 fixes (a
+ * `tableParam`-only reset gate can't see this apply, since `tableParam` alone
+ * hasn't moved).
+ */
+const SAME_TABLE_FIXTURES: Record<string, SameTableRow[]> = {
+    "": [
+        { __id__: "r1", category: "default", text: "hello" },
+        { __id__: "r2", category: "default", text: "world" },
+    ],
+    b: [
+        { __id__: "b1", category: "beta", text: "b-row-one" },
+        { __id__: "b2", category: "beta", text: "b-row-two" },
+    ],
+};
+
+const createSameTableClient = (): MockClientHooks =>
+    createMockClient({
+        query: (reference, args, options): unknown => {
+            const shard = (options as { shardKey?: string } | undefined)?.shardKey ?? "";
+            const fixture = SAME_TABLE_FIXTURES[shard];
+
+            if (fixture === undefined) {
+                throw new Error(`unknown shard: ${shard}`);
+            }
+
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: fixture.length }];
+            }
+
+            if (reference !== ADMIN_FUNCTIONS.readTablePage) {
+                // describeTables / facetColumn / etc — not exercised by these tests.
+                return { columns: [], rows: [], total: 0 };
+            }
+
+            const {
+                filters = [],
+                limit = 50,
+                offset = 0,
+                search = "",
+                table,
+            } = args as {
+                filters?: { column: string; operator: string; value?: unknown }[];
+                limit?: number;
+                offset?: number;
+                search?: string;
+                table: string;
+            };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            const needle = search.trim().toLowerCase();
+            let matched = needle === "" ? fixture : fixture.filter((row) => row.text.toLowerCase().includes(needle));
+
+            for (const clause of filters) {
+                if (clause.operator === "eq") {
+                    matched = matched.filter((row) => row[clause.column as keyof SameTableRow] === clause.value);
+                }
+            }
+
+            return { columns: ["__id__", "category", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
+        },
+    });
+
+/** The saved query STUDIO-274 exercises: same table, new shard/search/filter. */
+const SAME_TABLE_SAVED_QUERY: DataView = {
+    filters: [{ column: "category", operator: "eq", value: "beta" }],
+    orderBy: undefined,
+    search: "b-row",
+    shard: "b",
+    table: "messages",
+    tier: "shard",
+};
+
+/** The `onViewChange` payload shape — the mirrored view's shard/search/filters/sort. */
+type MirroredView = Pick<DataView, "filters" | "orderBy" | "search" | "shard">;
+
+/**
+ * A faithful miniature of `table-editor.tsx`'s URL wiring: the view lives in a
+ * plain in-memory "URL" object, `onViewChange` mirrors the loaded view back
+ * into it (skipping the write when the URL already reflects it — the same
+ * `unchanged` short-circuit `table-editor.tsx` uses), and applying a saved
+ * query pushes a fresh URL object carrying table + shard + search + filters in
+ * ONE update, exactly like `onApplyQuery`. Modeling this precisely (rather than
+ * a `ControlledDataBrowser`-style ad hoc host) is what lets these tests exercise
+ * the actual regression: a same-table apply that changes shard/search/filters
+ * without ever changing `tableParam`.
+ */
+const MiniTableEditor = ({ onViewChangeCall, pageSize }: { onViewChangeCall?: (view: MirroredView) => void; pageSize?: number }): ReactElement => {
+    const [urlSearch, setUrlSearch] = useState<Record<string, unknown>>({ table: "messages" });
+    const urlRef = useMirroredRef(urlSearch);
+    const view = searchToDataView(urlSearch);
+
+    const onSelectTable = (table: string, options?: { search?: string }): void => {
+        setUrlSearch({ search: options?.search, table });
+    };
+
+    const onViewChange = (next: MirroredView): void => {
+        onViewChangeCall?.(next);
+
+        const patch = dataViewToSearch(next);
+        const { current } = urlRef;
+
+        const unchanged =
+            (current["filters"] ?? undefined) === patch.filters &&
+            (current["order"] ?? undefined) === patch.order &&
+            (current["search"] ?? undefined) === patch.search &&
+            (current["shard"] ?? undefined) === patch.shard;
+
+        if (unchanged) {
+            return;
+        }
+
+        setUrlSearch((previous) => {
+            return { ...previous, filters: patch.filters, order: patch.order, search: patch.search, shard: patch.shard };
+        });
+    };
+
+    const applySavedQuery = (): void => {
+        const patch = dataViewToSearch(SAME_TABLE_SAVED_QUERY);
+
+        setUrlSearch({ filters: patch.filters, order: patch.order, schema: patch.schema, search: patch.search, shard: patch.shard, table: patch.table });
+    };
+
+    return (
+        <>
+            <button data-testid="apply-saved-query" onClick={applySavedQuery} type="button">
+                apply saved query
+            </button>
+            <DataBrowser
+                editable
+                initialFilters={view.filters}
+                initialOrderBy={view.orderBy}
+                initialSearch={view.search}
+                initialShardKey={view.shard}
+                onSelectTable={onSelectTable}
+                onViewChange={onViewChange}
+                pageSize={pageSize}
+                tableParam={view.table}
+            />
+        </>
+    );
+};
+
+describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
+    it("re-seeds shard, search, and filters when a saved query names the ALREADY-OPEN table", async () => {
+        expect.assertions(2);
+
+        const mock = createSameTableClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <MiniTableEditor pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        // Mount opens "messages" on the root shard.
+        await screen.findByText("hello");
+
+        fireEvent.click(screen.getByTestId("apply-saved-query"));
+
+        // The saved query names shard "b", search "b-row", and an `eq` filter on
+        // `category` — all while `table` stays "messages" throughout. Asserted
+        // via the cell testids (not `findByText`) because the active search
+        // highlights the "b-row" match, splitting the cell's text across
+        // `<mark>` spans — `findByText` can't match text split across elements.
+        await waitFor(
+            () => {
+                if (
+                    screen.queryByTestId("db-cell-b1-text")?.textContent !== "b-row-one" ||
+                    screen.queryByTestId("db-cell-b2-text")?.textContent !== "b-row-two"
+                ) {
+                    throw new Error("rows not re-seeded to shard b yet");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        expect(screen.getByTestId<HTMLInputElement>("db-shard-input").value).toBe("b");
+
+        const reads = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+        const lastRead = reads.at(-1) as [unknown, { table: string }, { shardKey?: string } | undefined];
+
+        // The read that produced the rows above already targeted shard "b" — not
+        // the root shard the browser opened with.
+        expect(lastRead[2]?.shardKey).toBe("b");
+    });
+
+    it("mirrors the newly-applied view back to the host, never with the stale pre-apply shard/search", async () => {
+        expect.assertions(2);
+
+        const mock = createSameTableClient();
+        const onViewChangeCall = vi.fn<(view: MirroredView) => void>();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <MiniTableEditor onViewChangeCall={onViewChangeCall} pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        await screen.findByText("hello");
+
+        // Discard the mount-time mirror call(s) — only what happens AFTER the
+        // apply matters here.
+        onViewChangeCall.mockClear();
+
+        fireEvent.click(screen.getByTestId("apply-saved-query"));
+
+        // See the sibling test above for why this is a testid check, not
+        // `findByText("b-row-one")` — the active search highlights the match.
+        await waitFor(
+            () => {
+                if (screen.queryByTestId("db-cell-b1-text")?.textContent !== "b-row-one") {
+                    throw new Error("rows not re-seeded to shard b yet");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        // Give the mirror a chance to fire (or, on the pre-fix code, to not).
+        await waitFor(
+            () => {
+                if (onViewChangeCall.mock.calls.length === 0) {
+                    throw new Error("view was never mirrored back after the apply");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        // Every post-apply mirror call reflects the NEW view — none regresses to
+        // the pre-apply shard ("") or search (undefined), which is the reported
+        // "operator watches the just-applied link revert" symptom.
+        const revertedToStale = onViewChangeCall.mock.calls.some(([call]) => call.shard !== "b" || call.search !== "b-row");
+
+        expect(revertedToStale).toBe(false);
+
+        // And it did settle on the new view at least once (not just avoid the
+        // stale one) — otherwise "never reverts" would be vacuously true.
+        const mirroredNewView = onViewChangeCall.mock.calls.some(([call]) => call.shard === "b" && call.search === "b-row");
+
+        expect(mirroredNewView).toBe(true);
+    });
+
+    it("never re-seeds on a keystroke, even once the URL mirror echoes it back (contract — holds before AND after the fix)", async () => {
+        expect.assertions(2);
+
+        const mock = createSameTableClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <MiniTableEditor pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        await screen.findByText("hello");
+
+        // Type a search that only matches one of the root shard's rows — the
+        // debounced round trip (state → debounce → onViewChange → URL →
+        // `initialSearch`) must be a fixed point: it can echo `initialSearch`
+        // back without ever resetting what's on screen.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hel" } });
+
+        await waitFor(() => {
+            const reads = mock.query.mock.calls.filter(
+                (call) =>
+                    (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { search?: string }).search === "hel",
+            );
+
+            if (reads.length === 0) {
+                throw new Error("debounced search not applied yet");
+            }
+        });
+
+        // The typed value is still exactly what was typed — never reset by a
+        // re-seed reacting to the mirror's own echo of `initialSearch`.
+        expect(screen.getByTestId<HTMLInputElement>("db-filter").value).toBe("hel");
+
+        const settledCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        // Wait well past every debounce window; a re-seed loop would keep
+        // issuing reads (its own reset re-triggers the mirror, which re-seeds
+        // again, …). No loop → the read count stays put.
+        await act(async () => {
+            await new Promise((resolve) => {
+                setTimeout(resolve, 500);
+            });
+        });
+
+        const laterCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        expect(laterCount).toBe(settledCount);
     });
 });

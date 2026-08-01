@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
@@ -62,6 +62,37 @@ const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter
 
 /** Translate a single-sort `orderBy` into the TanStack sorting state the grid renders. */
 const fromOrderBy = (orderBy: DataView["orderBy"]): SortingState => (orderBy === undefined ? [] : [{ desc: orderBy.direction === "desc", id: orderBy.column }]);
+
+/**
+ * A {@link FilterClause} reduced to a fixed-shape tuple. `JSON.stringify` of an
+ * object literal preserves THAT object's own key insertion order, which two
+ * structurally-equal clauses need not share (e.g. one parsed from a URL's JSON
+ * blob) — serializing a tuple instead means two equal clauses always produce
+ * the same string, regardless of where they came from.
+ */
+const filterClauseTuple = (clause: FilterClause): [string, string, unknown] => [clause.column, clause.operator, clause.value];
+
+/**
+ * Serialize the fields a data-browser view is keyed on (shard / search /
+ * filters / sort) into one comparable string. Used both for "what view is
+ * incoming right now" (from props) and "what view is this component currently
+ * emitting to the host" (from local state) so the render-time re-seed check
+ * below can tell an actual apply from the URL mirror's own echo. Built from
+ * fixed-shape tuples/arrays throughout (never a bare object), so two views
+ * that are equal in value always serialize identically.
+ */
+const serializeView = (
+    shard: string | undefined,
+    search: string | undefined,
+    filters: ReadonlyArray<FilterClause> | undefined,
+    orderBy: DataView["orderBy"],
+): string =>
+    JSON.stringify([
+        shard ?? "",
+        search ?? "",
+        (filters ?? []).map((clause) => filterClauseTuple(clause)),
+        orderBy === undefined ? null : [orderBy.column, orderBy.direction],
+    ]);
 
 /**
  * Hard ceiling on the number of bounded server `deleteRows`/`clearTable` calls
@@ -370,16 +401,67 @@ const useDataBrowser = ({
     const [editingCell, setEditingCell] = useState<null | { column: string; rowId: string }>(null);
     const [committing, setCommitting] = useState<boolean>(false);
 
-    // Tracks the table the local view has been (re-)seeded for. Seeded with the
-    // mount `tableParam` so the first render is a no-op (the `useState`
-    // initializers above already hydrated from the URL).
+    // Tracks the (table, view) identity the local view state has been (re-)seeded
+    // for. Seeded with the mount `tableParam`/incoming view so the first render is
+    // a no-op (the `useState` initializers above already hydrated from the URL).
+    // `seededViewKey` is a serialized snapshot of the fields a re-seed consumes
+    // (shard/search/filters/order — see `serializeView`), so a same-table apply (a
+    // saved query, or browser back/forward, that changes the view WITHOUT
+    // changing the table) is visible even though `tableParam` alone isn't.
     const [seededTableParameter, setSeededTableParameter] = useState<string | undefined>(tableParam);
+    const [seededViewKey, setSeededViewKey] = useState<string>(() => serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy));
+
+    // Bumped on every re-seed (table switch OR same-table view apply) to re-key
+    // both debounces below, so a re-seed's shard/search snap immediately instead
+    // of trailing the OLD value for up to 300–400ms (see `filterInput`/
+    // `shardInput` below).
+    const [seedEpoch, setSeedEpoch] = useState<number>(0);
+
+    // The view this component last EMITTED (or would emit) to the host — the
+    // exact payload the mirror effect far below sends. Read here, at the TOP of
+    // the function, to tell an incoming view apart from the mirror's own echo of
+    // it; updated by a plain effect (not `useMirroredRef`) because the value
+    // isn't computable until this render's `search`/`debouncedShard` exist,
+    // further down — see that effect for why.
+    const emittedViewKeyRef = useRef<string>(serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy));
+
     const isTableSwitch = tableParam !== seededTableParameter;
 
-    // Re-seed the per-table local view state whenever the open table changes — an
-    // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
-    // values come from the new URL (empty on a plain switch, the id on an FK-nav,
-    // the saved view on a deep link), so the table and its view never disagree.
+    // The incoming view this render's props describe — compared against BOTH
+    // `seededViewKey` (what the reset block below last locked in) and
+    // `emittedViewKeyRef.current` (what this component last mirrored to the
+    // host). Needing BOTH to differ is what makes the URL round trip a fixed
+    // point, without a second seeding mechanism:
+    //
+    //  - `seededViewKey` breaks the loop WITHIN one re-seed: React's "adjust
+    //    state while rendering" pattern discards this render and retries
+    //    synchronously once a setter below runs; on that retry `seededViewKey`
+    //    already equals the incoming key (it's plain state, so the update is
+    //    visible on the retry), so the condition goes false immediately.
+    //    Without it, `emittedViewKeyRef` — only updated by a COMMITTED render's
+    //    effect, which the retry hasn't reached yet — would still read stale,
+    //    and the retry would re-trigger itself forever.
+    //  - `emittedViewKeyRef` breaks the loop ACROSS renders: the user's own
+    //    typing debounces into `search`/`debouncedShard`, the mirror effect
+    //    below sends that to the host, and the host echoes it straight back as
+    //    this same render's `initialSearch`/`initialShardKey`. By the time that
+    //    echo arrives, the mirror's effect has already updated
+    //    `emittedViewKeyRef` to match it, so the echo reads as "already
+    //    current" rather than as a fresh apply.
+    //
+    // Gated on `!isTableSwitch` because a real table switch already
+    // unconditionally re-seeds below; this only covers the same-table case a
+    // switch doesn't reach.
+    const incomingViewKey = serializeView(initialShardKey, initialSearch, initialFilters, initialOrderBy);
+    const isSameTableViewApply = !isTableSwitch && incomingViewKey !== seededViewKey && incomingViewKey !== emittedViewKeyRef.current;
+    const isReseed = isTableSwitch || isSameTableViewApply;
+
+    // Re-seed the per-table local view state whenever the open table changes OR
+    // (same table) a saved-query apply / browser back-forward hands this render a
+    // genuinely new view — an in-app switch, an FK-nav, a deep link, a same-table
+    // apply, or browser back/forward. The new values come from the new URL (empty
+    // on a plain switch, the id on an FK-nav, the saved view on a deep link or
+    // apply), so the table + view and the local state never disagree.
     //
     // Done RENDER-TIME (the "adjusting state when a prop changes" pattern), not in
     // an effect: an effect — even a synchronous one, even one that skips the old
@@ -396,24 +478,27 @@ const useDataBrowser = ({
     // reconcile/"select the URL's table" step — opening the URL's table is
     // implicit. Reads `initialFilters`/`initialOrderBy`/`initialSearch`/
     // `initialShardKey` DIRECTLY (this render's props), not through a mirrored
-    // ref: unlike the effect this replaces, this block is gated by a plain
-    // condition re-evaluated every render (`tableParam !== seededTableParameter`)
-    // rather than an effect dependency array, so it can only ever fire on a real
-    // `tableParam` change. The URL-mirror round trip from the user's OWN typing
-    // (which changes `initialSearch` etc. without changing `tableParam`) can't
-    // retrigger it, so there is no staleness hazard here to route around with a
-    // ref the way the mirror effect below still has to.
-    if (isTableSwitch) {
+    // ref: this block is gated by a plain condition re-evaluated every render
+    // (`isReseed`, above) rather than an effect dependency array, so it can only
+    // ever fire when the table actually changed or the incoming view actually
+    // differs from both what was seeded AND what was just emitted. The URL-mirror
+    // round trip from the user's OWN typing (which changes `initialSearch` etc.
+    // without changing `tableParam`) is exactly the case `emittedViewKeyRef`
+    // exists to recognize as "no-op" rather than "apply" — see the comment on
+    // `isSameTableViewApply` above.
+    if (isReseed) {
         setSeededTableParameter(tableParam);
+        setSeededViewKey(incomingViewKey);
+        setSeedEpoch((epoch) => epoch + 1);
         setSorting(fromOrderBy(initialOrderBy));
         setFilter(initialSearch ?? "");
 
         const nextFilters = toEditableFilters(initialFilters ?? []);
 
         setFilters(nextFilters);
-        // Re-seed the shard from the new URL too, so a switch that also changes
-        // shard (a saved query / cross-shard deep link) points reads AND writes
-        // at the URL's shard instead of leaving the previous table's shard live.
+        // Re-seed the shard from the new URL too, so a switch/apply that also
+        // changes shard (a saved query / cross-shard deep link) points reads AND
+        // writes at the URL's shard instead of leaving the previous shard live.
         setShardKey(initialShardKey ?? "");
         clearFacets();
         stagedEdits.clear();
@@ -422,13 +507,14 @@ const useDataBrowser = ({
     }
 
     // The raw input each debounced mirror below reflects for THIS render: on a
-    // table switch, the new table's URL values directly — the `filter`/`shardKey`
-    // STATE above only catches up once React retries this render, and feeding
-    // `useDebounced` the stale state on THIS pass would bake the stale value into
-    // its own internal (persistent) `debounced` state via its `resetKey` snap (see
-    // `useDebounced`'s doc comment). Otherwise, the live state as usual.
-    const filterInput = isTableSwitch ? (initialSearch ?? "") : filter;
-    const shardInput = isTableSwitch ? (initialShardKey ?? "") : shardKey;
+    // re-seed (table switch OR same-table view apply), the new view's URL values
+    // directly — the `filter`/`shardKey` STATE above only catches up once React
+    // retries this render, and feeding `useDebounced` the stale state on THIS
+    // pass would bake the stale value into its own internal (persistent)
+    // `debounced` state via its `resetKey` snap (see `useDebounced`'s doc
+    // comment). Otherwise, the live state as usual.
+    const filterInput = isReseed ? (initialSearch ?? "") : filter;
+    const shardInput = isReseed ? (initialShardKey ?? "") : shardKey;
 
     // Search box value, debounced into a server-side `search` (filters across the
     // WHOLE table, not just the loaded page), which re-fetches from offset 0.
@@ -440,12 +526,25 @@ const useDataBrowser = ({
     // rows are on screen during the debounce window. The live `shardKey` is only the
     // input value + the share-link descriptor.
     //
-    // Both key their `resetKey` on `tableParam`: a table switch snaps them straight
-    // to the new table's values (via `filterInput`/`shardInput` above) with NO
-    // trailing debounce window, instead of continuing to serve the previous
-    // table's search predicate / shard for up to 300–400ms after the switch.
-    const search = useDebounced(filterInput.trim(), 300, tableParam);
-    const debouncedShard = useDebounced(shardInput.trim(), 400, tableParam);
+    // Both key their `resetKey` on `tableParam` + `seedEpoch`: a re-seed (table
+    // switch OR same-table apply) snaps them straight to the new view's values
+    // (via `filterInput`/`shardInput` above) with NO trailing debounce window,
+    // instead of continuing to serve the previous view's search predicate / shard
+    // for up to 300–400ms after the switch/apply.
+    const debounceResetKey = `${tableParam ?? ""}:${seedEpoch.toString()}`;
+    const search = useDebounced(filterInput.trim(), 300, debounceResetKey);
+    const debouncedShard = useDebounced(shardInput.trim(), 400, debounceResetKey);
+
+    // Mirror the emitted view — the exact payload the mirror effect far below
+    // sends to the host — into `emittedViewKeyRef` on every commit, so the
+    // render-time re-seed check above can compare against it next render. No dep
+    // array: track every commit, the same way `useMirroredRef` does (this can't
+    // just BE a `useMirroredRef` call up there, since its value depends on
+    // `search`/`debouncedShard`/`filters`/`sorting`, none of which exist yet at
+    // that point in the function).
+    useEffect(() => {
+        emittedViewKeyRef.current = serializeView(debouncedShard, search, toFilterClauses(filters), toOrderBy(sorting));
+    });
 
     // ── Reads via TanStack Query: a one-shot fetch plus a live WS push into the
     // cache (the same model as every other studio panel). The table list follows
@@ -598,14 +697,16 @@ const useDataBrowser = ({
     // search are debounced, so it tracks the displayed view; the table itself is
     // mirrored separately by `onSelectTable`.
     useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern.
-        if (selectedTable === null || onViewChangeRef.current === undefined || seededTableParameter !== tableParam) {
-            // The render-time reset above keeps `seededTableParameter` in lockstep with
-            // `tableParam` on every COMMITTED render, so this branch is a defensive
-            // invariant rather than a live gate now (there's no longer a committed
-            // render where a switch has landed but the reset hasn't) — kept so a
-            // future change to the reset can't silently reintroduce the stale-URL-
-            // write hazard the two-effect version had to route around.
+        /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern. */
+        if (selectedTable === null || onViewChangeRef.current === undefined || seededTableParameter !== tableParam || seededViewKey !== incomingViewKey) {
+            /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
+            // The render-time reset above keeps `seededTableParameter`/`seededViewKey`
+            // in lockstep with `tableParam`/the incoming view on every COMMITTED
+            // render, so this branch is a defensive invariant rather than a live gate
+            // now (there's no longer a committed render where a re-seed has landed but
+            // the reset hasn't) — kept so a future change to the reset can't silently
+            // reintroduce the stale-URL-write hazard the two-effect version had to
+            // route around.
             return;
         }
 
@@ -618,7 +719,7 @@ const useDataBrowser = ({
         // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the ref is a `useMirroredRef` handle — stable by construction; depending on `onViewChange` itself is what caused the navigate loop this pattern exists to avoid
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: the ref handle is stable, and depending on `onViewChange` is exactly the loop this avoids
-    }, [selectedTable, tableParam, seededTableParameter, filters, sorting, search, debouncedShard]);
+    }, [selectedTable, tableParam, seededTableParameter, seededViewKey, incomingViewKey, filters, sorting, search, debouncedShard]);
 
     const goToPage = (nextOffset: number): void => {
         if (selectedTable === null) {
