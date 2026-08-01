@@ -1604,3 +1604,123 @@ describe("dataBrowser — table switch reset (STUDIO-01)", () => {
         expect(deletes.every((call) => (call[2] as { shardKey?: string } | undefined)?.shardKey === "s2")).toBe(true);
     });
 });
+
+// Mirrors `MAX_BULK_DELETE_BATCHES` in `use-data-browser.tsx` (not exported —
+// this test drives the client-side loop-exhaustion path directly).
+const MAX_BULK_DELETE_BATCHES = 200;
+
+/**
+ * A `messages` table pre-loaded with more matching rows than
+ * `MAX_BULK_DELETE_BATCHES × bulkCap` can drain in one bulk-delete run, so the
+ * client's own batch loop runs out before the server ever reports
+ * `hasMore: false` — exercising the STUDIO-02 truncation path, distinct from
+ * `createFilterableClient`'s ordinary (server-completes) multi-batch drain.
+ */
+const createCapExhaustingClient = (rowCount: number, bulkCap: number): MockClientHooks => {
+    let rows = Array.from({ length: rowCount }, (_, index) => {
+        return { __id__: `m${index.toString()}`, status: "active", text: `row-${index.toString()}` };
+    });
+
+    return createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.deleteRows) {
+                const batch = rows.slice(0, bulkCap);
+                const doomed = new Set(batch.map((row) => row["__id__"]));
+
+                rows = rows.filter((row) => !doomed.has(row["__id__"]));
+
+                return { deleted: batch.length, hasMore: rows.length > 0 };
+            }
+
+            const { limit = 50, offset = 0, table } = args as { limit?: number; offset?: number; table: string };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            return { columns: ["__id__", "status", "text"], rows: rows.slice(offset, offset + limit), total: rows.length };
+        },
+    });
+};
+
+describe("dataBrowser — bulk delete cap exhaustion (STUDIO-02)", () => {
+    it("surfaces a truncation message when the client's batch cap is hit before the server reports done", async () => {
+        expect.assertions(3);
+
+        // 205 matching rows, capped at 1 row/call → needs 205 round-trips to
+        // finish; the client stops itself at 200.
+        const mock = createCapExhaustingClient(MAX_BULK_DELETE_BATCHES + 5, 1);
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length === 0) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        const errorElement = await screen.findByTestId("db-write-error");
+
+        expect(errorElement.textContent).toBe("Stopped after 200 batches — rows still match this delete. Run it again to remove the rest.");
+
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.deleteRows);
+
+        expect(bulk).toHaveLength(MAX_BULK_DELETE_BATCHES);
+
+        // 205 rows − 200×1 deleted = 5 left; the refetch this triggers shows them
+        // rather than a page that quietly still looks "done".
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 5) {
+                throw new Error("page not refetched yet");
+            }
+        });
+
+        expect(screen.getAllByTestId("db-row")).toHaveLength(5);
+    });
+
+    it("still reports clean success (no writeError) when the delete finishes under the cap", async () => {
+        expect.assertions(1);
+
+        const mock = createFilterableClient(1);
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length > 0) {
+                throw new Error("rows not deleted yet");
+            }
+        });
+
+        expect(screen.queryByTestId("db-write-error")).toBeNull();
+    });
+});

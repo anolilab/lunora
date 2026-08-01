@@ -264,6 +264,13 @@ const resolveStagedChanges = (page: TablePage | null, staged: StagedEditsModel["
 /** Whether a column is editable in place — every column but the meta ones. */
 const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
 
+/**
+ * Why `drainBulk` stopped: `"completed"` when the server reported no more
+ * matching rows; `"cap-hit"` when the client's own `MAX_BULK_DELETE_BATCHES`
+ * loop ran out first — matching rows may still remain.
+ */
+type BulkDrainOutcome = "cap-hit" | "completed";
+
 const useDataBrowser = ({
     initialFilters,
     initialOrderBy,
@@ -716,27 +723,46 @@ const useDataBrowser = ({
     // call; the loop is bounded by `MAX_BULK_DELETE_BATCHES` so it can never run
     // unbounded. Sequential by design: each call's deletes shrink the set the
     // next read sees, so the round-trips can't be parallelised.
-    const drainBulk = async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<void> => {
+    //
+    // Running out of batches before the server reports `hasMore: false` means
+    // rows still match the predicate — the loop just stopped asking. Falling
+    // through to the same `setOffset(0); pageQuery.refetch();` as a clean finish
+    // would look like success (the visible page empties or shrinks along with
+    // whatever DID get deleted) while leaving the operator with no signal that
+    // more rows are still out there, so this reports the outcome and surfaces a
+    // truncation notice on `writeError` instead of staying silent.
+    const drainBulk = async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<BulkDrainOutcome | undefined> => {
         if (selectedTable === null) {
-            return;
+            return undefined;
         }
 
         setWriteError(null);
 
         try {
+            let outcome: BulkDrainOutcome = "cap-hit";
+
             for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
                 // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
                 const result = (await client.query(ref, args, callOptions(debouncedShard))) as BulkDeleteResult;
 
                 if (!result.hasMore) {
+                    outcome = "completed";
                     break;
                 }
             }
 
             setOffset(0);
             pageQuery.refetch();
+
+            if (outcome === "cap-hit") {
+                setWriteError(`Stopped after ${MAX_BULK_DELETE_BATCHES.toString()} batches — rows still match this delete. Run it again to remove the rest.`);
+            }
+
+            return outcome;
         } catch (error) {
             setWriteError((error as Error).message);
+
+            return undefined;
         }
     };
 
