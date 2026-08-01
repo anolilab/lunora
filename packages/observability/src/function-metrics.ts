@@ -82,13 +82,19 @@ const FUNCTION_METRICS_BUCKET_RETENTION = 1440;
 /**
  * Maximum distinct function `path`s tracked in the accumulator table. Mirrors
  * `query-metrics.ts`'s `QUERY_METRICS_MAX_STATEMENTS` cap (and exists for the
- * same reason): the `path` is attacker-reachable — an unregistered/`FUNCTION_NOT_FOUND`
- * dispatch still records a row keyed by the caller-supplied `functionPath` — so
- * without a cap a flood of distinct random paths would grow `__lunora_metrics`
- * (and its bucket/scan satellites) without bound, eventually filling the shard's
- * SQLite store shared with the app's real data. A few thousand registered
- * functions is already far beyond any real app, so a new path past this cap is
- * dropped while already-tracked paths keep accumulating.
+ * same reason): the real bound is the app's own registered-function set plus
+ * deploy churn (a rename/removal leaves its old path's row in place until the
+ * cap evicts it) — a few thousand registered functions is already far beyond
+ * any real app. `shard-do.ts`'s dispatch handler explicitly does NOT record
+ * per-function metrics for an unregistered/`FUNCTION_NOT_FOUND` dispatch (see
+ * the guard next to its `FUNCTION_NOT_FOUND` check), so a caller cannot mint
+ * arbitrary `path`s here the way a raw caller-supplied SQL shape can in
+ * `query-metrics.ts`. Without a cap, deploy churn across the app's lifetime
+ * would still grow `__lunora_metrics` (and its bucket/scan satellites) without
+ * bound, eventually filling the shard's SQLite store shared with the app's
+ * real data. At the cap, the accumulator row with the oldest `last_called_at`
+ * is evicted (along with its bucket/scan satellite rows) to admit a
+ * genuinely new path; already-tracked paths keep accumulating past the cap.
  */
 const FUNCTION_METRICS_MAX_PATHS = 5000;
 

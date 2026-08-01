@@ -9,9 +9,10 @@
  * external collector.
  *
  * Modelled directly on `function-metrics.ts`'s `__lunora_metrics_buckets` (same
- * bucket width, same bounded-retention trim, same distinct-key cap for
- * attacker-reachable keys). One row per `(series, bucket)`, written with a single
- * PK-keyed `INSERT … ON CONFLICT … DO UPDATE` upsert plus a bounded `DELETE`.
+ * bucket width, same bounded-retention trim, same distinct-key cap with the same
+ * least-recently-updated eviction at capacity). One row per `(series, bucket)`,
+ * written with a single PK-keyed `INSERT … ON CONFLICT … DO UPDATE` upsert plus a
+ * bounded `DELETE`.
  *
  * Each bucket also carries an **exemplar**: a sample `traceId` of a measurement
  * folded into it, so the studio can jump from a point on the chart to a trace
@@ -42,7 +43,8 @@ const METRIC_HISTORY_BUCKET_RETENTION = 1440;
  * series per id — so without a cap a high-cardinality dimension would grow the
  * table without bound and eventually crowd the app's own data out of the shard's
  * SQLite. Mirrors `function-metrics.ts`'s `FUNCTION_METRICS_MAX_PATHS`: at the
- * cap a brand-new series is dropped while already-tracked ones keep accumulating.
+ * cap, the series with the oldest `MAX(last_ts)` is evicted to admit a
+ * genuinely new one; already-tracked series keep accumulating past the cap.
  */
 const METRIC_HISTORY_MAX_SERIES = 1000;
 
