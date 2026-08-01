@@ -357,6 +357,62 @@ describe("lunoraContainer lifecycle logging", () => {
         await expect(instance.onStart()).rejects.toThrow("has no port");
     });
 
+    it("aborts a readiness probe that never responds instead of hanging forever, and rejects at the deadline", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        // `AbortSignal.timeout`'s real delay runs on the wall clock and isn't
+        // reachable by vitest's fake timers, so stub it to hand back an
+        // already-aborted signal — this exercises the same "the attempt was
+        // aborted" path a real timeout would take, without a real 30s wait.
+        vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+            const controller = new AbortController();
+
+            controller.abort();
+
+            return controller.signal;
+        });
+        vi.useFakeTimers();
+
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return {
+                        // A container that accepted the TCP connection but never
+                        // answers: the returned promise only ever settles via the
+                        // abort signal, exactly like a real `fetch` would.
+                        fetch: (_url: string, init?: { signal?: AbortSignal }) => {
+                            return new Promise((_resolve, reject) => {
+                                if (init?.signal?.aborted) {
+                                    reject(new Error("aborted"));
+
+                                    return;
+                                }
+
+                                init?.signal?.addEventListener("abort", () => {
+                                    reject(new Error("aborted"));
+                                });
+                            });
+                        },
+                    };
+                },
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({ defaultPort: 8080, image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        try {
+            const assertion = expect(instance.onStart()).rejects.toThrow("did not return 200 within");
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await assertion;
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("arms a hard-timeout schedule on start, stamped with the bumped run generation", async () => {
         expect.assertions(2);
 

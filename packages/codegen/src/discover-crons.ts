@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import type { CronScheduleKind } from "@lunora/scheduler";
-import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "@lunora/scheduler";
+import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression, warnIfSecondsLeading } from "@lunora/scheduler";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
+import { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { AgentIR, CronJobIR, WorkflowIR } from "./ir";
 import { isCronSourceModule } from "./module-specifiers";
@@ -336,6 +336,81 @@ const resolveTarget = (
     return { functionPath: functionPathFromArgument(call, index, jobName) };
 };
 
+/** Strips the `@lunora/scheduler: ` prefix a re-thrown scheduler error carries, so codegen's own prefix isn't doubled. */
+const SCHEDULER_ERROR_PREFIX_PATTERN = /^@lunora\/scheduler:\s*/u;
+
+/**
+ * Resolve the raw `.cron(name, cronExpr, ...)` escape hatch: validate the
+ * literal expression is well-formed, then route an accepted-but-6-field
+ * (seconds-leading) expression through the same shared advisory the runtime
+ * `cronJobs()` builder emits — so a hand-authored 6-field `.cron(name,
+ * cronExpr, …)` warns at build time too, not only when the app runs.
+ */
+const rawCronExpression = (call: CallExpression, name: string): string => {
+    const expression = stringArgument(call, 1);
+
+    if (expression === undefined) {
+        throw diagnosticAt(call, `Cron job "${name}" must pass a string-literal cron expression to ".cron(...)".`, {
+            code: "CRON_EXPR_NOT_STATIC",
+            name: "LunoraError",
+            status: 500,
+        });
+    }
+
+    if (!isValidCronExpression(expression)) {
+        throw diagnosticAt(call, `Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields.`, {
+            code: "CRON_EXPR_INVALID",
+            name: "LunoraError",
+            status: 500,
+        });
+    }
+
+    warnIfSecondsLeading(expression, `cron expression for job "${name}"`);
+
+    return expression;
+};
+
+/**
+ * Resolve an ergonomic `.{daily,hourly,interval,monthly,weekly}(name, schedule,
+ * ...)` call into a compiled cron expression. `name` is passed through as
+ * `compileCronSchedule`'s `jobName` (already in scope here) so a rejection —
+ * e.g. `interval.seconds`, which `compileInterval` rejects outright — names the
+ * job, and any such rejection is re-thrown through `diagnosticAt`, like every
+ * sibling error in this module, so it also carries file:line instead of
+ * surfacing bare.
+ */
+const structuredCronExpression = (call: CallExpression, method: string, name: string): string => {
+    const scheduleArgument = call.getArguments()[1];
+
+    if (!scheduleArgument || !Node.isObjectLiteralExpression(scheduleArgument)) {
+        throw diagnosticAt(call, `Cron job "${name}" must pass an object-literal schedule to ".${method}(...)".`, {
+            code: "CRON_SCHEDULE_NOT_STATIC",
+            name: "LunoraError",
+            status: 500,
+        });
+    }
+
+    try {
+        return compileCronSchedule(method as CronScheduleKind, objectLiteralValue(scheduleArgument, name), name);
+    } catch (error) {
+        // `objectLiteralValue`/`literalValue` already throw a
+        // `CodegenDiagnosticError` (file:line included) for a non-static
+        // schedule value — let that pass through unchanged rather than
+        // double-wrapping it.
+        if (error instanceof CodegenDiagnosticError) {
+            throw error;
+        }
+
+        const detail = error instanceof Error ? error.message.replace(SCHEDULER_ERROR_PREFIX_PATTERN, "") : String(error);
+
+        throw diagnosticAt(call, detail, {
+            code: "CRON_SCHEDULE_INVALID",
+            name: "LunoraError",
+            status: 500,
+        });
+    }
+};
+
 /** Lift one `crons.method(name, schedule, fnRef, args?)` call into {@link CronJobIR}. */
 const cronFromCall = (
     call: CallExpression,
@@ -364,41 +439,7 @@ const cronFromCall = (
         });
     }
 
-    let cron: string;
-
-    if (method === "cron") {
-        const expression = stringArgument(call, 1);
-
-        if (expression === undefined) {
-            throw diagnosticAt(call, `Cron job "${name}" must pass a string-literal cron expression to ".cron(...)".`, {
-                code: "CRON_EXPR_NOT_STATIC",
-                name: "LunoraError",
-                status: 500,
-            });
-        }
-
-        if (!isValidCronExpression(expression)) {
-            throw diagnosticAt(call, `Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields.`, {
-                code: "CRON_EXPR_INVALID",
-                name: "LunoraError",
-                status: 500,
-            });
-        }
-
-        cron = expression;
-    } else {
-        const scheduleArgument = call.getArguments()[1];
-
-        if (!scheduleArgument || !Node.isObjectLiteralExpression(scheduleArgument)) {
-            throw diagnosticAt(call, `Cron job "${name}" must pass an object-literal schedule to ".${method}(...)".`, {
-                code: "CRON_SCHEDULE_NOT_STATIC",
-                name: "LunoraError",
-                status: 500,
-            });
-        }
-
-        cron = compileCronSchedule(method as CronScheduleKind, objectLiteralValue(scheduleArgument, name));
-    }
+    const cron = method === "cron" ? rawCronExpression(call, name) : structuredCronExpression(call, method, name);
 
     const target = resolveTarget(call, 2, name, workflowsByName, agentsByName);
     const argumentsNode = call.getArguments()[3];

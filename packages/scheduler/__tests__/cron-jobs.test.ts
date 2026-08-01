@@ -20,17 +20,27 @@ const fnRef = (ref: string): FunctionReference => {
 
 describe("cronJobs", () => {
     it("compiles .interval into a stepped cron expression for each unit", () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const crons = cronJobs();
 
         crons.interval("every-30-min", { minutes: 30 }, fnRef("presence.clear"));
         crons.interval("every-2-hours", { hours: 2 }, fnRef("jobs.sweep"));
-        crons.interval("every-15-seconds", { seconds: 15 }, fnRef("jobs.tick"));
 
         expect(crons.jobs()[0]?.cron).toBe("*/30 * * * *");
         expect(crons.jobs()[1]?.cron).toBe("0 */2 * * *");
-        expect(crons.jobs()[2]?.cron).toBe("*/15 * * * * *");
+    });
+
+    it("rejects interval.seconds — Cloudflare Cron Triggers have a one-minute floor", () => {
+        expect.assertions(2);
+
+        // A `{ seconds }` interval compiles to a 6-field, seconds-leading cron
+        // expression that Cloudflare's Cron Triggers don't understand — it would
+        // otherwise survive validation and codegen and only fail at
+        // `wrangler deploy`, naming neither the job nor the file.
+        expect(() => cronJobs().interval("tick", { seconds: 30 }, fnRef("jobs.tick"))).toThrow(/cron job "tick".*one-minute floor/u);
+        // The fastest cron-native cadence (once a minute) still compiles.
+        expect(cronJobs().interval("every-minute", { minutes: 1 }, fnRef("jobs.tick")).jobs()[0]?.cron).toBe("*/1 * * * *");
     });
 
     it("compiles .daily/.weekly/.monthly to fixed-UTC cron expressions", () => {
@@ -139,7 +149,7 @@ describe("cronJobs", () => {
     });
 
     it("rejects an interval value that does not evenly divide its period", () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const crons = cronJobs();
 
@@ -147,8 +157,8 @@ describe("cronJobs", () => {
         expect(() => crons.interval("m", { minutes: 45 }, fnRef("a.b"))).toThrow(/interval\.minutes/u);
         // 7 does not divide 24: cron "0 */7" fires at 00,07,14,21 then wraps to a 3h gap.
         expect(() => crons.interval("h", { hours: 7 }, fnRef("a.b"))).toThrow(/interval\.hours/u);
-        // 25 does not divide 60 seconds.
-        expect(() => crons.interval("s", { seconds: 25 }, fnRef("a.b"))).toThrow(/interval\.seconds/u);
+        // `interval.seconds` is rejected outright (one-minute floor) before divisibility is
+        // even checked — see "rejects interval.seconds" above.
     });
 
     it("validates numeric bounds on schedule fields", () => {

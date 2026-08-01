@@ -1,13 +1,6 @@
 {
-    "_comment": "Shared cron-schedule compile contract. Both @lunora/scheduler's compileCronSchedule (src/jobs.ts) and @lunora/codegen's mirror (src/cron-compile.ts) are asserted against this single matrix so a drift in either copy fails CI. Update this file ONLY when the cron expression format intentionally changes, and update both compilers together.",
+    "_comment": "Shared cron-schedule compile contract for @lunora/scheduler's compileCronSchedule (src/jobs.ts), which @lunora/codegen imports directly rather than mirroring. Update this file ONLY when the cron expression format intentionally changes. `interval.seconds` is deliberately absent — Cloudflare Cron Triggers have a one-minute floor, so compileCronSchedule rejects it outright (see the dedicated 'rejects interval.seconds' test above) instead of compiling to a 6-field expression.",
     "cases": [
-        {
-            "kind": "interval",
-            "schedule": {
-                "seconds": 30
-            },
-            "expected": "*/30 * * * * *"
-        },
         {
             "kind": "interval",
             "schedule": {
