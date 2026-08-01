@@ -106,10 +106,16 @@ const flushAsync = async (): Promise<void> => {
 describe("presence (Svelte)", () => {
     beforeEach(() => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
+        // `presence` gates its heartbeat/interval/listener/connection-context wiring
+        // on a browser `window` (SVELTE-01); the vitest env is `node` (no `window`),
+        // so define one for these client-path tests. The SSR test below removes it
+        // to exercise the guard, mirroring `@lunora/vue`'s `use-presence.test.ts`.
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
     });
 
     afterEach(() => {
         vi.useRealTimers();
+        Reflect.deleteProperty(globalThis, "window");
     });
 
     it("heartbeats on mount and again on each interval tick", async () => {
@@ -270,5 +276,49 @@ describe("presence (Svelte)", () => {
         first.teardown();
 
         expect(fake.currentConnectionContext()).toBeUndefined();
+    });
+
+    it("does not heartbeat, open an interval, subscribe, or acquire connection context during SSR (no window) (SVELTE-01)", async () => {
+        const fake = createPresenceFakeClient();
+
+        // Simulate the server render: no browser `window` (this package pairs
+        // with `@lunora/nuxt`'s server rendering, where a component's init runs
+        // inside `renderToString` with no `window`).
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        // Reading the store ("rendering" it) must not trigger a live WS
+        // subscription server-side either.
+        const stopPresent = handle.present.subscribe(() => undefined);
+
+        await flushAsync();
+
+        // No setup-time heartbeat write, no live subscription, no connection
+        // context acquired.
+        expect(fake.mutationCalls).toHaveLength(0);
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(fake.currentConnectionContext()).toBeUndefined();
+
+        // No leaked interval: advancing time fires no further heartbeats.
+        await vi.advanceTimersByTimeAsync(2000);
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(0);
+
+        // The store stays at its inert initial value.
+        expect(get(handle.present)).toBeUndefined();
+
+        stopPresent();
+
+        // Teardown itself must not throw with nothing to release/clear.
+        expect(() => {
+            handle.teardown();
+        }).not.toThrow();
     });
 });

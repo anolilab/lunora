@@ -86,28 +86,53 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         sendHeartbeat();
     };
 
-    sendHeartbeat();
-    const intervalHandle = setInterval(sendHeartbeat, intervalMs);
-
     const onVisible = (): void => {
         if (typeof document !== "undefined" && document.visibilityState === "visible") {
             sendHeartbeat();
         }
     };
 
-    if (typeof document !== "undefined") {
-        document.addEventListener("visibilitychange", onVisible);
+    let intervalHandle: ReturnType<typeof setInterval> | undefined;
+    let releaseConnectionContext: (() => void) | undefined;
+
+    // The heartbeat, interval, visibility listener, connection-context, and
+    // live subscription below are all client-only side effects. During SSR
+    // (this package pairs with `@lunora/nuxt`'s server rendering) a
+    // component's init runs inside `renderToString` with no `window`: firing a
+    // heartbeat there writes a ghost presence row under a throwaway session
+    // id, and the render scope never stops — so the auto-`onDestroy` below
+    // never fires and every server render would leak a live `setInterval`
+    // handle (SVELTE-01). Skip the whole client wiring server-side, mirroring
+    // `@lunora/vue`'s `use-presence.ts` guard; the returned store stays inert
+    // until the component hydrates.
+    const isBrowser = (globalThis as { window?: unknown }).window !== undefined;
+
+    if (isBrowser) {
+        sendHeartbeat();
+        intervalHandle = setInterval(sendHeartbeat, intervalMs);
+
+        if (typeof document !== "undefined") {
+            document.addEventListener("visibilitychange", onVisible);
+        }
+
+        // Register connection context so server can drop the row on socket disconnect.
+        // Use the refcounted acquire (not the last-writer-wins setter) so a second
+        // presence store on the same client/shard doesn't clobber this one's context
+        // when either tears down.
+        releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
     }
 
-    // Register connection context so server can drop the row on socket disconnect.
-    // Use the refcounted acquire (not the last-writer-wins setter) so a second
-    // presence store on the same client/shard doesn't clobber this one's context
-    // when either tears down.
-    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
-
-    // Subscribe to the live present-list; expose as a Readable store.
+    // Subscribe to the live present-list; expose as a Readable store. Also
+    // gated: `readable`'s start callback only runs once the store gets its
+    // first subscriber, but a server-rendered page that reads `$present`
+    // during `renderToString` WOULD trigger it — so guard it too rather than
+    // open a live WS subscription server-side.
     const present = readable<ReturnOf<L> | undefined>(undefined, (set) => {
-        const unsubscribe = client.subscribe(
+        if (!isBrowser) {
+            return undefined;
+        }
+
+        return client.subscribe(
             listPresent,
             { roomId } as ArgsOf<L>,
             (value) => {
@@ -115,8 +140,6 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
             },
             { shardKey },
         );
-
-        return unsubscribe;
     });
 
     let torndown = false;
@@ -131,13 +154,15 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 
         torndown = true;
 
-        clearInterval(intervalHandle);
+        if (intervalHandle !== undefined) {
+            clearInterval(intervalHandle);
+        }
 
         if (typeof document !== "undefined") {
             document.removeEventListener("visibilitychange", onVisible);
         }
 
-        releaseConnectionContext();
+        releaseConnectionContext?.();
     };
 
     // Auto-teardown on component destruction so a consumer who forgets

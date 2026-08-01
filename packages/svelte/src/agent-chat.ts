@@ -260,16 +260,30 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
         recomputeStreamingText();
     });
 
+    // The history/thread subscriptions below are client-only side effects: a
+    // component's init can run server-side (this package pairs with
+    // `@lunora/nuxt`'s server rendering) with no `window`, and opening a live
+    // WS subscription there would fire during `renderToString` with no
+    // corresponding `onDestroy` to close it — every server render would leak
+    // a subscription (SVELTE-01, mirrors the `presence.ts` guard). Skip them
+    // server-side; `messages`/`status` stay at their inert initial values
+    // until the component hydrates and `teardown` becomes a no-op.
+    const isBrowser = (globalThis as { window?: unknown }).window !== undefined;
+
     const historyArgs = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
-    const unsubscribeHistory = client.subscribe(api.agents.agentMessages, historyArgs, (value) => {
-        durable = value as unknown as ReadonlyArray<AgentChatMessage>;
-        recompute();
-        recomputeStreamingText();
-    });
-    const unsubscribeThread = client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
-        latestThread = value as AgentThreadRecord | undefined;
-        statusStore.set(latestThread?.status);
-    });
+    const unsubscribeHistory = isBrowser
+        ? client.subscribe(api.agents.agentMessages, historyArgs, (value) => {
+              durable = value as unknown as ReadonlyArray<AgentChatMessage>;
+              recompute();
+              recomputeStreamingText();
+          })
+        : (): void => undefined;
+    const unsubscribeThread = isBrowser
+        ? client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
+              latestThread = value as AgentThreadRecord | undefined;
+              statusStore.set(latestThread?.status);
+          })
+        : (): void => undefined;
 
     const send = async (input: string, arguments_?: Record<string, unknown>): Promise<void> => {
         const id = nextId;
