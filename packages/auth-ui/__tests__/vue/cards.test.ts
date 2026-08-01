@@ -17,8 +17,11 @@ import ResetPasswordOtpCard from "../../src/vue/ResetPasswordOtpCard.vue";
 import SignInCard from "../../src/vue/SignInCard.vue";
 import SignUpCard from "../../src/vue/SignUpCard.vue";
 import TwoFactorCard from "../../src/vue/TwoFactorCard.vue";
+import TwoFactorSetupCard from "../../src/vue/TwoFactorSetupCard.vue";
 import type { FakeClient } from "../fake-client";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
+
+const OTPAUTH_URI_PATTERN = /^otpauth:\/\//u;
 
 const renderInProvider = (component: unknown, fake: FakeClient, extra: Record<string, unknown> = {}, componentProps: Record<string, unknown> = {}): void => {
     render(
@@ -64,6 +67,25 @@ describe("vue SignInCard", () => {
 
         expect(screen.getByText("Email is required.")).toBeDefined();
         expect(fake.signInEmail).not.toHaveBeenCalled();
+    });
+});
+
+describe("vue TwoFactorSetupCard", () => {
+    it("shows the setup key, not the raw otpauth:// URI, once enabled", async () => {
+        expect.assertions(2);
+
+        // The setup key, not the URI: this package ships no QR encoder, so the
+        // URI has nothing to be scanned by, and most authenticators reject a
+        // pasted `otpauth://…` string anyway.
+        const fake = pluginClient();
+
+        renderInProvider(TwoFactorSetupCard, fake);
+
+        await fireEvent.update(screen.getByLabelText("Password"), "hunter2hunter2");
+        await fireEvent.submit(screen.getByRole("button", { name: "Enable 2FA" }));
+
+        await expect(screen.findByText("JBSWY3DPEHPK3PXP")).resolves.toBeDefined();
+        expect(screen.queryByText(OTPAUTH_URI_PATTERN)).toBeNull();
     });
 });
 

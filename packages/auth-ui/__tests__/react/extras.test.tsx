@@ -26,12 +26,19 @@ afterEach(() => {
 });
 
 describe("errorToaster", () => {
-    it("renders nothing until something fails", () => {
-        expect.assertions(1);
+    it("mounts the aria-live region before any toast arrives, empty", () => {
+        expect.assertions(2);
 
+        // Regression: the component returned `null` until the first toast
+        // existed, so that toast was pushed before assistive tech was
+        // watching the region — a live region only announces changes made
+        // AFTER it exists in the accessibility tree, so the first failure
+        // went unannounced.
         const { container } = render(<ErrorToaster />);
+        const toaster = container.querySelector(".lunora-auth-toaster");
 
-        expect(container.textContent).toBe("");
+        expect(toaster).not.toBeNull();
+        expect(toaster?.getAttribute("aria-live")).toBe("polite");
     });
 
     it("shows a pushed message and lets the user dismiss it", () => {

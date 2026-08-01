@@ -50,6 +50,30 @@ const installArgsFor = (manager: PackageManager): { args: string[]; command: str
 };
 
 /**
+ * The argv that adds `packages` as new dependencies with `manager` — the
+ * counterpart to {@link installArgsFor}, which reinstalls what package.json
+ * already declares rather than adding something new to it.
+ *
+ * npm's dev flag is `--save-dev` (its own docs lead with the long form); bun's
+ * is the lowercase `-d` (uppercase `-D` is not one of its recognized flags);
+ * pnpm and yarn both take `-D`.
+ */
+const addArgsFor = (manager: PackageManager, packages: ReadonlyArray<string>, options: { dev?: boolean } = {}): { args: string[]; command: string } => {
+    const dev = options.dev === true;
+
+    if (manager === "npm") {
+        return { args: ["install", ...(dev ? ["--save-dev"] : []), ...packages], command: "npm" };
+    }
+
+    if (manager === "bun") {
+        return { args: ["add", ...(dev ? ["-d"] : []), ...packages], command: "bun" };
+    }
+
+    // pnpm / yarn both accept `-D`.
+    return { args: ["add", ...(dev ? ["-D"] : []), ...packages], command: manager };
+};
+
+/**
  * Resolve the package manager to drive for the project rooted at (or above)
  * `startDirectory`. Every step is a real signal — Lunora never blindly assumes a
  * particular manager, and there is no hardcoded fallback:
@@ -147,4 +171,4 @@ const runScriptCommand = (manager: PackageManager, script: string): string => {
 };
 
 export type { PackageManager, PackageManagerProbe };
-export { detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand };
+export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand };

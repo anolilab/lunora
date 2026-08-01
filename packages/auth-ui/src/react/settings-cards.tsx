@@ -38,7 +38,7 @@ const ProfileCard = ({ defaultImage, defaultName }: ProfileCardProps = {}): Reac
     );
 
     return (
-        <AuthCard title={t.profile}>
+        <AuthCard headingLevel={2} title={t.profile}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
@@ -64,7 +64,7 @@ const ChangeEmailCard = (): ReactElement => {
     const [state, actions] = useController(createChangeEmailController);
 
     return (
-        <AuthCard title={t.changeEmail}>
+        <AuthCard headingLevel={2} title={t.changeEmail}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
@@ -91,7 +91,7 @@ const ChangePasswordCard = (): ReactElement => {
     const [state, actions] = useController(createChangePasswordController);
 
     return (
-        <AuthCard title={t.changePassword}>
+        <AuthCard headingLevel={2} title={t.changePassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
@@ -144,7 +144,7 @@ const DeleteAccountCard = (): ReactElement => {
     const [state, actions] = useController(createDeleteAccountController);
 
     return (
-        <AuthCard description={t.deleteAccountWarning} title={t.deleteAccount}>
+        <AuthCard description={t.deleteAccountWarning} headingLevel={2} title={t.deleteAccount}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
                 <Field
@@ -208,7 +208,7 @@ const SessionsCard = (): ReactElement => {
     })();
 
     return (
-        <AuthCard title={t.sessions}>
+        <AuthCard headingLevel={2} title={t.sessions}>
             <FormBanner error={state.error} />
             {body}
             <button
@@ -278,7 +278,7 @@ const PasskeysCard = (): ReactElement | null => {
     })();
 
     return (
-        <AuthCard title={t.passkeys}>
+        <AuthCard headingLevel={2} title={t.passkeys}>
             <FormBanner error={state.error} />
             {body}
             <form

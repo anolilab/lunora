@@ -44,6 +44,12 @@ describe(SignInCard, () => {
         expect(screen.getByLabelText("Password")).toBeDefined();
     });
 
+    it("still renders its title as an h1 — a standalone auth screen is the page's only heading", () => {
+        renderCard(stubClient());
+
+        expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in");
+    });
+
     it("submits credentials and navigates on success", async () => {
         const client = stubClient();
         const { nav } = renderCard(client);

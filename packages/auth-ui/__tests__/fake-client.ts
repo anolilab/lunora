@@ -39,7 +39,8 @@ const pluginClient = (): FakeClient => {
         organization: { list: vi.fn(() => ok([])) },
         passkey: { addPasskey: vi.fn(() => ok({})), listUserPasskeys: vi.fn(() => ok([])) },
         signIn: { ...bare.client.signIn, magicLink: vi.fn(() => ok({ status: true })) },
-        twoFactor: { enable: vi.fn(() => ok({ backupCodes: [], totpURI: "otpauth://x" })) },
+        // eslint-disable-next-line no-secrets/no-secrets -- a fake TOTP secret for the setup-card fixture, not a real credential
+        twoFactor: { enable: vi.fn(() => ok({ backupCodes: [], totpURI: "otpauth://totp/Acme:ada?secret=JBSWY3DPEHPK3PXP&issuer=Acme" })) },
     } as unknown as AuthClient;
 
     registerAuthClientPlugins(client, { emailOtp: true, magicLink: true, organization: true, passkey: true, twoFactor: true });

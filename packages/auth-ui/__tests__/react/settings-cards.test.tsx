@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient, AuthResponse } from "../../src/core";
 import { resetFlowWarnings } from "../../src/core";
-import { AuthUIProvider, SessionsCard, SignOutButton } from "../../src/react";
+import { AuthUIProvider, ChangePasswordCard, SessionsCard, SignOutButton } from "../../src/react";
 
 const ok = <T,>(data: T = null as T): Promise<AuthResponse<T>> => Promise.resolve({ data, error: null });
 
@@ -48,6 +48,31 @@ describe("sessionsCard", () => {
         await waitFor(() => {
             expect(client.revokeSession as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({ token: "tok-1" });
         });
+    });
+});
+
+describe("heading levels in a composed settings page", () => {
+    it("renders card titles as h2, not h1 — the host settings page owns the h1", async () => {
+        expect.assertions(2);
+
+        const client = stubClient();
+
+        renderWith(
+            client,
+            <>
+                <SessionsCard />
+                <ChangePasswordCard />
+            </>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText("Chrome on macOS")).toBeDefined();
+        });
+
+        // Regression: every `AuthCard` hardcoded `<h1>`, so a settings page
+        // stacking several cards broke the WCAG 1.3.1 heading outline a
+        // screen-reader user navigates by.
+        expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
     });
 });
 

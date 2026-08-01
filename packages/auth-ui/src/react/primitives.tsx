@@ -14,16 +14,26 @@ interface AuthCardProps {
     children: ReactNode;
     description?: string;
     footer?: ReactNode;
+
+    /**
+     * The title's heading level (default 1). A standalone auth screen is the
+     * page's only heading, so `h1` is right there — but a settings/organization
+     * page composes several cards under its own `h1`, and stacking six more
+     * `h1`s breaks the WCAG 1.3.1 heading outline a screen-reader user
+     * navigates by. Pass `2` (or `3`, nested deeper) from a composition.
+     */
+    headingLevel?: 1 | 2 | 3;
     title: string;
 }
 
-const AuthCard = ({ children, description, footer, title }: AuthCardProps): ReactElement => {
+const AuthCard = ({ children, description, footer, headingLevel = 1, title }: AuthCardProps): ReactElement => {
     const style = useThemeStyle();
+    const Heading = `h${String(headingLevel)}` as "h1" | "h2" | "h3";
 
     return (
         <section className="lunora-auth-card" style={style}>
             <header className="lunora-auth-card__header">
-                <h1 className="lunora-auth-card__title">{title}</h1>
+                <Heading className="lunora-auth-card__title">{title}</Heading>
                 {description === undefined ? null : <p className="lunora-auth-card__description">{description}</p>}
             </header>
             <div className="lunora-auth-card__body">{children}</div>

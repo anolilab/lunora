@@ -1,7 +1,11 @@
-import { DiagnosticCategory, Project } from "ts-morph";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { dialectFromUrl } from "../src/commands/introspect/connect";
+import { DiagnosticCategory, Project } from "ts-morph";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { dialectFromUrl, loadDriver } from "../src/commands/introspect/connect";
 import { emitIntrospection, identifierFor, indexedColumns } from "../src/commands/introspect/emit";
 import type { IntrospectedDatabase, IntrospectedTable } from "../src/commands/introspect/model";
 import { validatorForColumn } from "../src/commands/introspect/model";
@@ -483,4 +487,30 @@ describe("dialectFromUrl", () => {
 
         expect(() => dialectFromUrl("mongodb://localhost/shop")).toThrow(/Unrecognised database URL scheme/);
     });
+});
+
+describe("loadDriver", () => {
+    let projectRoot: string;
+
+    afterEach(() => {
+        rmSync(projectRoot, { force: true, recursive: true });
+    });
+
+    it("names the detected manager's own add-dependency command, not a hardcoded pnpm", () => {
+        expect.assertions(1);
+
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-introspect-driver-"));
+        // `packageManager` is the strongest of `detectPackageManager`'s
+        // signals — deterministic regardless of what happens to be on PATH.
+        writeFileSync(join(projectRoot, "package.json"), JSON.stringify({ packageManager: "yarn@4.0.0" }), "utf8");
+
+        expect(() => loadDriver("this-module-does-not-exist", "pg", projectRoot)).toThrow("yarn add -D pg");
+    });
+
+    // The "detection itself fails" branch (falls back to the
+    // `<your-package-manager> add -D …` placeholder) isn't reachable from this
+    // suite: `detectPackageManager`'s last resort is "first manager installed
+    // on PATH", and this repo's own sandbox always has pnpm on PATH — see
+    // `detect-package-manager.test.ts`'s equivalent note. Covered at the
+    // `formatUpdateNotice` unit level instead (`update-notifier.test.ts`).
 });

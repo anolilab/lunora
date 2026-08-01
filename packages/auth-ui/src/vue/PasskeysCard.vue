@@ -38,7 +38,7 @@ const onRemove = (id?: string): void => {
 </script>
 
 <template>
-    <AuthCard v-if="enabled" :title="t.passkeys">
+    <AuthCard v-if="enabled" :headingLevel="2" :title="t.passkeys">
         <FormBanner :error="state.error" />
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>
         <p v-else-if="state.items.length === 0" class="lunora-auth-card__description">{{ t.passkeysEmpty }}</p>

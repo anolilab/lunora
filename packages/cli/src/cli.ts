@@ -39,6 +39,7 @@ import { runCommand } from "./commands/run";
 import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
 import { viewCommand } from "./commands/view";
+import { detectPackageManager } from "./util/detect-package-manager";
 import { createLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";
 import { closestMatch } from "./util/suggest";
@@ -344,7 +345,17 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     // Best-effort "update available" notice. A no-op for the unpublished dev
     // version (`0.0.0`), in CI, when stdout isn't a TTY, or when opted out — so
     // it never fires in tests or dev, and never blocks the resolved exit code.
-    await maybeNotifyUpdate({ current: VERSION, logger: createLogger() });
+    // The manager detection is itself best-effort — undetectable just means the
+    // notice falls back to naming no specific install command.
+    let manager: ReturnType<typeof detectPackageManager> | undefined;
+
+    try {
+        manager = detectPackageManager(process.cwd());
+    } catch {
+        manager = undefined;
+    }
+
+    await maybeNotifyUpdate({ current: VERSION, logger: createLogger(), manager });
 
     return exitCode.value;
 };

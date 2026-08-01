@@ -11,7 +11,7 @@
     const { actions, state: form } = controllerStore(createChangeEmailController);
 </script>
 
-<AuthCard title={t.changeEmail}>
+<AuthCard headingLevel={2} title={t.changeEmail}>
     <form
         class="lunora-auth-form"
         novalidate

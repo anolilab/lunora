@@ -2069,7 +2069,10 @@ export default schema;
             const message = thrown instanceof Error ? thrown.message : String(thrown);
 
             expect(message).toContain("@lunora/d1");
-            expect(message).toContain("pnpm add @lunora/d1");
+            // No hardcoded `pnpm add` — codegen has no package-manager
+            // knowledge, and a pnpm-only command is wrong for the other
+            // three managers' projects.
+            expect(message).not.toContain("pnpm add");
             // Nothing was emitted, so the failure cannot be mistaken for a
             // type error in output the user did not write.
             expect(existsSync(join(workdir, "lunora", "_generated", "app.ts"))).toBe(false);

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
+import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
@@ -108,6 +109,23 @@ const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): vo
     process.stdout.write(`${JSON.stringify({ items: planSnapshot }, undefined, 2)}\n`);
 };
 
+/**
+ * The copy-pastable "install what was just added" command for `cwd`'s project.
+ * `deps` are already written into package.json by `reconcileItems` — this is a
+ * plain re-install, not an add, so it goes through `installArgsFor`, not
+ * `addArgsFor`. Falls back to a manager-neutral placeholder when
+ * `detectPackageManager` itself can't resolve one.
+ */
+const installHint = (cwd: string): string => {
+    try {
+        const { args, command } = installArgsFor(detectPackageManager(cwd));
+
+        return `${command} ${args.join(" ")}`;
+    } catch {
+        return "<your-package-manager> install";
+    }
+};
+
 /** Print the post-reconcile report: summary, next steps, and per-item `docs` guidance. */
 const reportAddResult = (
     items: ReadonlyArray<{ manifest: RegistryManifest }>,
@@ -115,13 +133,14 @@ const reportAddResult = (
     written: number,
     skipped: number,
     logger: Logger,
+    cwd: string,
 ): void => {
     logger.success(`add complete: ${String(written)} written, ${String(skipped)} skipped`);
     logger.info("next steps:");
     logger.info("  lunora codegen   # regenerate _generated/ so the new tables/functions appear");
 
     if (deps.length > 0) {
-        logger.info("  pnpm install     # install newly-added dependencies");
+        logger.info(`  ${installHint(cwd)}  # install newly-added dependencies`);
     }
 
     for (const { manifest } of items) {
@@ -244,7 +263,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
         // --- Reconcile ---
         const { bindings, deps, skipped, written } = reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
 
-        reportAddResult(items, deps, written.length, skipped.length, options.logger);
+        reportAddResult(items, deps, written.length, skipped.length, options.logger, cwd);
 
         return { bindings, code: 0, deps, skipped, written };
     } catch (error) {

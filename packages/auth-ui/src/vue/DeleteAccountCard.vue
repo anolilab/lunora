@@ -12,7 +12,7 @@ const { actions, state } = useController(createDeleteAccountController);
 </script>
 
 <template>
-    <AuthCard :title="t.deleteAccount" :description="t.deleteAccountWarning">
+    <AuthCard :title="t.deleteAccount" :description="t.deleteAccountWarning" :headingLevel="2">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
             <Field

@@ -2,7 +2,7 @@
 import { computed } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { createTwoFactorSetupController } from "../core/two-factor-setup";
+import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
@@ -16,6 +16,7 @@ const t = context.value.localization;
 // would stay frozen on the pre-discovery answer. See `provider.ts`.
 const enabled = computed(() => isFlowEnabled(context.value, "twoFactor", "TwoFactorSetupCard"));
 const { actions, state } = useController(createTwoFactorSetupController);
+const secret = computed(() => totpSecret(state.value.totpUri));
 </script>
 
 <template>
@@ -35,7 +36,16 @@ const { actions, state } = useController(createTwoFactorSetupController);
     </AuthCard>
     <AuthCard v-else-if="enabled && state.step === 'verify'" :title="t.twoFactorSetup" :description="t.twoFactorScan">
         <FormBanner :error="state.error" />
-        <code v-if="state.totpUri !== undefined" class="lunora-auth-code">{{ state.totpUri }}</code>
+        <!--
+            The setup key, not the raw `otpauth://…` URI: this package ships no
+            QR encoder, so there is nothing to scan, and most authenticators
+            reject a pasted `otpauth://…` string anyway — the key is the only
+            path that reliably works.
+        -->
+        <template v-if="secret !== undefined">
+            <p class="lunora-auth-note">{{ t.twoFactorSecret }}</p>
+            <code class="lunora-auth-code">{{ secret }}</code>
+        </template>
         <template v-if="state.backupCodes.length > 0">
             <p class="lunora-auth-card__description">{{ t.backupCodes }}</p>
             <ul class="lunora-auth-codes">

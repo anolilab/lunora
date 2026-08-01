@@ -25,9 +25,17 @@ const onDismiss = (id: number): void => {
 </script>
 
 <template>
-    <!-- `polite`, not `assertive`: these are failures the user can retry, not
-    something that should interrupt a screen reader mid-sentence. -->
-    <div v-if="toasts.length > 0" class="lunora-auth-toaster" aria-live="polite">
+    <!--
+        `polite`, not `assertive`: these are failures the user can retry, not
+        something that should interrupt a screen reader mid-sentence.
+
+        Mounted unconditionally — including with no toasts yet. A live region
+        only announces changes made AFTER it exists in the accessibility tree;
+        gating the whole `<div>` on `toasts.length > 0` meant the very first
+        toast landed before assistive tech was watching the region, so it went
+        unannounced.
+    -->
+    <div class="lunora-auth-toaster" aria-live="polite">
         <div v-for="toast in toasts" :key="toast.id" class="lunora-auth-toast" role="status">
             <span class="lunora-auth-toast__message">{{ toast.message }}</span>
             <button class="lunora-auth-toast__dismiss" type="button" aria-label="Dismiss" @click="onDismiss(toast.id)">×</button>
