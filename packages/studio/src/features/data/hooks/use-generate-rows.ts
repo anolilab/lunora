@@ -37,6 +37,23 @@ const extractId = (row: Record<string, unknown>): string => {
  * Export/Import panel uses. All state is local to this hook; the data browser
  * refresh is the caller's responsibility after a successful insert.
  */
+
+/**
+ * Outcome of one `insertBatch` call. A bare `string | undefined` (the original
+ * `writeRow`-loop contract) can't distinguish "every row inserted" from "every
+ * row skipped as an id conflict" — both have no `error` — so the caller needs
+ * the real `inserted`/`conflicts` counts to report honestly instead of assuming
+ * the requested row count is what actually landed.
+ */
+interface InsertBatchOutcome {
+    /** Rows skipped because their `_id` already existed on the shard (e.g. a re-click with the same seed regenerating the same planned ids). */
+    conflicts: number;
+    /** Set when the batch had at least one row-level error, naming the first failing row. `undefined` when there were none — a conflict-only result still counts as success. */
+    error: string | undefined;
+    /** Rows actually inserted (never assume this equals the requested count — conflicts and errors both reduce it). */
+    inserted: number;
+}
+
 interface UseGenerateRowsModel {
     /** Close the dialog and reset state. */
     closeDialog: () => void;
@@ -49,11 +66,11 @@ interface UseGenerateRowsModel {
 
     /**
      * Insert a batch of pre-generated row documents in ONE `importShard` call.
-     * Returns `undefined` on full success (no row-level errors — conflicts alone
-     * still count as success, see `composeImportError`) or an error string
-     * naming the first failing row on failure.
+     * The returned {@link InsertBatchOutcome} carries the REAL inserted/conflict
+     * counts — never assume every requested row landed just because `error` is
+     * `undefined` (see `composeInsertOutcome`).
      */
-    insertBatch: (rows: ReadonlyArray<Record<string, unknown>>, onDone: () => void) => Promise<string | undefined>;
+    insertBatch: (rows: ReadonlyArray<Record<string, unknown>>, onDone: () => void) => Promise<InsertBatchOutcome>;
     /** True while fetching column meta / FK pools or inserting rows. */
     loading: boolean;
     /** Whether the dialog is currently open. */
@@ -67,28 +84,32 @@ interface UseGenerateRowsModel {
 }
 
 /**
- * Compose an `importShard` result into the dialog's single error string. Only a
- * non-empty `errors` array is a failure — a conflict-only result (every row's
+ * Compose an `importShard` result into an {@link InsertBatchOutcome}. Only a
+ * non-empty `errors` array sets `error` — a conflict-only result (every row's
  * `_id` collided with an existing one, e.g. a re-click with the same seed)
- * counts as success, matching the Export/Import panel's semantics. The first
- * error names its row (by 1-based `line`, which `importShard` treats as the
- * row's position in `rows` since generated rows have no file lines) and table;
- * a trailing count covers the rest so a big batch doesn't dump every failure.
+ * counts as success, matching the Export/Import panel's semantics, but
+ * `inserted`/`conflicts` are always the real counts so the caller can tell
+ * "200 inserted" apart from "0 inserted, 200 conflicts" instead of assuming
+ * the requested row count is what landed. The error string names the first
+ * failing row (by 1-based `line`, which `importShard` treats as the row's
+ * position in `rows` since generated rows have no file lines) and table; a
+ * trailing count covers the rest so a big batch doesn't dump every failure.
  */
-const composeImportError = (result: ImportShardResult): string | undefined => {
+const composeInsertOutcome = (result: ImportShardResult): InsertBatchOutcome => {
+    const insertedTotal = Object.values(result.inserted).reduce((sum, count) => sum + count, 0);
     const [firstError] = result.errors;
 
     if (firstError === undefined) {
-        return undefined;
+        return { conflicts: result.conflicts, error: undefined, inserted: insertedTotal };
     }
 
-    const insertedTotal = Object.values(result.inserted).reduce((sum, count) => sum + count, 0);
     const remaining = result.errors.length - 1;
     const attempted = insertedTotal + result.conflicts + result.errors.length;
     const errorWord = remaining === 1 ? "error" : "errors";
     const suffix = remaining > 0 ? ` (+${remaining.toString()} more ${errorWord})` : "";
+    const error = `Inserted ${insertedTotal.toString()} of ${attempted.toString()} rows — row ${firstError.line.toString()} (${firstError.table}): ${firstError.message}${suffix}`;
 
-    return `Inserted ${insertedTotal.toString()} of ${attempted.toString()} rows — row ${firstError.line.toString()} (${firstError.table}): ${firstError.message}${suffix}`;
+    return { conflicts: result.conflicts, error, inserted: insertedTotal };
 };
 
 /**
@@ -180,9 +201,9 @@ const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
         setError(undefined);
     };
 
-    const insertBatch = async (rows: ReadonlyArray<Record<string, unknown>>, onDone: () => void): Promise<string | undefined> => {
+    const insertBatch = async (rows: ReadonlyArray<Record<string, unknown>>, onDone: () => void): Promise<InsertBatchOutcome> => {
         if (table === undefined || shardKey === undefined) {
-            return "No table selected.";
+            return { conflicts: 0, error: "No table selected.", inserted: 0 };
         }
 
         try {
@@ -196,18 +217,18 @@ const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
                 callOptions(shardKey),
             )) as ImportShardResult;
 
-            const batchError = composeImportError(result);
+            const outcome = composeInsertOutcome(result);
 
-            if (batchError !== undefined) {
-                return batchError;
+            if (outcome.error !== undefined) {
+                return outcome;
             }
 
             onDone();
             onRefresh();
 
-            return undefined;
+            return outcome;
         } catch (error_) {
-            return (error_ as Error).message;
+            return { conflicts: 0, error: (error_ as Error).message, inserted: 0 };
         }
     };
 
@@ -215,4 +236,4 @@ const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
 };
 
 export { useGenerateRows };
-export type { UseGenerateRowsModel };
+export type { InsertBatchOutcome, UseGenerateRowsModel };

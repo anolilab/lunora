@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GenerateRowsDialog } from "../../../src/features/data/generate-rows-dialog";
+import type { InsertBatchOutcome } from "../../../src/features/data/hooks/use-generate-rows";
 import { useGenerateRows } from "../../../src/features/data/hooks/use-generate-rows";
 import type { ColumnMeta } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -50,7 +51,10 @@ const stubSeedFetch = (rows: ReadonlyArray<Record<string, unknown>> = [{ title: 
 
 // ── Render helpers ───────────────────────────────────────────────────────────
 
-const makeInsertRows = (returnValue?: string) => vi.fn<(_rows: ReadonlyArray<Record<string, unknown>>) => Promise<string | undefined>>(async () => returnValue);
+const makeInsertRows = (error?: string) =>
+    vi.fn<(_rows: ReadonlyArray<Record<string, unknown>>) => Promise<InsertBatchOutcome>>(async (rows) => {
+        return { conflicts: 0, error, inserted: error === undefined ? rows.length : 0 };
+    });
 
 const renderDialog = ({ columns = SIMPLE_COLUMNS, fkPools = {}, onClose = vi.fn<() => void>(), onInsertRows = makeInsertRows(), table = "posts" } = {}) =>
     render(<GenerateRowsDialog columns={columns} fkPools={fkPools} onClose={onClose} onInsertRows={onInsertRows} table={table} />);
@@ -146,6 +150,29 @@ describe("generateRowsDialog", () => {
         });
     });
 
+    it("reports the REAL inserted count when every row conflicted, not the requested count (STUDIO-292 M5)", async () => {
+        expect.hasAssertions();
+
+        // Every generated row's planned `_id` collided with an existing row —
+        // `onInsertRows` (the hook's `insertBatch`) treats this as `error ===
+        // undefined` (still success), but NOTHING was actually written.
+        const onInsertRows = vi.fn<(_rows: ReadonlyArray<Record<string, unknown>>) => Promise<InsertBatchOutcome>>(async (rows) => {
+            return { conflicts: rows.length, error: undefined, inserted: 0 };
+        });
+
+        renderDialog({ onInsertRows });
+
+        fireEvent.click(screen.getByTestId("gen-rows-generate"));
+
+        const success = await screen.findByTestId("gen-rows-success");
+
+        // Must never read as if the row landed — that's the exact "reports
+        // success when nothing was written" bug.
+        expect(success.textContent).not.toContain("Inserted 1 rows successfully");
+        expect(success.textContent).toContain("Inserted 0 of 1 rows");
+        expect(success.textContent).toContain("1 skipped as id conflicts");
+    });
+
     it("shows error message when onInsertRows returns an error string", async () => {
         expect.hasAssertions();
 
@@ -203,11 +230,11 @@ describe("generateRowsDialog", () => {
 
         // Use a slow insert to observe the disabled state.
         let settle!: () => void;
-        const onInsertRows = vi.fn<(_rows: ReadonlyArray<Record<string, unknown>>) => Promise<string | undefined>>(
-            () =>
-                new Promise<undefined>((resolve) => {
+        const onInsertRows = vi.fn<(_rows: ReadonlyArray<Record<string, unknown>>) => Promise<InsertBatchOutcome>>(
+            (rows) =>
+                new Promise<InsertBatchOutcome>((resolve) => {
                     settle = () => {
-                        resolve(undefined);
+                        resolve({ conflicts: 0, error: undefined, inserted: rows.length });
                     };
                 }),
         );
@@ -282,13 +309,13 @@ describe("useGenerateRows — insertBatch routes through the bulk importShard RP
         const rows = Array.from({ length: 200 }, (_, index) => {
             return { _id: `id-${index.toString()}`, title: `row ${index.toString()}` };
         });
-        let outcome: string | undefined;
+        let outcome: InsertBatchOutcome | undefined;
 
         await act(async () => {
             outcome = await result.current.insertBatch(rows, vi.fn());
         });
 
-        expect(outcome).toBeUndefined();
+        expect(outcome?.error).toBeUndefined();
 
         const importCalls = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.importShard);
         const writeRowCalls = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow);
@@ -316,21 +343,25 @@ describe("useGenerateRows — insertBatch routes through the bulk importShard RP
 
         await openAndSettle(result, "posts");
 
-        let outcome: string | undefined;
+        let outcome: InsertBatchOutcome | undefined;
 
         await act(async () => {
             outcome = await result.current.insertBatch([{ title: "a" }, { title: "b" }, { title: "c" }], vi.fn());
         });
 
-        expect(outcome).toContain("row 3 (posts): bad title");
+        expect(outcome?.error).toContain("row 3 (posts): bad title");
     });
 
-    it("treats conflicts alone (no errors) as success", async () => {
-        expect.assertions(1);
+    it("treats conflicts alone (no errors) as success, but reports the REAL inserted/conflicts counts — not the requested row count (STUDIO-292 M5)", async () => {
+        expect.assertions(3);
 
+        // Every row's planned `_id` collides with an existing one (a re-click
+        // with an unchanged seed) — nothing actually lands, but `errors` is
+        // empty, so this must still resolve as "success" per the Export/Import
+        // panel's semantics.
         const mock = createGenerateRowsClient((reference) => {
             if (reference === ADMIN_FUNCTIONS.importShard) {
-                return { conflicts: 2, errors: [], inserted: { posts: 0 } };
+                return { conflicts: 2, errors: [], inserted: {} };
             }
 
             return undefined;
@@ -340,13 +371,49 @@ describe("useGenerateRows — insertBatch routes through the bulk importShard RP
 
         await openAndSettle(result, "posts");
 
-        let outcome: string | undefined;
+        let outcome: InsertBatchOutcome | undefined;
 
         await act(async () => {
             outcome = await result.current.insertBatch([{ title: "a" }, { title: "b" }], vi.fn());
         });
 
-        expect(outcome).toBeUndefined();
+        expect(outcome?.error).toBeUndefined();
+
+        // The whole point: a conflict-only batch must report ZERO inserted, not
+        // the two requested rows — "success" and "everything landed" are NOT
+        // the same claim.
+        expect(outcome?.inserted).toBe(0);
+        expect(outcome?.conflicts).toBe(2);
+    });
+
+    it("reports the real inserted count alongside conflicts when a batch partially collides", async () => {
+        expect.assertions(2);
+
+        const mock = createGenerateRowsClient((reference) => {
+            if (reference === ADMIN_FUNCTIONS.importShard) {
+                return { conflicts: 3, errors: [], inserted: { posts: 197 } };
+            }
+
+            return undefined;
+        });
+
+        const { result } = renderHook(() => useGenerateRows(vi.fn()), { wrapper: wrapWithClient(mock) });
+
+        await openAndSettle(result, "posts");
+
+        let outcome: InsertBatchOutcome | undefined;
+
+        await act(async () => {
+            outcome = await result.current.insertBatch(
+                Array.from({ length: 200 }, () => {
+                    return { title: "row" };
+                }),
+                vi.fn(),
+            );
+        });
+
+        expect(outcome?.inserted).toBe(197);
+        expect(outcome?.conflicts).toBe(3);
     });
 
     it("still returns the error message when the transport throws (today's catch path)", async () => {
@@ -364,12 +431,12 @@ describe("useGenerateRows — insertBatch routes through the bulk importShard RP
 
         await openAndSettle(result, "posts");
 
-        let outcome: string | undefined;
+        let outcome: InsertBatchOutcome | undefined;
 
         await act(async () => {
             outcome = await result.current.insertBatch([{ title: "a" }], vi.fn());
         });
 
-        expect(outcome).toBe("network down");
+        expect(outcome?.error).toBe("network down");
     });
 });
