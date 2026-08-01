@@ -218,7 +218,7 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
     // distinct-series cap scan and the retention trim both run only when a
     // *genuinely new* bucket appears (≈ once per series per minute).
     const cache = knownBucketsFor(sql);
-    const cacheKey = `${key} ${bucket.toString()}`;
+    const cacheKey = `${key}\u0000${bucket.toString()}`;
 
     const bucketExists =
         cache.has(cacheKey) ||
