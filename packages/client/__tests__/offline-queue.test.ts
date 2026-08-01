@@ -215,6 +215,30 @@ describe("offlineQueue — persistence", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["a", "b", "c"]);
     });
 
+    it("hydrate omits the shard key of a restored mutation that eviction dropped", async () => {
+        expect.assertions(2);
+
+        const persistence = createInMemoryPersistence();
+
+        // Two shards, one restored mutation each — "room-1" is the older
+        // (oldest-first) record, so it's the one `evictOverflow` drops once
+        // `maxItems: 1` caps the restored set down to a single surviving entry.
+        await persistence.append({ args: {}, functionPath: "a", id: "1", shardKey: "room-1" });
+        await persistence.append({ args: {}, functionPath: "b", id: "2", shardKey: "room-2" });
+
+        const queue = new OfflineQueue({ maxItems: 1 }, { persistence });
+        const shardKeys = await queue.hydrate();
+
+        // Without a shard key for "room-1" left in the queue, a caller that
+        // called `ensureSocket()` for every returned shard key would open a
+        // socket for a shard with nothing left to flush.
+        expect(shardKeys).toEqual(["room-2"]);
+
+        const drained = queue.drain();
+
+        expect(drained.map((d) => d.functionPath)).toEqual(["b"]);
+    });
+
     it("hydrate splices restored prior-session writes ahead of a mutation enqueued during boot-time hydration (CLIENT-03)", async () => {
         expect.assertions(1);
 

@@ -203,7 +203,6 @@ class OfflineQueue {
             throw error;
         }
 
-        const shardKeys = new Set<string | undefined>();
         const restored: QueuedMutation[] = [];
 
         for (const mutation of persisted) {
@@ -230,7 +229,6 @@ class OfflineQueue {
                 resolve: () => undefined,
                 shardKey: mutation.shardKey,
             });
-            shardKeys.add(mutation.shardKey);
         }
 
         this.items.unshift(...restored);
@@ -244,6 +242,20 @@ class OfflineQueue {
         this.evictOverflow();
 
         this.notifySize();
+
+        // Compute shard keys AFTER eviction, from whichever restored entries
+        // actually survived: `evictOverflow` drops from the front of `items`
+        // (the oldest restored entries first), so a shard key gathered before
+        // eviction can point at a mutation that no longer exists — the caller
+        // would then call `ensureSocket()` for a shard with nothing queued.
+        const survivingItems = new Set(this.items);
+        const shardKeys = new Set<string | undefined>();
+
+        for (const mutation of restored) {
+            if (survivingItems.has(mutation)) {
+                shardKeys.add(mutation.shardKey);
+            }
+        }
 
         return [...shardKeys];
     }
