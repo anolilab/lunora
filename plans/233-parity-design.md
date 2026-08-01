@@ -24,22 +24,38 @@ see §2.
 
 ## 1. What shipped
 
+Both tests read their export lists through one shared helper,
+`packages/client/__tests__/lib/named-exports.ts`'s `namedValueExportsOf`,
+built on `ts-morph`'s `SourceFile#getExportedDeclarations()` rather than a
+hand-rolled `export { ... }` block regex. The two tests used to each carry
+their own copy of that regex (plus an "as alias" regex and a manual
+block-scan loop); both were blind to `export * from "./x"` re-exports,
+working only because every barrel they read happens to use explicit
+`export { ... }` today. `getExportedDeclarations()` resolves star re-exports,
+`export { x } from`, and `export { a as b }` aliases uniformly, and — same as
+the regex — excludes `export type { ... }`. It lives under `@lunora/client`'s
+`__tests__` (not either consumer's own tree) for the same "shared core, no
+new dependency edge" reason §1.2 gives for the manifest test itself; auth-ui
+imports it by relative path exactly the way the manifest test already reads
+sibling adapters' source.
+
 ### 1.1 `packages/auth-ui/__tests__/core/port-parity.test.ts`
 
-Reads every `create*Controller` value-export out of `packages/auth-ui/src/core/index.ts`
-via a regex over `export { ... }` blocks (excluding `export type { ... }` — the
-`type` keyword sits between `export` and `{`, so the block regex can't match
-past it). For each, greps the five port source trees (`src/react`, `src/vue`,
-`src/solid`, `src/svelte`, `src/angular`) for a whole-word reference. A
-controller with zero consumers fails the test unless it's on
-`DELIBERATELY_UNMOUNTED` with a reason.
+Reads every `create*Controller` value-export out of
+`packages/auth-ui/src/core/index.ts` via the shared helper. For each, greps
+the five port source trees (`src/react`, `src/vue`, `src/solid`,
+`src/svelte`, `src/angular`) for a whole-word reference. A controller with
+zero consumers fails the test unless it's on `DELIBERATELY_UNMOUNTED` with a
+reason.
 
 Verified live: removing the `createActiveMemberController` entry from the
-allow-list turns its check red (`expected { …(7) } to have property
-"createActiveMemberController"`); restoring it turns the suite green again. A
+allow-list turns its check red; restoring it turns the suite green again. A
 fourth test (`"proves the allow-list is load-bearing"`) asserts this
-mechanically on every run, so the demonstration isn't just something done once
-by hand.
+mechanically on every run — checking the real predicate the per-controller
+check evaluates (no port consumer AND not on the reduced allow-list), not
+merely that `Object.entries(...).filter(...)` removed the key it was told to
+remove, which an earlier draft asserted and which could never fail regardless
+of whether the parity check worked.
 
 ### 1.2 `packages/client/__tests__/adapter-export-parity.test.ts`
 
@@ -47,11 +63,10 @@ A `REQUIRED_SURFACE` manifest of 23 features (query, mutation, mutator,
 subscription, paginated/infinite query, presence, connection status, flags,
 auth + auth-gates, upload, rate limit, stream, voice agent, the four agent
 hooks, `hydratePreloaded`, the client-access primitive, and the one confirmed
-gap, HTTP streaming) × 5 adapters = 115 cells, plus one manifest sanity check.
-Each cell names the adapter's actual export and the module it should come
-from (defaulting to `src/index.ts`; `upload` points at `src/upload.ts`
-instead — see §2). The test reads that module's real exports back with the
-same block-regex technique as §1.1 and asserts presence.
+gap, HTTP streaming) × 5 adapters = 115 cells, plus manifest and subpath
+sanity checks. Each cell names the adapter's actual export and the module it
+should come from (defaulting to `src/index.ts`; `upload` points at
+`src/upload.ts` instead — see §2).
 
 It lives in `@lunora/client`, not any one adapter, because `@lunora/client` is
 the shared core all five depend on and the plan's own non-drifting
@@ -63,8 +78,27 @@ package to own a concern that isn't really its own.
 
 Verified live: flipping Angular's `upload` entry from its documented gap to a
 false claim (`{ name: "useUpload" }`) turns the check red (`@lunora/angular
-does not export "useUpload" from index.ts`); reverting restores 116/116
-green.
+does not export "useUpload" from index.ts`); reverting restores it to green.
+
+Two things a `src/index.ts`/`src/upload.ts` export check alone cannot catch,
+closed in this pass:
+
+- **A filled gap staying green forever.** Each `gap` entry now also carries
+  the export name it's gapping, following that adapter's own naming
+  convention (e.g. Vue's `httpStream` gap names `useHttpStream`, matching the
+  `use*` convention its real entries use). The gap check asserts that name is
+  still ABSENT from the adapter's barrel — so the day a port ships `httpStream`
+  or Angular ships `upload`, the corresponding gap cell goes red instead of
+  staying green next to a manifest that's now lying. Verified live: adding a
+  `useHttpStream` export to `packages/vue/src/index.ts` turns Vue's
+  `httpStream` gap cell red (`is on the gap list ("...") but @lunora/vue now
+exports "useHttpStream"...`); removing it restores green.
+- **`upload`'s subpath silently disappearing.** The file-level check only
+  proves `src/upload.ts` exports the right name; it never looks at
+  `package.json`. A separate assertion resolves each subpath-backed feature's
+  export through the adapter's `package.json` `exports` map instead (currently
+  just `upload`'s `./upload`), so dropping the subpath entry — even with
+  `src/upload.ts` untouched — fails independently of the file-level check.
 
 ## 2. The two allow-lists
 
@@ -94,7 +128,7 @@ They're structurally different from the other six: builder primitives other
 controllers call, never flows a port renders directly, so "mount this in a
 port" is not a meaningful ask for them.
 
-### 2.2 Adapter manifest gap entries (3 features, plus the unused `ADAPTER_OPT_OUTS` escape hatch)
+### 2.2 Adapter manifest gap entries (3 features)
 
 | Feature      | Adapter(s)                  | Reason                                                                                                                                                                                                                              |
 | ------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -112,11 +146,18 @@ Svelte and Angular have no component model to build a JSX-style gate from at
 all, so there's nothing to port; the reason says so rather than reading like
 an open bug.
 
-`ADAPTER_OPT_OUTS` (a per-adapter, per-feature reason map) exists as the
-escape hatch for a feature that turns out to not apply to one adapter's
-programming model at all — used by none of the 23 features today, because
-`authGates`' per-adapter `gap` entries covered that case adequately. Kept so
-the next such case doesn't have to invent the mechanism.
+Each gap entry also carries the export name it's gapping, following that
+adapter's own naming convention (e.g. `httpStream`'s Vue entry names
+`useHttpStream`, matching the `use*` convention `query`/`stream`/etc. already
+use there) — see §1.2 for what that buys.
+
+An earlier draft carried a per-adapter, per-feature `ADAPTER_OPT_OUTS` escape
+hatch alongside the `gap` mechanism, for a feature that turns out not to
+apply to one adapter's programming model at all. It was never used — every
+exception the manifest needed, `authGates` included, was already expressible
+as a per-adapter `gap` entry with a reason — so it was dead code carrying a
+second way to say the same thing, and has been removed. Reintroduce it only
+against a real feature that a `gap` entry genuinely can't express.
 
 ## 3. Naming-convention variance — bigger than the plan's example, still manageable
 

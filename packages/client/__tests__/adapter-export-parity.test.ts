@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { namedValueExportsOf } from "./lib/named-exports";
 
 /**
  * Cross-adapter export-surface parity for the five framework ports (React,
@@ -36,7 +38,18 @@ import { describe, expect, it } from "vitest";
  * A `{ gap: "…" }` entry is a genuine absence: the export does not exist
  * anywhere in that adapter today. The reason says whether it's a tracked
  * follow-up or a structural non-fit (see `authGates` for Svelte/Angular,
- * which have no JSX-like component model to gate with).
+ * which have no JSX-like component model to gate with). Every gap also
+ * carries the `name` (and, when it differs from `index.ts`, the `module`) it
+ * is gapping, following the same per-adapter naming convention as a real
+ * `Export` entry would — so the check can assert that name is still absent.
+ * When a gap is later filled, that assertion is what turns red: the whole
+ * point is that a stale gap entry does not get to stay green forever just
+ * because nobody remembered to delete it (see plan 233 §5.2).
+ *
+ * `upload`'s adapters also carry a `subpath`: the feature's real contract is
+ * the `./upload` package export (`import … from "@lunora/vue/upload"`), not
+ * merely the existence of `src/upload.ts`, so the manifest checks the
+ * adapter's `package.json` `exports` map for it too.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -56,18 +69,32 @@ interface Export {
     module?: string;
     /** The exported symbol name (after `as`, if aliased). */
     name: string;
+
+    /**
+     * When the feature's real contract is a package-export subpath (e.g.
+     * `./upload`), not merely a file on disk — the `exports` map key the
+     * adapter's `package.json` must carry, checked in addition to `name`.
+     */
+    subpath?: string;
 }
 
 interface Gap {
     gap: string;
+    /** File relative to the adapter's `src/` dir this would live in if ported; defaults to `index.ts`, same as `Export.module`. */
+    module?: string;
+
+    /**
+     * The name this adapter would export the feature under, following its
+     * own naming convention, if it existed — checked to still be ABSENT.
+     * When a port picks up the feature under this name, that assertion goes
+     * red, which is the signal the gap entry is stale.
+     */
+    name: string;
 }
 
 const isGap = (requirement: Export | Gap): requirement is Gap => "gap" in requirement;
 
 type Requirement = Export | Gap;
-
-const EXPORT_BLOCK_RE = /export\s*\{([^}]*)\}/g;
-const AS_ALIAS_RE = /\bas\s+([A-Za-z_$][\w$]*)\s*$/;
 
 /**
  * Required export surface, per feature, per adapter. Add a feature here when
@@ -118,10 +145,16 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
     // real framework-shape difference, not a missing port: nothing here would
     // be a component, it would be a documentation pattern.
     authGates: {
-        angular: { gap: "no JSX-like component model to build Authenticated/AuthLoading/Unauthenticated from — gate templates off the auth() signal directly" },
+        angular: {
+            gap: "no JSX-like component model to build Authenticated/AuthLoading/Unauthenticated from — gate templates off the auth() signal directly",
+            name: "Authenticated",
+        },
         react: { name: "Authenticated" },
         solid: { name: "Authenticated" },
-        svelte: { gap: "no JSX-like component model to build Authenticated/AuthLoading/Unauthenticated from — gate templates off the auth store directly" },
+        svelte: {
+            gap: "no JSX-like component model to build Authenticated/AuthLoading/Unauthenticated from — gate templates off the auth store directly",
+            name: "Authenticated",
+        },
         vue: { name: "Authenticated" },
     },
     connectionStatus: {
@@ -150,11 +183,11 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
     // difference like authGates), tracked separately from this spike; see
     // plan 231 for adapter-drift follow-ups.
     httpStream: {
-        angular: { gap: "not yet ported — React-only today; see plan 231" },
+        angular: { gap: "not yet ported — React-only today; see plan 231", name: "httpStream" },
         react: { name: "useHttpStream" },
-        solid: { gap: "not yet ported — React-only today; see plan 231" },
-        svelte: { gap: "not yet ported — React-only today; see plan 231" },
-        vue: { gap: "not yet ported — React-only today; see plan 231" },
+        solid: { gap: "not yet ported — React-only today; see plan 231", name: "createHttpStream" },
+        svelte: { gap: "not yet ported — React-only today; see plan 231", name: "httpStream" },
+        vue: { gap: "not yet ported — React-only today; see plan 231", name: "useHttpStream" },
     },
     hydratePreloaded: {
         angular: { name: "hydratePreloaded" },
@@ -244,11 +277,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
     upload: {
         angular: {
             gap: "no upload.ts and no ./upload subpath — chunked/multipart/TUS/paste upload was never ported; plan 233 evidence, still open on this base",
+            module: "upload.ts",
+            name: "upload",
         },
-        react: { module: "upload.ts", name: "useUpload" },
-        solid: { module: "upload.ts", name: "createUpload" },
-        svelte: { module: "upload.ts", name: "createUpload" },
-        vue: { module: "upload.ts", name: "useUpload" },
+        react: { module: "upload.ts", name: "useUpload", subpath: "./upload" },
+        solid: { module: "upload.ts", name: "createUpload", subpath: "./upload" },
+        svelte: { module: "upload.ts", name: "createUpload", subpath: "./upload" },
+        vue: { module: "upload.ts", name: "useUpload", subpath: "./upload" },
     },
     voiceAgent: {
         angular: { name: "voiceAgent" },
@@ -259,45 +294,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
     },
 };
 
-/**
- * Per-adapter opt-outs: a feature this adapter is not required to carry at
- * all, with why. (Currently unused — every feature above applies to every
- * adapter, with per-feature `gap` entries covering the exceptions. Kept as an
- * escape hatch: a feature that turns out to be legitimately inapplicable to
- * one adapter's programming model belongs here, annotated, rather than forcing
- * a `gap` entry that reads like an open bug.)
- */
-const ADAPTER_OPT_OUTS: Partial<Record<AdapterName, Partial<Record<keyof typeof REQUIRED_SURFACE, string>>>> = {};
-
-/** Every named export in `file`, resolving `export { default as X }` to `X`. */
-const namedExportsOf = (file: string): Set<string> => {
-    const source = readFileSync(file, "utf8");
-    const names = new Set<string>();
-
-    EXPORT_BLOCK_RE.lastIndex = 0;
-
-    let match: RegExpExecArray | null = EXPORT_BLOCK_RE.exec(source);
-
-    while (match !== null) {
-        for (const raw of (match[1] ?? "").split(",")) {
-            const spec = raw.trim();
-
-            if (!spec) {
-                continue;
-            }
-
-            const asMatch = AS_ALIAS_RE.exec(spec);
-            const name = asMatch ? asMatch[1] : spec;
-
-            if (name) {
-                names.add(name);
-            }
-        }
-
-        match = EXPORT_BLOCK_RE.exec(source);
+/** `filePath`'s exports, or `undefined` if the file doesn't exist. */
+const tryNamedValueExportsOf = (filePath: string): Set<string> | undefined => {
+    try {
+        return namedValueExportsOf(filePath);
+    } catch {
+        return undefined;
     }
-
-    return names;
 };
 
 interface Verdict {
@@ -307,33 +310,39 @@ interface Verdict {
 
 /**
  * Resolve a single (feature, adapter) cell to a pass/fail verdict. Kept out of
- * the `it` body (and so out of `expect`) so the three branches — opt-out, gap,
- * real check — never put a conditional around `expect` itself; the test below
+ * the `it` body (and so out of `expect`) so the two branches — gap, real
+ * check — never put a conditional around `expect` itself; the test below
  * makes exactly one unconditional assertion per cell.
  */
 const verdictFor = (feature: string, byAdapter: Record<AdapterName, Requirement>, adapter: AdapterName): Verdict => {
-    const optOutReason = ADAPTER_OPT_OUTS[adapter]?.[feature];
-
-    if (optOutReason !== undefined) {
-        return { message: `opted out: ${optOutReason}`, ok: optOutReason.length > 0 };
-    }
-
     const requirement = byAdapter[adapter];
 
     if (isGap(requirement)) {
         // A `gap` entry must still say why — no silent absences.
-        return { message: `${feature}/${adapter} is on the gap list with an empty reason — every gap needs one`, ok: requirement.gap.length > 0 };
+        if (requirement.gap.length === 0) {
+            return { message: `${feature}/${adapter} is on the gap list with an empty reason — every gap needs one`, ok: false };
+        }
+
+        // The symmetric guard: a gap is only honest while the export it names
+        // is still absent. If a port has since shipped it, this must fail —
+        // otherwise a filled gap stays green forever and the manifest quietly
+        // lies about a feature that no longer has a gap (see plan 233 §5.2).
+        const modulePath = join(ADAPTER_SRC[adapter], requirement.module ?? "index.ts");
+        const exported = tryNamedValueExportsOf(modulePath);
+        const filled = exported?.has(requirement.name) === true;
+
+        return {
+            message: filled
+                ? `${feature}/${adapter} is on the gap list ("${requirement.gap}") but @lunora/${adapter} now exports "${requirement.name}" from ` +
+                  `${requirement.module ?? "index.ts"} — the gap has been filled. Delete this REQUIRED_SURFACE gap entry and replace it with a real ` +
+                  `{ name, module? } requirement.`
+                : `${feature}/${adapter} gap: ${requirement.gap}`,
+            ok: !filled,
+        };
     }
 
     const modulePath = join(ADAPTER_SRC[adapter], requirement.module ?? "index.ts");
-
-    let exported: Set<string> | undefined;
-
-    try {
-        exported = namedExportsOf(modulePath);
-    } catch {
-        exported = undefined;
-    }
+    const exported = tryNamedValueExportsOf(modulePath);
 
     if (exported === undefined) {
         return {
@@ -356,7 +365,46 @@ const verdictFor = (feature: string, byAdapter: Record<AdapterName, Requirement>
 
 const featureEntries = Object.entries(REQUIRED_SURFACE).toSorted(([a], [b]) => a.localeCompare(b));
 
+/** Every (feature, adapter) cell whose requirement is a subpath-backed `Export` (never a `Gap` — a gapped subpath has nothing to check yet). */
+const subpathEntries = featureEntries.flatMap(([feature, byAdapter]) =>
+    ADAPTER_NAMES.flatMap((adapter) => {
+        const requirement = byAdapter[adapter];
+
+        return !isGap(requirement) && requirement.subpath !== undefined ? [{ adapter, feature, subpath: requirement.subpath }] : [];
+    }),
+);
+
+/** The adapter's `package.json` `exports` map, or `{}` if it declares none. */
+const packageExportsOf = (adapter: AdapterName): Record<string, unknown> => {
+    const packageJsonPath = join(PACKAGES_ROOT, adapter, "package.json");
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { exports?: Record<string, unknown> };
+
+    return parsed.exports ?? {};
+};
+
+/** Every distinct module path (under an adapter's `src/`) any (feature, adapter) cell reads, gap or not. */
+const allModulePaths = [
+    ...new Set(featureEntries.flatMap(([, byAdapter]) => ADAPTER_NAMES.map((adapter) => join(ADAPTER_SRC[adapter], byAdapter[adapter].module ?? "index.ts")))),
+];
+
 describe("adapter export-surface parity (react, vue, solid, svelte, angular)", () => {
+    // `ts-morph`'s first parse of a barrel that (transitively) pulls in JSX
+    // source — react's `index.ts` re-exports `Authenticated`/`useLunora` from
+    // `.tsx` files — pays for the checker's cold start, which comfortably
+    // exceeds vitest's default 5s per-test timeout. Paying that cost once
+    // here, for every module the suite will touch, means every individual
+    // `it` below hits the (already-parsed, cached) `Project` and stays fast.
+    beforeAll(() => {
+        for (const modulePath of allModulePaths) {
+            try {
+                namedValueExportsOf(modulePath);
+            } catch {
+                // Doesn't exist yet (an angular `upload.ts`-shaped gap) — the
+                // per-cell checks below handle that; warming is best-effort.
+            }
+        }
+    }, 30_000);
+
     it("declares a non-trivial manifest", () => {
         expect.assertions(1);
 
@@ -364,12 +412,33 @@ describe("adapter export-surface parity (react, vue, solid, svelte, angular)", (
     });
 
     describe.each(featureEntries)("%s", (feature, byAdapter) => {
-        it.each(ADAPTER_NAMES)("%s carries it, has a documented gap, or is opted out", (adapter) => {
+        it.each(ADAPTER_NAMES)("%s carries it or has a documented gap", (adapter) => {
             expect.assertions(1);
 
             const verdict = verdictFor(feature, byAdapter, adapter);
 
             expect(verdict.ok, verdict.message).toBe(true);
+        });
+    });
+
+    // The file-level check above only proves `src/upload.ts` exports the
+    // right name — it never looks at `package.json`, so an adapter could drop
+    // `"./upload"` from `exports` (breaking `import … from "@lunora/vue/upload"`)
+    // while `src/upload.ts` itself stays untouched, and the check above would
+    // stay green. Subpath-backed features need this second, independent
+    // assertion against the actual package surface a consumer imports.
+    describe("subpath-backed features carry their package.json export", () => {
+        it.each(subpathEntries)("$feature: @lunora/$adapter's package.json exports carries $subpath", ({ adapter, feature, subpath }) => {
+            expect.assertions(1);
+
+            const exportsMap = packageExportsOf(adapter);
+
+            expect(
+                Object.hasOwn(exportsMap, subpath),
+                `${feature}: @lunora/${adapter}'s package.json "exports" map does not carry "${subpath}". ` +
+                    `${feature} is a subpath-backed feature — src/${subpath.replace("./", "")}.ts existing is not enough; ` +
+                    `the exports map entry is what a consumer's "import … from '@lunora/${adapter}${subpath.slice(1)}'" actually resolves through.`,
+            ).toBe(true);
         });
     });
 });

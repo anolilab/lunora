@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { namedValueExportsOf } from "../../../client/__tests__/lib/named-exports";
+
 /**
  * `core/index.ts` is the framework-agnostic barrel every port (React, Vue,
  * Svelte, Solid, Angular) is meant to build on: each `create*Controller`
@@ -34,8 +36,6 @@ type PortName = (typeof PORT_NAMES)[number];
 const PORT_DIRS: Record<PortName, string> = Object.fromEntries(PORT_NAMES.map((name) => [name, join(AUTH_UI_SRC, name)])) as Record<PortName, string>;
 
 const TS_FILE_RE = /\.tsx?$/;
-const EXPORT_BLOCK_RE = /export\s*\{([^}]*)\}/g;
-const AS_ALIAS_RE = /\bas\s+([A-Za-z_$][\w$]*)\s*$/;
 const CONTROLLER_NAME_RE = /^create[A-Z]\w*Controller$/;
 
 /**
@@ -70,35 +70,14 @@ const filesUnder = (dir: string): string[] =>
 
 /**
  * Every `create*Controller` name `core/index.ts` exports as a VALUE (never a
- * type). Reads the barrel itself so the list can't drift from what a port
- * could actually import — `export type { ... }` blocks are excluded because
- * `\s*\{` can't match past the `type` keyword, so they never enter the regex
- * at all.
+ * type). Reads the barrel itself, via the shared `ts-morph`-based
+ * {@link namedValueExportsOf}, so the list can't drift from what a port could
+ * actually import — `export type { ... }` exports are excluded, and (unlike
+ * a hand-rolled `export { ... }` block regex) a re-export via `export * from`
+ * would still be picked up correctly.
  */
-const controllerExports = (): string[] => {
-    const source = readFileSync(CORE_INDEX, "utf8");
-    const names = new Set<string>();
-
-    EXPORT_BLOCK_RE.lastIndex = 0;
-
-    let match: RegExpExecArray | null = EXPORT_BLOCK_RE.exec(source);
-
-    while (match !== null) {
-        for (const raw of (match[1] ?? "").split(",")) {
-            const spec = raw.trim();
-            const asMatch = AS_ALIAS_RE.exec(spec);
-            const name = (asMatch ? asMatch[1] : spec) ?? "";
-
-            if (CONTROLLER_NAME_RE.test(name)) {
-                names.add(name);
-            }
-        }
-
-        match = EXPORT_BLOCK_RE.exec(source);
-    }
-
-    return [...names].toSorted((a, b) => a.localeCompare(b));
-};
+const controllerExports = (): string[] =>
+    [...namedValueExportsOf(CORE_INDEX)].filter((name) => CONTROLLER_NAME_RE.test(name)).toSorted((a, b) => a.localeCompare(b));
 
 /** Which ports reference `name` as a whole word anywhere under their source tree. */
 const consumersOf = (name: string): PortName[] => {
@@ -155,8 +134,16 @@ describe("auth-ui controller × port parity", () => {
         // (not `delete`), so the "removed" state is a fresh object.
         const withoutEntry = Object.fromEntries(Object.entries(DELIBERATELY_UNMOUNTED).filter(([key]) => key !== stillUnmounted));
 
-        // This is exactly the assertion the `it.each` above makes per controller —
-        // run standalone here so removing the entry demonstrably fails it.
-        expect(withoutEntry).not.toHaveProperty(stillUnmounted as string);
+        // This is the REAL predicate the `it.each` above evaluates per
+        // controller — not "does `withoutEntry` still have the key" (true by
+        // construction, since `filter` just removed it, and so unable to ever
+        // fail regardless of whether the parity check itself works), but
+        // whether the controller would actually pass the check without the
+        // allow-list entry: it has no port consumer AND isn't on the reduced
+        // allow-list. If that comes out `true`, removing the entry does NOT
+        // fail the check — which is what "load-bearing" would have meant.
+        const wouldStillPassWithoutEntry = consumersOf(stillUnmounted as string).length > 0 || Object.hasOwn(withoutEntry, stillUnmounted as string);
+
+        expect(wouldStillPassWithoutEntry).toBe(false);
     });
 });
