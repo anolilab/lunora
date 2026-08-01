@@ -7,19 +7,28 @@ import { ERROR_CATALOG } from "../src";
 
 // Repo root, three levels up from packages/errors/__tests__.
 const REPO_ROOT = join(__dirname, "..", "..", "..");
-const PACKAGES_ROOT = join(REPO_ROOT, "packages");
 
+// Walked from REPO_ROOT (not just packages/*/src) so registry/, shared/,
+// templates/, sdks/, protocol/, tools/, apps/, and examples/ are covered too —
+// an unregistered code is treated as client-safe (see isInternalCode below),
+// and registry/templates/examples are precisely the code users copy into
+// their own apps. Extend this set, don't reintroduce a directory allowlist,
+// when a root walk turns up a new build/vendor tree that is noise-only.
 const SKIP_DIRECTORIES = new Set([
     ".git",
     ".history",
     ".vis",
+    ".worktrees",
     ".wrangler",
     "__fixtures__",
     "__tests__",
+    "_generated",
+    "api-snapshots",
     "coverage",
     "dist",
     "fixtures",
     "node_modules",
+    "patches",
     "test-results",
 ]);
 
@@ -28,7 +37,17 @@ const SKIP_DIRECTORIES = new Set([
 // `new LunoraError("X", ...)` first-argument literal. Deliberately textual
 // (not AST-based) — this is meant to catch a *future* uncatalogued code the
 // same cheap way a reviewer would grep for one.
-const CODE_PATTERN = /code:\s*"([A-Z][A-Z0-9_]*)"|new LunoraError\(\s*"([A-Z][A-Z0-9_]*)"/g;
+//
+// The `new LunoraError(...)` group's first argument is unambiguously a code,
+// so it tolerates any case (`badRequest`, `BadRequest`, ...) — a mint doesn't
+// have to be SCREAMING_SNAKE_CASE to reach `isInternalCode`. The `code:`
+// object-literal group stays SCREAMING_SNAKE_CASE-only: widening it the same
+// way would flag every unrelated `code: "Enter"` (key events), `code: "en"`
+// (locale tags), `code: "P2002"` (driver errors), and similar repo-wide,
+// which is what makes the textual heuristic viable at all. A template-literal
+// code (`` `CODE_${x}` ``) is undetectable by a textual gate either way — an
+// accepted limitation, not a silent one.
+const CODE_PATTERN = /code:\s*"([A-Z][A-Z0-9_]*)"|new LunoraError\(\s*"([A-Za-z]\w*)"/g;
 
 /**
  * Codes the gate would otherwise flag as unregistered but that are not
@@ -45,6 +64,13 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     // A hand-rolled `Response.json(...)` error body for an oversized upload,
     // never a `LunoraError` construction.
     ["REQUEST_ENTITY_TOO_LARGE", "packages/storage/src/upload-handler.ts"],
+    // `SqlRejectionCode` rejection *values* returned by the read-only SQL
+    // classifier — the module docstring is explicit that it returns a
+    // rejection value rather than throwing; callers add their own error type.
+    // Never a `LunoraError` construction.
+    ["SQL_EMPTY", "shared/sql-readonly.ts"],
+    ["SQL_MULTIPLE_STATEMENTS", "shared/sql-readonly.ts"],
+    ["SQL_NOT_READONLY", "shared/sql-readonly.ts"],
     // `fanSubscriptionError`'s callback payload — a plain object, never a
     // `LunoraError` construction.
     ["SUBSCRIPTION_CANCELLED", "packages/client/src/lunora-client.ts"],
@@ -75,42 +101,21 @@ const collectSourceFiles = (dir: string): string[] => {
     return files;
 };
 
-/** Every `packages/&lt;name>/src` directory in the monorepo. */
-const packageSourceDirs = (): string[] => {
-    const dirs: string[] = [];
-
-    for (const packageDirectory of readdirSync(PACKAGES_ROOT)) {
-        const srcDir = join(PACKAGES_ROOT, packageDirectory, "src");
-
-        try {
-            if (statSync(srcDir).isDirectory()) {
-                dirs.push(srcDir);
-            }
-        } catch {
-            // No src/ directory for this package — nothing to scan.
-        }
-    }
-
-    return dirs;
-};
-
 describe("error catalog registration", () => {
-    it("every minted SCREAMING_SNAKE_CASE error code across packages/*/src is a catalog key", () => {
+    it("every minted error code across the whole repo is a catalog key", () => {
         expect.assertions(1);
 
         const catalogKeys = new Set(Object.keys(ERROR_CATALOG));
         const missing = new Map<string, string>();
 
-        for (const srcDir of packageSourceDirs()) {
-            for (const filePath of collectSourceFiles(srcDir)) {
-                const content = readFileSync(filePath, "utf8");
+        for (const filePath of collectSourceFiles(REPO_ROOT)) {
+            const content = readFileSync(filePath, "utf8");
 
-                for (const match of content.matchAll(CODE_PATTERN)) {
-                    const code = match[1] ?? match[2];
+            for (const match of content.matchAll(CODE_PATTERN)) {
+                const code = match[1] ?? match[2];
 
-                    if (code !== undefined && !catalogKeys.has(code) && !missing.has(code)) {
-                        missing.set(code, filePath.replace(`${REPO_ROOT}/`, ""));
-                    }
+                if (code !== undefined && !catalogKeys.has(code) && !missing.has(code)) {
+                    missing.set(code, filePath.replace(`${REPO_ROOT}/`, ""));
                 }
             }
         }
@@ -124,7 +129,7 @@ describe("error catalog registration", () => {
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
-        expect.assertions(2);
+        expect.assertions(5);
 
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
