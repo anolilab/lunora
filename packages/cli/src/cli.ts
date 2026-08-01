@@ -21,6 +21,7 @@ import { devCommand } from "./commands/dev";
 import documentationCommand from "./commands/docs";
 import { doctorCommand } from "./commands/doctor";
 import { envCommand } from "./commands/env";
+import { evalCommand } from "./commands/eval";
 import { exportCommand } from "./commands/export";
 import { importCommand } from "./commands/import";
 import { infoCommand } from "./commands/info";
@@ -157,6 +158,7 @@ const CLI_COMMANDS = [
     seedCommand,
     introspectCommand,
     backupCommand,
+    evalCommand,
     verifyCommand,
     infoCommand,
     doctorCommand,

@@ -2313,6 +2313,9 @@ importers:
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@visulima/cerebro':
         specifier: 3.0.0
         version: 3.0.0(@bomb.sh/tab@0.0.21(cac@6.7.14)(citty@0.2.2)(commander@15.0.0))(@visulima/find-cache-dir@3.0.0)(@visulima/pail@4.0.0(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0)(express@5.2.1(supports-color@10.2.2))(hono@4.12.30)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)))(github-slugger@2.0.0)
