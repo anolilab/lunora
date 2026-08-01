@@ -443,7 +443,7 @@ describe("progressive shard move (plan 235 spike)", () => {
             // removing the row `snapshotVnodes` already base-copied onto target.
             expect.assertions(3);
 
-            let move = beginVnodeMove(source);
+            const move = beginVnodeMove(source);
 
             snapshotVnodes(source, target, RING_SIZE, MOVING_VNODES);
 
@@ -457,7 +457,7 @@ describe("progressive shard move (plan 235 spike)", () => {
             clock += 1;
             deleteMessage(source, deletedId as string, clock);
 
-            move = catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move);
+            catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move);
 
             expect(readMessage(target, deletedId as string)).toBeUndefined();
         });
