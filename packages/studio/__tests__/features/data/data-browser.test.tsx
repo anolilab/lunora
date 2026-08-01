@@ -1439,3 +1439,168 @@ describe("dataBrowser — facets", () => {
         expect(screen.getByTestId("db-row").textContent).toContain("again");
     });
 });
+
+interface ShardSwitchRow {
+    __id__: string;
+    text: string;
+}
+
+/**
+ * Two independent shard fixtures — `""` (the default/root shard) serving table
+ * `inbox`, and `"s2"` serving a DIFFERENT table `archive` — so a test can drive
+ * an atomic table+shard switch (the shape a saved-query apply or a cross-shard
+ * deep link produces: table, shard, and search all change in ONE URL push) and
+ * tell which shard a request actually reached from `options.shardKey`.
+ */
+const SHARD_SWITCH_FIXTURES: Record<string, { rows: ShardSwitchRow[]; table: string }> = {
+    "": { rows: [{ __id__: "a1", text: "alpha-hello" }], table: "inbox" },
+    s2: { rows: [{ __id__: "b1", text: "beta-world" }], table: "archive" },
+};
+
+const createShardSwitchClient = (): MockClientHooks =>
+    createMockClient({
+        query: (reference, args, options): unknown => {
+            const shard = (options as { shardKey?: string } | undefined)?.shardKey ?? "";
+            const fixture = SHARD_SWITCH_FIXTURES[shard];
+
+            if (fixture === undefined) {
+                throw new Error(`unknown shard: ${shard}`);
+            }
+
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: fixture.table, rowCount: fixture.rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.writeRow) {
+                const { id, op } = args as { id?: string; op: string };
+
+                if (op === "delete" && id !== undefined) {
+                    fixture.rows = fixture.rows.filter((row) => row["__id__"] !== id);
+                }
+
+                return { id: id ?? null, op };
+            }
+
+            // readTablePage
+            const { search = "", table } = args as { search?: string; table: string };
+
+            if (table !== fixture.table) {
+                throw new Error(`unknown table "${table}" on shard "${shard}"`);
+            }
+
+            const needle = search.trim().toLowerCase();
+            const matched = needle === "" ? fixture.rows : fixture.rows.filter((row) => row.text.toLowerCase().includes(needle));
+
+            return { columns: ["__id__", "text"], rows: matched, total: matched.length };
+        },
+    });
+
+/**
+ * Test host that can drive an ATOMIC table+shard+search switch — `table`,
+ * `search`, and `shardKey` all change inside ONE event handler (one React
+ * commit), the way the real Table editor's "apply saved query" flow pushes a
+ * saved view's table, shard, and search as a single URL update.
+ * `onSelectTable` (a plain in-app table click) deliberately leaves the shard
+ * alone, matching production.
+ */
+const ShardSwitchDataBrowser = ({ pageSize }: { pageSize?: number }): ReactElement => {
+    const [table, setTable] = useState<string | undefined>(undefined);
+    const [search, setSearch] = useState<string | undefined>(undefined);
+    const [shardKey, setShardKey] = useState<string | undefined>(undefined);
+
+    const onSelectTable = (next: string, options?: { search?: string }): void => {
+        setTable(next);
+        setSearch(options?.search);
+    };
+
+    const applyShardSwitch = (): void => {
+        setTable("archive");
+        setSearch(undefined);
+        setShardKey("s2");
+    };
+
+    return (
+        <>
+            <button data-testid="apply-shard-switch" onClick={applyShardSwitch} type="button">
+                apply saved query
+            </button>
+            <DataBrowser editable initialSearch={search} initialShardKey={shardKey} onSelectTable={onSelectTable} pageSize={pageSize} tableParam={table} />
+        </>
+    );
+};
+
+describe("dataBrowser — table switch reset (STUDIO-01)", () => {
+    it("issues the first read for the new table with ITS OWN search, not the previous table's leftover search", async () => {
+        expect.assertions(1);
+
+        const mock = createShardSwitchClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ShardSwitchDataBrowser pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-inbox"));
+        await screen.findByText("alpha-hello");
+
+        // Type a search for table A, then switch WITHOUT waiting for its 300ms
+        // debounce to settle — the reset must discard it outright, not merely win
+        // a race against it.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "alpha" } });
+        fireEvent.click(screen.getByTestId("apply-shard-switch"));
+
+        await screen.findByText("beta-world");
+
+        const archiveRead = mock.query.mock.calls.find(
+            (call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { table: string }).table === "archive",
+        ) as [unknown, { search?: string; table: string }, unknown] | undefined;
+
+        // The very first read for the new table already carries ITS search
+        // ("") — never table A's leftover "alpha".
+        expect(archiveRead?.[1].search).toBe("");
+    });
+
+    it("targets the NEW shard for a delete issued right after a switch that also changes shard", async () => {
+        expect.assertions(1);
+
+        const mock = createShardSwitchClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ShardSwitchDataBrowser pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-inbox"));
+        await screen.findByText("alpha-hello");
+
+        fireEvent.click(screen.getByTestId("apply-shard-switch"));
+        await screen.findByText("beta-world");
+
+        // Select and delete the new table's row as soon as it's on screen — the
+        // earliest an operator could possibly click after the switch.
+        fireEvent.click(screen.getByTestId("db-select-all"));
+        await screen.findByTestId("grid-selection-count");
+
+        fireEvent.click(screen.getByTestId("grid-selection-delete"));
+        fireEvent.click(screen.getByTestId("grid-selection-delete-confirm"));
+
+        await waitFor(() => {
+            const deletes = mock.query.mock.calls.filter(
+                (call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
+            );
+
+            if (deletes.length === 0) {
+                throw new Error("delete not issued yet");
+            }
+        });
+
+        const deletes = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete");
+
+        // Every delete targets the NEW shard ("s2") — the old code's own comment
+        // claimed this couldn't happen, and it could: the debounced shard used to
+        // lag the table-derived selection by up to 400ms.
+        expect(deletes.every((call) => (call[2] as { shardKey?: string } | undefined)?.shardKey === "s2")).toBe(true);
+    });
+});
