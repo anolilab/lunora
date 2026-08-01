@@ -1,17 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeIdentityHeader, decodeUserIdHeader, encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-
-/** `true` when every UTF-16 code unit of `value` is &lt;= 255 (a valid WebIDL `ByteString`). */
-const isByteStringSafe = (value: string): boolean => {
-    for (let index = 0; index < value.length; index += 1) {
-        if ((value.codePointAt(index) ?? 0) > 255) {
-            return false;
-        }
-    }
-
-    return true;
-};
+import { decodeIdentityHeader, decodeUserIdHeader, encodeIdentityHeader, encodeUserIdHeader, isByteStringSafe } from "../../../shared/identity-header";
 
 describe("encodeIdentityHeader / decodeIdentityHeader", () => {
     it("round-trips ASCII claims", () => {

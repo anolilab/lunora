@@ -47,24 +47,13 @@
  * Consumers must drop `outDir`/`rootDir` from their `tsconfig.json` (a set
  * `rootDir` raises TS6059 for this out-of-package file under `tsc --noEmit`).
  */
-import { fromBase64, toBase64 } from "./base64";
+import { fromBase64Url, toBase64Url } from "./base64";
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 /** Sentinel prefix marking an `x-lunora-userid` value as base64url-encoded UTF-8. */
 const USERID_ENCODED_PREFIX = "=";
-
-/** Base64 (from {@link toBase64}) -> URL-safe, unpadded base64url. */
-const toBase64Url = (bytes: Uint8Array): string => toBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-
-/** URL-safe base64url -> bytes, via {@link fromBase64} (which expects standard padded base64). */
-const fromBase64Url = (value: string): Uint8Array => {
-    const restored = value.replaceAll("-", "+").replaceAll("_", "/");
-    const padded = restored + "=".repeat((4 - (restored.length % 4)) % 4);
-
-    return fromBase64(padded);
-};
 
 /** `true` when every UTF-16 code unit of `value` is <= 255 (safe as a WebIDL `ByteString`). */
 const isByteStringSafe = (value: string): boolean => {
@@ -130,6 +119,12 @@ const encodeUserIdHeader = (userId: string): string => {
  * returned unchanged (the common, unencoded case); a value with it is
  * base64url-decoded -> UTF-8. A malformed encoded value -> `undefined`
  * (fail-soft, matching {@link decodeIdentityHeader}).
+ *
+ * Mixed-rollout edge: this sentinel scheme assumes a raw (pre-{@link encodeUserIdHeader})
+ * userId never itself starts with `=` — true for UUIDs/emails/JWT `sub`s, but not
+ * guaranteed in general. A new consumer decoding a legacy raw userId that does start
+ * with `=` would misinterpret it as encoded. Deploy this decoder no earlier than every
+ * producer that could emit such a raw id has picked up the `=`-encoding it now expects.
  */
 const decodeUserIdHeader = (raw: null | string | undefined): string | undefined => {
     if (!raw) {
@@ -147,4 +142,4 @@ const decodeUserIdHeader = (raw: null | string | undefined): string | undefined 
     }
 };
 
-export { decodeIdentityHeader, decodeUserIdHeader, encodeIdentityHeader, encodeUserIdHeader };
+export { decodeIdentityHeader, decodeUserIdHeader, encodeIdentityHeader, encodeUserIdHeader, isByteStringSafe };

@@ -1,7 +1,7 @@
 import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
-import { decodeIdentityHeader, encodeIdentityHeader } from "../../../shared/identity-header";
+import { decodeIdentityHeader, encodeIdentityHeader, isByteStringSafe } from "../../../shared/identity-header";
 import { createDispatchLogger } from "../src/create-dispatch-logger";
 import { createDispatchRunner } from "../src/create-dispatch-runner";
 
@@ -97,15 +97,8 @@ describe("createDispatchRunner identity forwarding", () => {
 
         const { headers } = captureCall(fetchImpl);
         const identityHeader = headers["x-lunora-identity"] as string;
-        let isByteStringSafe = identityHeader.length > 0;
 
-        for (let index = 0; index < identityHeader.length; index += 1) {
-            if ((identityHeader.codePointAt(index) ?? 0) > 255) {
-                isByteStringSafe = false;
-            }
-        }
-
-        expect(isByteStringSafe).toBe(true);
+        expect(isByteStringSafe(identityHeader)).toBe(true);
         expect(identityHeader).toBe(encodeIdentityHeader({ name: "名前 🎌" }));
     });
 
