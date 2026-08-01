@@ -15,6 +15,8 @@ import {
     readLinkedProject,
     requiredSecrets,
     resolveDeployDriver,
+    upsertDevVariableLine,
+    writeDevVariablesFileAtomically,
 } from "@lunora/config";
 import {
     findWranglerFile,
@@ -179,6 +181,15 @@ interface DeployCommandResult {
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before reaching the wrangler invocation. */
     error?: string;
+
+    /**
+     * The `.dev.vars`-shaped filename (never a full path, never a value) a
+     * secret minted during this run was recorded into, when the missing-
+     * secret gate minted one — `.dev.vars` for the default environment, or a
+     * `.dev.vars.&lt;env>` sibling for an explicit `--env`. `undefined` when
+     * nothing was minted this run.
+     */
+    mintedSecretsFile?: string;
     /** The schema-drift gate verdict, when it ran (skipped on `--skip-codegen`). */
     schemaDrift?: { blocked: boolean; reason: string };
     validation: {
@@ -516,8 +527,39 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
     return [...new Set([...fromPackages, ...fromLocal])];
 };
 
-/** Generate + `wrangler secret put` each mintable key (sequential; stops on first failure). Returns true on full success. */
-const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, keys: ReadonlyArray<string>, target: string): Promise<boolean> => {
+/**
+ * `wrangler secret put &lt;name>` is Cloudflare's write-only channel — the
+ * value never comes back. A previous version of this function minted a fresh
+ * value for every key and piped it straight to `secret put`, without binding
+ * it to anything the caller could see: the only trace was a key-name log
+ * line, so the operator could never again use the secret it just created
+ * (studio against prod, `lunora insights`, admin RPCs). Recovery meant minting
+ * again, invalidating anything already holding the first value.
+ *
+ * Now: mint a fresh value for every missing key, push it, and return it in
+ * `minted` so the caller can record it in `.dev.vars` — the only local record
+ * of a value this function itself must never print, log, or return anywhere
+ * else. Sequential; stops on first failure. `ok` is `false` the moment any
+ * `secret put` fails — `minted` still holds whatever succeeded before that,
+ * because those values are equally unrecoverable if discarded.
+ *
+ * Deliberately does NOT reuse an existing local `.dev.vars` value for a
+ * missing key, even a non-placeholder one — an earlier version of this
+ * function did, on the theory that a real local value needs no fresh
+ * disclosure. That reasoning doesn't hold: `isPlaceholderValue` is a marker
+ * heuristic (empty / `&lt;…>` / `changeme` / `todo` / …), not a strength check,
+ * so a real-but-weak shared dev secret (`AUTH_SECRET="devsecret"`) would
+ * silently become the value protecting `--env production`, and the confirm
+ * prompt never named which keys were about to be promoted that way. Minting
+ * fresh for every missing key is the only choice that can't leak a weak
+ * local value into a production credential.
+ */
+const pushMintableSecrets = async (
+    cwd: string,
+    options: DeployCommandOptions,
+    keys: ReadonlyArray<string>,
+    target: string,
+): Promise<{ minted: ReadonlyArray<{ key: string; value: string }>; ok: boolean }> => {
     const { logger } = options;
     const spawner = options.spawner ?? defaultSpawner;
     const manager = detectPackageManager(cwd);
@@ -528,31 +570,110 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
     if (toolchain === undefined) {
         logger.error("deploy target has no command-line toolchain; cannot push secrets");
 
-        return false;
+        return { minted: [], ok: false };
     }
 
+    const minted: { key: string; value: string }[] = [];
+
     for (const key of keys) {
+        const value = generateSecretValue();
+
         const secretCommand = toolchain.secretPut({ environment: options.env, key, temporary: options.temporary });
         const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
 
-        // `wrangler secret put <name>` reads the value from stdin, so the generated
-        // secret never lands on the command line, in env, or in shell history.
+        // `wrangler secret put <name>` reads the value from stdin, so the value
+        // never lands on the command line, in env, or in shell history.
         // eslint-disable-next-line no-await-in-loop -- push sequentially so a failure aborts before the rest.
-        const pushResult = await spawner({ args: exec.args, command: exec.command, cwd, input: generateSecretValue() });
+        const pushResult = await spawner({ args: exec.args, command: exec.command, cwd, input: value });
 
         if (pushResult.code !== 0) {
             logger.error(
                 `failed to push secret ${key} (exit ${String(pushResult.code)}); set it manually with \`wrangler secret put ${key}${environmentFlag}\`.`,
             );
 
-            return false;
+            return { minted, ok: false };
         }
 
+        minted.push({ key, value });
+        // Destination is `persistMintedSecrets`'s call — it knows the actual
+        // path (bare `.dev.vars` vs. an `--env`-scoped sibling); don't claim
+        // one here.
         logger.success(`generated + pushed ${key}`);
     }
 
-    return true;
+    return { minted, ok: true };
 };
+
+/**
+ * Plain-identifier check before `options.env` is spliced into a filename
+ * (`.dev.vars.&lt;env>`) — defense-in-depth; a `--env &lt;name>` naming no
+ * declared `wrangler.jsonc` environment is already blocked earlier in the
+ * deploy pipeline (`validateWrangler`), so this should be unreachable in
+ * practice.
+ */
+const SAFE_ENV_NAME = /^[\w-]+$/u;
+
+/**
+ * Fold newly-minted secret values into the right `.dev.vars`-shaped file, via
+ * the same surgical upsert `env generate --set` uses, written atomically and
+ * owner-only (`writeDevVariablesFileAtomically`, matching `@lunora/config`'s
+ * own `.dev.vars` writers) — a plain `writeFileSync` would let a process
+ * interrupted mid-write truncate the file, destroying every OTHER secret in
+ * it alongside the new one, which for a value with no other recoverable copy
+ * (Cloudflare secrets are write-only) is worse than not writing at all. A
+ * no-op (returning `undefined`) when nothing was minted.
+ *
+ * Which file depends on `options.env`:
+ * - No explicit `--env`: the deploy targets the account's one default environment — the same one `.dev.vars`/`lunora dev`/a plain `lunora env push` already treat as authoritative — so the minted value goes into `.dev.vars` itself, same as `env set`/`env generate --set` would.
+ * - An explicit `--env &lt;name>`: a DIFFERENT, named environment. Writing that secret into the bare, environment-agnostic `.dev.vars` would silently share it with local dev and with a later no-`--env` `env push` — the exact cross-environment leak an `--env`-scoped deploy is supposed to avoid. So it goes into a sibling `.dev.vars.&lt;name>` instead (already covered by this repo's `.gitignore` `.dev.vars.*` pattern). No other command reads `.dev.vars.&lt;name>` today — it exists purely as this deploy's own recoverable record of a value `wrangler secret put` can never return; open it by hand to retrieve the value.
+ *
+ * Returns the (relative) filename written, or `undefined` when nothing was
+ * recorded — the caller threads this through the deploy result so the
+ * end-of-deploy summary can point at it too, alongside the KEY-only success
+ * log this function prints immediately (a single trailing line naming every
+ * minted key once, rather than repeating the file per key).
+ */
+const persistMintedSecrets = (cwd: string, options: DeployCommandOptions, minted: ReadonlyArray<{ key: string; value: string }>): string | undefined => {
+    if (minted.length === 0) {
+        return undefined;
+    }
+
+    const keys = minted.map((entry) => entry.key).join(", ");
+
+    if (options.env !== undefined && !SAFE_ENV_NAME.test(options.env)) {
+        options.logger.warn(
+            `${keys}: minted and pushed for --env ${options.env}, but "${options.env}" isn't a safe filename fragment — the value could not be recorded. Capture it manually if you need it again.`,
+        );
+
+        return undefined;
+    }
+
+    const targetFile = options.env === undefined ? DEV_VARS_FILE : `${DEV_VARS_FILE}.${options.env}`;
+    const devVariablesPath = join(cwd, targetFile);
+    let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+
+    for (const entry of minted) {
+        raw = upsertDevVariableLine(raw, entry.key, entry.value);
+    }
+
+    writeDevVariablesFileAtomically(devVariablesPath, raw);
+
+    options.logger.success(
+        options.env === undefined
+            ? `${keys}: value(s) recorded in ${targetFile}`
+            : `${keys}: value(s) recorded in ${targetFile} (kept separate from ${DEV_VARS_FILE} so \`lunora dev\` and a plain \`lunora env push\` don't inherit the --env ${options.env} value)`,
+    );
+
+    return targetFile;
+};
+
+/** {@link offerMissingSecrets}'s outcome: an abort message (deploy must not proceed) and/or the file a minted secret was recorded into, if any. */
+interface MissingSecretsOutcome {
+    /** Set when the deploy must abort before reaching the wrangler spawn. */
+    error?: string;
+    /** The `.dev.vars`-shaped file a minted secret was recorded into this run, if any — set even alongside `error` (see the mint-failure branch below), so a partially-recorded secret is never dropped from the caller's view. */
+    mintedSecretsFile?: string;
+}
 
 /**
  * Before a live deploy, detect required secrets that are NOT yet set on the
@@ -561,7 +682,7 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
  * provider secrets (`RESEND_API_KEY`, `STRIPE_*`) to set by hand.
  * NON-INTERACTIVE (CI): there's nothing to prompt, so a missing required secret
  * aborts the deploy — returns an error message rather than shipping a worker
- * that will crash on a missing secret. Returns `undefined` when the deploy may
+ * that will crash on a missing secret. Returns `{}` when the deploy may
  * proceed.
  *
  * Best-effort detection: a dry-run/preview publishes nothing (skip), and if the
@@ -569,9 +690,9 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
  * secret list can't be read — we proceed rather than guess. Any pushing happens
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
-const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, target: string): Promise<string | undefined> => {
+const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, target: string): Promise<MissingSecretsOutcome> => {
     if (options.dryRun === true || options.preview === true) {
-        return undefined;
+        return {};
     }
 
     const { logger } = options;
@@ -582,12 +703,12 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     try {
         remote = await (options.secretLister ?? listRemoteSecrets)({ cwd, env: options.env, temporary: options.temporary });
     } catch {
-        return undefined;
+        return {};
     }
 
     // Can't enumerate (no worker yet / not authed) → nothing actionable to check.
     if (!remote.ok) {
-        return undefined;
+        return {};
     }
 
     const remoteNames = new Set(remote.names);
@@ -595,17 +716,18 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     const missing = required.filter((key) => !remoteNames.has(key));
 
     if (missing.length === 0) {
-        return undefined;
+        return {};
     }
 
     // No TTY to prompt on → fail fast rather than deploy a worker that will crash
     // on a missing required secret.
     if (!interactive) {
-        return (
-            `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
-            `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
-            `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`), then re-deploy.`
-        );
+        return {
+            error:
+                `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
+                `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
+                `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`), then re-deploy.`,
+        };
     }
 
     for (const key of missing.filter((name) => !isMintableSecretKey(name))) {
@@ -615,7 +737,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     const mintable = missing.filter((key) => isMintableSecretKey(key));
 
     if (mintable.length === 0) {
-        return undefined;
+        return {};
     }
 
     const confirm = options.secretConfirm ?? createTuiConfirm();
@@ -623,16 +745,26 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     if (
         await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
     ) {
-        // `pushMintableSecrets` returns `false` the moment any `secret put` fails
-        // (e.g. auth expired mid-push). Discarding that result used to deploy
-        // anyway, shipping a worker still missing the secret it just failed to
-        // set — the exact outcome the non-interactive branch above refuses to
-        // risk.
-        if (!(await pushMintableSecrets(cwd, options, mintable, target))) {
-            return "failed to push required secret(s) — set them manually and re-deploy";
+        // `pushMintableSecrets` returns `ok: false` the moment any `secret put`
+        // fails (e.g. auth expired mid-push). Discarding that result used to
+        // deploy anyway, shipping a worker still missing the secret it just
+        // failed to set — the exact outcome the non-interactive branch above
+        // refuses to risk.
+        const { minted, ok } = await pushMintableSecrets(cwd, options, mintable, target);
+
+        // Persist whatever WAS minted even on a partial failure — a pushed
+        // secret this function doesn't record is permanently lost (Cloudflare
+        // secrets are write-only), so recording it is not conditional on the
+        // rest of the batch succeeding. Its path is threaded into the returned
+        // outcome even when `ok` is `false`, so an abort never drops a secret
+        // that DID get recorded from the caller's view.
+        const mintedSecretsFile = persistMintedSecrets(cwd, options, minted);
+
+        if (!ok) {
+            return { error: "failed to push required secret(s) — set them manually and re-deploy", mintedSecretsFile };
         }
 
-        return undefined;
+        return { mintedSecretsFile };
     }
 
     logger.warn(
@@ -640,7 +772,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
             `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`.`,
     );
 
-    return undefined;
+    return {};
 };
 
 /**
@@ -965,6 +1097,7 @@ const finalizeSuccessfulDeploy = async (
     descriptor: SpawnDescriptor,
     validation: DeployCommandResult["validation"],
     reblessSchemaBaseline: (() => void) | undefined,
+    mintedSecretsFile: string | undefined,
 ): Promise<DeployCommandResult> => {
     // Before migrations: a data migration may write rows whose vectors are
     // filtered on immediately afterwards.
@@ -980,13 +1113,13 @@ const finalizeSuccessfulDeploy = async (
             reblessSchemaBaseline?.();
         }
 
-        return { code: migrateCode, descriptor, validation };
+        return { code: migrateCode, descriptor, mintedSecretsFile, validation };
     }
 
     // Deploy succeeded — safe to advance the committed schema baseline.
     reblessSchemaBaseline?.();
 
-    return { code: 0, descriptor, validation };
+    return { code: 0, descriptor, mintedSecretsFile, validation };
 };
 
 /**
@@ -1216,12 +1349,16 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // Non-interactive (CI): a missing required secret aborts rather than shipping
     // a worker that will crash. Best-effort detection — skips dry-run/preview and
     // stays quiet when the worker can't be queried yet (first deploy / not authed).
-    const secretAbort = await offerMissingSecrets(cwd, options, interactive, target);
+    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, target);
 
     if (secretAbort !== undefined) {
         options.logger.error(secretAbort);
 
-        return { code: 1, descriptor: undefined, error: secretAbort, validation };
+        // `mintedSecretsFile` may be set here too — a secret can be recorded
+        // and STILL abort (e.g. the second of two mintable keys failed to
+        // push) — carry it through so the caller's `error` path doesn't drop
+        // the one place that value is now recoverable.
+        return { code: 1, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
     // Capture wrangler's stdout (to read the deployed URL for auto-link) only on
@@ -1247,27 +1384,27 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     const result = await spawner(descriptor);
 
     if (result.code !== 0) {
-        return { code: result.code, descriptor, validation };
+        return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
     // A dry run published nothing — never run migrations or advance the schema
     // baseline against a deploy that didn't happen.
     if (options.dryRun) {
-        return { code: 0, descriptor, validation };
+        return { code: 0, descriptor, mintedSecretsFile, validation };
     }
 
     // A preview uploaded a Version but didn't go live — skip the post-deploy
     // finalize (migrations / baseline re-bless) and auto-link, which only apply
     // to a production deploy. wrangler prints the preview URL itself.
     if (options.preview) {
-        return { code: 0, descriptor, validation };
+        return { code: 0, descriptor, mintedSecretsFile, validation };
     }
 
     // Zero-effort linking: record the deployed URL the first time (self-guards
     // when already linked or when stdout wasn't captured).
     autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, output: result.stdout });
 
-    return finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline);
+    return finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
 };
 
 /**
@@ -1297,7 +1434,13 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     // printed the preview URL), and never in json mode (the early return above)
     // where it would corrupt the document on stdout.
     if (result.code === 0 && options.dryRun !== true && options.preview !== true) {
-        renderDeploySummary({ cwd: options.cwd ?? process.cwd(), env: options.env, logger: options.logger, migrated: options.migrate === true });
+        renderDeploySummary({
+            cwd: options.cwd ?? process.cwd(),
+            env: options.env,
+            logger: options.logger,
+            migrated: options.migrate === true,
+            mintedSecretsFile: result.mintedSecretsFile,
+        });
     } else if (result.code === 0 && options.preview === true) {
         options.logger.success("preview version uploaded — see the preview URL in the wrangler output above");
     }

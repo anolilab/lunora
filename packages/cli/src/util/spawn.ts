@@ -197,6 +197,11 @@ export const defaultSpawner: Spawner = (descriptor) =>
         });
 
         if (hasInput && child.stdin) {
+            // A child that exits before draining stdin (e.g. `wrangler secret put`
+            // failing auth preflight) emits EPIPE on this stream; without a listener
+            // that is an uncaught exception. Swallow it — the `exit` handler above
+            // reports the child's real nonzero code, which is the actionable error.
+            child.stdin.on("error", () => {});
             // End the write so the child sees EOF and exits its read loop.
             // Most CLIs (wrangler secret put included) read until EOF.
             child.stdin.end(descriptor.input);

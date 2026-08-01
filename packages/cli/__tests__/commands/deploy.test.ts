@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,9 +106,10 @@ const validWranglerWithEnv = (name: string): string => `{
 }
 `;
 
-const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; warns: string[] } => {
+const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; successes: string[]; warns: string[] } => {
     const errors: string[] = [];
     const infos: string[] = [];
+    const successes: string[] = [];
     const warns: string[] = [];
 
     return {
@@ -117,9 +118,10 @@ const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; wa
         logger: {
             error: (message) => errors.push(message),
             info: (message) => infos.push(message),
-            success: () => {},
+            success: (message) => successes.push(message),
             warn: (message) => warns.push(message),
         },
+        successes,
         warns,
     };
 };
@@ -991,6 +993,184 @@ export const backfillNames = defineMigration({
         });
 
         describe("missing-secret gate", () => {
+            it("mints a missing secret, records it in .dev.vars, and never logs the value", async () => {
+                expect.assertions(6);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, infos, logger, successes } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // Remote has no secrets → the core LUNORA_ADMIN_TOKEN is missing + mintable,
+                    // and .dev.vars has no value for it yet → a fresh value is minted.
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+                // The result carries the (filename-only) record location so the caller
+                // (the end-of-deploy summary) can point at it too.
+                expect(result.mintedSecretsFile).toBe(".dev.vars");
+
+                const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+
+                // `wrangler secret put` is write-only — the ONLY place this value can
+                // still be read back from is the file it was disclosed into.
+                expect(secretPush?.descriptor.input).toMatch(/^[a-f0-9]{64}$/u);
+
+                const mintedValue = secretPush?.descriptor.input ?? "";
+
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${mintedValue}"`);
+
+                // Never printed, logged, or otherwise disclosed anywhere but the file.
+                expect([...errors, ...infos, ...successes].join("\n")).not.toContain(mintedValue);
+                // The success line names the key and points at the file — never the value.
+                expect(successes.some((line) => line.includes("LUNORA_ADMIN_TOKEN") && line.includes(".dev.vars"))).toBe(true);
+            });
+
+            it("the end-of-deploy summary points at the file a minted secret was recorded into", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { infos, logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                // The summary is where an operator looks after a long deploy — it must
+                // name the file too, not just the log line printed minutes earlier.
+                expect(infos.some((line) => line.includes("secrets:") && line.includes(".dev.vars"))).toBe(true);
+                expect(infos.some((line) => line.includes("deploy complete") || line.includes("worker:"))).toBe(true);
+            });
+
+            it("--env production's summary points at the .dev.vars.production sibling, not the bare file", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { infos, logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(infos.some((line) => line.includes("secrets:") && line.includes(".dev.vars.production"))).toBe(true);
+                // Never claims the bare, environment-agnostic file for a named --env.
+                expect(infos.some((line) => line.includes("secrets:") && !line.includes(".dev.vars.production"))).toBe(false);
+            });
+
+            it("writes the minted secret file owner-only (mode 0o600), not world-readable", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                // eslint-disable-next-line no-bitwise -- checking the permission bits is the point of this test
+                expect(statSync(join(workdir, ".dev.vars")).mode & 0o777).toBe(0o600);
+            });
+
+            it("never reuses an existing local .dev.vars value — always mints fresh, even for a non-placeholder key", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // A real (non-placeholder) value already sits in .dev.vars for the
+                // missing key. Reusing it — the behaviour this test guards against —
+                // would let a real-but-weak shared dev secret quietly become the
+                // value protecting the deploy target.
+                const existingValue = "existing-local-dev-token";
+
+                writeFileSync(join(workdir, ".dev.vars"), `LUNORA_ADMIN_TOKEN="${existingValue}"\n`, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+
+                // A fresh value was minted — never the pre-existing local one.
+                expect(secretPush?.descriptor.input).toMatch(/^[a-f0-9]{64}$/u);
+                expect(secretPush?.descriptor.input).not.toBe(existingValue);
+            });
+
+            it("--env production writes the minted secret into a sibling .dev.vars.production, leaving bare .dev.vars untouched", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                // A pre-existing bare .dev.vars (local dev's own file) must not be
+                // touched by a secret minted for a DIFFERENT, named environment.
+                // eslint-disable-next-line no-secrets/no-secrets -- test fixture literal, not a real secret
+                const localDevVars = 'SOME_OTHER_LOCAL_VAR="untouched"\n';
+
+                writeFileSync(join(workdir, ".dev.vars"), localDevVars, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                const secretPush = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+                const mintedValue = secretPush?.descriptor.input ?? "";
+
+                expect(mintedValue).toMatch(/^[a-f0-9]{64}$/u);
+                // The env-scoped sibling file gets the minted value...
+                expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${mintedValue}"`);
+                // ...and the bare, environment-agnostic .dev.vars is left exactly as it was.
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe(localDevVars);
+            });
+
             it("interactively generates + pushes a missing mintable secret before deploying", async () => {
                 expect.assertions(3);
 
