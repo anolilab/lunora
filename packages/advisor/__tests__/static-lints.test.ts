@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorQueryRead } from "../src";
+import type { AdvisorQueryRead, AdvisorSchema } from "../src";
 import {
     duplicateIndex,
     emptyIndex,
@@ -87,11 +87,27 @@ describe("index_references_unknown_field", () => {
     it("flags an index on a column the table does not declare", () => {
         expect.assertions(2);
 
-        const schema = defineSchema({
-            posts: defineTable({ title: v.string() }).index("byAuthor", ["authorId"]),
-        });
+        // Built directly rather than through `defineSchema` + `fromServerSchema`:
+        // `validateIndexFields` (packages/server/src/schema.ts) now rejects this
+        // exact shape at construction time, so `defineSchema` can never hand back
+        // a `Schema` with an index over an undeclared column. But the codegen
+        // feeder (`packages/codegen/src/advisor.ts`'s `toAdvisorSchema`) builds
+        // `AdvisorSchema` straight from its own AST-derived `SchemaIR` and never
+        // imports `@lunora/server` — a schema.ts typo is discoverable there
+        // *before* the module is ever executed, so this lint stays reachable from
+        // that path and needs a fixture that bypasses `defineSchema` entirely.
+        const schema: AdvisorSchema = {
+            tables: [
+                {
+                    fields: ["title"],
+                    indexes: [{ fields: ["authorId"], kind: "index", name: "byAuthor" }],
+                    name: "posts",
+                    relations: [],
+                },
+            ],
+        };
 
-        const findings = indexReferencesUnknownField.run({ schema: fromServerSchema(schema) });
+        const findings = indexReferencesUnknownField.run({ schema });
 
         expect(findings).toHaveLength(1);
         expect(findings[0]?.metadata).toMatchObject({ field: "authorId", index: "byAuthor", table: "posts" });
@@ -257,19 +273,26 @@ describe("runAdvisor with the full static set", () => {
     it("aggregates findings from every lint, correctness first", () => {
         expect.assertions(2);
 
-        const schema = fromServerSchema(
-            defineSchema({
-                // unindexed FK (authorId) + a redundant index pair + an unknown index field.
-                posts: defineTable({ authorId: v.id("users"), createdAt: v.number() })
-                    .index("byAuthor", ["authorId"])
-                    .index("byAuthorCreated", ["authorId", "createdAt"])
-                    .index("byGhost", ["ghost"])
-                    .relations((r) => {
-                        return { author: r.one("users", { field: "authorId" }) };
-                    }),
-                users: defineTable({ name: v.string() }),
-            }),
-        );
+        // Built directly rather than through `defineSchema` — see the comment in
+        // `index_references_unknown_field` above: `byGhost`'s unknown field would
+        // now throw at construction time, but the codegen feeder never goes
+        // through `defineSchema`, so this fixture mirrors that IR shape by hand.
+        const schema: AdvisorSchema = {
+            tables: [
+                {
+                    // unindexed FK (authorId) + a redundant index pair + an unknown index field.
+                    fields: ["authorId", "createdAt"],
+                    indexes: [
+                        { fields: ["authorId"], kind: "index", name: "byAuthor" },
+                        { fields: ["authorId", "createdAt"], kind: "index", name: "byAuthorCreated" },
+                        { fields: ["ghost"], kind: "index", name: "byGhost" },
+                    ],
+                    name: "posts",
+                    relations: [{ field: "authorId", kind: "one", name: "author", references: "_id", table: "users" }],
+                },
+                { fields: ["name"], indexes: [], name: "users", relations: [] },
+            ],
+        };
 
         const findings = runAdvisor({ schema }, { source: "static" });
         const names = findings.map((finding) => finding.name);
