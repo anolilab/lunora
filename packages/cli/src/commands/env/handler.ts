@@ -329,6 +329,17 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         return { code: 0, descriptors: [] };
     }
 
+    const placeholders = [...map.values()].filter((entry) => isPlaceholderValue(entry.value)).map((entry) => entry.key);
+
+    if (placeholders.length > 0) {
+        logger.error(
+            `env push: refusing to upload placeholder value(s) for ${placeholders.join(", ")} — ` +
+                `run \`lunora env doctor\` to review, and \`lunora env generate --set\` (or \`lunora env set <KEY> <VALUE>\`) to fill them, then re-run.`,
+        );
+
+        return { code: 1, descriptors: [] };
+    }
+
     const spawner = options.spawner ?? defaultSpawner;
     const cwd = options.cwd ?? process.cwd();
     const manager = detectPackageManager(cwd);

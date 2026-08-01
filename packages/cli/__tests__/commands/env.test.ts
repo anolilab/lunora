@@ -287,6 +287,38 @@ describe("lunora env", () => {
             expect(recorded.warnings.join("\n")).toContain("A");
         });
 
+        it("push refuses to upload a placeholder value, naming the offending key and nothing gets spawned", async () => {
+            expect.assertions(4);
+
+            const { logger, recorded } = recordingLogger();
+
+            writeFileSync(join(workdir, ".dev.vars"), 'REAL_KEY="a-real-value"\nAUTH_SECRET="replace-me"\n', "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            const result = await runEnvCommand({ cwd: workdir, logger, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain("AUTH_SECRET");
+            expect(recorded.errors.join("\n")).toContain("env doctor");
+        });
+
+        it("push proceeds when every value is real (no placeholder regression)", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+
+            writeFileSync(join(workdir, ".dev.vars"), 'REAL_KEY="a-real-value"\nOTHER_KEY="also-real"\n', "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            const result = await runEnvCommand({ cwd: workdir, logger, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(2);
+        });
+
         it("push without --yes is refused", async () => {
             expect.assertions(3);
 
