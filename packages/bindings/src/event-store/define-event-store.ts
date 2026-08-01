@@ -46,7 +46,7 @@ const assertMatchesSchema = (schema: EventStoreSchema, record: Record<string, un
     }
 
     for (const field of Object.keys(record)) {
-        if (!(field in schema)) {
+        if (!Object.hasOwn(schema, field)) {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/bindings/event-store: field "${field}" is not declared in the schema`);
         }
     }

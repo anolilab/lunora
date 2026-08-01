@@ -116,4 +116,24 @@ describe("defineEventStore (prototype)", () => {
 
         await expect(store.send(extraField)).rejects.toThrow(/"unexpected" is not declared in the schema/);
     });
+
+    it("catches an off-schema field named after an Object.prototype member", async () => {
+        expect.assertions(2);
+
+        // `field in schema` walks the prototype chain, so a record field named
+        // "constructor" (or "toString", "hasOwnProperty", …) would read as
+        // "declared" against ANY schema object and smuggle through unvalidated
+        // — the exact off-schema case the previous test guards against, just
+        // reached via the prototype chain instead of a plain extra key.
+        const { send, store } = setup();
+        const prototypePollution = {
+            amount: 1,
+            constructor: "nope",
+            id: "evt-5",
+            occurredAt: "2026-07-31T00:00:00Z",
+        } as unknown as PurchaseEvent;
+
+        await expect(store.send(prototypePollution)).rejects.toThrow(/"constructor" is not declared in the schema/);
+        expect(send).not.toHaveBeenCalled();
+    });
 });

@@ -125,6 +125,15 @@ const assertCanonicalSafe = (value: string): void => {
     }
 };
 
+/**
+ * Predicate form of the same C0-control-character check `assertCanonicalSafe`
+ * throws on. The canonical home for "is this value canonical-unsafe" so
+ * callers that need a boolean (rather than a thrown `TypeError`) — e.g.
+ * `@lunora/storage`'s `validateKey`, which raises its own `LunoraError` — share
+ * this single detector instead of re-deriving `CONTROL_CHAR_RE` from scratch.
+ */
+const hasControlChar = (value: string): boolean => CONTROL_CHAR_RE.test(value);
+
 /** Sign `canonical` with the secret's HMAC key, returning the base64url signature. */
 const signCanonical = async (secret: string, canonical: string): Promise<string> => {
     const cryptoKey = await importHmacKey(secret);
@@ -145,4 +154,4 @@ const verifyCanonical = async (secret: string, canonical: string, sigBytes: Uint
     return crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonical));
 };
 
-export { assertCanonicalSafe, extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical };
+export { assertCanonicalSafe, extractHost, fromBase64Url, hasControlChar, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical };
