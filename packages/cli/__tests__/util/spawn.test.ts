@@ -137,4 +137,25 @@ describe("defaultSpawner", () => {
             writeSpy.mockRestore();
         }
     });
+
+    // Regression test for the two secret-push paths (`env push`,
+    // `deploy`'s mint-and-push flow), which are the only callers of the
+    // `input` channel: a child that destroys its stdin and exits before
+    // draining it (e.g. `wrangler secret put` failing an auth preflight)
+    // used to raise an uncaught EPIPE on the error-less writable stream
+    // instead of resolving with the child's real exit code. Platform-timing
+    // dependent — if this doesn't crash pre-fix on a given machine, the fix
+    // (an attached `error` listener) is still harmless and this stays a
+    // regression guard.
+    it("resolves with the child's exit code instead of throwing an uncaught EPIPE when the child destroys stdin before draining it", async () => {
+        expect.assertions(1);
+
+        const result = await defaultSpawner({
+            args: ["-e", "process.stdin.destroy(); setTimeout(() => process.exit(3), 100)"],
+            command: process.execPath,
+            input: "some-input-that-will-never-be-read",
+        });
+
+        expect(result.code).toBe(3);
+    });
 });
