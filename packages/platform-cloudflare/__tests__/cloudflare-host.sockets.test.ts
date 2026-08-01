@@ -256,6 +256,27 @@ describe("createSocketHost handleFor ownership", () => {
         expect(host.handleFor(stranger)).toBeUndefined();
     });
 
+    it("keeps idFor stable across repeated calls on a socket it never accepted (PLATCF-01)", () => {
+        expect.assertions(2);
+
+        // A socket the runtime hands back that this host never accepted — the
+        // same "stranger" scenario as ownership, but for identity. `idFor`
+        // used to mint a FRESH counter-based id on every call for exactly this
+        // case (no id tag, no fallbackIds entry), so two callers holding the
+        // same unowned socket disagreed about its identity — three behaviours
+        // for one call, per the SocketHost.idFor contract this now honours.
+        const live: FakeSocket[] = [];
+        const host = createSocketHost(stateWith(live) as never);
+        const stranger = new FakeSocket();
+
+        const first = host.idFor(stranger);
+        const second = host.idFor(stranger);
+
+        expect(second).toBe(first);
+        // A DIFFERENT unowned socket must not collide with the first one's id.
+        expect(host.idFor(new FakeSocket())).not.toBe(first);
+    });
+
     it("answers ownership for a stream of unknown sockets without re-walking per call", () => {
         expect.assertions(23);
 

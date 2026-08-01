@@ -207,6 +207,21 @@ const ID_TAG_PREFIX = "lunora-socket:";
 /** Fallback ids for doubles without `getTags`, stable only within one wake. */
 const fallbackIds = new WeakMap<WebSocket, string>();
 
+/**
+ * Read-only fallback ids for a socket this host never accepted (or a double
+ * with no `getTags`, once `fallbackIds` has already been checked).
+ *
+ * A separate map from `fallbackIds` on purpose: `fallbackIds` is ownership
+ * evidence written only by `accept`, and `handleFor` trusts membership in it
+ * to mean "ours". `idFor` must answer *some* caller holding a socket this
+ * host never saw (a whisper sender in another pool, a relay-tier peer) — the
+ * contract requires a stable answer, not a thrown error, per `SocketHost.idFor`
+ * — but that answer must never be able to promote the socket into `fallbackIds`
+ * and launder it into ownership. Keeping the two maps distinct is what makes
+ * that impossible: this one is consulted only by `idFor`, never by `handleFor`.
+ */
+const readOnlyIds = new WeakMap<WebSocket, string>();
+
 let fallbackCounter = 0;
 
 /**
@@ -254,13 +269,27 @@ const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
         return existing;
     }
 
+    // A socket with no id tag and no fallback-id entry: either a test double
+    // with no `getTags` and no accept-time record, or a socket this host never
+    // accepted at all. `idFor` still has to answer, and it has to answer the
+    // SAME string every time for the SAME socket object — a fresh mint per call
+    // was the bug (PLATCF-01): three different callers holding the same
+    // unowned socket would get three different "ids" for what the engine has
+    // to treat as one identity. Cache into `readOnlyIds` — NOT `fallbackIds`,
+    // see that map's docstring for why the two must stay separate.
+    const cached = readOnlyIds.get(ws);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
     fallbackCounter += 1;
 
-    // Deliberately NOT recorded in `fallbackIds`. That map is ownership evidence
-    // consulted by `handleFor`, and `accept` is its only legitimate writer — a
-    // read-only id lookup that wrote to it would let `idFor(x)` on a foreign
-    // socket turn a cached "not ours" into "ours" on the next `handleFor(x)`.
-    return `cf-socket-${String(fallbackCounter)}`;
+    const minted = `cf-socket-${String(fallbackCounter)}`;
+
+    readOnlyIds.set(ws, minted);
+
+    return minted;
 };
 
 /**

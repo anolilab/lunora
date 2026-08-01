@@ -240,6 +240,52 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             });
 
+            // `SocketHost.idFor` is documented to answer the SAME string for
+            // the SAME socket, not a fresh value per call — the property every
+            // caller (fan-out dedup, subscription reassociation) relies on.
+            it("keeps idFor stable across repeated calls within a wake", async () => {
+                expect.assertions(1);
+
+                const host = await createHost();
+                const handle = host.socket.accept(rawSocket(host), {});
+
+                const first = host.socket.idFor(handle);
+                const second = host.socket.idFor(handle);
+
+                expect(second).toBe(first);
+
+                host.cleanup?.();
+            });
+
+            // Same leg as "round-trips attachments across a recycle" above, for
+            // identity rather than payload: the engine reassociates a rehydrated
+            // socket with the subscription state it owned before the wake BY id,
+            // so a host whose id drifts across a recycle breaks that lookup even
+            // though the attachment round-trips fine.
+            it("keeps idFor stable across a recycle", async () => {
+                expect.assertions(1);
+
+                const host = await createHost();
+
+                if (host.simulateRecycle === undefined || host.restoreSocket === undefined) {
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                const attachment = { roomId: "room-1", roles: ["admin"] };
+                const handle = host.socket.accept(rawSocket(host), attachment);
+                const idBeforeRecycle = host.socket.idFor(handle);
+
+                host.simulateRecycle();
+                const restored = host.restoreSocket(idBeforeRecycle, attachment);
+
+                expect(host.socket.idFor(restored)).toBe(idBeforeRecycle);
+
+                host.cleanup?.();
+            });
+
             // A tagged `getSockets` must return *exactly* the tagged sockets.
             // Length alone would pass a host that returns the wrong socket, and
             // a superset would fan shape updates out to unrelated (possibly

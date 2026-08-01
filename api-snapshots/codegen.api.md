@@ -492,7 +492,7 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_unknown_target" | "platform_unsupported_feature";
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
     remediation: string;
     target: string;
 }

@@ -36,6 +36,26 @@ describe("createWorkerPlatform", () => {
         expect(() => createWorkerPlatform({}).directory("SHARD")).toThrow(/no Durable Object namespace bound as "SHARD"/);
     });
 
+    // A binding wrangler left unresolved can surface as `null`, not just absent
+    // from `env` — the guard used to be `undefined`-only, which let `null` fall
+    // through to `createShardDirectory` and fail several calls later as an
+    // unrelated TypeError instead of this actionable message (PLATCF-02).
+    it("throws the same actionable message for a null binding, not a downstream TypeError", () => {
+        expect.assertions(1);
+
+        expect(() => createWorkerPlatform({ SHARD: null }).directory("SHARD")).toThrow(/no Durable Object namespace bound as "SHARD"/);
+    });
+
+    // This package does not depend on `@lunora/do` — the error used to say
+    // `@lunora/do:` from inside `@lunora/platform-cloudflare`, naming a package
+    // this one has no edge to, which sends a reader debugging the message to
+    // the wrong source.
+    it("names @lunora/platform-cloudflare in the error, not @lunora/do", () => {
+        expect.assertions(1);
+
+        expect(() => createWorkerPlatform({}).directory("SHARD")).toThrow(/^@lunora\/platform-cloudflare:/);
+    });
+
     it("omits the scheduler when no scheduler wiring is supplied", () => {
         expect.assertions(1);
 

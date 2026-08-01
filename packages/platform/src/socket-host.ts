@@ -127,6 +127,31 @@ export interface SocketHost {
      * recycle, since the engine uses it to reassociate a rehydrated socket with
      * its subscription state. Callers outside the O(subscribers) loops are the
      * intended consumers; do not reach for this per socket per frame.
+     *
+     * **A socket this host never {@link SocketHost.accept}ed** (a foreign socket
+     * the runtime hands back — a whisper sender in another pool, a relay peer)
+     * is outside that "own socket" contract, but a host must still pick ONE
+     * consistent answer for it, never a fresh value per call:
+     *
+     * - Throw, when a `SocketHandle` from this host can *only* ever originate
+     * from this host's own `accept`/`recycle` — an unrecognized handle then
+     * means caller error (a handle crossed from a different host instance),
+     * and failing loud beats returning a plausible-looking wrong id. This is
+     * the reference host's choice, since its `SocketHandle` is an opaque
+     * object it mints itself.
+     * - Mint and cache a read-only fallback id, when `SocketHandle` doubles as
+     * the provider's own transport socket (see {@link SocketHandle}'s "not a
+     * wrapper" rationale) — a foreign-but-genuine socket then structurally
+     * satisfies the type without ever going through `accept`, so throwing
+     * would fire on legitimate traffic, not just caller error. This is the
+     * Cloudflare host's choice: it caches into a separate map from its
+     * accept-time ownership evidence, so an `idFor` lookup can never promote
+     * a socket into "ours" for {@link SocketHost.handleFor}.
+     *
+     * Either is a valid implementation as long as it is consistent: what is not
+     * valid is minting a new id on every call for a socket the host does not
+     * recognize, which defeats the "same string for the same socket" property
+     * every caller of `idFor` — owned or not — depends on.
      */
     idFor: (socket: SocketHandle) => string;
 

@@ -24,6 +24,7 @@
  * `webSocketMessage`, and `fetch` seams exposed by ShardDO.
  */
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
@@ -189,6 +190,35 @@ const subscribeSocket = (shard: SubscriptionRefreshShard, ws: FakeWebSocket, sub
         query: { args: {}, functionPath },
         type: "subscribe",
     });
+
+/**
+ * Shared by both the isolation test and the DO-01 counter/log test: a shard
+ * whose `messages:broken` subscription seeds cleanly (first call) then throws
+ * on every subsequent refresh, while every other functionPath behaves like
+ * the base `SubscriptionRefreshShard`.
+ */
+class BrokenRefreshShard extends SubscriptionRefreshShard {
+    // Track whether we are on the first call (seed) to each functionPath.
+    private readonly firstCall = new Set<string>();
+
+    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        if (functionPath === "messages:broken") {
+            if (!this.firstCall.has(functionPath)) {
+                // First call = seed: return null so no memo is set and no
+                // initial push is sent. The broken subscription is "registered"
+                // but has no memo.
+                this.firstCall.add(functionPath);
+
+                return Promise.resolve(null);
+            }
+
+            // Subsequent calls = refresh: throw to exercise the error path.
+            return Promise.reject(new Error("broken subscription"));
+        }
+
+        return super.executeSubscription(functionPath, args);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Test suite
@@ -447,29 +477,6 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     it("a failing subscription does not abort the refresh of its siblings on the same socket", async () => {
         expect.assertions(3);
 
-        class BrokenRefreshShard extends SubscriptionRefreshShard {
-            // Track whether we are on the first call (seed) to each functionPath.
-            private readonly firstCall = new Set<string>();
-
-            protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
-                if (functionPath === "messages:broken") {
-                    if (!this.firstCall.has(functionPath)) {
-                        // First call = seed: return null so no memo is set and
-                        // no initial push is sent. The broken subscription is
-                        // "registered" but has no memo.
-                        this.firstCall.add(functionPath);
-
-                        return Promise.resolve(null);
-                    }
-
-                    // Subsequent calls = refresh: throw to exercise the error path.
-                    return Promise.reject(new Error("broken subscription"));
-                }
-
-                return super.executeSubscription(functionPath, args);
-            }
-        }
-
         const brokenShard = new BrokenRefreshShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -515,6 +522,66 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
         const brokenFrames = subFrames(ws, "sub-broken");
 
         expect(brokenFrames).toHaveLength(0);
+    });
+
+    // -------------------------------------------------------------------------
+    // DO-01 — a swallowed refresh error is counted and logged, not silent.
+    //
+    // Same broken/healthy pairing as the case above, but asserting the
+    // observability side rather than just "siblings still refresh": the
+    // `catch { continue; }` in `refreshSubscriptions` used to discard the error
+    // outright, so a live query that threw deterministically went silently
+    // stale for the life of the socket with nothing an operator could see.
+    // -------------------------------------------------------------------------
+    it("a failing subscription refresh increments subscriptionRefreshErrors and logs once, without blocking its sibling", async () => {
+        expect.assertions(6);
+
+        const adminToken = "s3cret-admin";
+        const adminRequest = (functionPath: string): Request =>
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath }),
+                headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+                method: "POST",
+            });
+
+        const brokenShard = new BrokenRefreshShard(state, { LUNORA_ADMIN_TOKEN: adminToken });
+        const ws = createFakeWebSocket();
+
+        brokenShard.registerSocket(ws);
+
+        await subscribeSocket(brokenShard, ws, "sub-broken", "messages:broken");
+
+        brokenShard.outcomes.set("messages:list", { result: [{ _id: "m1" }], tables: new Set(["messages"]) });
+        await subscribeSocket(brokenShard, ws, "sub-healthy", "messages:list");
+
+        brokenShard.outcomes.set("messages:list", { result: [{ _id: "m1" }, { _id: "m2" }], tables: new Set(["messages"]) });
+        brokenShard.changedTableOnRpc = "messages";
+
+        // Two mutations ⇒ the broken subscription's refresh throws TWICE — the
+        // counter and log entries must track both, and the sibling must keep
+        // refreshing on the second pass too, not just the first.
+        await brokenShard.writeRpc();
+        await brokenShard.writeRpc();
+
+        // Sibling still refreshes on both passes — same shape as the case above,
+        // asserted again here so a future change can't decouple "counted" from
+        // "siblings unaffected".
+        expect(subFrames(ws, "sub-healthy").slice(1).length).toBeGreaterThan(0);
+        expect(subFrames(ws, "sub-broken")).toHaveLength(0);
+
+        const metricsResponse = await brokenShard.fetch(adminRequest(ADMIN_FUNCTIONS.getMetrics));
+        const metricsBody = await metricsResponse.json<{ result: { subscriptionRefreshErrors: number } }>();
+
+        expect(metricsResponse.status).toBe(200);
+        expect(metricsBody.result.subscriptionRefreshErrors).toBe(2);
+
+        const logsResponse = await brokenShard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs));
+        const logsBody = await logsResponse.json<{
+            result: { entries: { functionPath?: string; level: string; message: string }[] };
+        }>();
+
+        expect(logsResponse.status).toBe(200);
+        expect(logsBody.result.entries.filter((entry) => entry.functionPath === "messages:broken" && entry.level === "error")).toHaveLength(2);
     });
 
     // -------------------------------------------------------------------------

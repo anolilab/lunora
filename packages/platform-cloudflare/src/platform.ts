@@ -129,8 +129,15 @@ export const createWorkerPlatform = (env: unknown, options: WorkerPlatformOption
     const directory = (binding: string): ShardDirectory => {
         const namespace = bindings[binding];
 
-        if (namespace === undefined) {
-            throw new Error(`@lunora/do: no Durable Object namespace bound as "${binding}" — add it to wrangler.jsonc's durable_objects.bindings`);
+        // Guards `null` too, not just `undefined`: a binding wrangler left
+        // unresolved can surface as `null` rather than simply absent from
+        // `env`, and that case must fail with this same actionable message,
+        // not fall through to `createShardDirectory` and surface as an
+        // unrelated TypeError several calls downstream.
+        if (namespace === undefined || namespace === null) {
+            throw new Error(
+                `@lunora/platform-cloudflare: no Durable Object namespace bound as "${binding}" — add it to wrangler.jsonc's durable_objects.bindings`,
+            );
         }
 
         return createShardDirectory(namespace as Parameters<typeof createShardDirectory>[0]);

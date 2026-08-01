@@ -1158,8 +1158,15 @@ abstract class ShardDO {
      * RPC. In-memory only — they reset when the DO hibernates or restarts, which
      * is the right granularity for a "since this instance woke" health readout
      * (durable aggregation would be a separate, heavier feature).
+     *
+     * `subscriptionRefreshErrors` (DO-01) rides along the same lifetime/in-memory
+     * shape: incremented, alongside a structured log, wherever a live-query
+     * refresh or shape poke swallows a per-subscription/per-socket error so its
+     * siblings can keep flushing (`refreshSubscriptions`, `pokeShapeSubscribers`
+     * via `recordSubscriptionRefreshError`). It IS on the `getMetrics` wire
+     * response (`collectMetrics`); a studio panel charting it is a follow-up.
      */
-    private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
+    private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now(), subscriptionRefreshErrors: 0 };
 
     /**
      * Running fan-out cost counters surfaced by the
@@ -4910,6 +4917,13 @@ abstract class ShardDO {
      * fields. `indexHits` is shaped exactly as the advisor's `AdvisorIndexHit`
      * (`{ table, index, reads }`), so the studio passes it straight to
      * `runLints({ ..., indexHits })` after summing the per-shard arrays.
+     *
+     * `subscriptionRefreshErrors` (DO-01) rides along the same way: an
+     * in-memory-only lifetime count (no durable table, unlike `requests`/
+     * `errors`), incremented by `recordSubscriptionRefreshError` whenever a live
+     * query refresh or shape poke swallows a per-subscription error to protect
+     * its siblings. The field is on the wire so it is queryable/testable now;
+     * charting it in the studio's metrics panel is a follow-up.
      */
     private collectMetrics(): {
         cache: null | { bytes: number; entries: number; evictions: number; hits: number; misses: number };
@@ -4922,6 +4936,7 @@ abstract class ShardDO {
         requests: number;
         shard: string;
         sinceMs: number;
+        subscriptionRefreshErrors: number;
         uptimeMs: number;
     } {
         const size = this.shardHost.sql.databaseSize;
@@ -4975,6 +4990,7 @@ abstract class ShardDO {
             requests,
             shard: this.runner.shardKey ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
+            subscriptionRefreshErrors: this.metrics.subscriptionRefreshErrors,
             uptimeMs: Date.now() - this.metrics.sinceMs,
         };
     }
@@ -7360,6 +7376,44 @@ abstract class ShardDO {
      * high-fanout shards rather than bolt a second, semantically-divergent dedup
      * into this loop.
      */
+
+    /**
+     * Count and log a subscription-delivery error that its caller is about to
+     * swallow (DO-01) — `refreshSubscriptions`' per-`(socket, sub)` catch and
+     * `pokeShapeSubscribers`' per-socket catch both call this instead of a bare
+     * `catch { continue; }`, so a live query or shape poke that throws
+     * DETERMINISTICALLY on every flush is counted on `metrics.subscriptionRefreshErrors`
+     * and shows up in the studio's Live Logs, rather than repeating silently for
+     * the life of the socket. Factored out because both call sites need the
+     * identical counter-then-best-effort-log shape, and duplicating it inline
+     * pushed each closure over the file's cognitive-complexity budget.
+     *
+     * `lastTelemetrySink` (not a threaded `sink`) because both flush workers run
+     * with no `ctx` — the same stand-in `flushTelemetry` uses.
+     *
+     * `error` is a caught INTERNAL failure surfaced from a background
+     * refresh/poke pass, not a value a developer chose to log via `ctx.log` —
+     * so `recordUserLog`'s "args are not redacted" contract (see its
+     * docstring) does not apply here: a thrown value can carry an arbitrary
+     * `cause`, stack, or custom own property (a handler can `throw
+     * Object.assign(new Error(...), { row })`), and `args` rides raw into any
+     * `sink.onLog` an operator has configured. Route it through the same
+     * `toErrorBody` envelope every other error-crossing boundary in this file
+     * uses (see `errorToResponse`, the shape-seed catches above) so only a
+     * bounded `{ code, message }` — not the raw error — reaches the sink.
+     */
+    private recordSubscriptionRefreshError(functionPath: string, error: unknown, fields: Record<string, unknown>): void {
+        this.metrics.subscriptionRefreshErrors += 1;
+
+        try {
+            const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+            this.recordUserLog(functionPath, "error", [body], body.message, fields, this.lastTelemetrySink, "subscriptionRefreshError");
+        } catch {
+            // Best-effort, matching every other telemetry call on this path.
+        }
+    }
+
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
         const sockets = [...this.runner.sockets()];
 
@@ -7448,12 +7502,18 @@ abstract class ShardDO {
                     await awaitWsDrain(ws);
 
                     this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch);
-                } catch {
+                } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
                     // is left untouched ("unknown deps"), so this subscription
-                    // re-runs on the next flush.
-                    /* refresh error contained to this subscription */ continue;
+                    // re-runs on the next flush — but until now that failure was
+                    // silent (DO-01): a subscription whose refresh throws
+                    // DETERMINISTICALLY (a bad handler cast, say) repeated
+                    // unnoticed for the life of the socket with no signal an
+                    // operator could see anywhere. See `recordSubscriptionRefreshError`.
+                    this.recordSubscriptionRefreshError(functionPath, error, { subId });
+
+                    continue;
                 }
             }
         };
@@ -7777,13 +7837,17 @@ abstract class ShardDO {
                         }
                     }
                 }
-            } catch {
+            } catch (error) {
                 // A throwing socket (e.g. awaitWsDrain/sendPoke rejecting on a dead
                 // connection) must not abort the poke fan-out to its siblings — the
                 // bounded pool runs sockets in parallel and one bad socket would
                 // otherwise reject the whole Promise.all. Memos are left untouched,
-                // so the next flush re-pokes this socket. Mirrors refreshSubscriptions.
-                /* poke error contained to this socket */
+                // so the next flush re-pokes this socket. Mirrors refreshSubscriptions,
+                // including the DO-01 fix — see `recordSubscriptionRefreshError`. No
+                // single `functionPath` applies to a shape poke (one socket can hold
+                // several shapes), so the log is tagged with the admin-namespaced
+                // pseudo-path below and the live shape ids.
+                this.recordSubscriptionRefreshError(`${ADMIN_FUNCTION_PREFIX}pokeShapeSubscribers`, error, { shapeIds: Object.keys(shapes) });
             }
         };
 
@@ -7807,9 +7871,10 @@ abstract class ShardDO {
      * the results into the poke parts to send and the per-shape memo advances. A
      * `.global()` shape (driven by the alarm poll loop, not this flush) and a shape
      * whose table didn't change are skipped; a shape whose resolve/diff throws is
-     * logged and skipped with its memo unadvanced so a later flush retries. Empty
-     * diffs advance unconditionally; part-bearing shapes advance only once the
-     * caller confirms the poke was delivered.
+     * counted and logged via `recordSubscriptionRefreshError` (DO-01) and skipped
+     * with its memo unadvanced so a later flush retries. Empty diffs advance
+     * unconditionally; part-bearing shapes advance only once the caller confirms
+     * the poke was delivered.
      */
     private collectShapePokeParts(
         ws: ShardSocketLike,
@@ -7842,7 +7907,13 @@ abstract class ShardDO {
                     emptyAdvanced.push(subId);
                 }
             } catch (error) {
-                this.recordShapeError(`shape:poke:${subId}`, error);
+                // Counted and logged like the socket-level catch in the caller
+                // (see `recordSubscriptionRefreshError`) so a resolve/diff
+                // failure contained to one shape still shows up on
+                // `metrics.subscriptionRefreshErrors` and the structured
+                // telemetry event — not just the socket-level failures that
+                // escape this loop entirely.
+                this.recordSubscriptionRefreshError(`${ADMIN_FUNCTION_PREFIX}pokeShapeSubscribers`, error, { subId });
             }
         }
 
