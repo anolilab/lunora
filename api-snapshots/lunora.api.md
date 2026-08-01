@@ -3853,6 +3853,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `NODE_CAPABILITIES` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `NOOP_EXECUTION_CONTEXT` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.

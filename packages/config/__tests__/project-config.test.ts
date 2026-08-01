@@ -167,16 +167,31 @@ describe("deploy-target resolution", () => {
 });
 
 describe("target registries", () => {
-    it("keeps the driver registry and codegen's capability matrices in agreement", () => {
+    // A ONE-DIRECTION invariant, not equality — plan 234 is why. A target with
+    // a driver but NO matrix is the dangerous case: it passes
+    // `resolveTargetOrThrow` and then codegen emits an un-gated surface,
+    // reintroducing the silent fallback with the guard fully in place. That
+    // direction must never happen, so it stays asserted below.
+    //
+    // A target with a matrix but no driver is different: it says codegen can
+    // gate capabilities for a host the CLI cannot deploy to yet — exactly
+    // `node` today (`@lunora/platform-node`, plan 234), a spike host that
+    // exists to run the conformance TCK against a second implementation and
+    // has deliberately no `lunora dev`/deploy wiring. That is not a bug in
+    // either registry; it is what "codegen-gateable" and "deployable" being
+    // different questions looks like once a second target actually exists to
+    // ask them about. See `plans/234-node-host-findings.md`.
+    //
+    // This used to assert strict equality on the theory that the two id
+    // spaces were one concept and would always agree — true only because both
+    // held exactly `cloudflare` and nothing had tested the claim. `node` is
+    // that test, and it failed the strict form: a construction-discovered gap
+    // in the invariant itself, not in either registry.
+    it("never has a deploy driver for a target codegen cannot gate", () => {
         expect.assertions(1);
 
-        // Two id spaces for one concept. A target with a driver but no matrix
-        // passes `resolveTargetOrThrow` and then emits an un-gated surface —
-        // reintroducing the silent fallback with the guard fully in place. One
-        // with a matrix but no driver gates a surface nothing can deploy.
-        // They agree today only because both hold exactly `cloudflare`; this is
-        // what makes the next target's omission a failing test instead of a
-        // production surprise.
-        expect(deployTargetIds()).toStrictEqual(platformMatrixIds());
+        const matrixIds = new Set(platformMatrixIds());
+
+        expect(deployTargetIds().every((id) => matrixIds.has(id))).toBe(true);
     });
 });

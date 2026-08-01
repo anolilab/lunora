@@ -52,7 +52,11 @@ const snapshotsDir = join(rootDir, "api-snapshots");
 /**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`). The
  * experimental packages (agent, replica, x402, react-native, angular, ai,
- * browser, container, payment) are deliberately NOT covered.
+ * browser, container, payment) are deliberately NOT covered — and so, for now,
+ * is `platform-node`: it is a plan-234 spike (no `lunora dev` wiring, no
+ * deploy driver, capabilities mostly `unsupported`/`emulated`), and its public
+ * surface is still expected to move. Add it here once it graduates past spike
+ * stage, alongside `platform`/`platform-cloudflare`.
  */
 const TIER_1 = [
     "server",

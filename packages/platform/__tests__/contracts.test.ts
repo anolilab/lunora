@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, SocketHost } from "../src";
-import { CLOUDFLARE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
+import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
 
 describe("@lunora/platform contracts", () => {
     it("exports the Cloudflare capability matrix", () => {
@@ -20,6 +20,27 @@ describe("@lunora/platform contracts", () => {
 
         expect(CLOUDFLARE_CAPABILITIES.features.crossShardFanout?.level).toBe("emulated");
         expect(CLOUDFLARE_CAPABILITIES.features.mail?.level).toBe("emulated");
+    });
+
+    // Plan 234: `@lunora/platform-node` is honestly a mostly-unsupported target
+    // — no Cloudflare-specific product bindings exist for it — but it must
+    // rate EVERY feature Cloudflare does, not leave gaps `gateAgainstMatrix`
+    // would otherwise fail closed on under `platform_undeclared_feature`
+    // rather than the more specific `platform_unsupported_feature`.
+    it("exports the Node capability matrix, rating every feature Cloudflare rates", () => {
+        expect.assertions(5);
+
+        expect(NODE_CAPABILITIES.id).toBe("node");
+        expect(NODE_CAPABILITIES.name).toBe("Node");
+        expect(Object.keys(NODE_CAPABILITIES.features).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            Object.keys(CLOUDFLARE_CAPABILITIES.features).toSorted((a, b) => a.localeCompare(b)),
+        );
+        // The two contracts this package actually implements well: real
+        // synchronous SQL, matching Cloudflare's native rating.
+        expect(NODE_CAPABILITIES.features.localSql?.level).toBe("native");
+        // Most Cloudflare-specific products have no Node equivalent at all —
+        // spot-check one rather than enumerate all 15.
+        expect(NODE_CAPABILITIES.features.objectStorage?.level).toBe("unsupported");
     });
 
     it("exports the noop execution context", () => {
