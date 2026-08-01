@@ -226,10 +226,9 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
     // claim the same key (e.g. `creem:""`) once and permanently, so every SUBSEQUENT event with a
     // missing id — from any adapter, present or future — would be misclassified "duplicate" and
     // dropped with no state change. Throwing here returns non-2xx, so the provider retries instead
-    // of the webhook silently going dark. Guarded against a falsy (not just empty-string) id too:
-    // `WebhookAction.eventId` is typed `string`, but an adapter reading a missing field defensively
-    // (rather than coalescing to `""`) could still hand this an `undefined` at runtime.
-    if (!action.eventId || action.eventId.trim() === "") {
+    // of the webhook silently going dark.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `WebhookAction.eventId` is typed `string`, but an adapter reading a missing field defensively could still hand this an `undefined` at runtime
+    if (!action.eventId?.trim()) {
         throw new LunoraPaymentError("WEBHOOK_EVENT_ID_MISSING", `webhook event id is missing or blank for provider "${action.provider}"`);
     }
 

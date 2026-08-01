@@ -299,6 +299,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return jsonResponse({ error: "webhook error" }, 400);
             }
 
+            // Deliberately outside the try/catch above: a thrown LunoraPaymentError (e.g.
+            // WEBHOOK_EVENT_ID_MISSING) surfaces uncaught as a 5xx rather than its catalog 400, so
+            // every provider retries the transient malformed delivery instead of some providers
+            // treating a 400 as "stop retrying". Do not wrap this call in the parseWebhook try/catch.
             const result = await applyWebhookAction(store, action, options.observability);
 
             // Acknowledge once verified so the provider stops retrying — a no-op is still a 200.
