@@ -1691,10 +1691,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * `let`: every dispatch builds a fresh `createShardCtxDb(...)` writer (see
      * the generated `buildCtx`), so this flag can never leak across a
      * CONCURRENT dispatch on a different writer instance — each has its own.
-     * Within one writer/dispatch a Durable Object is single-threaded (no true
-     * parallelism, only `await`-point interleaving of THAT SAME writer's own
-     * sequential work), so `runUnmetered`'s synchronous set/restore around an
-     * `await` chain is race-free for the erasure loop that uses it.
+     * Within one writer, though, the exemption is WRITER-WIDE for the
+     * duration of `deleteAll`'s await chain, not scoped to `deleteAll`'s own
+     * calls: `meterExempt` is a single boolean every hook on this writer
+     * reads, so any OTHER write that gets interleaved into that chain — e.g.
+     * a sibling `await Promise.all([ctx.db.deleteAll("a"),
+     * ctx.db.insertMany("b", big)])` — sees `meterExempt === true` too and is
+     * silently exempted alongside it. This is a known, low-severity
+     * limitation rather than a correctness bug: the meter is a resource
+     * bound, and parallelizing a bulk erase with other writes on the same
+     * writer is an unusual pattern to begin with.
      *
      * Gating the SHARED `onRead`/`onWrite` hooks (rather than only the two call
      * sites `deleteAll` itself makes) means a trigger's own writes, fired as a

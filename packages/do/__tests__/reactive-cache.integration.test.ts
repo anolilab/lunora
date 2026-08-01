@@ -768,4 +768,46 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
 
         expect(shard.cacheRef()?.size().entries).toBe(1);
     });
+
+    // Regression for the missed-invalidation gap: a query that reads the SAME
+    // table through BOTH a provable range (`.withIndex(...).eq(...)`, which
+    // reports through `onReadRange` and deps nothing on its own) AND a by-id
+    // read (`writer.get(id)`, which reports through `onRead` and marks the
+    // table unnarrowable). Before the fix, `ReadFootprint.ranges()` drops the
+    // table's slice entirely once it is marked unnarrowable, so the cache
+    // entry ends up with deps `{messages:<seededId>}` and an EMPTY range set —
+    // an insert of a brand-new row into the very same range then matches
+    // neither the per-id dep nor any range dep, and the stale entry survives.
+    // `runCachedQuery`'s whole-table `SCAN_DEP` fallback (mirroring
+    // `executeSubscription`'s `footprint.tables` fallback) closes that gap.
+    it("a mixed range + get(id) read on the same table falls back to whole-table invalidation on an insert inside the range", async () => {
+        expect.assertions(2);
+
+        const shard = newRangeShard();
+
+        // Seed a row in channel A so `get(id)` has something to read
+        // alongside the range scan.
+        const seeded = await shard.writer.insert("messages", { body: "seed", channelId: "A" });
+
+        shard.handlers.set("messages:mixed", async (writer) => {
+            const ranged = await writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect();
+            const byId = await writer.get(seeded);
+
+            return { byId, ranged };
+        });
+
+        await shard.handleRpc("messages:mixed", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // A write INSIDE the range that was also read by id. Pre-fix this
+        // evicts nothing (missed invalidation); post-fix the whole-table
+        // fallback dep catches it.
+        await shard.writer.insert("messages", { body: "new", channelId: "A" });
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
+    });
 });

@@ -3163,7 +3163,12 @@ abstract class ShardDO {
      * the same `createShardCtxDb(...)` call — mirroring `onRead` above. A
      * subclass that only wires `onRead` still works: `ranges()` degrades to
      * `undefined` and every read is treated as a whole-table dependency, per
-     * `ReactiveCache.run`'s own default.
+     * `ReactiveCache.run`'s own default. When `onReadRange` IS wired, a table
+     * `footprint.ranges()` could not narrow (any by-id/scan read, or a
+     * provable range mixed with one) still falls back to a whole-table
+     * `SCAN_DEP`, stamped after `run()` resolves — see the fallback in this
+     * method's body. Only a table read EXCLUSIVELY through provable ranges
+     * gets range-precise invalidation instead.
      */
     protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
         if (!this.reactiveCache) {
@@ -3213,8 +3218,47 @@ abstract class ShardDO {
                 : // eslint-disable-next-line unicorn/no-null -- fold userId/claims into the discriminator; missing fields serialize as null so the shape stays canonical
                   stableStringify({ claims: claims ?? null, userId: userId ?? null });
 
+        // Wraps `run` so that, once the handler has actually executed and the
+        // footprint is final, every table it touched that `footprint.ranges()`
+        // could NOT narrow gets a whole-table `SCAN_DEP` stamped into the same
+        // tracker `deps` set the cache indexes by — mirroring the whole-table
+        // fallback `executeSubscription` gets for free from `footprint.tables`
+        // (see `writeTouchesMemo` in `subscription-range-gate.ts`, which treats
+        // any table in a subscription's memo without a narrowed range as
+        // "assume touched"). Two reads land here: a table read only through an
+        // unprovable path (scan / by-id), which the tracker already deps via
+        // `getCtxDbReadHook`, and — the gap this closes — a table read through
+        // BOTH a provable range (`onReadRange`, deps nothing on its own) AND a
+        // by-id read (`onRead`, which marks the table unnarrowable so
+        // `ReadFootprint.ranges()` drops its slices). That mix used to leave
+        // the cache entry with deps `{table:id}` and ranges `[]`: an insert of
+        // a NEW row into the range matched neither and the stale entry
+        // survived. A table `ranges()` DID narrow is deliberately left alone —
+        // adding a fallback there would defeat the range-precise invalidation
+        // this cache exists to provide. This does not touch `ReadFootprint`'s
+        // unnarrowable semantics (which subscriptions also rely on); it only
+        // changes what `runCachedQuery` derives FROM that footprint.
+        //
+        // Ordering relies on `ReactiveCache.run`'s own contract: it awaits
+        // `run()` in full, THEN calls the `ranges` thunk, and only THEN reads
+        // `deps` to index the entry. `tracker.collect()` below hands the cache
+        // a live `Set` reference, so stamping it here — after the real
+        // handler resolved but before either later step — lands in time.
+        const runWithRangeFallback = async (): Promise<R> => {
+            const result = await run();
+            const narrowed = footprint.ranges();
+
+            for (const table of footprint.tables) {
+                if (!narrowed?.has(table)) {
+                    tracker.recordRead(table, SCAN_DEP);
+                }
+            }
+
+            return result;
+        };
+
         try {
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), run, () =>
+            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), runWithRangeFallback, () =>
                 flattenReadRanges(footprint.ranges()),
             );
 
