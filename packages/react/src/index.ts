@@ -68,6 +68,8 @@ export {
     useTusUpload,
     useUpload,
 } from "./upload";
+export type { AdminAuthListResult, UseAuthSessionsOptions, UseAuthUsersOptions, UseImpersonateResult, UseOrganizationsOptions } from "./use-admin-auth";
+export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations } from "./use-admin-auth";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
 export type {
