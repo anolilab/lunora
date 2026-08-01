@@ -1081,6 +1081,7 @@ const MESSAGE_IDS = [
     "Body must be valid JSON.",
     "Captured",
     "Clear log",
+    "Clear {count} messages?",
     "Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.",
     "Consumed messages appear here once a push consumer processes a batch in dev. Send one from the Send tab to see it captured.",
     "Declare a queue with defineQueue in lunora/queues.ts to enqueue a test message.",

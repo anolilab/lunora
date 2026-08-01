@@ -2,6 +2,7 @@ import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { ErrorAlert } from "../../components/error-alert";
 import { Alert } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
@@ -215,17 +216,16 @@ const QueuesMessagesTab = ({
                 <p className="text-sm text-muted-foreground">
                     {t("Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.")}
                 </p>
-                <Button
-                    className="ml-auto"
-                    data-testid="queues-clear"
-                    disabled={messages.length === 0}
-                    onClick={onClear}
-                    size="sm"
-                    type="button"
-                    variant="outline"
-                >
-                    {t("Clear log")}
-                </Button>
+                <div className="ml-auto">
+                    <ConfirmButton
+                        confirmLabel={t("Clear {count} messages?", { count: messages.length })}
+                        disabled={messages.length === 0}
+                        onConfirm={onClear}
+                        testId="queues-clear"
+                    >
+                        {t("Clear log")}
+                    </ConfirmButton>
+                </div>
                 {messages.length > 0 && (
                     <Badge data-testid="queues-count" variant="secondary">
                         {t("{count} messages", { count: messages.length })}
