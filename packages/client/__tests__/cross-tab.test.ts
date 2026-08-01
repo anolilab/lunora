@@ -1077,3 +1077,44 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
         }
     });
 });
+
+describe("lunoraClient — identity-change coordinator restart promotes immediately (thermos H3)", () => {
+    it("a tab that was leader before an identity change reconnects immediately, not after the full leaderTimeout", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const constructed: string[] = [];
+
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL, WebSocket: createMockWebSocket(constructed) });
+
+        try {
+            client.subscribe(fnRef("q:list"), {}, () => undefined);
+
+            // Solo self-promotion on the ANON channel (default 3s leaderTimeout).
+            await vi.advanceTimersByTimeAsync(3100);
+
+            expect(constructed).toHaveLength(1);
+
+            // A genuine identity change while this tab IS the leader — the
+            // coordinator restarts on a new (re-derived) channel. Without
+            // `promoteImmediately`, this tab wouldn't reconnect until ANOTHER
+            // full leaderTimeout elapsed on the new channel, freezing every
+            // live query for the same 3s window this exact pattern
+            // (`setAuthToken(token)` on every JWT refresh, no stable
+            // `subject`) hits on every single refresh.
+            client.setAuthToken("token-1", "user-1");
+
+            // No further virtual time advance beyond flushing the current
+            // microtask queue — a real leaderTimeout-gated restart would
+            // still show only the ORIGINAL socket here.
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(constructed).toHaveLength(2);
+        } finally {
+            client.close();
+            vi.useRealTimers();
+        }
+    });
+});

@@ -291,6 +291,30 @@ class TabCoordinator {
         return this.leader;
     }
 
+    /**
+     * Force this (freshly `start()`-ed) tab to become leader immediately,
+     * skipping the normal claim-then-`leaderTimeout` dance. Safe to call
+     * right after `start()` when the caller already knows this tab was the
+     * SOLE leader of the group it's replacing (e.g. `LunoraClient`'s
+     * identity-change coordinator restart — waiting out the full
+     * `leaderTimeout` there would freeze every live query for no reason,
+     * since this tab is overwhelmingly likely to be alone on the freshly
+     * derived channel). A sibling tab going through the normal `start()`
+     * dance for the SAME transition observes this tab's `becomeLeader`
+     * heartbeat and defers before its own claim-timeout fires; if another
+     * tab ALSO force-promotes at the same moment (e.g. two tabs both
+     * transitioning to the same new identity), the existing
+     * `resolveLeaderVsLeaderTieBreak` resolves the rare double-promotion
+     * the same way it resolves any other split-brain.
+     */
+    public promoteImmediately(): void {
+        if (!this.running) {
+            return;
+        }
+
+        this.becomeLeader();
+    }
+
     /** The tab id of the current leader, or `undefined` if unknown / no leader. */
     public get leaderTabId(): string | undefined {
         return this.knownLeader;

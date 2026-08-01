@@ -1097,10 +1097,28 @@ class LunoraClient {
             // this tab doesn't keep leading/following the PREVIOUS identity's
             // group. After the queue handling above, so drained/restamped
             // writes settle before the new group's leader election begins.
+            // BroadcastChannel names are immutable, so a stop-old+construct-new
+            // is the only way to move channels — but that means the fresh
+            // coordinator would otherwise sit through the full
+            // claim-then-`leaderTimeout` dance (3s default) before any tab
+            // opens a socket again, freezing every live query for that long
+            // on EVERY identity change (including a routine JWT refresh for
+            // an app that doesn't pass a stable `subject` — the documented
+            // reason to pass one). If this tab was already the leader, it's
+            // overwhelmingly likely to remain the sole tab on the new
+            // channel too, so promote it immediately instead of waiting —
+            // `promoteImmediately`'s docblock covers the (self-healing) rare
+            // case where another tab does the same at once.
             if (this.tabCoordinator) {
+                const wasLeader = this.tabCoordinator.isLeader();
+
                 this.tabCoordinator.stop();
                 this.tabCoordinator = this.createTabCoordinator();
                 this.tabCoordinator.start();
+
+                if (wasLeader) {
+                    this.tabCoordinator.promoteImmediately();
+                }
             }
         }
 
