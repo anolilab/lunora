@@ -255,6 +255,53 @@ export default defineSchema({
             expect(() => runCodegen({ projectRoot: workdir })).toThrow(/mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u);
         });
 
+        it("rejects a shape when a mask() policies object literal spreads a variable (fail closed on spread/computed mask keys, plan 257)", () => {
+            expect.assertions(1);
+
+            // `mask({ ...sharedPolicies })`'s argument IS an object literal, so the
+            // pre-plan-257 non-literal-policy guard (which only rejected a
+            // non-object-literal argument) let this through — `extractMaskColumns`
+            // still contributes ZERO pairs for the spread member, so a shape over
+            // "users" would have shipped raw. Pre-fix this build SUCCEEDS; post-fix
+            // it must throw MASK_UNSUPPORTED.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                const sharedPolicies = { users: { email: "redact" } };
+                export const listUsers = query.use(mask({ ...sharedPolicies })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const allUsers = defineShape({ table: "users", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/isn't a plain object literal.*spread.*computed key/su);
+        });
+
+        it("does not throw for a mask() policies object literal that spreads a variable when the project declares no shapes (scoping preserved)", () => {
+            expect.assertions(1);
+
+            // Same spread-bearing mask as above, but no `defineShape` anywhere —
+            // `assertNoMaskedShapeTable` only fires when `shapes.length > 0`, so a
+            // shape-free project stays buildable (degraded studio/advisor metadata,
+            // no leak path since nothing replicates raw rows).
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                const sharedPolicies = { users: { email: "redact" } };
+                export const listUsers = query.use(mask({ ...sharedPolicies })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+        });
+
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
             expect.assertions(3);
 
