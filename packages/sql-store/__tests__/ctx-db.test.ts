@@ -352,6 +352,28 @@ describe("createSqlCtxDb — search iteration terminates like collect()", () => 
                 .collect(),
         ).rejects.toThrow(/documents match this search/u);
     });
+
+    // `.collectWithScores()` (plan 236) surfaces the relevance score the
+    // sharded DO backend already computes. The three `.global()` search
+    // layouts compute + order by the same `__score__` in SQL but none of them
+    // selects it back out — plumbing it through all three is follow-up work,
+    // not this reader alone — so this fails closed with a clear message
+    // rather than a bare "not a function", mirroring `withGeoIndex()`'s
+    // existing `.global()`-unsupported guard.
+    it("collectWithScores() fails closed on a .global() table with a clear message", async () => {
+        expect.assertions(1);
+
+        const writer = makeSearchWriter();
+
+        await seedMatching(writer, 1);
+
+        await expect(
+            writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "alpha"))
+                .collectWithScores(),
+        ).rejects.toThrow(/collectWithScores\(\) is not supported on `\.global\(\)` tables/u);
+    });
 });
 
 describe("createSqlCtxDb — rank over node:sqlite", () => {

@@ -277,6 +277,7 @@ export type {
     SchedulableWorkflowReferenceLike,
     SchedulerLike,
     SchemaLike,
+    ScoredDocument,
     SearchFilterBuilderLike,
     SearchIndexDefinitionLike,
     ServerDefaultContextLike,

@@ -81,8 +81,16 @@ interface GroupByArgs {
     where?: unknown;
 }
 
+/** One row of a `.collectWithScores()` result — mirrors `@lunora/shard-engine`'s `ScoredDocument`. */
+interface ScoredDocument {
+    distanceMeters?: null | number;
+    document: Record<string, unknown>;
+    score?: number;
+}
+
 interface TableReaderLike {
     collect: () => Promise<Record<string, unknown>[]>;
+    collectWithScores: () => Promise<ScoredDocument[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
     order: (direction: "asc" | "desc") => TableReaderLike;
@@ -333,6 +341,18 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
                 const rows = await reader.collect();
 
                 return rows.map((row) => maskRow(row, columns, context));
+            },
+            // `score`/`distanceMeters` carry no column value — same reasoning that
+            // lets `count`/`rank` pass through the mask wrapper below — so only the
+            // `document` half of each pair goes through the normal per-row mask
+            // path (the SAME `maskRow` helper `collect` uses, not a hand-rolled
+            // pass); the ranking value stays in the clear.
+            collectWithScores: async () => {
+                const rows = await reader.collectWithScores();
+
+                return rows.map((row) => {
+                    return { ...row, document: maskRow(row.document, columns, context) };
+                });
             },
             // SECURITY (value oracle): the predicate must see the MASKED row, not
             // the raw stored row — otherwise a caller can `.filter(d => d.ssn ===

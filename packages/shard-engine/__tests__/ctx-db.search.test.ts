@@ -252,6 +252,58 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
         });
     });
 
+    describe("collectWithScores", () => {
+        it("pairs each document with its relevance score, descending", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await writer.insert("docs", { body: "alpha beta", channel: "x", title: "low" });
+            await writer.insert("docs", { body: "alpha alpha alpha", channel: "x", title: "high" });
+
+            const results = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "alpha"))
+                .collectWithScores();
+
+            expect(results.map((entry) => entry.document["title"])).toStrictEqual(["high", "low"]);
+            // Higher term frequency scores higher, and it's strictly descending —
+            // not just an order the fixture happens to already have.
+            expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
+            expect(typeof results[1]?.score).toBe("number");
+        });
+
+        it("returns the same documents .collect() would, unchanged", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await writer.insert("docs", { body: "match one", channel: "x", title: "a" });
+            await writer.insert("docs", { body: "match two", channel: "x", title: "b" });
+
+            const bare = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "match"))
+                .collect();
+            const scored = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "match"))
+                .collectWithScores();
+
+            expect(scored.map((entry) => entry.document)).toStrictEqual(bare);
+        });
+
+        it("throws when called without a staged .withSearchIndex()/.withGeoIndex()", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await expect(writer.query("docs").collectWithScores()).rejects.toThrow(
+                /collectWithScores\(\) requires a staged \.withSearchIndex\(\.\.\.\) or \.withGeoIndex\(\.\.\.\)/u,
+            );
+        });
+    });
+
     describe("builder guards", () => {
         it("throws on an unknown search index", () => {
             expect.assertions(1);
@@ -466,6 +518,31 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
                 .take(1);
 
             expect(bounded.map((document) => document["title"])).toStrictEqual(["drop"]);
+        });
+
+        // `@lunora/server`'s RLS middleware enforces a row policy by calling
+        // `.filter(predicate)` on this exact reader and forwarding the SAME
+        // object back (it never rebuilds a narrower one) — see
+        // `packages/server/src/rls/middleware.ts`'s `query()`. That means
+        // `.collectWithScores()` composes with RLS "for free" as long as it
+        // respects `stage.inMemoryFilters` the same way `.collect()` does.
+        // This pins that: a `.filter()` staged before `.collectWithScores()`
+        // must narrow the scored window exactly like it narrows `.collect()`.
+        it("respects a .filter() staged before it, same as .collect()", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await writer.insert("docs", { body: "hello world", channel: "x", title: "keep" });
+            await writer.insert("docs", { body: "hello there", channel: "x", title: "drop" });
+
+            const kept = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .filter((document) => document["title"] === "keep")
+                .collectWithScores();
+
+            expect(kept.map((entry) => entry.document["title"])).toStrictEqual(["keep"]);
         });
 
         it("hides soft-deleted rows without touching the companion", async () => {

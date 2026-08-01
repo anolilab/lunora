@@ -45,14 +45,28 @@ interface FakeSearchBuilder {
     search: (field: string, query: string) => FakeSearchBuilder;
 }
 
+/** Geo-filter builder passed to `.withGeoIndex(name, q => …)` — mirrors `@lunora/do`'s `GeoFilterBuilderLike`. */
+interface FakeGeoBuilder {
+    near: (point: { lat: number; lng: number }, radiusMeters: number) => FakeGeoBuilder;
+    within: (box: { ne: { lat: number; lng: number }; sw: { lat: number; lng: number } }) => FakeGeoBuilder;
+}
+
 interface FakeReader {
     collect: () => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Synthesizes a deterministic, distinguishable score/distance per row
+     * (by position) — the fixture doesn't need a realistic ranking, only one
+     * a test can prove passed through the mask wrapper unchanged.
+     */
+    collectWithScores: () => Promise<{ distanceMeters: null | number; document: Record<string, unknown>; score: number }[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => FakeReader;
     first: () => Promise<Record<string, unknown> | null>;
     order: (direction: "asc" | "desc") => FakeReader;
     paginate: () => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
     unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName?: string, build?: (q: FakeGeoBuilder) => FakeGeoBuilder) => FakeReader;
     withIndex: (indexName?: string, range?: (q: FakeIndexBuilder) => FakeIndexBuilder) => FakeReader;
     withSearchIndex: (indexName: string, search: (q: FakeSearchBuilder) => FakeSearchBuilder) => FakeReader;
 }
@@ -210,6 +224,11 @@ const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown
     const makeReader = (list: Record<string, unknown>[]): FakeReader => {
         return {
             collect: async () => list,
+
+            collectWithScores: async () =>
+                list.map((row, index) => {
+                    return { distanceMeters: index === 0 ? 111 : null, document: row, score: 100 - index };
+                }),
             filter: (predicate) => makeReader(list.filter((row) => predicate(row))),
             first: async () => list[0] ?? null,
             order: (direction) => makeReader(direction === "desc" ? list.toReversed() : list),
@@ -218,9 +237,19 @@ const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown
             },
             take: async (limit) => list.slice(0, limit),
             unique: async () => list[0] ?? null,
-            // Run the range callback against a chainable no-op builder — mirrors
+            // Run the builder callback against a chainable no-op — mirrors
             // `@lunora/do`'s reader, and proves the mask guard's recorder pass is
             // an EXTRA run the (pure) callback survives (the reader still runs it).
+            withGeoIndex: (_indexName, build) => {
+                const builder: FakeGeoBuilder = {
+                    near: () => builder,
+                    within: () => builder,
+                };
+
+                build?.(builder);
+
+                return makeReader(list);
+            },
             withIndex: (_indexName, range) => {
                 const builder: FakeIndexBuilder = {
                     eq: () => builder,
@@ -338,6 +367,57 @@ describe("mask — read path", () => {
 
         expect(row?.["email"]).toBeNull();
         expect(row?.["name"]).toBe("Ann");
+    });
+
+    it("masks documents (not the score) through query().withSearchIndex().collectWithScores()", async () => {
+        expect.assertions(4);
+
+        const seed = [
+            { _id: "u1", email: "a@x.com", name: "Ann", table: "users" },
+            { _id: "u2", email: "b@x.com", name: "Bo", table: "users" },
+        ];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db
+                .query("users")
+                .withSearchIndex("by_name", (q) => q.search("name", "a"))
+                .collectWithScores(),
+        );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(2);
+        // The document half is masked exactly like `.collect()` would.
+        expect(rows[0]?.document["email"]).toBeNull();
+        expect(rows[0]?.document["name"]).toBe("Ann");
+        // score carries no column value — same reasoning that lets count()/rank()
+        // pass through the mask wrapper — so it must NOT be touched.
+        expect(rows[0]?.score).toBe(100);
+    });
+
+    it("masks documents (not distanceMeters) through query().withGeoIndex().collectWithScores()", async () => {
+        expect.assertions(3);
+
+        const seed = [{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db
+                .query("users")
+                .withGeoIndex("by_location", (q) => q.near({ lat: 0, lng: 0 }, 1000))
+                .collectWithScores(),
+        );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows[0]?.document["email"]).toBeNull();
+        expect(rows[0]?.document["name"]).toBe("Ann");
+        expect(rows[0]?.distanceMeters).toBe(111);
     });
 
     it("masks the row returned by findFirst", async () => {

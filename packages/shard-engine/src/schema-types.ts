@@ -349,11 +349,36 @@ export interface GeoFilterBuilderLike {
     within: (box: { ne: { lat: number; lng: number }; sw: { lat: number; lng: number } }) => GeoFilterBuilderLike;
 }
 
+/**
+ * One row of a `.collectWithScores()` result — the document paired with the
+ * ranking value the read already computed to order it. `score` (FTS
+ * relevance, higher is better) is populated for a `.withSearchIndex()` chain;
+ * `distanceMeters` (haversine distance from `.near()`'s point) for a
+ * `.withGeoIndex()` chain. `.within()` box matches have no point-distance
+ * metric, so `distanceMeters` is `null` for those rows rather than a
+ * misleading `0`. The two fields are mutually exclusive per call — which one
+ * is populated depends on which index the chain staged.
+ */
+export interface ScoredDocument {
+    distanceMeters?: null | number;
+    document: Record<string, unknown>;
+    score?: number;
+}
+
 /** A `ctx.db.&lt;table>` reader facade. */
 export interface TableReaderLike {
     /** Lazy row iteration — see the implementation note in `ctx-db.ts`. */
     [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Like `.collect()`, but pairs each row with the relevance score /
+     * distance the read already computed to order it — see
+     * {@link ScoredDocument}. Requires a staged `.withSearchIndex()` or
+     * `.withGeoIndex()`; throws otherwise (mirrors `.paginate()`'s
+     * geo-unsupported guard).
+     */
+    collectWithScores: () => Promise<ScoredDocument[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
     order: (direction: "asc" | "desc") => TableReaderLike;

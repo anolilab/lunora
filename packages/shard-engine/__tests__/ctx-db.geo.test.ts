@@ -262,4 +262,98 @@ describe("ctx-db geo", () => {
 
         expect(restored.map((document) => document["name"])).toStrictEqual(["cafe"]);
     });
+
+    describe("collectWithScores", () => {
+        it("pairs each .near() result with its distance, nearest-first", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await writer.insert("places", { location: BROOKLYN, name: "brooklyn" });
+            await writer.insert("places", { location: TIMES_SQUARE, name: "times-square" });
+            await writer.insert("places", { location: NEWARK, name: "newark" });
+
+            const results = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 20_000))
+                .collectWithScores();
+
+            expect(results.map((entry) => entry.document["name"])).toStrictEqual(["times-square", "brooklyn", "newark"]);
+            // Times Square is (approximately) the query point, so it comes back
+            // very close to 0 meters and strictly nearer than Brooklyn.
+            expect(results[0]?.distanceMeters).toBeLessThan(1000);
+            expect(results[0]?.distanceMeters).toBeLessThan(results[1]?.distanceMeters ?? 0);
+        });
+
+        it("surfaces null distanceMeters for .within() box matches", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await writer.insert("places", { location: TIMES_SQUARE, name: "times-square" });
+            await writer.insert("places", { location: BROOKLYN, name: "brooklyn" });
+
+            const results = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.within({ ne: { lat: 40.9, lng: -73.7 }, sw: { lat: 40.5, lng: -74.3 } }))
+                .collectWithScores();
+
+            expect(results).toHaveLength(2);
+            // A box match has no point-distance metric — null documents "not
+            // applicable" rather than the misleading "exactly here" of a 0.
+            expect(results.every((entry) => entry.distanceMeters === null)).toBe(true);
+        });
+
+        it("returns the same documents .collect() would, unchanged", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await writer.insert("places", { location: BROOKLYN, name: "brooklyn" });
+            await writer.insert("places", { location: TIMES_SQUARE, name: "times-square" });
+
+            const bare = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 20_000))
+                .collect();
+            const scored = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 20_000))
+                .collectWithScores();
+
+            expect(scored.map((entry) => entry.document)).toStrictEqual(bare);
+        });
+
+        it("throws when called without a staged .withSearchIndex()/.withGeoIndex()", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await expect(writer.query("places").collectWithScores()).rejects.toThrow(
+                /collectWithScores\(\) requires a staged \.withSearchIndex\(\.\.\.\) or \.withGeoIndex\(\.\.\.\)/u,
+            );
+        });
+
+        // Same composition guarantee as the search-side test in
+        // `ctx-db.search.test.ts`: RLS pushes its row policy down as a
+        // `.filter()` on this exact reader object (see
+        // `packages/server/src/rls/middleware.ts`'s `query()`), so
+        // `.collectWithScores()` must respect it exactly like `.collect()` does.
+        it("respects a .filter() staged before it, same as .collect()", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await writer.insert("places", { location: BROOKLYN, name: "brooklyn" });
+            await writer.insert("places", { location: TIMES_SQUARE, name: "times-square" });
+
+            const kept = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 20_000))
+                .filter((document) => document["name"] === "brooklyn")
+                .collectWithScores();
+
+            expect(kept.map((entry) => entry.document["name"])).toStrictEqual(["brooklyn"]);
+        });
+    });
 });
