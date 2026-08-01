@@ -2628,6 +2628,74 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("vectors,");
         });
 
+        it("emits the bare (namespace-less) createVectorSyncHook call for an unsharded (root) vectorized table", () => {
+            expect.assertions(4);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "docs",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { body: { kind: "string" } },
+                        shardMode: "root",
+                        vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+                    },
+                ],
+                vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+            };
+
+            const output = emitShard({ schema });
+
+            // A `root`-mode vectorized table has exactly one canonical copy — no
+            // shard key to scope by — so the emit must stay byte-identical to
+            // today: no `namespace`, no `ROOT_SHARD_NAME` import, no shard-key read.
+            expect(output).toContain("onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });");
+            expect(output).not.toContain("namespace:");
+            expect(output).not.toContain("ROOT_SHARD_NAME");
+            expect(output).not.toContain("currentShardKey");
+        });
+
+        it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is .shardBy()'d", () => {
+            expect.assertions(5);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "docs",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { body: { kind: "string" } },
+                        shardMode: { field: "tenantId", kind: "shardBy" },
+                        vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+                    },
+                ],
+                vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+            };
+
+            const output = emitShard({ schema });
+
+            // Vectorize indexes are account-global: a `.shardBy()`'d vectorized
+            // table MUST pass the owning DO's shard key as `namespace`, or every
+            // tenant's auto-synced vectors land in one shared namespace (the
+            // cross-tenant leak this plan closes). `ROOT_SHARD_NAME` maps the
+            // single-DO sentinel back to `undefined` so a root-mode write on the
+            // same schema (a mixed app) still stays namespace-less.
+            expect(output).toContain(
+                "import { applyCdcChanges, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ROOT_SHARD_NAME, runDataMigration",
+            );
+            expect(output).toContain("const vectorShardKey = this.currentShardKey();");
+            expect(output).toContain(
+                "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
+            );
+            expect(output).toContain("vectors,");
+            expect(output).toContain("onWrite,");
+        });
+
         it("omits @lunora/bindings/vectors entirely when the schema declares no vectors", () => {
             expect.assertions(4);
 

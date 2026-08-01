@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createContextVectors } from "../../src/vectors/context";
+import type { SchemaLike } from "../../src/vectors/context";
+import { createContextVectors, createVectorSyncHook } from "../../src/vectors/context";
 import createVectors from "../../src/vectors/create-vectors";
 import type {
     VectorizeDeleteMutation,
@@ -221,5 +222,48 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         const matches = await context.query("docs", { topK: 1, vector: embed("hello") });
 
         expect(matches.matches[0]?.id).toBe("row-1");
+    });
+});
+
+describe("createVectorSyncHook: cross-shard namespace isolation (codegen write path)", () => {
+    it("scopes each shard's auto-synced upsert to its own namespace so a second shard's query can't see it", async () => {
+        expect.assertions(3);
+
+        // One account-global Vectorize index shared by every shard DO — exactly
+        // the topology `.vectorize()` + `.shardBy()` produces. `vectors` here is
+        // the SAME `VectorSearchLike` the codegen emit hands to
+        // `createVectorSyncHook({ namespace, schema, vectors })`.
+        const index = createStatefulVectorizeIndex();
+        const vectors = createContextVectors(createVectors({ indexes: { docs: index } }));
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs" }] } },
+            vectorIndexes: {},
+        };
+
+        // Mirrors `emit.ts`'s `buildCtx`: each shard DO builds its OWN onWrite
+        // hook, scoped by ITS OWN shard key — never a shared, namespace-less hook.
+        const shardAHook = createVectorSyncHook({ namespace: "shard-a", schema, vectors });
+        const shardBHook = createVectorSyncHook({ namespace: "shard-b", schema, vectors });
+
+        await shardAHook({ doc: { body: "hello from tenant A" }, id: "row-1", op: "insert", table: "docs" });
+        await shardBHook({ doc: { body: "hello from tenant B" }, id: "row-2", op: "insert", table: "docs" });
+
+        const shardAView = await vectors.query("docs", { embed, input: "hello", namespace: "shard-a" });
+        const shardBView = await vectors.query("docs", { embed, input: "hello", namespace: "shard-b" });
+
+        // The actual isolation assertion: each shard's namespaced query returns
+        // ONLY its own row — the other tenant's vector is invisible, not merely
+        // "a namespace was passed" on the write call.
+        expect(shardAView.matches.map((match) => match.id)).toEqual(["row-1"]);
+        expect(shardBView.matches.map((match) => match.id)).toEqual(["row-2"]);
+
+        // Sanity check on the fake itself: an unnamespaced query (today's
+        // `.withVectorIndex()` reader, plan 238) still sees both tenants' rows in
+        // the same account-global index — confirming the isolation above comes
+        // from the namespace filter, not from the fake accidentally partitioning
+        // storage some other way.
+        const unscoped = await vectors.query("docs", { embed, input: "hello" });
+
+        expect(unscoped.matches.map((match) => match.id).toSorted((a, b) => a.localeCompare(b))).toEqual(["row-1", "row-2"]);
     });
 });
