@@ -13,6 +13,16 @@ interface SchedulerDOState {
     acceptWebSocket?: (ws: WebSocket) => void;
     /** Every accepted server WebSocket (workers `state.getWebSockets`). */
     getWebSockets?: () => WebSocket[];
+
+    /**
+     * Register a constant ping/pong auto-response so the runtime answers a
+     * known keepalive frame on a hibernated socket WITHOUT waking this DO (no
+     * billable request, no dispatch). Optional: absent in the unit harness and
+     * older runtimes, present on the real `DurableObjectState`. Mirrors
+     * `@lunora/do`'s `ShardDOState.setWebSocketAutoResponse` — see
+     * {@link SchedulerDO.armWebSocketKeepalive}.
+     */
+    setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;
     storage: {
         delete: (key: string | string[]) => Promise<number | boolean>;
         deleteAlarm: () => Promise<void> | void;
@@ -52,6 +62,20 @@ interface SchedulerEnv {
      */
     LUNORA_SCHEDULER_SECRET?: string;
 }
+
+/**
+ * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
+ * via the DO Hibernation API's auto-response — see
+ * {@link SchedulerDO.armWebSocketKeepalive}. The exchange never wakes this
+ * Durable Object, so an idle `/ws` subscription stays alive across
+ * hibernation without a billable request. Deliberately the SAME literal pair
+ * `@lunora/do`'s `ShardDO` uses (not imported — `@lunora/scheduler` doesn't
+ * depend on `@lunora/do`, and both sides just need to agree on the wire
+ * value the client already sends on its heartbeat).
+ */
+const WS_KEEPALIVE_PING = "lunora-ping";
+/** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; this class has no `webSocketMessage` handler at all, so before this auto-response existed the ping simply went unanswered. */
+const WS_KEEPALIVE_PONG = "lunora-pong";
 
 const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
@@ -330,6 +354,8 @@ class SchedulerDO {
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
+
+        this.armWebSocketKeepalive();
     }
 
     public async fetch(request: Request): Promise<Response> {
@@ -538,6 +564,29 @@ class SchedulerDO {
         } catch {
             return false;
         }
+    }
+
+    /**
+     * Register the hibernation-safe ping/pong keepalive. The runtime answers a
+     * {@link WS_KEEPALIVE_PING} text frame with {@link WS_KEEPALIVE_PONG}
+     * WITHOUT waking this Durable Object, keeping an idle `/ws` subscription
+     * alive across hibernation with no billable wakeup and no dispatch. Without
+     * this, a client's heartbeat ping goes unanswered and its watchdog force-
+     * closes the socket every ~90s, defeating hibernation (each unanswered ping
+     * wakes the DO to reconnect) — mirrors `@lunora/do`'s
+     * `ShardDO.armWebSocketKeepalive`. The auto-response is per-instance, so
+     * this re-runs on every construction (including a post-hibernation wake).
+     * Guarded: the API and the `WebSocketRequestResponsePair` global are absent
+     * in the unit harness and on older runtimes, where it degrades to a no-op.
+     */
+    private armWebSocketKeepalive(): void {
+        const setter = this.state.setWebSocketAutoResponse;
+
+        if (typeof setter !== "function" || typeof WebSocketRequestResponsePair === "undefined") {
+            return;
+        }
+
+        setter.call(this.state, new WebSocketRequestResponsePair(WS_KEEPALIVE_PING, WS_KEEPALIVE_PONG));
     }
 
     /**
