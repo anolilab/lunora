@@ -32,15 +32,43 @@ const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", "patch", "query", "replace", "system"]);
 
 /**
+ * Table names are interpolated raw into generated type names (`Doc_${name}`)
+ * and unquoted property keys — they must be JS identifiers. Must stay in
+ * sync with `IDENTIFIER_RE` in `emit.ts` (the emit-side E1 gate is
+ * defense-in-depth behind this check).
+ */
+const TABLE_NAME_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
+
+/**
+ * `property.getName()` returns the string-literal's text WITH its surrounding
+ * quotes for a quoted key (e.g. `"delete"` yields `'"delete"'`, not `delete`),
+ * verified empirically against ts-morph — so both the reserved-name and
+ * identifier checks below must strip them first, or a quoted `"delete"` key
+ * would slip past `RESERVED_TABLE_NAMES.has` and a quoted `"user-profiles"`
+ * key would slip past the identifier test.
+ */
+const stripQuotes = (name: string): string => name.replaceAll(/^["']|["']$/gu, "");
+
+/**
  * Throw a pinpointed diagnostic when a discovered table key collides with a
- * `ctx.db` member. The `node` is the table's name node (or the table builder
- * expression) so the error points at the offending declaration.
+ * `ctx.db` member, or is not a valid JS identifier. The `node` is the table's
+ * name node (or the table builder expression) so the error points at the
+ * offending declaration.
  */
 const assertTableNameAllowed = (name: string, node: Node): void => {
-    if (RESERVED_TABLE_NAMES.has(name)) {
+    const unquoted = stripQuotes(name);
+
+    if (RESERVED_TABLE_NAMES.has(unquoted)) {
         throw diagnosticAt(
             node,
-            `table name "${name}" is reserved — it collides with a \`ctx.db\` member (one of ${[...RESERVED_TABLE_NAMES].map((reserved) => `"${reserved}"`).join(", ")}). Rename the table.`,
+            `table name "${unquoted}" is reserved — it collides with a \`ctx.db\` member (one of ${[...RESERVED_TABLE_NAMES].map((reserved) => `"${reserved}"`).join(", ")}). Rename the table.`,
+        );
+    }
+
+    if (!TABLE_NAME_IDENTIFIER_RE.test(unquoted)) {
+        throw diagnosticAt(
+            node,
+            `table name ${JSON.stringify(unquoted)} is not a valid JS identifier — table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the table.`,
         );
     }
 };
