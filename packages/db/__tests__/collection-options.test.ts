@@ -482,6 +482,101 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         void pendingA;
         void pendingB;
     });
+
+    it("a genuinely-zero frame watermark does not permanently disable the RPC-ack fallback (thermos H1)", async () => {
+        expect.assertions(1);
+
+        // Every socket announces a clientId unconditionally, and a fresh
+        // `__client_watermark` row reads back 0 (not "no row") — so the
+        // VERY FIRST frame this session legitimately carries `mutationId: 0`.
+        // A sticky `frameWatermark ?? fallback` design reads that `0` as
+        // "already have an authoritative answer" forever after, since `0` is
+        // not nullish — disabling the compensator for every later write.
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+        };
+
+        // The first (seed) frame: nothing confirmed yet for this client.
+        onCheckpoint?.({ checkpoint: 1, mutationId: 0 });
+        onRows([{ _creationTime: 0, _id: "m1", text: "seed" }]);
+
+        // A LATER frame carrying no watermark of its own (e.g. an unstamped
+        // delta from an un-upgraded server) must fall back to the client's
+        // provisional RPC-ack watermark — not resolve against a stale `0`
+        // forever. `confirmedMutationWatermark` now reports 5 (a real write
+        // was acked since the seed frame).
+        watermark.mockReturnValue(5);
+
+        const order: string[] = [];
+        const pending = options.checkpoints.awaitMutationId(5).then(() => order.push("resolved"));
+
+        onRows([{ _creationTime: 0, _id: "m1", text: "seed" }, { _creationTime: 0, _id: "m2", text: "new" }]);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(order).toStrictEqual(["resolved"]);
+
+        void pending;
+    });
+
+    it("a follower's onRows falls back to the RPC-ack watermark instead of a stale leader-era value (thermos H2)", async () => {
+        expect.assertions(1);
+
+        // A demoted leader's own writes now go over HTTP RPC; the cross-tab
+        // `subscription-data` broadcast that drives a follower's `onRows`
+        // deliberately never carries `lastMutationId` (plan 266 S3's
+        // clientId-scoping lives on the SETTLED path only). A sticky
+        // watermark left over from before demotion would resolve every
+        // later `onRows` against that stale value instead of ever falling
+        // back — hanging every follower-issued write for the full
+        // CHECKPOINT_FALLBACK_MS.
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+        };
+
+        // While still leader: a real frame-carried watermark arrives and
+        // resolves normally.
+        onCheckpoint?.({ checkpoint: 1, mutationId: 3 });
+        onRows([{ _creationTime: 0, _id: "m1", text: "leader-era" }]);
+
+        // Demotion: no more onCheckpoint calls ever arrive for this
+        // subscription. A follower-issued write's watermark (7) must still
+        // resolve via the compensator, not the stale leader-era "3".
+        watermark.mockReturnValue(7);
+
+        const order: string[] = [];
+        const pending = options.checkpoints.awaitMutationId(7).then(() => order.push("resolved"));
+
+        onRows([{ _creationTime: 0, _id: "m1", text: "leader-era" }, { _creationTime: 0, _id: "m2", text: "follower-write" }]);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(order).toStrictEqual(["resolved"]);
+
+        void pending;
+    });
 });
 
 /**
