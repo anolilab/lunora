@@ -8666,6 +8666,17 @@ abstract class ShardDO {
                 ? undefined
                 : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
 
+        // Stamp this socket's per-mutator watermark on the plain `data` frame
+        // the same way the `settled` branch above does, so the client's
+        // checkpoint gate can trust what THIS frame's rows actually reflect
+        // instead of a provisional RPC-ack signal that can race ahead of it
+        // (plan 266 finding d: write A's data frame arriving after write B's
+        // ack has already landed, but before B's own rows synced, must not
+        // resolve B's overlay early). Out of scope here: the delta path below
+        // rides the same suppressed-value machinery and is a follow-up.
+        const dataWatermark = this.socketClientWatermark(ws);
+        const lastMutationIdField = dataWatermark === undefined ? "" : `,"lastMutationId":${String(dataWatermark)}`;
+
         // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once
         // the frame(s) for this value actually leave the socket. `ws.send` throws
         // when the socket has closed or its outbound buffer is gone. Advancing the
@@ -8678,7 +8689,7 @@ abstract class ShardDO {
         // tracking stays accurate even when delivery failed.
         const delivered =
             deltas === undefined
-                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`)
+                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${lastMutationIdField}${cursorSuffix}}`)
                 : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix);
 
         memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), ranges: outcome.ranges, tables: outcome.tables });

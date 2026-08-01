@@ -5235,6 +5235,23 @@ class LunoraClient {
             state.serverEpoch = message.epoch;
         }
 
+        // Consume the per-client custom-mutator watermark this frame carries
+        // (mirrors the `settled` tail in `handleSettledMessage`), so a
+        // `@lunora/db` checkpoint gate sees the watermark THIS frame's rows
+        // actually reflect, instead of relying solely on the provisional
+        // RPC-ack signal (`confirmedMutationWatermark`) which can race ahead
+        // of what has actually synced. `Math.max` guards monotonicity. Fired
+        // BEFORE `notifySubscription` below (which drives `@lunora/db`'s
+        // `onRows`) so a fresher, frame-scoped watermark is already recorded
+        // by the time any RPC-ack-based fallback would otherwise run.
+        if (message.lastMutationId !== undefined) {
+            state.lastMutationId = Math.max(state.lastMutationId ?? 0, message.lastMutationId);
+
+            for (const onCheckpoint of state.checkpointCallbacks) {
+                onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+            }
+        }
+
         // Persist the authoritative server value (never the optimistic overlay)
         // to the durable read cache (debounced).
         this.persistQueryValue(state);
@@ -5247,7 +5264,10 @@ class LunoraClient {
 
         // When cross-tab sync is active and we're the WS leader, broadcast
         // the new value to follower tabs so they stay in sync without their
-        // own WS connections.
+        // own WS connections. Deliberately does NOT carry `lastMutationId` —
+        // a follower gets the watermark only via the `settled` broadcast,
+        // which is clientId-scoped (plan 266 S3); relaying a `data` frame's
+        // watermark here would reintroduce the same cross-client leak S3 fixed.
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 

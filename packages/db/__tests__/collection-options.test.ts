@@ -422,6 +422,69 @@ describe("lunoraCollectionOptions (list source)", () => {
 });
 
 /**
+ * Plan 266 S4 — the `list` path's `onRows` compensator resolves the checkpoint
+ * gate off `client.confirmedMutationWatermark`, a PROVISIONAL signal advanced
+ * by the RPC ack the moment a write is accepted, independent of whether that
+ * write's rows have actually synced via a `data` frame yet. Two writes to the
+ * same list, HTTP-ack-races-WS-broadcast: write A (mutationId 5) and write B
+ * (mutationId 6) are BOTH acked before A's `data` frame (reflecting only A's
+ * row) arrives — the compensator reads the watermark (6) rather than what
+ * THIS frame actually represents, dropping B's still-unsynced overlay early.
+ *
+ * The fix threads a frame-carried watermark (fed by `onCheckpoint`, which a
+ * fixed client now fires from a `data` frame's own `lastMutationId` BEFORE
+ * `onRows`, not just from `settled` frames) and prefers it over the
+ * compensator once any such watermark has been observed.
+ */
+describe("lunoraCollectionOptions (list source) — data-frame watermark race (plan 266 S4)", () => {
+    it("a data frame reflecting only A's write must not resolve B's still-unsynced overlay merely because B's RPC ack raced ahead", async () => {
+        expect.assertions(1);
+
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        // Both A (5) and B (6) have already been acked over HTTP by the time
+        // the WS frame below arrives — the provisional signal is at 6.
+        watermark.mockReturnValue(6);
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+        };
+
+        const order: string[] = [];
+        const pendingA = options.checkpoints.awaitMutationId(5).then(() => order.push("A"));
+        const pendingB = options.checkpoints.awaitMutationId(6).then(() => order.push("B"));
+
+        // A fixed client fires `onCheckpoint` with the FRAME's own watermark
+        // (5 — this frame reflects only A's commit) before `onRows` — see
+        // `handleDataMessage`'s ordering.
+        onCheckpoint?.({ checkpoint: 12, mutationId: 5 });
+        onRows([{ _creationTime: 0, _id: "a", text: "A" }]);
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // A's overlay legitimately drops (A's row IS in this frame). B's must
+        // NOT — its own rows haven't synced, only its ack has. Against
+        // baseline (pre-fix) `onRows` unconditionally resolves off the
+        // provisional watermark (6), dropping B's overlay too — this is the
+        // repro failure.
+        expect(order).toStrictEqual(["A"]);
+
+        void pendingA;
+        void pendingB;
+    });
+});
+
+/**
  * The scope/sync lifecycle for a `scopeBy` collection: a sync restart (after gc
  * cleanup) must re-open the last scope, and a `scope(...)` issued before sync
  * first starts must still deliver the source's initial snapshot.

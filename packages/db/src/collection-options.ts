@@ -521,6 +521,17 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     // starts (while `emit` is undefined) is applied once sync begins.
     let scopedArgs: Record<string, unknown> | undefined;
 
+    // The highest per-frame watermark ever observed via `onCheckpoint` for the
+    // `list` path (fed by `settled` frames, and — once the server ships it —
+    // a `data` frame's own `lastMutationId`; see `handleDataMessage`). Once
+    // any such watermark has been seen, `onRows`'s compensator below stops
+    // trusting the provisional RPC-ack signal (which can race ahead of what a
+    // given frame's rows actually represent — plan 266 finding d) and defers
+    // to this instead. Survives a resubscribe (gc-cleanup restart, reconnect)
+    // — the watermark it tracks is a property of the shard's mutation
+    // sequence, not of any one subscription instance.
+    let frameWatermark: number | undefined;
+
     // Open the underlying sync source — a full-table `list` query subscription or
     // a replication-`shape` poke subscription — with one uniform callback shape.
     // `onReady` is invoked on the first rowset so the collection leaves `loading`.
@@ -531,16 +542,20 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             emit?.(toMap(data as TRow[], getKey));
             onReady?.();
 
-            // The shape path resolves the registry from the poke `checkpoint`,
-            // and the list path resolves it from the `onCheckpoint` watermark a
-            // `settled` frame forwards (both wired below). A `list` *data* frame
-            // carries no per-frame watermark, so advance from the client's
-            // server-confirmed custom-mutator watermark (the push-ack stream) as
-            // synced rows land — a `bindMutators` optimistic overlay then drops
-            // exactly when the server rows arrive instead of `awaitMutationId`
+            // The shape path resolves the registry from the poke `checkpoint`
+            // (wired below). The list path prefers `frameWatermark` — the
+            // AUTHORITATIVE watermark a prior `onCheckpoint` call (a `settled`
+            // frame, or now a `data` frame's own `lastMutationId`; onCheckpoint
+            // fires before onRows for the frame that carries both) recorded as
+            // reflecting what THIS subscription's rows actually are. Only when
+            // no such watermark has ever arrived (an un-upgraded server, or the
+            // very first frame this session) does it fall back to the client's
+            // provisional server-confirmed custom-mutator watermark (the
+            // push-ack stream) — a `bindMutators` optimistic overlay then drops
+            // once its threshold is reached instead of `awaitMutationId`
             // hanging forever after the write is accepted.
             if (options.shape === undefined) {
-                checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark(options.shardKey) });
+                checkpoints.resolve({ mutationId: frameWatermark ?? options.client.confirmedMutationWatermark(options.shardKey) });
             }
         };
         const onError = (error: SubscriptionError): void => onErrorHandler?.(error);
@@ -548,8 +563,13 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         // Advance the registry as the source syncs, so a mutator runtime can drop
         // optimistic overlays once the server's rows (or a `settled` no-change
         // acknowledgement) have landed. Both paths forward the same watermark
-        // shape, so the handler is identical.
+        // shape, so the handler is identical. Also records the high-watermark
+        // `onRows`'s list-path compensator above defers to.
         const onCheckpoint = (watermark: { checkpoint?: number; mutationId?: number }): void => {
+            if (watermark.mutationId !== undefined) {
+                frameWatermark = Math.max(frameWatermark ?? 0, watermark.mutationId);
+            }
+
             checkpoints.resolve(watermark);
         };
 

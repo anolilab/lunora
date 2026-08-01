@@ -584,6 +584,49 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("forwards a data frame's lastMutationId to onCheckpoint, monotonically, alongside the data callback (plan 266 S4)", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+            const checkpoints: { checkpoint?: number; mutationId?: number }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d), {
+                onCheckpoint: (watermark) => checkpoints.push(watermark),
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            // The server now stamps the client's per-mutator watermark on a plain
+            // `data` frame too (not just `settled`) — the frame the client can
+            // trust as reflecting what THESE rows actually confirm.
+            socket.receive({ cursor: 10, data: [{ _id: "m1" }], epoch: "e1", id: sub.id, lastMutationId: 5, type: "data" });
+
+            // The value changed, so the data callback fires...
+            expect(received).toEqual([[{ _id: "m1" }]]);
+            // ...and the frame's own watermark ALSO reaches onCheckpoint, same
+            // tail as a `settled` frame.
+            expect(checkpoints).toEqual([{ checkpoint: 10, mutationId: 5 }]);
+
+            // A later frame with a LOWER watermark must never move it backwards.
+            socket.receive({ cursor: 11, data: [{ _id: "m2" }], epoch: "e1", id: sub.id, lastMutationId: 3, type: "data" });
+
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 5 });
+
+            client.close();
+        });
+
         it("ignores a settled frame for an unknown subscription id", () => {
             expect.assertions(1);
 
