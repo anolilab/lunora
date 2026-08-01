@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "1.0.0-alpha.63",
+    "version": "1.0.0-alpha.64",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -117,7 +117,7 @@
         "@better-auth/passkey": "catalog:auth",
         "@better-auth/scim": "catalog:auth",
         "@lunora/errors": "1.0.0-alpha.10",
-        "@lunora/server": "1.0.0-alpha.55",
+        "@lunora/server": "1.0.0-alpha.56",
         "@lunora/values": "1.0.0-alpha.13",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
