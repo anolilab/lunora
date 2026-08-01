@@ -177,7 +177,10 @@ describe("discoverStorageKeyAccesses", () => {
     it("attaches the enclosing procedure's visibility when `functions` is supplied", () => {
         expect.assertions(2);
 
-        write("extraction2.ts", `export const extractDocumentText = internalAction(async ({ ctx, args }) => { return ctx.storage.docs.get(args.storageId); });`);
+        write(
+            "extraction2.ts",
+            `export const extractDocumentText = internalAction(async ({ ctx, args }) => { return ctx.storage.docs.get(args.storageId); });`,
+        );
 
         const functions: FunctionIR[] = [
             { args: {}, exportName: "extractDocumentText", filePath: "extraction2", kind: "action", returnType: "unknown", visibility: "internal" },
