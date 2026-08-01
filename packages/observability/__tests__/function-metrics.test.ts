@@ -7,7 +7,6 @@ import {
     FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_MAX_PATHS,
     FUNCTION_METRICS_READ_LIMIT,
-    FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
     mergeScanAttribution,
     readFunctionMetricBuckets,
@@ -286,73 +285,31 @@ describe("recordFunctionMetric", () => {
         expect(readFunctionMetricIndexHits(sql)).toStrictEqual([]);
     });
 
-    it("evicts the coldest path (smallest last_called_at) to admit a genuinely new one at the cap", () => {
-        expect.assertions(5);
+    it("refuses a brand-new path once the accumulator is at its cap, protecting incumbents", () => {
+        expect.assertions(4);
 
         const harness = createSqliteExec();
         const { sql } = harness;
 
         ensureFunctionMetricsTables(sql);
 
-        // Seed the accumulator to the cap with distinct `last_called_at` values
-        // so eviction order is deterministic: `seed:0` is the coldest.
+        // Seeding straight to the limit keeps this a test of the guard, not of
+        // 5000 upserts.
         for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
-            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path, last_called_at) VALUES (?, ?)`, `seed:${String(index)}`, index);
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES (?)`, `seed:${String(index)}`);
         }
 
-        harness.raw(`INSERT INTO "${FUNCTION_METRICS_SCANS_TABLE}" (path, table_name, scans) VALUES ('seed:0', 'posts', 3)`);
-        harness.raw(`INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('seed:0', 60000, 1, 0)`);
-
-        recordFunctionMetric(sql, dispatch({ path: "new:fn", ts: FUNCTION_METRICS_MAX_PATHS }));
-
-        const [count] = harness.raw(`SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`);
-
-        // The table stays at the cap: the new path was admitted, exactly one
-        // (the coldest) was evicted to make room.
-        expect(count?.["n"]).toBe(FUNCTION_METRICS_MAX_PATHS);
-        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'new:fn'`)).toHaveLength(1);
-        // The coldest seed (`last_called_at = 0`) is gone — pre-fix, `new:fn`
-        // would be refused and every seed row (including this one) would survive.
-        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'seed:0'`)).toStrictEqual([]);
-        // The satellites matter as much as the accumulator: an eviction that only
-        // cleared the accumulator row would leave the bucket/scan tables growing
-        // without bound for a path no longer tracked.
-        expect(readFunctionMetricBuckets(sql, "seed:0")).toStrictEqual({ buckets: [], truncated: false });
-        expect(readFunctionMetricScans(sql).get("seed:0")).toBeUndefined();
-    });
-
-    it("drops an evicted path from the known-paths cache so it re-verifies rather than bypassing the cap", () => {
-        expect.assertions(3);
-
-        const harness = createSqliteExec();
-        const { sql } = harness;
-
-        ensureFunctionMetricsTables(sql);
-
-        // Record `cold:fn` through `recordFunctionMetric` (not a raw seed) so it
-        // is marked "known" in THIS handle's in-memory cache, exactly like a
-        // real repeatedly-called function would be.
-        recordFunctionMetric(sql, dispatch({ path: "cold:fn", ts: 0 }));
-
-        for (let index = 1; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
-            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path, last_called_at) VALUES (?, ?)`, `seed:${String(index)}`, index);
-        }
-
-        // `cold:fn` has the smallest `last_called_at` (0), so it is the one
-        // evicted here.
-        recordFunctionMetric(sql, dispatch({ path: "new:fn", ts: FUNCTION_METRICS_MAX_PATHS }));
-
-        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'cold:fn'`)).toStrictEqual([]);
-
-        // If eviction left `cold:fn` in the known-paths cache, this call would
-        // skip the cap check entirely (`known.has` short-circuits `admitPath`)
-        // and the table would grow to MAX_PATHS + 1 instead of evicting again.
-        recordFunctionMetric(sql, dispatch({ path: "cold:fn", ts: FUNCTION_METRICS_MAX_PATHS + 1 }));
+        recordFunctionMetric(sql, dispatch({ path: "flood:random" }));
 
         const [count] = harness.raw(`SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`);
 
         expect(count?.["n"]).toBe(FUNCTION_METRICS_MAX_PATHS);
-        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'cold:fn'`)).toHaveLength(1);
+        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'flood:random'`)).toStrictEqual([]);
+        // The satellites matter as much as the accumulator: a guard that only
+        // protected the accumulator would leave the bucket, scan and index tables
+        // growing without bound, which is the whole reason the cap exists.
+        expect(readFunctionMetricBuckets(sql, "flood:random")).toStrictEqual({ buckets: [], truncated: false });
+        expect(readFunctionMetricScans(sql).get("flood:random")).toBeUndefined();
     });
 
     it("keeps accumulating an already-tracked path past the cap", () => {
@@ -585,14 +542,14 @@ describe("per-handle memoization (OBS-02)", () => {
     });
 
     it("re-verifies the distinct-path cap against durable state on a fresh post-hibernation handle", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const harness = createSqliteExec();
 
         ensureFunctionMetricsTables(harness.sql);
 
         for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
-            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path, last_called_at) VALUES (?, ?)`, `seed:${String(index)}`, index);
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES (?)`, `seed:${String(index)}`);
         }
 
         // A fresh handle has no local cache of what's tracked — it must fall
@@ -600,15 +557,9 @@ describe("per-handle memoization (OBS-02)", () => {
         // means the cap hasn't been reached.
         const fresh = freshHandleOver(harness);
 
-        recordFunctionMetric(fresh, dispatch({ path: "new:fn", ts: FUNCTION_METRICS_MAX_PATHS }));
+        recordFunctionMetric(fresh, dispatch({ path: "attacker:random" }));
 
-        // Admitted by evicting the coldest seed, not refused outright, and the
-        // table stays bounded at the cap.
-        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'new:fn'`)).toHaveLength(1);
-
-        const [count] = harness.raw(`SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`);
-
-        expect(count?.["n"]).toBe(FUNCTION_METRICS_MAX_PATHS);
+        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'attacker:random'`)).toStrictEqual([]);
     });
 });
 
@@ -625,7 +576,7 @@ describe("reads on a never-called shard", () => {
         expect(readFunctionMetricBuckets(sql)).toStrictEqual({ buckets: [], truncated: false });
         expect(readFunctionMetricScans(sql).size).toBe(0);
         expect(readFunctionMetricIndexHits(sql)).toStrictEqual([]);
-        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ errors: 0, requests: 0 });
+        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ capped: false, errors: 0, requests: 0 });
     });
 });
 
@@ -683,7 +634,22 @@ describe("readFunctionMetricsTotals", () => {
         recordFunctionMetric(sql, dispatch({ errored: true, path: "b:fn" }));
         recordFunctionMetric(sql, dispatch({ path: "b:fn" }));
 
-        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ errors: 1, requests: 3 });
+        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ capped: false, errors: 1, requests: 3 });
+    });
+
+    it("reports capped once the distinct-path cap is reached — the write-side signal a refused path leaves behind", () => {
+        expect.assertions(1);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        ensureFunctionMetricsTables(sql);
+
+        for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES (?)`, `seed:${String(index)}`);
+        }
+
+        expect(readFunctionMetricsTotals(sql).capped).toBe(true);
     });
 });
 

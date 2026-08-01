@@ -83,18 +83,22 @@ const FUNCTION_METRICS_BUCKET_RETENTION = 1440;
  * Maximum distinct function `path`s tracked in the accumulator table. Mirrors
  * `query-metrics.ts`'s `QUERY_METRICS_MAX_STATEMENTS` cap (and exists for the
  * same reason): the real bound is the app's own registered-function set plus
- * deploy churn (a rename/removal leaves its old path's row in place until the
- * cap evicts it) — a few thousand registered functions is already far beyond
- * any real app. `shard-do.ts`'s dispatch handler explicitly does NOT record
- * per-function metrics for an unregistered/`FUNCTION_NOT_FOUND` dispatch (see
- * the guard next to its `FUNCTION_NOT_FOUND` check), so a caller cannot mint
- * arbitrary `path`s here the way a raw caller-supplied SQL shape can in
- * `query-metrics.ts`. Without a cap, deploy churn across the app's lifetime
- * would still grow `__lunora_metrics` (and its bucket/scan satellites) without
- * bound, eventually filling the shard's SQLite store shared with the app's
- * real data. At the cap, the accumulator row with the oldest `last_called_at`
- * is evicted (along with its bucket/scan satellite rows) to admit a
- * genuinely new path; already-tracked paths keep accumulating past the cap.
+ * deploy churn (a rename/removal leaves its old path's row in place, still
+ * counted against the cap, until an operator's own retention/cleanup
+ * process — there is none built in today) — a few thousand registered
+ * functions is already far beyond any real app. `shard-do.ts`'s dispatch
+ * handler explicitly does NOT record per-function metrics for an
+ * unregistered/`FUNCTION_NOT_FOUND` dispatch (see the guard next to its
+ * `FUNCTION_NOT_FOUND` check), so a caller cannot mint arbitrary `path`s here
+ * the way a raw caller-supplied SQL shape can in `query-metrics.ts`. Without a
+ * cap, deploy churn across the app's lifetime would still grow
+ * `__lunora_metrics` (and its bucket/scan satellites) without bound,
+ * eventually filling the shard's SQLite store shared with the app's real
+ * data. At the cap, a brand-new path is refused — protecting the incumbent
+ * leaderboard from a flood of one-off paths is the point, so admission is
+ * refused rather than evicting an existing path to make room; already-tracked
+ * paths keep accumulating past the cap. `readFunctionMetricsTotals`'s
+ * `capped` is the read-side signal for this.
  */
 const FUNCTION_METRICS_MAX_PATHS = 5000;
 
@@ -369,23 +373,12 @@ const admitPath = (sql: SqlExec, path: string): boolean => {
 
     const pathCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`).one();
 
+    // At capacity: refuse the new path rather than evict an existing one —
+    // protecting the incumbent leaderboard from a flood of one-off paths is
+    // the reason this cap exists, so admission is refused, not traded away.
+    // `readFunctionMetricsTotals`'s `capped` is the read-side signal for this.
     if (pathCountRow.n >= FUNCTION_METRICS_MAX_PATHS) {
-        // At capacity: evict the coldest path (smallest `last_called_at`) to
-        // admit this genuinely new one, mirroring `metric-history.ts`'s
-        // series-cap eviction and `MetricBuffer.push`'s in-memory LRU policy.
-        // Without this, a deploy that renames/removes functions would
-        // permanently fill the accumulator with dead paths and refuse every
-        // path introduced afterward — including the app's own new functions.
-        const evictRow = runSql<{ path: string }>(sql, `SELECT path FROM "${FUNCTION_METRICS_TABLE}" ORDER BY last_called_at ASC LIMIT 1`).toArray()[0];
-
-        if (evictRow === undefined) {
-            return false;
-        }
-
-        runSql(sql, `DELETE FROM "${FUNCTION_METRICS_TABLE}" WHERE path = ?`, evictRow.path);
-        runSql(sql, `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?`, evictRow.path);
-        runSql(sql, `DELETE FROM "${FUNCTION_METRICS_SCANS_TABLE}" WHERE path = ?`, evictRow.path);
-        known.delete(evictRow.path);
+        return false;
     }
 
     known.add(path);
@@ -697,11 +690,15 @@ const readFunctionMetricBuckets = (sql: SqlExec, path?: string): FunctionMetricB
 
 /**
  * Aggregate the persisted accumulators into the lifetime totals the metrics
- * health snapshot reports: total calls (`requests`), total `errors`, and the
- * earliest `last_called_at` seen — a best-effort "since" marker for durable
- * data. Returns zeroes on a never-called shard.
+ * health snapshot reports: total calls (`requests`), total `errors`. Returns
+ * zeroes on a never-called shard.
+ *
+ * `capped` is true when the distinct-path cap ({@link FUNCTION_METRICS_MAX_PATHS})
+ * has been reached — the write-side signal that a brand-new function path is
+ * currently being refused (see `admitPath`), mirroring `readQueryInsights`'s
+ * `capped` for query-metrics and `readMetricHistory`'s for metric-history.
  */
-const readFunctionMetricsTotals = (sql: SqlExec): { errors: number; requests: number } => {
+const readFunctionMetricsTotals = (sql: SqlExec): { capped: boolean; errors: number; requests: number } => {
     ensureFunctionMetricsTables(sql);
 
     const row = runSql<{ errors: null | number; requests: null | number }>(
@@ -709,7 +706,9 @@ const readFunctionMetricsTotals = (sql: SqlExec): { errors: number; requests: nu
         `SELECT SUM(calls) AS requests, SUM(errors) AS errors FROM "${FUNCTION_METRICS_TABLE}"`,
     ).one();
 
-    return { errors: row.errors ?? 0, requests: row.requests ?? 0 };
+    const pathCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`).one();
+
+    return { capped: pathCountRow.n >= FUNCTION_METRICS_MAX_PATHS, errors: row.errors ?? 0, requests: row.requests ?? 0 };
 };
 
 export {

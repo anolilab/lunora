@@ -187,16 +187,14 @@ describe("metricHistory", () => {
         });
     });
 
-    describe("distinct-series cap eviction", () => {
-        it("evicts the least-recently-updated series to admit a genuinely new one at the cap", () => {
-            expect.assertions(3);
+    describe("distinct-series cap", () => {
+        it("refuses a brand-new series once the cap is reached, protecting incumbents", () => {
+            expect.assertions(2);
 
             const sql = makeSql();
             const base = Math.floor(1_749_300_000_000 / MINUTE) * MINUTE;
             const maxSeries = 5;
 
-            // Fill the cap, oldest first — series `s0` ends up with the smallest
-            // `MAX(last_ts)` since it is never touched again.
             for (let index = 0; index < maxSeries; index += 1) {
                 recordMetricHistory(sql, event({ kind: "counter", name: `s${String(index)}`, ts: base + index * 1000, value: 1 }), undefined, { maxSeries });
             }
@@ -207,11 +205,10 @@ describe("metricHistory", () => {
             const { series } = readMetricHistory(sql);
             const names = series.map((s) => s.name);
 
-            // The new series was admitted — pre-fix this is absent.
-            expect(names).toContain("new-series");
-            // The coldest series (`s0`, the oldest `last_ts`) was evicted to make room.
-            expect(names).not.toContain("s0");
-            // Every other pre-existing series survived — only the coldest was evicted.
+            // Refused, not evicted: every incumbent series survives and the
+            // new one is absent — a flood of one-off series must not be able
+            // to trade away the app's own tracked series.
+            expect(names).not.toContain("new-series");
             expect(names).toHaveLength(maxSeries);
         });
 

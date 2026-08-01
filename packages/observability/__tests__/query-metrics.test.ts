@@ -2,8 +2,6 @@ import type { SqlExec } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-    ensureQueryMetricsTable,
-    hashStatement,
     normalizeSql,
     pruneQueryBuckets,
     QUERY_BUCKET_RETENTION,
@@ -76,45 +74,6 @@ describe("normalizeSql", () => {
         expect.assertions(1);
 
         expect(normalizeSql(`SELECT "user_id" FROM t`)).toBe(`SELECT "user_id" FROM t`);
-    });
-});
-
-describe("ensureQueryMetricsTable", () => {
-    it("backfills last_seen_at on a table that predates the eviction feature", () => {
-        expect.assertions(3);
-
-        const harness = createSqliteExec();
-        const { sql } = harness;
-
-        try {
-            // A shard created before the distinct-statement eviction landed has
-            // the original column set — build that shape by hand rather than
-            // assume the guarded `ALTER TABLE` is safe against it.
-            harness.raw(`CREATE TABLE "${QUERY_METRICS_TABLE}" (
-                normalized_sql TEXT PRIMARY KEY,
-                exec_count     INTEGER NOT NULL DEFAULT 0,
-                total_duration_ms REAL NOT NULL DEFAULT 0,
-                rows_read      INTEGER NOT NULL DEFAULT 0,
-                rows_written   INTEGER NOT NULL DEFAULT 0
-            )`);
-
-            expect(() => {
-                ensureQueryMetricsTable(sql);
-            }).not.toThrow();
-
-            const columns = harness.raw(`PRAGMA table_info("${QUERY_METRICS_TABLE}")`).map((row) => row["name"]);
-
-            expect(columns).toContain("last_seen_at");
-
-            // A write against the back-filled table must not throw either —
-            // the column is nullable, so the upsert's explicit `last_seen_at`
-            // value is what populates it going forward.
-            expect(() => {
-                recordQueryMetric(sql, "SELECT * FROM posts WHERE id = 1", 5, 1, 0);
-            }).not.toThrow();
-        } finally {
-            harness.close();
-        }
     });
 });
 
@@ -232,55 +191,31 @@ describe("recordQueryMetric + readQueryMetrics", () => {
         }
     });
 
-    it("evicts the least-recently-seen statement to admit a genuinely new one at the cap", () => {
-        expect.assertions(3);
+    it("refuses a brand-new statement once the cap is reached, protecting incumbents", () => {
+        expect.assertions(2);
 
         const { sql, close } = createSqliteExec();
 
         try {
-            // Fill the table to the cap, oldest first — distinct explicit `now`
-            // values make eviction order deterministic: `col0`'s statement ends
-            // up with the smallest `last_seen_at`.
+            // Fill the table to the cap.
             for (let i = 0; i < QUERY_METRICS_MAX_STATEMENTS; i += 1) {
                 // Use distinct column names to generate distinct normalized SQL (identifier numbers are kept).
-                recordQueryMetric(sql, `SELECT col${String(i)} FROM t`, 1, 0, 0, i);
+                recordQueryMetric(sql, `SELECT col${String(i)} FROM t`, 1, 0, 0);
             }
 
-            // A genuinely new statement arrives at capacity.
-            recordQueryMetric(sql, "SELECT extra_col FROM t", 999, 0, 0, QUERY_METRICS_MAX_STATEMENTS);
+            // Attempt to add one more new statement.
+            recordQueryMetric(sql, "SELECT extra_col FROM t", 999, 0, 0);
 
             const rows = readQueryMetrics(sql);
 
-            // Admitted, not dropped — the table stays bounded at the cap.
+            // Refused, not evicted: the table stays at the cap and every
+            // incumbent statement survives — a flood of one-off shapes must
+            // not be able to trade away the app's own tracked statements.
             expect(rows).toHaveLength(QUERY_METRICS_MAX_STATEMENTS);
-            expect(rows.some((r) => r.normalizedSql.includes("extra_col"))).toBe(true);
-            // The coldest statement (`col0`, the smallest `last_seen_at`) was
-            // evicted to make room.
-            expect(rows.some((r) => r.normalizedSql.includes("SELECT col0 "))).toBe(false);
-        } finally {
-            close();
-        }
-    }, 15_000);
 
-    it("evicts the evicted statement's bucket rows too", () => {
-        expect.assertions(1);
+            const found = rows.some((r) => r.normalizedSql.includes("extra_col"));
 
-        const { sql, close } = createSqliteExec();
-
-        try {
-            for (let i = 0; i < QUERY_METRICS_MAX_STATEMENTS; i += 1) {
-                recordQueryMetric(sql, `SELECT col${String(i)} FROM t`, 1, 0, 0, i);
-            }
-
-            const evictedHash = hashStatement(normalizeSql("SELECT col0 FROM t"));
-
-            recordQueryMetric(sql, "SELECT extra_col FROM t", 999, 0, 0, QUERY_METRICS_MAX_STATEMENTS);
-
-            // The bucket table (keyed by `sql_hash`) must not keep growing for a
-            // statement no longer tracked in the lifetime table.
-            const insights = readQueryInsights(sql, 60 * 60_000, QUERY_METRICS_MAX_STATEMENTS);
-
-            expect(insights.entries.some((entry) => entry.normalizedSql === evictedHash)).toBe(false);
+            expect(found).toBe(false);
         } finally {
             close();
         }
@@ -365,12 +300,12 @@ describe("per-handle memoization (OBS-02)", () => {
     });
 
     it("re-verifies the distinct-statement cap against durable state on a fresh post-hibernation handle", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const harness = createSqliteExec();
 
         for (let index = 0; index < QUERY_METRICS_MAX_STATEMENTS; index += 1) {
-            recordQueryMetric(harness.sql, `SELECT col${String(index)} FROM t`, 1, 0, 0, index);
+            recordQueryMetric(harness.sql, `SELECT col${String(index)} FROM t`, 1, 0, 0);
         }
 
         // A fresh handle has no local cache of what's tracked — it must fall
@@ -378,14 +313,11 @@ describe("per-handle memoization (OBS-02)", () => {
         // means the cap hasn't been reached.
         const fresh = freshHandleOver(harness);
 
-        recordQueryMetric(fresh, "SELECT extra_col FROM t", 999, 0, 0, QUERY_METRICS_MAX_STATEMENTS);
+        recordQueryMetric(fresh, "SELECT extra_col FROM t", 999, 0, 0);
 
         const rows = readQueryMetrics(fresh);
 
-        // Admitted by evicting the coldest tracked statement, not refused
-        // outright, and the table stays bounded at the cap.
-        expect(rows.some((row) => row.normalizedSql.includes("extra_col"))).toBe(true);
-        expect(rows).toHaveLength(QUERY_METRICS_MAX_STATEMENTS);
+        expect(rows.some((row) => row.normalizedSql.includes("extra_col"))).toBe(false);
     }, 15_000);
 
     it("reports capped on readQueryInsights once the tracked-statement count reaches the cap", () => {

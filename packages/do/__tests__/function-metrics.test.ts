@@ -203,7 +203,7 @@ describe("function-metrics module", () => {
             expect(buckets[0]).toEqual({ bucketMs: base, calls: 2, errors: 1, path: "f:a" });
             expect(buckets[1]).toEqual({ bucketMs: base + FUNCTION_METRICS_BUCKET_MS, calls: 1, errors: 0, path: "f:a" });
 
-            expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 1, requests: 3 });
+            expect(readFunctionMetricsTotals(database.sql)).toEqual({ capped: false, errors: 1, requests: 3 });
         } finally {
             database.close();
         }
@@ -339,33 +339,30 @@ describe("function-metrics module", () => {
             expect(readFunctionMetricBuckets(database.sql)).toEqual({ buckets: [], truncated: false });
             expect(readFunctionMetricScans(database.sql).size).toBe(0);
             expect(readFunctionMetricIndexHits(database.sql)).toEqual([]);
-            expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 0, requests: 0 });
+            expect(readFunctionMetricsTotals(database.sql)).toEqual({ capped: false, errors: 0, requests: 0 });
         } finally {
             database.close();
         }
     });
 
-    it("evicts the coldest path so an unregistered-path flood can't grow the table unbounded", () => {
+    it("caps distinct paths so an unregistered-path flood can't grow the table unbounded", () => {
         expect.assertions(2);
 
         const database = createSqliteExec();
 
         try {
-            // Fill the accumulator to its distinct-path cap, oldest first —
-            // distinct timestamps make eviction order deterministic: `fn:0` ends
-            // up with the smallest `last_called_at`.
+            // Fill the accumulator to its distinct-path cap.
             for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
-                recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: `fn:${String(index)}`, ts: index });
+                recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: `fn:${String(index)}`, ts: 1000 });
             }
 
-            // A brand-new path past the cap evicts the coldest tracked path
-            // (`fn:0`) to admit itself; an already-tracked path keeps
-            // accumulating past the cap.
-            recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:flood-1", ts: FUNCTION_METRICS_MAX_PATHS });
-            recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:1", ts: FUNCTION_METRICS_MAX_PATHS + 1 });
+            // A brand-new path past the cap is refused; an already-tracked path
+            // keeps accumulating.
+            recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:flood-1", ts: 2000 });
+            recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:0", ts: 2000 });
 
             const total = database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}"`)[0] as { c: number };
-            const tracked = database.raw(`SELECT calls AS c FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'fn:1'`)[0] as { c: number };
+            const tracked = database.raw(`SELECT calls AS c FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'fn:0'`)[0] as { c: number };
 
             expect(total.c).toBe(FUNCTION_METRICS_MAX_PATHS);
             expect(tracked.c).toBe(2);

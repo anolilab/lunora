@@ -9,10 +9,10 @@
  * external collector.
  *
  * Modelled directly on `function-metrics.ts`'s `__lunora_metrics_buckets` (same
- * bucket width, same bounded-retention trim, same distinct-key cap with the same
- * least-recently-updated eviction at capacity). One row per `(series, bucket)`,
- * written with a single PK-keyed `INSERT … ON CONFLICT … DO UPDATE` upsert plus a
- * bounded `DELETE`.
+ * bucket width, same bounded-retention trim, same distinct-key cap that
+ * protects already-tracked identities by refusing a brand-new one once full).
+ * One row per `(series, bucket)`, written with a single PK-keyed
+ * `INSERT … ON CONFLICT … DO UPDATE` upsert plus a bounded `DELETE`.
  *
  * Each bucket also carries an **exemplar**: a sample `traceId` of a measurement
  * folded into it, so the studio can jump from a point on the chart to a trace
@@ -43,8 +43,11 @@ const METRIC_HISTORY_BUCKET_RETENTION = 1440;
  * series per id — so without a cap a high-cardinality dimension would grow the
  * table without bound and eventually crowd the app's own data out of the shard's
  * SQLite. Mirrors `function-metrics.ts`'s `FUNCTION_METRICS_MAX_PATHS`: at the
- * cap, the series with the oldest `MAX(last_ts)` is evicted to admit a
- * genuinely new one; already-tracked series keep accumulating past the cap.
+ * cap, a brand-new series is refused (see `readMetricHistory`'s `capped` flag,
+ * the write-side signal this used to lack) while already-tracked series keep
+ * accumulating past the cap — protecting the incumbent leaderboard from a
+ * flood of one-off series is the point of the cap, so admission is refused
+ * rather than evicting an existing series to make room for the flood.
  */
 const METRIC_HISTORY_MAX_SERIES = 1000;
 
@@ -83,11 +86,14 @@ interface MetricHistorySeries {
 /** {@link readMetricHistory} result: every tracked series with its buckets. */
 interface MetricHistoryResult {
     /**
-     * True when the distinct-series cap has been reached, so the caller can say
-     * "showing N of a capped set" rather than implying totality — mirrors
-     * `readQueryInsights`'s `capped`. Series past the cap are still charted; only
-     * a genuinely new one arriving at capacity evicts the coldest existing series
-     * (see `recordMetricHistory`).
+     * True when the distinct-series cap has been reached — a **write-side**
+     * signal ("this shard can no longer admit a brand-new series", see
+     * `admitNewSeries`), not a read-side truncation flag. It is computed over
+     * the whole table regardless of `options.sinceMs`/the row-count read
+     * limit, so it can be `true` even when every series `readMetricHistory`
+     * actually returned fits comfortably: the caller should read it as "a
+     * flood of new series would currently be refused", the same thing
+     * `readQueryInsights`'s `capped` already signals for query-metrics.
      */
     capped: boolean;
     series: MetricHistorySeries[];
@@ -194,50 +200,20 @@ interface MetricHistoryOptions {
 }
 
 /**
- * Admit a brand-new `key` against the distinct-series cap, evicting the
- * least-recently-updated series (smallest `MAX(last_ts)`) when at capacity —
- * the durable mirror of `MetricBuffer.push`'s in-memory LRU policy. Mirrors
+ * Admit a brand-new `key` against the distinct-series cap. Mirrors
  * `function-metrics.ts`'s `admitPath` and `query-metrics.ts`'s
- * `admitStatement`. Only called for a series `recordMetricHistory` has
- * confirmed is not yet tracked (an already-tracked series always keeps
- * accumulating past the cap, so it never reaches this check).
- *
- * Split out of {@link recordMetricHistory} to keep that function's cognitive
- * complexity in bounds — this is the one branch-heavy part of it.
+ * `admitStatement`: `false` at capacity, so a flood of one-off series can't
+ * displace the app's real leaderboard — protecting already-tracked
+ * incumbents is the reason the cap exists, so admission is refused rather
+ * than evicting one of them to make room. Only called for a series
+ * `recordMetricHistory` has confirmed is not yet tracked (an already-tracked
+ * series always keeps accumulating past the cap, so it never reaches this
+ * check).
  */
-const admitNewSeries = (sql: SqlExec, cache: Set<string>, maxSeries: number): void => {
+const admitNewSeries = (sql: SqlExec, maxSeries: number): boolean => {
     const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
 
-    if (seriesCountRow.n < maxSeries) {
-        return;
-    }
-
-    // At capacity: evict the least-recently-updated series to admit this
-    // genuinely new one. A brand-new series arriving right after a deploy (or
-    // the incident being charted) must not go permanently unrecorded — only
-    // the coldest existing series pays for it.
-    const evictRow = runSql<{ series_key: string }>(
-        sql,
-        `SELECT series_key FROM "${METRIC_HISTORY_TABLE}" GROUP BY series_key ORDER BY MAX(last_ts) ASC LIMIT 1`,
-    ).toArray()[0];
-
-    if (evictRow === undefined) {
-        return;
-    }
-
-    runSql(sql, `DELETE FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ?`, evictRow.series_key);
-
-    // Drop the evicted series' entries from the known-bucket cache so a later
-    // write for it re-checks durable state rather than skipping straight to an
-    // upsert that would resurrect rows this eviction just deleted. Cache keys
-    // are `${seriesKey}\u0000${bucketMs}` (see `cacheKey` in `recordMetricHistory`).
-    const evictedPrefix = `${evictRow.series_key}\u0000`;
-
-    for (const cachedKey of cache) {
-        if (cachedKey.startsWith(evictedPrefix)) {
-            cache.delete(cachedKey);
-        }
-    }
+    return seriesCountRow.n < maxSeries;
 };
 
 /**
@@ -290,8 +266,11 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
         // into a new minute skips it, and an in-minute update never reaches here.
         const seriesTracked = runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ? LIMIT 1`, key).toArray().length > 0;
 
-        if (!seriesTracked) {
-            admitNewSeries(sql, cache, maxSeries);
+        if (!seriesTracked && !admitNewSeries(sql, maxSeries)) {
+            // At capacity: refuse the write rather than evict an existing
+            // series — see `admitNewSeries` for why. `readMetricHistory`'s
+            // `capped` flag is the read-side signal for this.
+            return;
         }
     }
 

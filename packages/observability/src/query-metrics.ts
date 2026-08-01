@@ -15,8 +15,9 @@
  * iterated via `.toArray()` / `.one()`). `rows_written` is always 0 in this
  * module; callers that know a DML statement affected rows can pass the count
  * explicitly. The tracked set is capped at {@link QUERY_METRICS_MAX_STATEMENTS}
- * entries — at the cap, the least-recently-seen statement is evicted (see
- * `admitStatement`) to admit a genuinely new one, rather than dropping it.
+ * entries — new statements beyond the cap are refused (see `admitStatement`),
+ * protecting the already-tracked leaderboard from a flood of one-off shapes;
+ * `readQueryInsights`'s `capped` is the read-side signal for this.
  */
 
 import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
@@ -70,11 +71,11 @@ const LATENCY_BUCKET_EDGES = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 5000] as
 const QUERY_METRICS_MAX_SQL_LEN = 512;
 
 /**
- * Maximum distinct normalised statements tracked, to prevent unbounded table
+ * Maximum distinct normalised statements tracked. Entries beyond this cap
+ * are refused (not evicted — see `admitStatement`) to prevent unbounded table
  * growth when ad-hoc SQL (e.g. DDL migrations, dynamic query builders)
- * generates many distinct statement shapes. At the cap, the statement with the
- * oldest `last_seen_at` is evicted (see `admitStatement`) to admit a genuinely
- * new one; already-tracked statements keep accumulating past the cap.
+ * generates many distinct statement shapes; already-tracked statements keep
+ * accumulating past the cap.
  */
 const QUERY_METRICS_MAX_STATEMENTS = 500;
 
@@ -143,18 +144,6 @@ const ensuredMetricsHandles = new WeakSet<SqlExec>();
  * Create the reserved query-metrics table. Idempotent — safe to call on every
  * hot path; SQLite's `CREATE TABLE IF NOT EXISTS` is a no-op when the table
  * already exists. Only runs once per handle (see {@link ensuredMetricsHandles}).
- *
- * `last_seen_at` is added via a guarded `ALTER TABLE` rather than baked only
- * into the `CREATE`, mirroring `function-metrics.ts`'s `scans`/`conflicts`
- * back-fill, so a shard whose `__lunora_metrics_queries` predates the
- * distinct-statement eviction (see {@link admitStatement}) gains the column on
- * the next call without a migration. SQLite has no `ADD COLUMN IF NOT EXISTS`,
- * so the duplicate-column error from a re-run (or the freshly-created schema
- * above) is swallowed. Left nullable — for a row already covered by the CREATE
- * above it is always set by `recordQueryMetric`'s upsert, and a legacy
- * pre-migration row reads `NULL`, which `admitStatement`'s
- * `ORDER BY last_seen_at ASC` sorts first (oldest) so it is evicted before any
- * row with a real timestamp.
  */
 const ensureQueryMetricsTable = (sql: SqlExec): void => {
     if (ensuredMetricsHandles.has(sql)) {
@@ -168,16 +157,9 @@ const ensureQueryMetricsTable = (sql: SqlExec): void => {
             exec_count     INTEGER NOT NULL DEFAULT 0,
             total_duration_ms REAL NOT NULL DEFAULT 0,
             rows_read      INTEGER NOT NULL DEFAULT 0,
-            rows_written   INTEGER NOT NULL DEFAULT 0,
-            last_seen_at   REAL
+            rows_written   INTEGER NOT NULL DEFAULT 0
         )`,
     );
-
-    try {
-        runSql(sql, `ALTER TABLE "${QUERY_METRICS_TABLE}" ADD COLUMN last_seen_at REAL`);
-    } catch {
-        // Column already exists — no-op.
-    }
 
     ensuredMetricsHandles.add(sql);
 };
@@ -503,12 +485,12 @@ const knownStatementsFor = (sql: SqlExec): Set<string> => {
  * "genuinely new", and only a genuinely new statement reaches the actual
  * `COUNT(*)` gate — the rare case once the leaderboard has warmed up.
  *
- * At the cap, the statement with the oldest `last_seen_at` is evicted (its
- * bucket rows too) to admit this genuinely new one, mirroring
- * `metric-history.ts`'s series-cap eviction and `function-metrics.ts`'s
- * path-cap eviction. `NULLS FIRST` evicts a legacy pre-migration row (which has
- * no `last_seen_at`) before any row with a real timestamp — SQLite already
- * orders `NULL` first in `ASC`, but the clause is kept explicit for clarity.
+ * At the cap, a brand-new statement is refused rather than evicting an
+ * existing one — protecting the incumbent leaderboard from a flood of
+ * one-off statement shapes (ad-hoc SQL, a dynamic query builder) is the
+ * reason this cap exists, so a flood must not be able to trade away the
+ * app's own tracked statements. `readQueryInsights`'s `capped` is the
+ * read-side signal for this.
  */
 const admitStatement = (sql: SqlExec, normalized: string): boolean => {
     const known = knownStatementsFor(sql);
@@ -529,18 +511,7 @@ const admitStatement = (sql: SqlExec, normalized: string): boolean => {
     const countRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${QUERY_METRICS_TABLE}"`).one();
 
     if (countRow.n >= QUERY_METRICS_MAX_STATEMENTS) {
-        const evictRow = runSql<{ normalized_sql: string }>(
-            sql,
-            `SELECT normalized_sql FROM "${QUERY_METRICS_TABLE}" ORDER BY last_seen_at ASC NULLS FIRST LIMIT 1`,
-        ).toArray()[0];
-
-        if (evictRow === undefined) {
-            return false;
-        }
-
-        runSql(sql, `DELETE FROM "${QUERY_METRICS_TABLE}" WHERE normalized_sql = ?`, evictRow.normalized_sql);
-        runSql(sql, `DELETE FROM "${QUERY_BUCKETS_TABLE}" WHERE sql_hash = ?`, hashStatement(evictRow.normalized_sql));
-        known.delete(evictRow.normalized_sql);
+        return false;
     }
 
     known.add(normalized);
@@ -587,16 +558,15 @@ const recordQueryMetric = (
     }
 
     // eslint-disable-next-line no-secrets/no-secrets -- SQL keyword "CONFLICT" triggers the entropy scanner; this is plain DDL, not a secret
-    const upsertSql = `INSERT INTO "${QUERY_METRICS_TABLE}" (normalized_sql, exec_count, total_duration_ms, rows_read, rows_written, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+    const upsertSql = `INSERT INTO "${QUERY_METRICS_TABLE}" (normalized_sql, exec_count, total_duration_ms, rows_read, rows_written)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(normalized_sql) DO UPDATE SET
              exec_count = exec_count + excluded.exec_count,
              total_duration_ms = total_duration_ms + excluded.total_duration_ms,
              rows_read = rows_read + excluded.rows_read,
-             rows_written = rows_written + excluded.rows_written,
-             last_seen_at = excluded.last_seen_at`;
+             rows_written = rows_written + excluded.rows_written`;
 
-    runSql(sql, upsertSql, normalized, execCount, durationMs, rowsRead, rowsWritten, now);
+    runSql(sql, upsertSql, normalized, execCount, durationMs, rowsRead, rowsWritten);
     recordQueryBucket(sql, normalized, durationMs, rowsRead, rowsWritten, now, execCount);
 };
 
