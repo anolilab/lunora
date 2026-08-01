@@ -476,6 +476,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Unknown admin operation";
     };
+    readonly SOCKET_TAG_BUDGET_EXCEEDED: {
+        readonly status: 400;
+        readonly title: "Socket tag budget exceeded";
+    };
     readonly RELAY_CANNOT_SEED: {
         readonly status: 500;
         readonly title: "Relay cannot seed";

@@ -15,6 +15,7 @@
  */
 
 import type { DurableObjectNamespace, DurableObjectState, DurableObjectStub, WebSocket } from "@cloudflare/workers-types";
+import { LunoraError } from "@lunora/errors";
 import type {
     ShardAlarms,
     ShardDirectory,
@@ -293,6 +294,57 @@ const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
 };
 
 /**
+ * Cloudflare's `acceptWebSocket` tag budget: at most 10 tags per socket, each
+ * at most 256 characters, for the socket's whole lifetime (tags are frozen at
+ * accept — there is no per-call vs. per-lifetime distinction because there is
+ * only ever one accept call per socket). Verified against
+ * https://developers.cloudflare.com/durable-objects/api/state/ (2026-08-01);
+ * update these two constants and the comment's date if that page's numbers
+ * ever change.
+ */
+const MAX_ACCEPT_TAGS = 10;
+const MAX_TAG_LENGTH = 256;
+
+/**
+ * `accept` always prepends one identity tag ({@link ID_TAG_PREFIX}) before
+ * calling `state.acceptWebSocket`, which is what turns Cloudflare's
+ * {@link MAX_ACCEPT_TAGS}-tag provider cap into a caller-visible budget one
+ * smaller — the reservation the guard below enforces.
+ */
+const RESERVED_ID_TAG_COUNT = 1;
+
+/**
+ * Reject an over-budget `tags` argument before it ever reaches
+ * `state.acceptWebSocket` — the provider throws about the combined list
+ * (including the host's own reserved id tag), which blames the caller for a
+ * count or tag it never supplied. The adapter knows whose fault it is and
+ * says so.
+ */
+const assertWithinTagBudget = (tags: ReadonlyArray<string> | undefined): void => {
+    if (!tags || tags.length === 0) {
+        return;
+    }
+
+    const usableBudget = MAX_ACCEPT_TAGS - RESERVED_ID_TAG_COUNT;
+
+    if (tags.length > usableBudget) {
+        throw new LunoraError(
+            "SOCKET_TAG_BUDGET_EXCEEDED",
+            `${String(tags.length)} tags supplied; Cloudflare allows ${String(MAX_ACCEPT_TAGS)} per socket and 1 is reserved for the host's identity tag — pass at most ${String(usableBudget)}.`,
+        );
+    }
+
+    const overLength = tags.find((tag) => tag.length > MAX_TAG_LENGTH);
+
+    if (overLength !== undefined) {
+        throw new LunoraError(
+            "SOCKET_TAG_BUDGET_EXCEEDED",
+            `Tag ${JSON.stringify(overLength)} is ${String(overLength.length)} characters; Cloudflare allows at most ${String(MAX_TAG_LENGTH)} characters per tag.`,
+        );
+    }
+};
+
+/**
  * Build the socket host for a DO.
  *
  * Note what is deliberately absent: `setTag` / `removeTag`. Cloudflare freezes
@@ -343,6 +395,8 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
 
     return {
         accept: (socket, attachment, tags) => {
+            assertWithinTagBudget(tags);
+
             const ws = socket as WebSocket;
             const id = crypto.randomUUID();
 
