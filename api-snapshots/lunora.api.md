@@ -3451,6 +3451,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `FunctionMetricBucketsResult` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `FunctionMetricIndexHit` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.

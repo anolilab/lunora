@@ -225,6 +225,17 @@ interface FunctionMetricBucket {
 }
 ```
 
+### `FunctionMetricBucketsResult` (interface)
+
+```ts
+interface FunctionMetricBucketsResult {
+    buckets: (FunctionMetricBucket & {
+        path: string;
+    })[];
+    truncated: boolean;
+}
+```
+
 ### `FunctionMetricIndexHit` (interface)
 
 ```ts
@@ -799,9 +810,7 @@ const readErrorIssues: (sql: SqlExec, options?: ReadIssuesOptions) => ErrorIssue
 ### `readFunctionMetricBuckets` (const)
 
 ```ts
-const readFunctionMetricBuckets: (sql: SqlExec, path?: string) => (FunctionMetricBucket & {
-    path: string;
-})[];
+const readFunctionMetricBuckets: (sql: SqlExec, path?: string) => FunctionMetricBucketsResult;
 ```
 
 ### `readFunctionMetricIndexHits` (const)

@@ -290,6 +290,14 @@ export interface QueryStatEntry {
 export interface MetricsSnapshot extends ShardMetrics {
     functions?: FunctionCallStat[];
     history?: MetricsHistoryBucket[];
+
+    /**
+     * True when the DO's durable bucket table held more rows than the read
+     * limit could return, so `history` is a partial (newest) window rather
+     * than the shard's full retained history. Absent on a worker predating
+     * the signal — treat a missing value the same as `false`.
+     */
+    historyTruncated?: boolean;
     /** Per-declared-index recorded reads; absent on a worker predating the dead-index feed. */
     indexHits?: MetricsIndexHit[];
 

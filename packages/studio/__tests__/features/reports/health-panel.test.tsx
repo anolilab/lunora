@@ -168,6 +168,46 @@ describe("healthPanel SLO view", () => {
         expect(screen.getByTestId("hl-spark-requests")).toBeDefined();
     });
 
+    it("shows a notice when the durable history was truncated by the read limit", async () => {
+        expect.assertions(1);
+
+        const mock = withConnection(
+            createMockClient({
+                query: (reference): unknown => {
+                    if (reference === ADMIN_FUNCTIONS.getLogs) {
+                        return { entries: ENTRIES };
+                    }
+
+                    if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                        return { ...SNAPSHOT, historyTruncated: true };
+                    }
+
+                    if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                        return { functions: [] };
+                    }
+
+                    throw new Error(`unexpected ${reference}`);
+                },
+            }),
+        );
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("hl-history-truncated");
+
+        expect(screen.getByTestId("hl-history-truncated")).toBeDefined();
+    });
+
+    it("does not show the truncation notice when the durable history fits within the read limit", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(sloClient()));
+
+        await screen.findByTestId("hl-spark-requests");
+
+        expect(screen.queryByTestId("hl-history-truncated")).toBeNull();
+    });
+
     it("degrades each SLO tile to — when its read fails, without blanking the panel", async () => {
         expect.assertions(2);
 

@@ -113,6 +113,22 @@ interface FunctionMetricBucket {
     errors: number;
 }
 
+/** {@link readFunctionMetricBuckets} result: the time-series window plus whether the read limit cut it short. */
+interface FunctionMetricBucketsResult {
+    buckets: (FunctionMetricBucket & { path: string })[];
+
+    /**
+     * True when more rows existed than {@link FUNCTION_METRICS_READ_LIMIT} could
+     * return, so `buckets` is a partial (newest) window rather than the app's
+     * full retained history. Mirrors `readQueryInsights`'s `capped` and
+     * `foldTraces`'s `total`: a silently truncated read looks identical to a
+     * complete one to a caller that doesn't check for it — the Metrics chart's
+     * window would appear to shrink as the app grows, with a wrong leftmost
+     * bar, and nothing would say why.
+     */
+    truncated: boolean;
+}
+
 /** One declared index a dispatch exercised (used to narrow a read). */
 interface IndexHit {
     /** The declared index name. */
@@ -616,9 +632,9 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
 /**
  * Read the coarse time-series buckets for `path` (every path when omitted),
  * oldest-bucket first so a chart can plot them left-to-right. Creates the table
- * first so reads on a never-called shard return `[]`.
+ * first so reads on a never-called shard return `{ buckets: [], truncated: false }`.
  */
-const readFunctionMetricBuckets = (sql: SqlExec, path?: string): (FunctionMetricBucket & { path: string })[] => {
+const readFunctionMetricBuckets = (sql: SqlExec, path?: string): FunctionMetricBucketsResult => {
     ensureFunctionMetricsTables(sql);
 
     // Bounded like the other reads, and for the same reason: the all-paths arm is
@@ -630,21 +646,32 @@ const readFunctionMetricBuckets = (sql: SqlExec, path?: string): (FunctionMetric
     // most recent, then reversed to restore the oldest-first order a chart plots
     // left-to-right. Ordering the scan ASC and limiting would have kept the
     // stalest window and thrown away what the panel is actually for.
+    //
+    // LIMIT is one past the real cap so a full page of results (exactly
+    // `FUNCTION_METRICS_READ_LIMIT + 1` rows back) is distinguishable from a read
+    // that happened to end exactly at the cap — the extra row is trimmed below
+    // and never returned, it only flips `truncated`.
     const rows =
         path === undefined
             ? runSql<{ bucket_ms: number; calls: number; errors: number; path: string }>(
                   sql,
-                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" ORDER BY bucket_ms DESC, path ASC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
+                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" ORDER BY bucket_ms DESC, path ASC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT + 1)}`,
               ).toArray()
             : runSql<{ bucket_ms: number; calls: number; errors: number; path: string }>(
                   sql,
-                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ? ORDER BY bucket_ms DESC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
+                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ? ORDER BY bucket_ms DESC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT + 1)}`,
                   path,
               ).toArray();
 
-    return rows.toReversed().map((row) => {
-        return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path };
-    });
+    const truncated = rows.length > FUNCTION_METRICS_READ_LIMIT;
+    const kept = truncated ? rows.slice(0, FUNCTION_METRICS_READ_LIMIT) : rows;
+
+    return {
+        buckets: kept.toReversed().map((row) => {
+            return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path };
+        }),
+        truncated,
+    };
 };
 
 /**
@@ -682,4 +709,4 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 };
-export type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput };
+export type { FunctionMetricBucket, FunctionMetricBucketsResult, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput };

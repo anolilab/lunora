@@ -334,7 +334,7 @@ describe("recordFunctionMetric", () => {
         // The satellites matter as much as the accumulator: a guard that only
         // protected the accumulator would leave the bucket, scan and index tables
         // growing without bound, which is the whole reason the cap exists.
-        expect(readFunctionMetricBuckets(sql, "attacker:random")).toStrictEqual([]);
+        expect(readFunctionMetricBuckets(sql, "attacker:random")).toStrictEqual({ buckets: [], truncated: false });
         expect(readFunctionMetricScans(sql).get("attacker:random")).toBeUndefined();
     });
 
@@ -363,7 +363,7 @@ describe("recordFunctionMetric", () => {
 
 describe("time-series buckets", () => {
     it("groups dispatches within one window into a single bucket", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const harness = createSqliteExec();
         const { sql } = harness;
@@ -373,11 +373,12 @@ describe("time-series buckets", () => {
         recordFunctionMetric(sql, dispatch({ ts: base + 1 }));
         recordFunctionMetric(sql, dispatch({ errored: true, ts: base + 500 }));
 
-        const buckets = readFunctionMetricBuckets(sql, "posts:list");
+        const { buckets, truncated } = readFunctionMetricBuckets(sql, "posts:list");
 
         expect(buckets).toHaveLength(1);
         expect(buckets[0]?.calls).toBe(2);
         expect(buckets[0]?.errors).toBe(1);
+        expect(truncated).toBe(false);
     });
 
     it("floors each bucket to its window start so samples land on one grid", () => {
@@ -392,7 +393,7 @@ describe("time-series buckets", () => {
 
         // Charting depends on a fixed grid; an unfloored timestamp gives every
         // call its own bucket and the retention trim never coalesces.
-        expect(readFunctionMetricBuckets(sql, "posts:list")[0]?.bucketMs).toBe(base);
+        expect(readFunctionMetricBuckets(sql, "posts:list").buckets[0]?.bucketMs).toBe(base);
     });
 
     it("returns buckets oldest-first so a chart plots left to right", () => {
@@ -406,7 +407,10 @@ describe("time-series buckets", () => {
         recordFunctionMetric(sql, dispatch({ ts: base + FUNCTION_METRICS_BUCKET_MS * 2 }));
         recordFunctionMetric(sql, dispatch({ ts: base }));
 
-        expect(readFunctionMetricBuckets(sql, "posts:list").map((bucket) => bucket.bucketMs)).toStrictEqual([base, base + FUNCTION_METRICS_BUCKET_MS * 2]);
+        expect(readFunctionMetricBuckets(sql, "posts:list").buckets.map((bucket) => bucket.bucketMs)).toStrictEqual([
+            base,
+            base + FUNCTION_METRICS_BUCKET_MS * 2,
+        ]);
     });
 
     it("trims buckets older than the retention window", () => {
@@ -420,7 +424,7 @@ describe("time-series buckets", () => {
         recordFunctionMetric(sql, dispatch({ ts: 0 }));
         recordFunctionMetric(sql, dispatch({ ts: recent }));
 
-        const buckets = readFunctionMetricBuckets(sql, "posts:list");
+        const { buckets } = readFunctionMetricBuckets(sql, "posts:list");
 
         // Unbounded history is how a per-minute series eventually fills the
         // shard's SQLite store alongside the app's real data.
@@ -441,8 +445,8 @@ describe("time-series buckets", () => {
         // the subquery's scope — a global subquery still passes this. Kept because
         // the property is worth pinning: writing one path must never evict
         // another's history, however the trim is expressed.
-        expect(readFunctionMetricBuckets(sql, "old:fn")).toHaveLength(1);
-        expect(readFunctionMetricBuckets(sql, "new:fn")).toHaveLength(1);
+        expect(readFunctionMetricBuckets(sql, "old:fn").buckets).toHaveLength(1);
+        expect(readFunctionMetricBuckets(sql, "new:fn").buckets).toHaveLength(1);
     });
 
     it("returns every path's buckets when no path is given", () => {
@@ -456,15 +460,15 @@ describe("time-series buckets", () => {
 
         expect(
             readFunctionMetricBuckets(sql)
-                .map((bucket) => bucket.path)
+                .buckets.map((bucket) => bucket.path)
                 .toSorted((a, b) => a.localeCompare(b)),
         ).toStrictEqual(["a:fn", "b:fn"]);
     });
 });
 
 describe("bounded reads", () => {
-    it("caps the all-paths bucket read and keeps the most recent window", () => {
-        expect.assertions(3);
+    it("caps the all-paths bucket read, keeps the most recent window, and reports truncated", () => {
+        expect.assertions(4);
 
         const harness = createSqliteExec();
         const { sql } = harness;
@@ -478,7 +482,7 @@ describe("bounded reads", () => {
             harness.raw(`INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('posts:list', ?, 1, 0)`, index * 60_000);
         }
 
-        const buckets = readFunctionMetricBuckets(sql);
+        const { buckets, truncated } = readFunctionMetricBuckets(sql);
 
         expect(buckets).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
         // Newest window kept, not the stalest one — a chart of the oldest 1000
@@ -486,6 +490,30 @@ describe("bounded reads", () => {
         expect(buckets.at(-1)?.bucketMs).toBe((FUNCTION_METRICS_READ_LIMIT + 49) * 60_000);
         // Still oldest-first, so it plots left to right.
         expect(buckets[0]!.bucketMs).toBeLessThan(buckets.at(-1)!.bucketMs);
+        // The chart's window silently shrinking is exactly what `truncated` exists
+        // to make visible rather than leaving the caller to infer it.
+        expect(truncated).toBe(true);
+    });
+
+    it("does not report truncated when the read ends exactly at the row count", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        ensureFunctionMetricsTables(sql);
+
+        // Fewer rows than the cap — the boundary case a LIMIT+1 probe must not
+        // misreport as truncated just because the app happens to have a lot of
+        // history.
+        for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT; index += 1) {
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('posts:list', ?, 1, 0)`, index * 60_000);
+        }
+
+        const { buckets, truncated } = readFunctionMetricBuckets(sql);
+
+        expect(buckets).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+        expect(truncated).toBe(false);
     });
 });
 
@@ -572,7 +600,7 @@ describe("reads on a never-called shard", () => {
         // Every read calls `ensureFunctionMetricsTables` first for exactly this
         // reason: the studio opens these panels before any function has run.
         expect(readFunctionMetrics(sql)).toStrictEqual([]);
-        expect(readFunctionMetricBuckets(sql)).toStrictEqual([]);
+        expect(readFunctionMetricBuckets(sql)).toStrictEqual({ buckets: [], truncated: false });
         expect(readFunctionMetricScans(sql).size).toBe(0);
         expect(readFunctionMetricIndexHits(sql)).toStrictEqual([]);
         expect(readFunctionMetricsTotals(sql)).toStrictEqual({ errors: 0, requests: 0 });

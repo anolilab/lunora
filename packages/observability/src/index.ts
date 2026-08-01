@@ -42,7 +42,7 @@ export type {
 export { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type { DatabaseInstrumentation, DatabaseTally } from "./database-telemetry";
 export { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
-export type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput } from "./function-metrics";
+export type { FunctionMetricBucket, FunctionMetricBucketsResult, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,
     FUNCTION_METRICS_BUCKET_MS,

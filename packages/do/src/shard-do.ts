@@ -10,6 +10,7 @@ import type {
     DatabaseInstrumentation,
     DatabaseTally,
     FunctionMetricBucket,
+    FunctionMetricBucketsResult,
     FunctionMetricIndexHit,
     HostTracingLike,
     IndexHit,
@@ -4799,6 +4800,15 @@ abstract class ShardDO {
         errors: number;
         functions: FunctionCallStat[];
         history: (FunctionMetricBucket & { path: string })[];
+
+        /**
+         * True when the durable bucket table held more rows than
+         * {@link readFunctionMetricBuckets}'s read limit could return, so
+         * `history` is a partial (newest) window rather than the app's full
+         * retained history. Additive — absent on a worker predating the signal,
+         * so an older studio build simply never renders the notice.
+         */
+        historyTruncated: boolean;
         indexHits: FunctionMetricIndexHit[];
         queryStats: QueryStatEntry[];
         requests: number;
@@ -4844,6 +4854,8 @@ abstract class ShardDO {
             // No durable query-metrics table yet — report an empty feed.
         }
 
+        const historyResult = this.collectFunctionMetricBuckets();
+
         return {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
             cache: this.reactiveCache ? this.reactiveCache.stats() : null,
@@ -4851,7 +4863,8 @@ abstract class ShardDO {
             databaseSize: typeof size === "number" ? size : null,
             errors,
             functions: this.collectFunctionStats().functions,
-            history: this.collectFunctionMetricBuckets(),
+            history: historyResult.buckets,
+            historyTruncated: historyResult.truncated,
             indexHits,
             queryStats,
             requests,
@@ -5029,14 +5042,14 @@ abstract class ShardDO {
     /**
      * Per-function coarse time-series served additively by the metrics RPC, so
      * the studio can chart call/error history. Reads the durable
-     * `__lunora_metrics_buckets` table; returns `[]` when persistence is
-     * unavailable so the response stays well-formed.
+     * `__lunora_metrics_buckets` table; returns an empty, non-truncated result
+     * when persistence is unavailable so the response stays well-formed.
      */
-    private collectFunctionMetricBuckets(): (FunctionMetricBucket & { path: string })[] {
+    private collectFunctionMetricBuckets(): FunctionMetricBucketsResult {
         try {
             return readFunctionMetricBuckets(this.shardHost.sql);
         } catch {
-            return [];
+            return { buckets: [], truncated: false };
         }
     }
 
