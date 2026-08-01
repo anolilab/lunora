@@ -81,6 +81,36 @@ describe("gatePlatformFeatures", () => {
         ]);
     });
 
+    it("fails closed on a feature the matrix omits, under its own diagnostic name", async () => {
+        expect.assertions(5);
+
+        // A partial matrix that RATES `ai` but says nothing about `browser` — the
+        // shape a WIP second host ships mid-implementation. `browser` must not
+        // silently pass through just because the key is absent: every `features`
+        // key is optional, so an omission is indistinguishable from "unsupported"
+        // unless the gate treats it as such.
+        const partialTarget: PlatformCapabilities = {
+            id: "partial",
+            name: "Partial Host",
+            features: {
+                ai: { level: "native" },
+            },
+        };
+
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const usage: FeatureUsage = { ...ALL_OFF, ai: true, browser: true };
+
+        const result = gateAgainstMatrix(usage, partialTarget, "partial");
+
+        // Fails closed: the surface is omitted exactly as an explicit "unsupported" would be.
+        expect(result.usage.browser).toBe(false);
+        expect(result.usage.ai).toBe(true);
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_undeclared_feature");
+        expect(result.diagnostics[0]?.feature).toBe("browser");
+    });
+
     it("reports an unknown target and leaves the surface un-gated", async () => {
         expect.assertions(3);
 

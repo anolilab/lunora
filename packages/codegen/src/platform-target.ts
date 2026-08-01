@@ -9,7 +9,12 @@
  * `@lunora/platform` {@link PlatformCapabilities} matrix): a feature the app
  * uses that the target marks `unsupported` is dropped from the emitted surface
  * and reported as a {@link PlatformDiagnostic}, so a portability gap is a
- * build-time signal rather than a runtime surprise.
+ * build-time signal rather than a runtime surprise. A feature the app uses
+ * that the matrix does not rate AT ALL — every `features` key is optional —
+ * is treated the same way (dropped, diagnosed) rather than left in: an
+ * un-rated feature fails closed under its own `platform_undeclared_feature`
+ * name, so a partial matrix from a WIP second host cannot silently emit a
+ * surface for a primitive it never claimed to support.
  *
  * `native` and `emulated` both emit as-is — `emulated` means Lunora builds the
  * feature on lower-level primitives, which is still a working surface.
@@ -149,12 +154,12 @@ const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> 
 interface PlatformDiagnostic {
     /** The codegen capability this concerns, when it is feature-specific. */
     feature?: CapabilityKey;
-    /** Severity. `platform_unsupported_feature` and `platform_unknown_target` are both errors — each drops or misdirects an emitted surface. */
+    /** Severity. All three names are errors — each drops or misdirects an emitted surface. */
     level: "error" | "warn";
     /** Human-readable explanation of the gap. */
     message: string;
-    /** The lint id: `platform_unsupported_feature` or `platform_unknown_target`. */
-    name: "platform_unknown_target" | "platform_unsupported_feature";
+    /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, or `platform_unknown_target`. */
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
     /** How to resolve it. */
     remediation: string;
     /** The requested deploy target. */
@@ -195,6 +200,25 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
                 message: `${matrix.name} does not support "${capability}" (ctx.${capability}). Its surface was omitted from the generated types.`,
                 name: "platform_unsupported_feature",
                 remediation: `Remove the ctx.${capability} usage, or deploy to a target whose capability matrix marks "${featureKey}" as native or emulated.`,
+                target,
+            });
+        } else if (level === undefined) {
+            // Every `features` key is optional (`Capability | undefined`), so a
+            // matrix that OMITS a key — the shape a WIP second host ships while its
+            // capability matrix is still partial — would otherwise fall through
+            // this `if` entirely and leave `gated` (and the emitted surface)
+            // untouched: fail OPEN. An omitted rating is not evidence of support,
+            // so it is treated the same as an explicit `"unsupported"` for gating
+            // purposes, but reported under its own name — the fix is different
+            // (rate the feature) from an explicit unsupported (remove the usage or
+            // change target), and collapsing them would send the wrong remediation.
+            gated[capability] = false;
+            diagnostics.push({
+                feature: capability,
+                level: "error",
+                message: `${matrix.name}'s capability matrix does not declare a support level for "${capability}" (ctx.${capability}). Treated as unsupported and its surface was omitted from the generated types.`,
+                name: "platform_undeclared_feature",
+                remediation: `Rate "${featureKey}" in the ${matrix.name} capability matrix as "native", "emulated", or "unsupported" — an undeclared feature fails closed rather than shipping a surface the host may not provide.`,
                 target,
             });
         }
