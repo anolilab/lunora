@@ -39,25 +39,26 @@ export interface SqlExec {
 
     /**
      * Optional: run several write statements as one round trip instead of
-     * `run()` called once per statement in sequence. Statements execute in the
-     * given array ORDER — callers rely on that for e.g. a purge-then-insert
-     * pair, so an implementation must never reorder or parallelize across
-     * elements in a way that could observe them out of order.
+     * `run()` called once per statement in sequence. Statements MUST be
+     * mutually independent — an implementation MAY reorder or parallelize
+     * across elements, so callers must never rely on array order between
+     * elements (e.g. a purge-then-insert pair belongs in separate sequential
+     * `queryRun`/`run` calls, not one `batch`).
      *
      * Absent, the store core falls back to its historical sequential `run()`
      * loop, so an exec that doesn't implement this keeps working unchanged.
      *
      * D1's `client.batch` executes the whole array atomically (all-or-nothing)
-     * in one request — an actual atomicity improvement over the sequential
-     * fallback, not just a round-trip one. The Hyperdrive `postgres`/`pg`
-     * adapters instead dispatch every statement concurrently (`Promise.all`)
-     * over the same connection/pool rather than awaiting each in turn — still
-     * "at-least-once, non-atomic" like the fallback, but no longer serialized
-     * one full RTT at a time. Safe only for statements whose effects don't
-     * depend on each other (distinct-keyed rows), which is what every current
-     * caller batches.
+     * in one request, preserving array order — an actual atomicity improvement
+     * over the sequential fallback, not just a round-trip one. The Hyperdrive
+     * `postgres`/`pg` adapters instead dispatch every statement concurrently
+     * (`Promise.all`) over the same connection/pool rather than awaiting each
+     * in turn — still "at-least-once, non-atomic" like the fallback, but no
+     * longer serialized one full RTT at a time, and with no ordering between
+     * elements. Safe only for statements whose effects don't depend on each
+     * other (distinct-keyed rows), which is what every current caller batches.
      */
-    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<SqlRunResult[]>;
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
 }
 

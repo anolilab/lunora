@@ -147,8 +147,8 @@ describe("exec adapters", () => {
         expect(result).toEqual({ rowsAffected: 0 });
     });
 
-    it("buildPgExec.batch dispatches every statement (concurrently, not one-per-round-trip) and reports rowsAffected: 0 per statement", async () => {
-        expect.assertions(2);
+    it("buildPgExec.batch dispatches every statement (concurrently, not one-per-round-trip)", async () => {
+        expect.assertions(1);
 
         const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
         const exec = buildPgExec({
@@ -159,7 +159,7 @@ describe("exec adapters", () => {
             },
         });
 
-        const result = await exec.batch?.([
+        await exec.batch?.([
             { params: ["a"], sql: "INSERT INTO t (x) VALUES ($1)" },
             { params: ["b"], sql: "INSERT INTO t (x) VALUES ($1)" },
         ]);
@@ -168,30 +168,25 @@ describe("exec adapters", () => {
             { params: ["a"], sql: "INSERT INTO t (x) VALUES ($1)" },
             { params: ["b"], sql: "INSERT INTO t (x) VALUES ($1)" },
         ]);
-        expect(result).toEqual([{ rowsAffected: 0 }, { rowsAffected: 0 }]);
     });
 
-    it("buildMysqlExec.batch dispatches every statement and reports each statement's affectedRows, in order", async () => {
-        expect.assertions(2);
+    it("buildMysqlExec.batch dispatches every statement", async () => {
+        expect.assertions(1);
 
         const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
         const exec = buildMysqlExec({
             execute: async (text, params = []) => {
                 calls.push({ params, sql: text });
 
-                // Reply with a distinct affectedRows per statement so a
-                // shuffled dispatch order would be caught by the ordered
-                // assertion below.
                 return [{ affectedRows: params[0] === "a" ? 1 : 2 }, undefined];
             },
         });
 
-        const result = await exec.batch?.([
+        await exec.batch?.([
             { params: ["a"], sql: "INSERT INTO `t` (`x`) VALUES (?)" },
             { params: ["b"], sql: "INSERT INTO `t` (`x`) VALUES (?)" },
         ]);
 
         expect(calls).toHaveLength(2);
-        expect(result).toEqual([{ rowsAffected: 1 }, { rowsAffected: 2 }]);
     });
 });

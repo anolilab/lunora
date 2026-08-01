@@ -577,7 +577,7 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
                     all(statement.sql, statement.params);
                 }
 
-                return Promise.resolve(statements.map(() => undefined));
+                return Promise.resolve();
             },
             run: (query, parameters) => {
                 all(query, parameters);

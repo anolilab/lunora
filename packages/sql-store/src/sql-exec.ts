@@ -115,13 +115,13 @@ const createIndexIfNotExists = async (
  */
 interface SqlCtxExec {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
-    // Optional, mirroring `SqlExec.batch` (see dialect.ts): run several write
-    // statements as one round trip, in array order. `| void` for the same
-    // reason `run` below is unioned — a D1/node:sqlite double may not report
-    // per-statement results. Absent it, `queryBatch` falls back to the
-    // sequential `run()` loop every companion write used before this existed.
-    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: accepts a batch that reports no per-statement results
-    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<(SqlRunResult | void)[]>;
+    // Optional, mirroring `SqlExec.batch` (see dialect.ts): run several
+    // mutually-independent write statements as one round trip. No caller
+    // consumes a return value — some engines dispatch these concurrently, so
+    // there's no ordered result to report — hence `void`. Absent it,
+    // `queryBatch` falls back to the sequential `run()` loop every companion
+    // write used before this existed.
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     // `void` for D1/node:sqlite (the result is ignored on those paths); a
     // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
     // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale

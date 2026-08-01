@@ -138,7 +138,7 @@ const createBatchingHarness = (): {
                     all(statement.sql, statement.params);
                 }
 
-                return Promise.resolve(statements.map(() => undefined));
+                return Promise.resolve();
             },
             run: (query, parameters) => {
                 runs += 1;
