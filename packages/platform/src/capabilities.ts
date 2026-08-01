@@ -94,7 +94,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
         queues: { level: "native", note: "Cloudflare Queues" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
-        scheduler: { level: "native", note: "SchedulerDO + Cron Triggers" },
+        scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         objectStorage: { level: "native", note: "R2" },
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: { level: "native", note: "Vectorize" },
