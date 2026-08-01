@@ -1,3 +1,5 @@
+## @lunora/errors [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Ferrors%401.0.0-alpha.10...%40lunora%2Ferrors%401.0.0-alpha.11) (2026-08-01)
+
 ## @lunora/errors [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/%40lunora%2Ferrors%401.0.0-alpha.9...%40lunora%2Ferrors%401.0.0-alpha.10) (2026-07-31)
 
 ## @lunora/errors [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Ferrors%401.0.0-alpha.8...%40lunora%2Ferrors%401.0.0-alpha.9) (2026-07-28)
