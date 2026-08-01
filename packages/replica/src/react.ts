@@ -1,12 +1,20 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
-import type { LocalMirror, LocalQueryResult } from "./local-mirror";
+import type { LocalMirror } from "./local-mirror";
+
+/**
+ * Result of {@link useLocalQuery} — a discriminated union so callers get a
+ * typed error instead of a swallowed `undefined`.
+ * @experimental
+ */
+// eslint-disable-next-line sonarjs/no-redundant-optional -- `?: undefined` is the discriminant, not a redundant optional: it's what lets `result.data !== undefined` narrow the union without an explicit `"data" in result` check. Dropping either half breaks that narrowing.
+type LocalQueryResult<T> = { readonly data: T[]; readonly error?: undefined } | { readonly data?: undefined; readonly error: Error };
 
 /**
  * Options for the {@link useLocalQuery} hook.
  * @experimental
  */
-export interface UseLocalQueryOptions {
+interface UseLocalQueryOptions {
     /**
      * Optional shard key (reserved for future use; currently unused).
      *
@@ -19,19 +27,39 @@ export interface UseLocalQueryOptions {
 }
 
 /**
+ * Serialize `params` into a stable, `useMemo`-safe dependency key.
+ *
+ * Plain `JSON.stringify` throws `TypeError: Do not know how to serialize a
+ * BigInt` for a `bigint` param — and `bigint` is a normal bind value here
+ * (64-bit SQLite ids, `normalizeBindValue` in `diff-applier.ts` supports
+ * bigint binds). That throw would happen synchronously during render (inside
+ * the `useMemo` factory), crashing the component subtree instead of
+ * surfacing as a query `{ error }`. The replacer stringifies bigints as
+ * their decimal digits followed by a trailing `n` so the key stays a plain
+ * string for any param shape.
+ */
+const stableParamsKey = (params?: ReadonlyArray<unknown>): string =>
+    JSON.stringify(params ?? [], (_key, value: unknown) => (typeof value === "bigint" ? `${value.toString()}n` : value));
+
+/**
  * React hook that subscribes to a local SQLite query and returns
  * live-updating results whenever the mirror applies a diff.
  *
- * Uses `useSyncExternalStore`, with `getSnapshot` reading through
- * {@link LocalMirror.queryCached} — the render body itself never touches
- * SQLite. `queryCached` returns the SAME cached result object for the same
- * `(mirror.version, sql, params)` triple, so a re-render that isn't
- * preceded by an `applyDiff`/`clearData` (e.g. a parent re-rendering for an
- * unrelated reason) is a cache hit, not a fresh query — and because
- * `getSnapshot` is what `useSyncExternalStore` itself calls to detect
- * changes, the result can't tear under concurrent rendering the way an
- * imperative `mirror.query(...)` call after the hook (decoupled from
- * React's snapshot mechanism) could.
+ * Uses `useSyncExternalStore` with `getSnapshot` reading {@link LocalMirror.version}
+ * — a plain number, unconditionally `Object.is`-stable across calls with no
+ * mutation in between. The actual query runs in a `useMemo` keyed on
+ * `[mirror, version, sql, stableParamsKey(params)]`, so it only re-executes
+ * when the mirror actually advances (or `sql`/`params` change) — not on
+ * every unrelated re-render.
+ *
+ * This intentionally does NOT cache query results inside {@link LocalMirror}
+ * itself: an LRU-capped cache in the mirror core evicts still-mounted hooks'
+ * entries once more than the cap's worth of distinct live queries are open
+ * on one mirror, which makes `getSnapshot` return a fresh (non-identical)
+ * object on the next read — `useSyncExternalStore` then force-re-renders,
+ * re-inserts, evicts another entry, and so on without bound. Keying the
+ * external-store snapshot on the version primitive instead of a cached
+ * query result has no such cap, so it can't loop.
  *
  * The hook works with React 18+ concurrent features, Suspense, and
  * server-side rendering. During SSR the same value is returned as on
@@ -76,7 +104,7 @@ export interface UseLocalQueryOptions {
  * ```
  * @experimental
  */
-export const useLocalQuery = <T = Record<string, unknown>>(
+const useLocalQuery = <T = Record<string, unknown>>(
     mirror: LocalMirror,
     sql: string,
     params?: ReadonlyArray<unknown>,
@@ -84,12 +112,24 @@ export const useLocalQuery = <T = Record<string, unknown>>(
 ): LocalQueryResult<T> => {
     const subscribe = (onStoreChange: () => void): (() => void) => mirror.onChange(onStoreChange);
 
-    // Reads through the mirror's per-version query cache — a pure,
-    // side-effect-free lookup on a cache hit (i.e. on every render that
-    // isn't preceded by a mutation), and the ONLY place SQLite is actually
-    // queried on a cache miss (a real `applyDiff`/`clearData`, or the very
-    // first render).
-    const getSnapshot = (): LocalQueryResult<T> => mirror.queryCached<T>(sql, params);
+    // `mirror.version` is a plain number — unconditionally `Object.is`-stable
+    // across calls with no intervening `applyDiff`/`clearData`. No cap, no
+    // eviction, so it can never make `useSyncExternalStore` see a spurious
+    // change.
+    const getSnapshot = (): number => mirror.version;
 
-    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const version = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+    const paramsKey = stableParamsKey(params);
+
+    return useMemo<LocalQueryResult<T>>(() => {
+        try {
+            return { data: mirror.query<T>(sql, params) };
+        } catch (error) {
+            return { error: error instanceof Error ? error : new Error(String(error)) };
+        }
+    }, [mirror, version, sql, paramsKey]);
 };
+
+export { useLocalQuery };
+export type { LocalQueryResult, UseLocalQueryOptions };

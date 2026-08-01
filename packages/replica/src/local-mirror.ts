@@ -137,15 +137,6 @@ const inferColumnAffinity = (value: unknown): ColumnAffinity => {
 type ChangeSubscriber = () => void;
 
 /**
- * Result of {@link LocalMirror.queryCached} — a discriminated union so
- * callers (notably `useLocalQuery` in `@lunora/replica/react`) get a typed
- * error instead of a swallowed `undefined`.
- * @experimental
- */
-// eslint-disable-next-line sonarjs/no-redundant-optional -- `?: undefined` is the discriminant, not a redundant optional: it's what lets `result.data !== undefined` narrow the union without an explicit `"data" in result` check. Dropping either half breaks that narrowing.
-type LocalQueryResult<T> = { readonly data: T[]; readonly error?: undefined } | { readonly data?: undefined; readonly error: Error };
-
-/**
  * `LocalMirror` is part of the experimental `@lunora/replica` API and may change without a major version bump.
  * @experimental
  */
@@ -163,25 +154,6 @@ class LocalMirror {
      * re-render after a clear; `version` changes on both operations.
      */
     #version = 0;
-
-    /**
-     * Cache for {@link LocalMirror.queryCached}, keyed on `sql` + serialized
-     * `params`. Invalidated wholesale whenever `#version` moves on — never
-     * read across a mutation, so it can't serve a stale row set.
-     */
-    readonly #queryCache = new Map<string, LocalQueryResult<unknown>>();
-
-    /** `#version` the entries currently in `#queryCache` were computed against. */
-    #queryCacheVersion = -1;
-
-    /**
-     * Cap on the number of DISTINCT `(sql, params)` pairs held in
-     * `#queryCache` at once (oldest evicted first — `Map` iteration order is
-     * insertion order). This bounds the CACHE's own growth across a long
-     * session that issues many different queries; it does not — and cannot
-     * — bound the row count of any single cached query's result set.
-     */
-    static readonly #MAX_QUERY_CACHE_ENTRIES = 64;
 
     /**
      * Convenience factory that creates a {@link LocalMirror} backed by a
@@ -306,66 +278,6 @@ class LocalMirror {
      */
     public query<T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>): T[] {
         return this.#db.query<T>(sql, params);
-    }
-
-    /**
-     * Cached variant of {@link LocalMirror.query} for consumers that need a
-     * REFERENTIALLY STABLE result across repeated calls that aren't preceded
-     * by a mutation — namely `useLocalQuery` (`@lunora/replica/react`),
-     * whose `getSnapshot` must return `Object.is`-equal values between
-     * `useSyncExternalStore` calls or React treats every render as a store
-     * change (at best wasted re-renders, at worst a tear under concurrent
-     * rendering).
-     *
-     * Returns `{ data }` on success or `{ error }` on failure — never throws
-     * and never collapses a real query error to `undefined`. The cache is
-     * keyed on `(version, sql, serialized params)`: it's entirely
-     * invalidated on every {@link LocalMirror.version} bump (`applyDiff`,
-     * `clearData`), so a cached entry can never outlive the data it was
-     * computed from. Entry count is capped — see `#MAX_QUERY_CACHE_ENTRIES`
-     * — bounding the CACHE's size, not any individual query's row count.
-     * @example
-     * ```ts
-     * const { data, error } = mirror.queryCached<{ id: string }>(
-     *   "SELECT id FROM users WHERE active = ?",
-     *   [true],
-     * );
-     * ```
-     */
-    public queryCached<T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>): LocalQueryResult<T> {
-        if (this.#queryCacheVersion !== this.#version) {
-            this.#queryCache.clear();
-            this.#queryCacheVersion = this.#version;
-        }
-
-        const key = `${sql}::${JSON.stringify(params ?? [])}`;
-        const cached = this.#queryCache.get(key);
-
-        if (cached) {
-            return cached as LocalQueryResult<T>;
-        }
-
-        let result: LocalQueryResult<T>;
-
-        try {
-            result = { data: this.query<T>(sql, params) };
-        } catch (error) {
-            result = { error: error instanceof Error ? error : new Error(String(error)) };
-        }
-
-        if (this.#queryCache.size >= LocalMirror.#MAX_QUERY_CACHE_ENTRIES) {
-            // `Map` iteration order is insertion order — the first key is the
-            // oldest entry.
-            const oldestKey = this.#queryCache.keys().next().value;
-
-            if (oldestKey !== undefined) {
-                this.#queryCache.delete(oldestKey);
-            }
-        }
-
-        this.#queryCache.set(key, result);
-
-        return result;
     }
 
     /**
@@ -574,4 +486,4 @@ class LocalMirror {
 }
 
 export { LocalMirror };
-export type { LocalMirrorOptions, LocalQueryResult, MirrorTableDef };
+export type { LocalMirrorOptions, MirrorTableDef };
