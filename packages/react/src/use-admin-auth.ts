@@ -1,9 +1,9 @@
 "use client";
 
-import type { AuthImpersonation, AuthPage, AuthSession, AuthUser } from "@lunora/client";
+import type { AuthImpersonation, AuthPage, AuthSession, AuthUser, LunoraClient } from "@lunora/client";
 import type { QueryKey } from "@tanstack/react-query";
-import { useMutation as useTanStackMutation, useQuery as useTanStackQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { keepPreviousData, useMutation as useTanStackMutation, useQuery as useTanStackQuery } from "@tanstack/react-query";
+import { useState, useSyncExternalStore } from "react";
 
 import { useLunora } from "./lunora-provider";
 
@@ -75,6 +75,7 @@ interface AdminAuthListResult<T> {
  */
 // eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as JSX in this package's TSX-mode parser (see use-client-query.ts / studio's use-admin-query.ts for the same workaround).
 function useAdminAuthList<T>(
+    client: LunoraClient,
     key: QueryKey,
     fetchPage: (limit: number) => Promise<AuthPage<T>>,
     options: { enabled?: boolean; pageSize?: number } = {},
@@ -82,11 +83,41 @@ function useAdminAuthList<T>(
     const { enabled = true, pageSize = DEFAULT_PAGE_SIZE } = options;
     const [limit, setLimit] = useState(pageSize);
 
-    const queryKey: QueryKey = [ADMIN_AUTH_KEY, ...key, limit];
+    // Fold the acting admin's bearer token into the cache key. Without this, a
+    // token swap on the same `LunoraClient` (admin A → admin B via
+    // `setAuthToken`, e.g. an admin console that lets one operator switch
+    // accounts) would briefly serve admin A's cached rows to admin B under the
+    // same collection key, until the `staleTime: 0` refetch resolves —
+    // `gcTime` is the provider's default 5min, plenty of time for a stale read
+    // to render. `useSyncExternalStore` mirrors `useAuth`'s own token
+    // subscription (`use-auth.ts`) so every mounted list hook picks up a swap
+    // immediately rather than waiting for an unrelated re-render.
+    //
+    // Residual caveat: `placeholderData: keepPreviousData` below (added for
+    // `loadMore`) shows the *previous* observer's data as a placeholder while
+    // any new key resolves, including the key produced by a token swap — so a
+    // narrow placeholder-only window (never a persistent cache read) can still
+    // surface admin A's rows to admin B until the refetch lands. Scoping the
+    // placeholder to same-token key changes would close that gap; left as a
+    // follow-up since this fold already satisfies the ask (a token swap gets
+    // its own cache entry, not admin A's).
+    const token = useSyncExternalStore(
+        (onChange) => client.onAuthTokenChange(onChange),
+        () => client.getAuthToken(),
+        () => client.getAuthToken(),
+    );
+
+    const queryKey: QueryKey = [ADMIN_AUTH_KEY, token ?? "anon", ...key, limit];
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `fetchPage` is a fresh closure supplied by each caller hook (`useAuthUsers`/`useOrganizations`/`useAuthSessions`) and is not part of the cache identity — `queryKey` (built from the caller's own filter/search/sort args plus `limit` above) already encodes every input that should invalidate the cache. Folding `fetchPage` itself into the key would defeat TanStack's dedup (a fresh closure every render is never `===` the previous one).
     const query = useTanStackQuery<AuthPage<T>>({
         enabled,
+        // Keep the previously-resolved page visible (and `isLoading: false`)
+        // while a larger `{ limit }` window — a brand-new `queryKey`, since
+        // `limit` is part of it — is in flight. Without this, `loadMore()`
+        // flashes the whole list to `undefined`/loading on every page grow,
+        // because TanStack v5 has no cached entry for the new key yet.
+        placeholderData: keepPreviousData,
         queryFn: () => fetchPage(limit),
         queryKey,
         // `<LunoraProvider>`'s default QueryClient sets `staleTime: Infinity`
@@ -105,7 +136,12 @@ function useAdminAuthList<T>(
     // — see packem.config.ts) stabilises both closures, matching the rest of
     // this package's hooks (e.g. use-query.ts, use-flag.ts).
     const loadMore = (): void => {
-        setLimit((current) => current + pageSize);
+        // No-op past the end (matches the docstring above) — otherwise a
+        // caller wired to infinite-scroll keeps growing `limit` past `total`,
+        // firing a fresh full-window refetch of the same rows on every call.
+        if (hasMore) {
+            setLimit((current) => current + pageSize);
+        }
     };
 
     const refetch = (): void => {
@@ -157,7 +193,11 @@ const useAuthUsers = (options: UseAuthUsersOptions = {}): AdminAuthListResult<Au
     const { enabled, filterField, filterValue, pageSize, search, searchField, sortBy, sortDirection } = options;
 
     return useAdminAuthList<AuthUser>(
-        ["users", filterField ?? "", filterValue ?? "", search ?? "", searchField ?? "", sortBy ?? "", sortDirection ?? ""],
+        client,
+        // TanStack v5 hashes keys with deterministic, key-sorted JSON, so the
+        // options object is the key — no hand-rolled `?? ""`-padded slots to
+        // keep in lockstep with the fetch payload below.
+        ["users", { filterField, filterValue, search, searchField, sortBy, sortDirection }],
         (limit) => client.listAuthUsers({ filterField, filterValue, limit, search, searchField, sortBy, sortDirection }),
         { enabled, pageSize },
     );
@@ -182,7 +222,7 @@ const useOrganizations = (options: UseOrganizationsOptions = {}): AdminAuthListR
     const client = useLunora();
     const { enabled, pageSize } = options;
 
-    return useAdminAuthList<Record<string, unknown>>(["organizations"], (limit) => client.listAuthOrganizations({ limit }), { enabled, pageSize });
+    return useAdminAuthList<Record<string, unknown>>(client, ["organizations"], (limit) => client.listAuthOrganizations({ limit }), { enabled, pageSize });
 };
 
 /** Options for {@link useAuthSessions}. */
@@ -205,7 +245,7 @@ const useAuthSessions = (options: UseAuthSessionsOptions = {}): AdminAuthListRes
     const client = useLunora();
     const { enabled, pageSize, userId } = options;
 
-    return useAdminAuthList<AuthSession>(["sessions", userId ?? ""], (limit) => client.listAuthSessions({ limit, userId }), { enabled, pageSize });
+    return useAdminAuthList<AuthSession>(client, ["sessions", { userId }], (limit) => client.listAuthSessions({ limit, userId }), { enabled, pageSize });
 };
 
 /** Everything {@link useImpersonate} returns. */
