@@ -16,6 +16,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { decodeDocJson, encodeDocJson } from "./do-sql";
 import { ConflictError } from "./transaction";
 
 /** Reserved append-only changelog table backing CDC streaming export and replay-PITR. */
@@ -60,7 +61,7 @@ const migrateCdcLog = (sql: SqlExec): void => {
  */
 const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op: CdcChange["op"], doc: Record<string, unknown> | undefined): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` column identifies the removed row.
-    const docValue = doc === undefined ? null : JSON.stringify(doc);
+    const docValue = doc === undefined ? null : encodeDocJson(doc);
 
     runDrizzle(
         sql,
@@ -103,7 +104,7 @@ const readCdcChanges = (
     const changes = rows.map((row): CdcChange => {
         const base = { id: row.id, op: row.op as CdcChange["op"], seq: row.seq, table: row.table, ts: row.ts };
 
-        return row.doc === null ? base : { ...base, doc: JSON.parse(row.doc) as Record<string, unknown> };
+        return row.doc === null ? base : { ...base, doc: decodeDocJson(row.doc) };
     });
 
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };

@@ -67,6 +67,7 @@ import {
     AGG_KEY,
     AGG_VALUE,
     DOC_COLUMN,
+    encodeDocJson,
     geoTableName,
     isFtsAvailable,
     jsonPathSql,
@@ -2378,7 +2379,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // can compare-and-swap on it — a concurrent write that changed the
         // row flips the blob and the guarded UPDATE/DELETE matches zero rows.
         const rawDocument = firstRow[DOC_COLUMN];
-        const documentJson = typeof rawDocument === "string" ? rawDocument : JSON.stringify(rawDocument ?? {});
+        const documentJson = typeof rawDocument === "string" ? rawDocument : encodeDocJson((rawDocument ?? {}) as Record<string, unknown>);
 
         return { docJson: documentJson, row, tableName };
     };
@@ -2734,7 +2735,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 runGuardedWrite(
                     sql,
                     tableName,
-                    dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
+                    dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
                 );
 
                 // Search stays maintained (the marker filter hides it on read), but
@@ -3362,7 +3363,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runWrite(
                 sql,
                 tableName,
-                dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES (${id}, ${creationTime}, ${JSON.stringify(documentWithMeta)})`,
+                dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES (${id}, ${creationTime}, ${encodeDocJson(documentWithMeta)})`,
             );
 
             syncCompanionsForInsert(tableName, id, documentWithMeta);
@@ -3455,7 +3456,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // ONE multi-row INSERT — the throughput win over `insertMany`'s N
             // single-row statements (and the skipped per-row JS pipeline).
             const valuesSql = dsql.join(
-                rows.map((row) => dsql`(${row.id}, ${row.creationTime}, ${JSON.stringify(row.document)})`),
+                rows.map((row) => dsql`(${row.id}, ${row.creationTime}, ${encodeDocJson(row.document)})`),
                 dsql`, `,
             );
 
@@ -3573,7 +3574,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runGuardedWrite(
                 sql,
                 tableName,
-                dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
+                dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
             syncSearch(tableName, id, merged, existing);
@@ -4000,7 +4001,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runGuardedWrite(
                 sql,
                 tableName,
-                dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
+                dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
             syncSearch(tableName, id, replaced, previous);
