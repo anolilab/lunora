@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { serveStateless } from "../src/http";
 import { createPaidMcpServer } from "../src/paid";
 import type { ToolResult } from "../src/tools";
+
+vi.mock(import("../src/http"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, serveStateless: vi.fn<typeof actual.serveStateless>(actual.serveStateless) };
+});
 
 /** The worker-level x402 charge vocabulary shared by every paid tool. */
 const charge = {
@@ -50,6 +57,14 @@ const mcpRequest = (body: unknown, headers: Record<string, string> = {}): Reques
         method: "POST",
     });
 
+/** A Streamable-HTTP client POST carrying a raw (possibly unparseable) body. */
+const rawMcpRequest = (rawBody: string, headers: Record<string, string> = {}): Request =>
+    new Request("https://worker.example/mcp", {
+        body: rawBody,
+        headers: { accept: "application/json, text/event-stream", "content-type": "application/json", ...headers },
+        method: "POST",
+    });
+
 const initializeBody = {
     id: 1,
     jsonrpc: "2.0",
@@ -68,6 +83,7 @@ const text = (value: string): ToolResult => {
 describe("createPaidMcpServer", () => {
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.mocked(serveStateless).mockClear();
     });
 
     it("challenges an unpaid paid-tool call with 402 and never runs the handler", async () => {
@@ -155,6 +171,40 @@ describe("createPaidMcpServer", () => {
         expect(response.status).toBe(400);
         // Refused before any facilitator or dispatch work.
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("fails closed on an unparseable body when a tool is priced — never dispatches", async () => {
+        expect.assertions(3);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        const response = await mcp.fetchHandler(rawMcpRequest("{not json"));
+
+        expect(response.status).toBe(400);
+        // The underlying SDK transport (serveStateless) is never reached — this
+        // module can't tell whether the unparseable body targeted the paid tool,
+        // so it refuses before dispatch rather than let the transport's own
+        // re-parse decide.
+        expect(serveStateless).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("dispatches an unparseable body unchanged when no tool is priced", async () => {
+        expect.assertions(1);
+
+        stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+
+        await mcp.fetchHandler(rawMcpRequest("{not json"));
+
+        // No paid tools registered → the parse-miss guard never applies, so the
+        // request still reaches the SDK transport exactly as before this change.
+        expect(serveStateless).toHaveBeenCalledTimes(1);
     });
 
     it("rejects registering the same tool name twice", () => {

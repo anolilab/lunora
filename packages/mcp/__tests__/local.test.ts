@@ -1,10 +1,14 @@
 import type { FunctionDescriptor } from "@lunora/client";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { ListResourcesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LocalDeployment } from "../src/local";
-import { localTools, NO_DEPLOYMENT_MESSAGE } from "../src/local";
+import { createLocalMcpServer, localTools, NO_DEPLOYMENT_MESSAGE, OPENAPI_RESOURCE_URI, OPENRPC_RESOURCE_URI } from "../src/local";
 
 const FUNCTIONS: FunctionDescriptor[] = [{ args: [], kind: "query", path: "messages:list" }];
+const OPENRPC_SPEC = { info: { title: "test", version: "1.0.0" }, methods: [{ name: "messages.list" }], openrpc: "1.3.2" } as const;
+const OPENAPI_SPEC = { info: { title: "test", version: "1.0.0" }, openapi: "3.1.0", paths: {} } as const;
 
 /**
  * A `fetch` double standing in for both the docs site and a Lunora deployment,
@@ -22,13 +26,50 @@ const stubFetch = (): { asFetch: typeof fetch; urls: string[] } => {
             return Response.json({ functions: FUNCTIONS }, { headers: { "content-type": "application/json" }, status: 200 });
         }
 
+        if (url.includes("/_lunora/admin/openrpc")) {
+            return Response.json(OPENRPC_SPEC, { headers: { "content-type": "application/json" }, status: 200 });
+        }
+
+        if (url.includes("/_lunora/admin/openapi")) {
+            return Response.json(OPENAPI_SPEC, { headers: { "content-type": "application/json" }, status: 200 });
+        }
+
         return new Response("[]", { headers: { "content-type": "application/json" }, status: 200 });
     }) as unknown as typeof fetch;
 
     return { asFetch, urls };
 };
 
+/** A `fetch` double whose openrpc/openapi routes 404 — everything else (e.g. docs) still 200s. */
+const stubFetchSpecNotFound = (): typeof fetch =>
+    vi.fn<(input: string | URL) => Promise<Response>>(async (input) => {
+        const url = typeof input === "string" ? input : input.href;
+
+        if (url.includes("/_lunora/admin/openrpc") || url.includes("/_lunora/admin/openapi")) {
+            return Response.json({ error: { code: "NOT_FOUND", message: "not found" } }, { status: 404 });
+        }
+
+        return new Response("[]", { headers: { "content-type": "application/json" }, status: 200 });
+    }) as unknown as typeof fetch;
+
 const namesOf = (tools: ReadonlyArray<{ definition: { name: string } }>): string[] => tools.map((tool) => tool.definition.name);
+
+/**
+ * The low-level SDK `Server` stores request handlers in a private map keyed by
+ * request method. We don't drive a transport here; we reach the handlers the
+ * same way the SDK does — by looking them up via the request schema's method.
+ */
+const handlerFor = (server: Server, method: string): ((request: Record<string, unknown>) => unknown) => {
+    // eslint-disable-next-line no-underscore-dangle -- reach into the SDK's private handler map; there is no public accessor for registered handlers.
+    const handlers = (server as unknown as { _requestHandlers: Map<string, (request: unknown, extra: unknown) => unknown> })._requestHandlers;
+    const handler = handlers.get(method);
+
+    if (handler === undefined) {
+        throw new Error(`no handler registered for ${method}`);
+    }
+
+    return (request: Record<string, unknown>) => handler({ method, ...request }, { signal: new AbortController().signal });
+};
 
 describe("localTools", () => {
     it("serves documentation tools even with no deployment", () => {
@@ -125,5 +166,91 @@ describe("localTools", () => {
         const names = namesOf(localTools({ deployment: () => undefined, extraTools: [extra] }));
 
         expect(names.indexOf("lunora_search_docs")).toBeLessThan(names.indexOf("custom"));
+    });
+});
+
+describe("deployment spec resources", () => {
+    it("lists the OpenRPC/OpenAPI resources alongside docs when a deployment is configured", async () => {
+        expect.assertions(1);
+
+        const { asFetch } = stubFetch();
+        const server = createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: asFetch });
+
+        const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
+            resources: { name: string; uri: string }[];
+        };
+
+        const uris = listed.resources.map((resource) => resource.uri);
+
+        expect(uris).toStrictEqual(expect.arrayContaining([OPENRPC_RESOURCE_URI, OPENAPI_RESOURCE_URI]));
+    });
+
+    it("reads the OpenRPC resource back with the fetched spec", async () => {
+        expect.assertions(2);
+
+        const { asFetch } = stubFetch();
+        const server = createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: asFetch });
+
+        const read = (await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } })) as {
+            contents: { mimeType?: string; text: string }[];
+        };
+
+        expect(read.contents[0]?.mimeType).toBe("application/json");
+        expect(JSON.parse(read.contents[0]?.text ?? "{}")).toStrictEqual(OPENRPC_SPEC);
+    });
+
+    it("omits the spec resources without error when the deployment doesn't serve them (404)", async () => {
+        expect.assertions(2);
+
+        const server = createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: stubFetchSpecNotFound() });
+
+        const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
+            resources: { uri: string }[];
+        };
+        const uris = listed.resources.map((resource) => resource.uri);
+
+        expect(uris).not.toContain(OPENRPC_RESOURCE_URI);
+        expect(uris).not.toContain(OPENAPI_RESOURCE_URI);
+    });
+
+    it("omits the spec resources when no deployment is configured", async () => {
+        expect.assertions(1);
+
+        // Docs stay enabled (stubbed, so no real network) — the resources
+        // capability exists via the docs provider; only the deployment side is
+        // absent, and that's what this test asserts stays unlisted.
+        const { asFetch } = stubFetch();
+        const server = createLocalMcpServer({ fetch: asFetch });
+
+        const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
+            resources: { uri: string }[];
+        };
+
+        expect(listed.resources.map((resource) => resource.uri)).not.toContain(OPENRPC_RESOURCE_URI);
+    });
+
+    it("reads through the same admin-gated client the tools use (bearer token forwarded)", async () => {
+        expect.assertions(1);
+
+        let sawAuthorization = false;
+
+        const asFetch = vi.fn<(input: string | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+            const url = typeof input === "string" ? input : input.href;
+            const headers = new Headers(init?.headers);
+
+            if (url.includes("/_lunora/admin/openrpc")) {
+                sawAuthorization = headers.get("authorization") === "Bearer secret-token";
+
+                return Response.json(OPENRPC_SPEC, { headers: { "content-type": "application/json" }, status: 200 });
+            }
+
+            return new Response("[]", { headers: { "content-type": "application/json" }, status: 200 });
+        }) as unknown as typeof fetch;
+
+        const server = createLocalMcpServer({ deployment: { token: "secret-token", url: "https://worker.example" }, fetch: asFetch });
+
+        await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } });
+
+        expect(sawAuthorization).toBe(true);
     });
 });
