@@ -140,13 +140,11 @@ describe("queuesPanel", () => {
 
     // Every other destructive action in the studio (storage delete, migrations,
     // export/import, PITR restore, …) is gated behind the shared `ConfirmButton`
-    // component before it fires. `clearQueueMessages` is not: the "Clear log"
-    // button in queues-panel.tsx wires straight to `onClear` with no confirm
-    // step, so a single click irreversibly wipes the dev consumed-message log.
-    // This test pins that CURRENT behaviour rather than the gated behaviour the
-    // rest of the studio's destructive actions have — it is a real gap, not a
-    // desired contract, and is flagged as a finding rather than "fixed" here.
-    it("clears the log on a single click, with no confirmation gate (flagged: unlike every sibling destructive action)", async () => {
+    // component before it fires. `clearQueueMessages` matches that: the "Clear
+    // log" button in queues-panel.tsx is a `ConfirmButton`, so the first click
+    // only reveals the confirm/cancel prompt and `onClear` (which invokes
+    // `clearQueueMessages`) fires only from the `queues-clear-confirm` click.
+    it("does not clear on the first click; only the confirm click invokes clearQueueMessages", async () => {
         expect.hasAssertions();
 
         let cleared = false;
@@ -177,9 +175,14 @@ describe("queuesPanel", () => {
 
         await screen.findByTestId("queues-message-msg-1");
 
-        // No intermediate confirm affordance exists to assert against — the
-        // click below is the entire interaction.
+        // First click only reveals the confirm/cancel prompt — the log must
+        // still be intact and clearQueueMessages must not have fired.
         fireEvent.click(screen.getByTestId("queues-clear"));
+
+        expect(cleared).toBe(false);
+        expect(screen.getByTestId("queues-message-msg-1")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("queues-clear-confirm"));
 
         await waitFor(() => {
             expect(cleared).toBe(true);
