@@ -27,6 +27,7 @@ import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
 
+import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { autoLinkFromDeployOutput } from "../../util/auto-link";
@@ -39,6 +40,7 @@ import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
@@ -138,6 +140,17 @@ interface DeployCommandOptions {
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
+
+    /**
+     * Fail the deploy when codegen reports an ERROR-level advisory. Same
+     * option `lunora codegen` exposes as `--no-strict-advisories`; defaults to
+     * CI detection (on in CI, off locally) so a legitimately-partial target
+     * can still be shipped interactively. Does NOT gate platform diagnostics
+     * (`platform_unsupported_feature` / `platform_unknown_target`), which
+     * always block — those mean the emitted `ctx.*` surface does not match
+     * what the target can serve, not merely a style nit.
+     */
+    strictAdvisories?: boolean;
 
     /**
      * Deploy target. Falls back to `"target"` in `lunora.json`, then
@@ -384,7 +397,13 @@ const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArr
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined, target: string): Promise<void> => {
+const provisionBindings = async (
+    cwd: string,
+    logger: Logger,
+    cronTriggers: ReadonlyArray<string> | undefined,
+    target: string,
+    environment: string | undefined,
+): Promise<void> => {
     try {
         // Resolved for its side effect: reject an unregistered target before
         // reconciling a config shaped for the wrong provider. `prepare` routes
@@ -393,7 +412,7 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         resolveDeployDriver(target);
 
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
-        const reconciled = reconcileWranglerBindings(cwd, inferred);
+        const reconciled = reconcileWranglerBindings(cwd, inferred, environment);
 
         if (reconciled.changed) {
             logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
@@ -585,7 +604,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         return (
             `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
             `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
-            `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : " --prod"}\`), then re-deploy.`
+            `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`), then re-deploy.`
         );
     }
 
@@ -604,14 +623,21 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     if (
         await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
     ) {
-        await pushMintableSecrets(cwd, options, mintable, target);
+        // `pushMintableSecrets` returns `false` the moment any `secret put` fails
+        // (e.g. auth expired mid-push). Discarding that result used to deploy
+        // anyway, shipping a worker still missing the secret it just failed to
+        // set — the exact outcome the non-interactive branch above refuses to
+        // risk.
+        if (!(await pushMintableSecrets(cwd, options, mintable, target))) {
+            return "failed to push required secret(s) — set them manually and re-deploy";
+        }
 
         return undefined;
     }
 
     logger.warn(
         `${String(mintable.length)} required secret(s) not set on the target: ${mintable.join(", ")}. ` +
-            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : " --prod"}\`.`,
+            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`.`,
     );
 
     return undefined;
@@ -743,6 +769,7 @@ const runCodegenStep = async (
     target: string,
     spawner: Spawner | undefined,
     jsonOutput: boolean,
+    strictAdvisories: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -759,6 +786,33 @@ const runCodegenStep = async (
 
         if (!codegenSpinner) {
             logger.success("codegen complete");
+        }
+
+        // Portability diagnostics (`platform_unsupported_feature` /
+        // `platform_unknown_target`) mean the emitted `ctx.*` surface does not
+        // match what the deploy target can actually serve — always blocking,
+        // no opt-out, same as every other codegen caller
+        // (`reportPlatformDiagnostics` is shared for exactly this reason).
+        const platformError = reportPlatformDiagnostics(result.platformDiagnostics, logger);
+
+        if (platformError !== undefined) {
+            return { error: platformError };
+        }
+
+        // ERROR-level schema advisories ("the call throws at runtime") gate on
+        // the same `--no-strict-advisories` opt-out `lunora codegen` uses, so a
+        // legitimately-partial target can still ship interactively while CI
+        // stays strict by default.
+        const { errorAdvisories, names, shouldBlock } = evaluateAdvisoryGate(result.advisories, strictAdvisories);
+
+        if (shouldBlock) {
+            const message =
+                `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
+                `Pass --no-strict-advisories to downgrade this to a warning and deploy anyway.`;
+
+            logger.error(message);
+
+            return { error: message };
         }
 
         // Codegen ran in-process, not through the project's own `codegen`
@@ -1044,6 +1098,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string> },
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
+    const strictAdvisories = resolveStrictAdvisories(options);
 
     // Resolved ONCE, and before anything writes. Deploy rewrites `_generated/*`
     // and may mutate `wrangler.jsonc` well before it reaches the wrangler step,
@@ -1067,7 +1122,16 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     let codegen: CodegenResult | undefined;
 
     if (!options.skipCodegen) {
-        const codegenStep = await runCodegenStep(cwd, interactive, options.logger, options.apiSpec, target, options.spawner, isJsonFormat(options.format));
+        const codegenStep = await runCodegenStep(
+            cwd,
+            interactive,
+            options.logger,
+            options.apiSpec,
+            target,
+            options.spawner,
+            isJsonFormat(options.format),
+            strictAdvisories,
+        );
 
         if (codegenStep.error !== undefined) {
             return {
@@ -1115,7 +1179,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
@@ -1132,7 +1196,11 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: 1, descriptor: undefined, error: preflightError, validation: { problems: [], wranglerPath: undefined } };
     }
 
-    const validation = validateWrangler({ projectRoot: cwd });
+    // `--env <name>` validates the env-scoped view — a binding present only
+    // at the top level is a real gap for that environment (non-inheritable;
+    // see wrangler-validator.ts's NON_INHERITABLE_KEYS), and the deploy that
+    // follows targets exactly this environment via `wrangler deploy --env`.
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
 
     if (reportWranglerProblems(validation, options.logger)) {
         return { code: 1, descriptor: undefined, error: "wrangler validation failed", validation };
@@ -1250,13 +1318,17 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
         // Fall back to the `.lunora/project.json` link so a linked checkout no
-        // longer needs --migrate-url repeated on every `deploy --migrate`.
-        migrateUrl: resolveWorkerUrl({ cwd, url: options.migrateUrl }),
+        // longer needs --migrate-url repeated on every `deploy --migrate`. The
+        // link is only trusted when it was recorded for THIS `--env` — a
+        // production-linked checkout must not silently supply its URL to a
+        // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
+        migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
         temporary: options.temporary === true,
         updateSchemaBaseline: options.updateSchemaBaseline === true,

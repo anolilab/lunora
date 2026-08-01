@@ -1,6 +1,8 @@
+import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import { collectWranglerSecretVariables } from "@lunora/config/cloudflare";
 
+import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
@@ -33,7 +35,7 @@ interface CodegenCommandOptions {
 }
 
 interface CodegenCommandResult {
-    advisories: ReadonlyArray<{ detail: string; level: string; name: string; remediation: string }>;
+    advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string }>;
     cronTriggers: ReadonlyArray<string>;
     /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
     error?: string;
@@ -59,7 +61,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
 
     // CI is the default gate: a pipeline should fail on an ERROR advisory, a
     // local run should not have its workflow interrupted by one.
-    const strictAdvisories = options.strictAdvisories ?? (process.env["CI"] !== undefined && process.env["CI"] !== "");
+    const strictAdvisories = resolveStrictAdvisories(options);
 
     // Validated here because codegen resolves no driver of its own — an
     // unregistered name would otherwise emit the full Cloudflare surface
@@ -122,11 +124,9 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     // that prompted this read "the call throws at runtime". Exiting 0 on those
     // meant three workflows could deploy and fail on first use with a green
     // build. WARN and INFO stay non-blocking.
-    const errorAdvisories = commandResult.advisories.filter((advisory) => advisory.level === "ERROR");
+    const { errorAdvisories, names, shouldBlock } = evaluateAdvisoryGate(commandResult.advisories, strictAdvisories);
 
-    if (errorAdvisories.length > 0 && strictAdvisories) {
-        const names = [...new Set(errorAdvisories.map((advisory) => advisory.name))].toSorted((a, b) => a.localeCompare(b));
-
+    if (shouldBlock) {
         logger.error(
             `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
                 `Codegen wrote its output; this exit code is the gate. Pass --no-strict-advisories to downgrade it to a warning.`,

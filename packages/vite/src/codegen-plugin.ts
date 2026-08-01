@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
-import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import type { CodegenResult } from "@lunora/codegen";
+import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
@@ -122,27 +123,64 @@ const reconcileWranglerExtras = (
     }
 };
 
+/** {@link runCodegenSafely}'s result. */
+interface CodegenSafelyResult {
+    /**
+     * Set when codegen reported at least one ERROR-level advisory or
+     * platform diagnostic — one message aggregating all of them, ready to
+     * fail a `vite build` with. Every level is still logged unconditionally
+     * above; this is only the caller's signal for whether to escalate.
+     */
+    blockingMessage?: string;
+    /** Absolute directory codegen actually wrote to; `undefined` when codegen was skipped or failed. */
+    outputDirectory?: string;
+}
+
+/**
+ * The `blockingMessage` for {@link runCodegenSafely}'s result: one aggregated
+ * line naming every ERROR-level advisory/platform diagnostic, or `undefined`
+ * when none. The name list itself comes from `@lunora/codegen`'s
+ * `describeErrorLevelFindings` — the same filter+dedup+sort the CLI's
+ * `lunora codegen`/`lunora deploy` gate uses — so this only owns folding the
+ * two categories into one combined, sorted message; it used to compute an
+ * unsorted list inline, which is what let it drift from the CLI's. Extracted
+ * purely to keep `runCodegenSafely`'s cognitive complexity within the repo's
+ * lint budget — no other behavior change from inlining it.
+ */
+const buildBlockingMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">): string | undefined => {
+    const { advisoryNames, platformDiagnosticNames } = describeErrorLevelFindings(result);
+    const blockingNames = [...new Set([...advisoryNames, ...platformDiagnosticNames])].toSorted((a, b) => a.localeCompare(b));
+
+    if (blockingNames.length === 0) {
+        return undefined;
+    }
+
+    const noun = blockingNames.length === 1 ? "advisory/platform diagnostic" : "advisories/platform diagnostics";
+
+    return `${LUNORA_TAG} ${String(blockingNames.length)} ERROR-level ${noun} (${blockingNames.join(", ")}) — see the log above for detail.`;
+};
+
 /**
  * Run codegen, returning the absolute directory codegen actually wrote to
  * (so callers can invalidate the *real* output, not an independently-guessed
- * path), or `undefined` when codegen was skipped or failed.
+ * path) and — when any advisory/platform diagnostic is ERROR-level — an
+ * aggregated `blockingMessage` the caller can escalate.
  *
  * Pass `overlay` to surface fatal failures in the Vite error overlay during
- * dev. Omit it (build mode) to keep the current log-and-return-undefined
- * behaviour.
+ * dev. Omit it (build mode) to keep the current log-and-return behaviour.
  */
 const runCodegenSafely = (
     options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir" | "target">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
     overlay?: OverlayCallbacks,
     project?: Project,
-): string | undefined => {
+): CodegenSafelyResult => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
         logger.warn(`${LUNORA_TAG} schema.ts not found at ${schemaPath} — codegen skipped`);
 
-        return undefined;
+        return {};
     }
 
     try {
@@ -191,7 +229,16 @@ const runCodegenSafely = (
         // successful run — so there is nothing to do here. (Build mode passes no
         // overlay at all.)
 
-        return resolve(result.outputDirectory);
+        // Every level above is already logged; this only decides whether the
+        // caller escalates. `vite build` gates on it (same reason `lunora
+        // deploy` does: an ERROR advisory says a call throws at runtime, and a
+        // platform diagnostic says the emitted surface doesn't match the
+        // target) — `vite dev` never does, matching `lunora codegen`'s own
+        // advisory-outside-CI default.
+        return {
+            blockingMessage: buildBlockingMessage(result),
+            outputDirectory: resolve(result.outputDirectory),
+        };
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
@@ -201,7 +248,7 @@ const runCodegenSafely = (
         // user sees it immediately without leaving the browser.
         overlay?.onError(error, message);
 
-        return undefined;
+        return {};
     }
 };
 
@@ -316,7 +363,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     let configBaselineSettled = false;
     let restartInFlight = false;
 
+    // Captured via the `config` hook (fires before `buildStart`), same idiom as
+    // `createCommandProbe` in `dev-worker-env.ts`. `buildStart` runs for BOTH
+    // `vite build` and `vite dev` — the presence/absence of the `overlay`
+    // callbacks below is NOT a build/dev signal (build mode's `buildStart` call
+    // also omits it), so without this a `vite build` against a mis-declared
+    // target logs an ERROR line and still exits 0.
+    let command: "build" | "serve" | undefined;
+
     return {
+        config(_userConfig, env) {
+            command = env.command;
+        },
         async buildStart() {
             const logger = {
                 error: (message: string): void => {
@@ -334,10 +392,21 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
 
             // Build mode: no devServer, no overlay callbacks.
-            const outputDirectory = runCodegenSafely(options, logger);
+            const { blockingMessage, outputDirectory } = runCodegenSafely(options, logger);
 
             if (outputDirectory !== undefined) {
                 absoluteGeneratedDirectory = outputDirectory;
+            }
+
+            // `vite build` fails on an ERROR-level advisory/platform diagnostic —
+            // silence here is how an app ships built against a surface its target
+            // can't serve, or a call known to throw at runtime, with CI green the
+            // whole way (the same gap `lunora deploy` closed for the CLI path).
+            // `vite dev` stays log-only, matching `lunora codegen`'s own
+            // advisory-outside-CI default — interrupting the dev server on every
+            // ERROR-level advisory would be a worse loop than the terminal warning.
+            if (command === "build" && blockingMessage !== undefined) {
+                this.error(blockingMessage);
             }
 
             // Auto-provision the bindings the code implies. Done once at startup
@@ -525,7 +594,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                         refreshCodegenProject(cachedProject, absoluteSchemaDirectory);
                     }
 
-                    const outputDirectory = runCodegenSafely(options, serverLogger, overlay, cachedProject);
+                    // `blockingMessage` (an ERROR-level advisory/platform
+                    // diagnostic) is intentionally ignored here: dev stays
+                    // log-only (already logged inside runCodegenSafely) —
+                    // only `vite build`, in buildStart above, escalates it.
+                    const { outputDirectory } = runCodegenSafely(options, serverLogger, overlay, cachedProject);
 
                     if (outputDirectory === undefined) {
                         // Codegen was skipped or threw — drop the (possibly partially

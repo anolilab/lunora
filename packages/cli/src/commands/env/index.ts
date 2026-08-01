@@ -18,7 +18,8 @@ const envCommand: Command = {
         }),
     name: "env",
     options: [
-        { description: "Target production for `push` (passes --env production to wrangler)", name: "prod", type: Boolean },
+        { description: "Target this Cloudflare environment for `push`/`diff` (passes --env <name> to wrangler)", name: "env", type: String },
+        { description: "Alias for --env production", name: "prod", type: Boolean },
         { description: "For `generate` — write the generated secrets into .dev.vars instead of printing them", name: "set", type: Boolean },
         {
             description:
@@ -32,4 +33,10 @@ const envCommand: Command = {
 
 export { envCommand };
 
-export type EnvOptions = CreateOptions<{ prod: boolean | undefined; set: boolean | undefined; temporary: boolean | undefined; yes: boolean | undefined }>;
+export type EnvOptions = CreateOptions<{
+    env: string | undefined;
+    prod: boolean | undefined;
+    set: boolean | undefined;
+    temporary: boolean | undefined;
+    yes: boolean | undefined;
+}>;

@@ -37,6 +37,16 @@ const deployCommand: Command = {
             type: String,
         },
         { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
+        // Declared as a `no-*` option, like `lunora codegen`'s identically-named
+        // flag: cerebro only synthesizes a negation for options declared that
+        // way, so a positive `strict-advisories` would have made the advertised
+        // `--no-strict-advisories` an unknown-option error.
+        {
+            description:
+                "Don't fail the deploy on ERROR-level codegen advisories (the gate defaults to on in CI, off locally). Never downgrades platform diagnostics.",
+            name: "no-strict-advisories",
+            type: Boolean,
+        },
         {
             description: "Upload a preview version (wrangler versions upload) instead of going live — prints a preview URL; doesn't shift production traffic",
             name: "preview",
@@ -71,6 +81,7 @@ export type DeployOptions = CreateOptions<{
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    "strict-advisories": boolean | undefined;
     target: string | undefined;
     temporary: boolean | undefined;
     "update-schema-baseline": boolean | undefined;

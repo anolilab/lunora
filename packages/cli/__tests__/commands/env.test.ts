@@ -360,6 +360,35 @@ describe("lunora env", () => {
             expect(calls[0]?.descriptor.args).toContain("production");
         });
 
+        it("push --env staging adds --env staging", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+
+            writeFileSync(join(workdir, ".dev.vars"), "OK=1\n", "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            await runEnvCommand({ cwd: workdir, env: "staging", logger, spawner, subcommand: "push", yes: true });
+
+            expect(calls[0]?.descriptor.args).toContain("--env");
+            expect(calls[0]?.descriptor.args).toContain("staging");
+        });
+
+        it("push --env wins over --prod when both are set", async () => {
+            expect.assertions(1);
+
+            const { logger } = recordingLogger();
+
+            writeFileSync(join(workdir, ".dev.vars"), "OK=1\n", "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            await runEnvCommand({ cwd: workdir, env: "staging", logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            expect(calls[0]?.descriptor.args).toContain("staging");
+        });
+
         it("push --temporary adds --temporary to each secret put", async () => {
             expect.assertions(2);
 
@@ -469,6 +498,23 @@ describe("lunora env", () => {
             const result = await runEnvCommand({ cwd: workdir, logger, secretLister: stubLister([], false), subcommand: "diff" });
 
             expect(result.code).toBe(1);
+        });
+
+        it("diff --env staging targets staging rather than production", async () => {
+            expect.assertions(1);
+
+            let seenEnv: string | undefined;
+            const lister = async (inputs: { env?: string }): Promise<{ names: string[]; ok: boolean }> => {
+                seenEnv = inputs.env;
+
+                return { names: [], ok: true };
+            };
+
+            const { logger } = recordingLogger();
+
+            await runEnvCommand({ cwd: workdir, env: "staging", logger, secretLister: lister, subcommand: "diff" });
+
+            expect(seenEnv).toBe("staging");
         });
 
         it("diff reports local-only and remote-only keys", async () => {

@@ -78,6 +78,67 @@ describe("reconcileWranglerBindings", () => {
         expect(result.reason).toContain("in sync");
     });
 
+    describe("environment argument (advisory only — does not change WHERE bindings are written)", () => {
+        it("still writes only to the top level when environment is passed", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [] },
+    "env": { "production": {} },
+}
+`,
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred(), "production");
+
+            expect(result.changed).toBe(true);
+            // The write landed at the top level, not inside env.production —
+            // the pipeline has no env-scoped write path (see the doc comment).
+            expect(readConfig().durable_objects.bindings).toContainEqual({ class_name: "ShardDO", name: "SHARD" });
+        });
+
+        it("warns that env.production has its own non-inheritable bindings needing manual reconciliation", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [] },
+    "env": { "production": {} },
+}
+`,
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred(), "production");
+
+            expect(result.warnings.some((line) => line.includes("env.production") && line.includes("top level"))).toBe(true);
+        });
+
+        it("warns distinctly when the requested environment isn't declared at all", () => {
+            expect.assertions(1);
+
+            const result = reconcileWranglerBindings(root, baseInferred(), "production");
+
+            expect(result.warnings.some((line) => line.includes('no "env.production" block'))).toBe(true);
+        });
+
+        it("does not warn about environments when none was requested (unchanged default)", () => {
+            expect.assertions(1);
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.warnings.some((line) => line.includes("env."))).toBe(false);
+        });
+    });
+
     it("turns on observability when the key is absent (not just for container apps)", () => {
         expect.assertions(3);
 

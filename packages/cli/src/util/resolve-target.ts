@@ -16,21 +16,36 @@ import { readLinkedProject } from "@lunora/config";
 
 interface ResolveWorkerUrlInputs {
     cwd: string;
+    /** The `--env &lt;name>` the caller is targeting, when scoped. `undefined` means top-level (no `--env`). */
+    env?: string;
     /** Explicit `--url` flag value, when the caller passed one. */
     url?: string;
 }
 
 /**
  * Resolve the worker URL: the explicit `--url` flag wins, else the linked
- * project's `workerUrl`, else `undefined` (the caller supplies its own default,
- * typically `http://localhost:8787`).
+ * project's `workerUrl` — but ONLY when the link was recorded for the SAME
+ * environment the caller is targeting now. `lunora link` writes `env` for the
+ * environment it was run against (`undefined` for the top-level config); a link
+ * scoped to `production` must never stand in for a `--env staging` command (or
+ * vice versa) — that would run e.g. a data migration meant for staging against
+ * the production worker's URL. When the environments don't match, this returns
+ * `undefined` so the caller keeps its own default (typically
+ * `http://localhost:8787`, or — for `--migrate` — a hard refusal demanding
+ * `--migrate-url`).
  */
-const resolveWorkerUrl = ({ cwd, url }: ResolveWorkerUrlInputs): string | undefined => {
+const resolveWorkerUrl = ({ cwd, env, url }: ResolveWorkerUrlInputs): string | undefined => {
     if (url !== undefined && url !== "") {
         return url;
     }
 
-    return readLinkedProject(cwd)?.workerUrl;
+    const link = readLinkedProject(cwd);
+
+    if (link === undefined || link.env !== env) {
+        return undefined;
+    }
+
+    return link.workerUrl;
 };
 
 interface ResolveProductionWorkerUrlInputs {
@@ -44,16 +59,32 @@ interface ResolveProductionWorkerUrlInputs {
 /**
  * Resolve the worker URL for a bulk/destructive command gated by `--prod`. The
  * explicit `--url` flag always wins; otherwise the linked project's `workerUrl`
- * is used ONLY when `--prod` is set. Without `--prod` (and without `--url`) this
- * returns `undefined` so the caller keeps defaulting to localhost — a prod link
- * never silently becomes the target of an unguarded write/export.
+ * is used ONLY when `--prod` is set AND the link was recorded for production
+ * (`env` unset, or explicitly `"production"`). Without `--prod` (and without
+ * `--url`) this returns `undefined` so the caller keeps defaulting to
+ * localhost — a prod link never silently becomes the target of an unguarded
+ * write/export.
+ *
+ * Same bug class as {@link resolveWorkerUrl}'s environment guard: a link
+ * scoped to a non-production environment (`lunora link --env staging`) is not
+ * a production link, so `--prod` must not silently borrow its URL.
  */
 const resolveProductionWorkerUrl = ({ cwd, prod, url }: ResolveProductionWorkerUrlInputs): string | undefined => {
     if (url !== undefined && url !== "") {
         return url;
     }
 
-    return prod ? readLinkedProject(cwd)?.workerUrl : undefined;
+    if (!prod) {
+        return undefined;
+    }
+
+    const link = readLinkedProject(cwd);
+
+    if (link === undefined || (link.env !== undefined && link.env !== "production")) {
+        return undefined;
+    }
+
+    return link.workerUrl;
 };
 
 export type { ResolveProductionWorkerUrlInputs, ResolveWorkerUrlInputs };

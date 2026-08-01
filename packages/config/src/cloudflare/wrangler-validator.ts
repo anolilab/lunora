@@ -110,6 +110,12 @@ interface WranglerConfig {
     // `validateDispatchNamespaces`.
     dispatch_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; outbound?: unknown } | null | undefined>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
+    // Per-environment overrides (`env.<name>` in wrangler.jsonc). Which keys a
+    // declared environment inherits from the top level vs must redeclare is
+    // NOT uniform — see `NON_INHERITABLE_KEYS` / `INHERITABLE_KEYS` /
+    // `mergeWranglerEnvironment`. Recursive by the same shape (minus its own
+    // `env`, which wrangler does not support nesting).
+    env?: Record<string, WranglerConfig>;
     // Per-entrypoint cache control for named `WorkerEntrypoint`s. Lunora apps
     // typically use a single `export default` entrypoint, so this is passthrough.
     // Parsed from untrusted JSONC, so the map or any entry may be `null`;
@@ -185,6 +191,137 @@ interface WranglerValidationReport {
     valid: boolean;
     warnings: string[];
 }
+
+/**
+ * `env.&lt;name>` keys confirmed NON-inheritable by the current Cloudflare docs
+ * (`workers/wrangler/configuration/`, "Non-inheritable keys" section, checked
+ * 2026-07-31): wrangler does NOT fall back to the top-level value for these
+ * when a declared environment omits one — each must be redeclared per
+ * environment or it is simply absent there. Every entry below except
+ * `d1_databases` is named verbatim in that section's list.
+ *
+ * `d1_databases` is not in the docs' literal enumeration, but every OTHER
+ * binding-shaped key in that same list (`durable_objects`, `kv_namespaces`,
+ * `r2_buckets`, `vectorize`, `services`, `queues`, `workflows`,
+ * `tail_consumers`, `secrets_store_secrets`) is confirmed non-inheritable,
+ * and the section's own framing is general — "Bindings, such as `vars` or
+ * `kv_namespaces`, are not inheritable and need to be defined explicitly." A
+ * D1 binding is a binding by every definition Cloudflare uses elsewhere in
+ * the same document, so treating it the same as its siblings here is a
+ * same-pattern inference from a direct quote, not a guess. Flagged so a
+ * future reviewer can re-check it if Cloudflare's docs are ever updated to
+ * state it explicitly (or to contradict this).
+ */
+const NON_INHERITABLE_KEYS = [
+    "d1_databases",
+    "durable_objects",
+    "kv_namespaces",
+    "queues",
+    "r2_buckets",
+    "secrets_store_secrets",
+    "services",
+    "tail_consumers",
+    "vars",
+    "vectorize",
+    "workflows",
+] as const satisfies ReadonlyArray<keyof WranglerConfig>;
+
+/**
+ * `env.&lt;name>` keys confirmed INHERITABLE by the same docs section: an
+ * environment that does not override one still gets the top-level value.
+ * Limited to the keys this validator actually reads — the docs' "Inheritable
+ * keys" list is longer (`name`, `route`, `triggers`, …) but this project does
+ * not validate those fields, so extending the table to cover them would add
+ * surface with nothing exercising it.
+ */
+const INHERITABLE_KEYS = [
+    "assets",
+    "compatibility_date",
+    "exports",
+    "logpush",
+    "main",
+    "migrations",
+    "observability",
+    "placement",
+] as const satisfies ReadonlyArray<keyof WranglerConfig>;
+
+interface WranglerEnvironmentMerge {
+    /** Set when `environment` names no `env.&lt;name>` block declared in the config — the caller should treat this as a hard validation failure. */
+    error?: string;
+    /** The env-scoped view: `wrangler` unchanged when `environment` is `undefined`, otherwise merged per {@link NON_INHERITABLE_KEYS} / {@link INHERITABLE_KEYS}. */
+    merged: WranglerConfig;
+
+    /**
+     * Keys the env block overrides whose inheritance status this validator
+     * cannot verify (not in either table above) — validated against the
+     * TOP-LEVEL value only, per the "do not guess" rule; the override is
+     * silently ignored for validation purposes. The caller logs this ONCE
+     * (not per key) so an unusual `env.&lt;name>` block doesn't spam warnings.
+     */
+    unverifiedKeys: string[];
+}
+
+/**
+ * Resolve the config view `wrangler deploy --env &lt;environment>` will actually
+ * use. Undefined `environment` returns `wrangler` unchanged — the top-level
+ * config is what a plain `wrangler deploy` reads, same as today.
+ *
+ * Deliberately independent of any other merge in this module: called fresh
+ * from the ORIGINAL `wrangler` each time (see both call sites), so there is
+ * no risk of merging an already-merged config and silently losing the
+ * top-level fallback a second merge pass would no longer have access to.
+ */
+const mergeWranglerEnvironment = (wrangler: WranglerConfig, environment: string | undefined): WranglerEnvironmentMerge => {
+    if (environment === undefined) {
+        return { merged: wrangler, unverifiedKeys: [] };
+    }
+
+    const envBlock = wrangler.env?.[environment];
+
+    if (envBlock === undefined) {
+        const declared = Object.keys(wrangler.env ?? {}).toSorted((a, b) => a.localeCompare(b));
+        const declaredSuffix = declared.length > 0 ? ` (declared: ${declared.join(", ")}).` : " (no environments are declared).";
+
+        return {
+            error: `--env "${environment}" names no environment declared in wrangler.jsonc's "env" block${declaredSuffix}`,
+            merged: wrangler,
+            unverifiedKeys: [],
+        };
+    }
+
+    // Baseline: the top-level config, `env` included — harmless since nothing
+    // downstream reads `merged.env`, and this function is always called fresh
+    // from the ORIGINAL `wrangler` (see both call sites), never from an
+    // already-merged result, so there is no risk of a stale `env` block
+    // confusing a later merge. A key the env block never mentions — inheritable,
+    // non-inheritable, or unverified alike — keeps its top-level value here,
+    // which is correct for all three cases EXCEPT when the env block DOES
+    // override an inheritable or non-inheritable key, handled below.
+    const merged: WranglerConfig = { ...wrangler };
+    const envBlockKeys = Object.keys(envBlock).filter((key) => key !== "env") as ReadonlyArray<keyof WranglerConfig>;
+
+    for (const key of envBlockKeys) {
+        if ((INHERITABLE_KEYS as ReadonlyArray<keyof WranglerConfig>).includes(key)) {
+            // Env overrides top-level when present — exactly what "inheritable"
+            // means: absent, it already fell through from the baseline above.
+            (merged as Record<string, unknown>)[key] = (envBlock as Record<string, unknown>)[key];
+        }
+    }
+
+    // Non-inheritable: use ONLY the env block's value, even when the block
+    // doesn't set it (making it `undefined`) — a declared environment that
+    // doesn't repeat a binding does NOT inherit the top level's, which is
+    // exactly the gap this closes (a missing SHARD binding at the top level
+    // is a false negative for `--env production` if that env has its own).
+    for (const key of NON_INHERITABLE_KEYS) {
+        (merged as Record<string, unknown>)[key] = (envBlock as Record<string, unknown>)[key];
+    }
+
+    const knownKeys = new Set<string>([...NON_INHERITABLE_KEYS, ...INHERITABLE_KEYS]);
+    const unverifiedKeys = envBlockKeys.filter((key) => !knownKeys.has(key)).map(String);
+
+    return { merged, unverifiedKeys };
+};
 
 /**
  * Schema-declared vector indexes must each have a matching `vectorize` binding.
@@ -1018,15 +1155,52 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
 };
 
 /**
+ * Resolve the env-scoped view for {@link validateWranglerConfig} and fold in
+ * its "unverified key" warning. Pulled out purely to keep
+ * `validateWranglerConfig`'s cognitive complexity within the repo's lint
+ * budget — no behavior change from inlining it.
+ */
+const resolveEnvironmentView = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): { error?: string; wrangler: WranglerConfig } => {
+    const { error, merged, unverifiedKeys } = mergeWranglerEnvironment(wrangler, environment);
+
+    if (error !== undefined) {
+        return { error, wrangler: merged };
+    }
+
+    if (unverifiedKeys.length > 0) {
+        warnings.push(
+            `env.${String(environment)} overrides ${unverifiedKeys.join(", ")}, which this validator doesn't have a verified inheritance rule for — validated against the TOP-LEVEL value only. Double-check ${unverifiedKeys.length === 1 ? "it" : "them"} by hand for "${String(environment)}".`,
+        );
+    }
+
+    return { wrangler: merged };
+};
+
+/**
  * Pure validator: given a parsed `WranglerConfig` object and an optional
  * `SchemaInfo`, produce a structured report. Performs no I/O.
+ *
+ * `environment`, when set, validates the `env.&lt;environment>` view
+ * ({@link mergeWranglerEnvironment}) instead of the top-level config — e.g. a
+ * `durable_objects` binding present only at the top level is a validation
+ * FAILURE for `--env production` if `env.production` doesn't repeat it,
+ * because `durable_objects` is non-inheritable and wrangler will not carry it
+ * over. Omit `environment` to validate the top level only (unchanged default).
  */
-const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: SchemaInfo): WranglerValidationReport => {
+const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schema?: SchemaInfo, environment?: string): WranglerValidationReport => {
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    if (!wrangler || typeof wrangler !== "object") {
+    if (!wranglerInput || typeof wranglerInput !== "object") {
         errors.push("wrangler config is not a valid object");
+
+        return { errors, valid: false, warnings };
+    }
+
+    const { error: environmentError, wrangler } = resolveEnvironmentView(wranglerInput, environment, warnings);
+
+    if (environmentError !== undefined) {
+        errors.push(environmentError);
 
         return { errors, valid: false, warnings };
     }
@@ -1121,6 +1295,13 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
 const validateWrangler: typeof validateWranglerConfig = validateWranglerConfig;
 
 interface WranglerProjectValidationOptions {
+    /**
+     * Cloudflare environment to validate against `env.&lt;name>` in
+     * wrangler.jsonc. See {@link mergeWranglerEnvironment} for which keys
+     * inherit the top-level value vs must be redeclared per environment.
+     * Omit to validate the top-level config only (unchanged default).
+     */
+    environment?: string;
     projectRoot: string;
     schemaDir?: string;
 }
@@ -1444,10 +1625,26 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         };
     }
 
+    // Resolved ONCE for the FS-aware checks below, straight from the raw
+    // `wrangler` — kept independent of `validateWranglerConfig`'s own
+    // equivalent merge (called with `options.environment` a few lines down)
+    // rather than fed this result, so there is exactly one merge input
+    // (`wrangler` unmerged) and no risk of double-merging an already-merged
+    // config, which would look up `merged.env` and find nothing.
+    const { error: environmentError, merged: resolvedWrangler } = mergeWranglerEnvironment(wrangler, options.environment);
+
+    if (environmentError !== undefined) {
+        return {
+            problems: [environmentError],
+            report: { errors: [environmentError], valid: false, warnings: [] },
+            wranglerPath,
+        };
+    }
+
     // Surface a parse failure as a warning rather than swallowing it — codegen
     // reports the actionable error elsewhere, but a complete miss is hard to debug.
     const { error: schemaError, info: schemaInfo } = discoverSchemaInfo(options.projectRoot, schemaDirectory);
-    const report = validateWranglerConfig(wrangler, schemaInfo);
+    const report = validateWranglerConfig(wrangler, schemaInfo, options.environment);
 
     if (schemaError !== undefined) {
         report.warnings.push(`schema parse failed in ${schemaDirectory}/schema.ts: ${schemaError}`);
@@ -1458,7 +1655,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // references are left to wrangler — pure shape checks already ran above.
     const configDirectory = dirname(wranglerPath);
 
-    report.errors.push(...collectContainerImageErrors(wrangler.containers ?? [], configDirectory, wranglerPath));
+    report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
 
     // FS-aware: every declared Durable Object / Workflow class must be exported
     // by the worker entry, or wrangler refuses to bundle.
@@ -1474,13 +1671,13 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // Warning still closes the reported gap: `verify` and `doctor` used to print
     // a clean bill of health on a tree that cannot deploy, and now they say so.
     // The authoritative check remains wrangler's own, which `lunora build` runs.
-    report.warnings.push(...collectUnexportedClassErrors(wrangler, options.projectRoot, wranglerPath));
+    report.warnings.push(...collectUnexportedClassErrors(resolvedWrangler, options.projectRoot, wranglerPath));
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*
     // (never an error) so pre-build validation flows aren't broken — mirrors the
     // container-image existence check above, but downgraded to a warning.
-    const assetsDirectory = wrangler.assets?.directory;
+    const assetsDirectory = resolvedWrangler.assets?.directory;
 
     if (typeof assetsDirectory === "string" && assetsDirectory.length > 0) {
         const resolved = assetsDirectory.startsWith("/") ? assetsDirectory : join(configDirectory, assetsDirectory);

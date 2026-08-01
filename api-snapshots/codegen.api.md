@@ -852,6 +852,15 @@ const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string
 const createCodegenProject: (lunoraDirectory: string) => Project;
 ```
 
+### `describeErrorLevelFindings` (const)
+
+```ts
+const describeErrorLevelFindings: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => {
+    advisoryNames: ReadonlyArray<string>;
+    platformDiagnosticNames: ReadonlyArray<string>;
+};
+```
+
 ### `diagnosticAt` (const)
 
 ```ts
@@ -1117,6 +1126,18 @@ const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>) => string;
 
 ```ts
 const emitWranglerCronTriggers: (crons: ReadonlyArray<CronJobIR>) => string[];
+```
+
+### `errorAdvisoryNames` (const)
+
+```ts
+const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name">>) => ReadonlyArray<string>;
+```
+
+### `errorPlatformDiagnosticNames` (const)
+
+```ts
+const errorPlatformDiagnosticNames: (platformDiagnostics: ReadonlyArray<Pick<PlatformDiagnostic, "level" | "name">>) => ReadonlyArray<string>;
 ```
 
 ### `evaluateSchemaDrift` (const)

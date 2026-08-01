@@ -127,6 +127,7 @@ interface DeployCommandOptions {
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
+    strictAdvisories?: boolean;
     target?: string;
     temporary?: boolean;
     updateSchemaBaseline?: boolean;
@@ -512,6 +513,7 @@ interface SpawnDescriptor {
     args: ReadonlyArray<string>;
     captureStderr?: boolean;
     captureStdout?: boolean;
+    captureStdoutSilently?: boolean;
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;

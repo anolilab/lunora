@@ -30,6 +30,13 @@ type EnvSubcommand = "diff" | "doctor" | "generate" | "get" | "list" | "push" | 
 
 interface EnvCommandOptions {
     cwd?: string;
+
+    /**
+     * Cloudflare environment name for `push`/`diff` (`wrangler … --env &lt;name>`).
+     * `prod` is a boolean-only alias for `env: "production"` kept for backward
+     * compatibility — when both are set, `env` wins.
+     */
+    env?: string;
     /** Required for `set`. Required (positional) for `get`/`unset`. */
     key?: string;
     logger: Logger;
@@ -188,6 +195,13 @@ interface EnvContext {
     options: EnvCommandOptions;
 }
 
+/**
+ * The Cloudflare environment `push`/`diff` should target: the explicit
+ * `--env &lt;name>` wins; `--prod` is kept as a boolean-only alias for
+ * `--env production`; otherwise `undefined` (top-level config).
+ */
+const resolveEnvironment = (options: EnvCommandOptions): string | undefined => options.env ?? (options.prod === true ? "production" : undefined);
+
 const runEnvList = (context: EnvContext): EnvCommandResult => {
     const map = loadDevVariables(context.devVariablesPath);
 
@@ -319,12 +333,13 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const manager = detectPackageManager(cwd);
     const descriptors: SpawnDescriptor[] = [];
+    const environment = resolveEnvironment(options);
 
     for (const entry of map.values()) {
         // The toolchain is the target's, not always wrangler's — resolving from the
         // project keeps a non-default target from shelling out to the wrong CLI.
         const secretCommand = resolveDeployDriver(resolveProjectTarget(cwd)).toolchain?.secretPut({
-            environment: options.prod === true ? "production" : undefined,
+            environment,
             key: entry.key,
             temporary: options.temporary,
         });
@@ -347,7 +362,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         };
 
         descriptors.push(descriptor);
-        logger.info(`pushing ${entry.key} -> wrangler secret${options.prod ? " (production)" : ""}`);
+        logger.info(`pushing ${entry.key} -> wrangler secret${environment === undefined ? "" : ` (${environment})`}`);
 
         // eslint-disable-next-line no-await-in-loop -- secrets push sequentially so a failure aborts.
         const result = await spawner(descriptor);
@@ -364,13 +379,13 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     return { code: 0, descriptors };
 };
 
-/** List the deployed Worker's secret names for `diff` (prod env when `--prod`). */
+/** List the deployed Worker's secret names for `diff` (the resolved --env/--prod target). */
 const fetchRemoteSecretNames = (context: EnvContext): Promise<ListRemoteSecretsResult> => {
     const lister = context.options.secretLister ?? listRemoteSecrets;
 
     return lister({
         cwd: context.cwd,
-        env: context.options.prod ? "production" : undefined,
+        env: resolveEnvironment(context.options),
         temporary: context.options.temporary,
     });
 };
@@ -612,6 +627,7 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
 
     return runEnvCommand({
         cwd,
+        env: options.env,
         key: argument[1],
         logger,
         prod: options.prod === true,

@@ -120,6 +120,70 @@ describe("codegen-plugin", () => {
             expect(dataModel).toContain("export interface Doc_users");
         });
 
+        it("vite build fails when codegen reports an ERROR-level advisory (index_references_unknown_field)", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const badSchema = SCHEMA_SOURCE.replace(
+                `.index("by_channel", ["channelId"]),`,
+                `.index("by_channel", ["channelId"])\n        .index("by_bogus", ["doesNotExist"]),`,
+            );
+
+            expect(badSchema).not.toBe(SCHEMA_SOURCE);
+
+            writeFileSync(join(workdir, "lunora", "schema.ts"), badSchema, "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            // Vite calls `config` (with the resolved command) before `buildStart` on
+            // every run — this is how the plugin tells a `vite build` apart from a
+            // `vite dev` inside `buildStart`, which fires for both.
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+
+            const buildContext = { error: (message: string): never => { throw new Error(message); } };
+
+            await expect(
+                (plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext),
+            ).rejects.toThrow(/ERROR-level.*index_references_unknown_field/u);
+        });
+
+        it("vite dev only logs the same ERROR-level advisory (never throws)", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const badSchema = SCHEMA_SOURCE.replace(
+                `.index("by_channel", ["channelId"]),`,
+                `.index("by_channel", ["channelId"])\n        .index("by_bogus", ["doesNotExist"]),`,
+            );
+
+            writeFileSync(join(workdir, "lunora", "schema.ts"), badSchema, "utf8");
+
+            const errors: string[] = [];
+            // eslint-disable-next-line no-console -- capturing console refs to restore after the test
+            const originalError = console.error;
+
+            // eslint-disable-next-line no-console
+            console.error = (message: string) => errors.push(message);
+
+            try {
+                const plugin = codegenPlugin(makeOptions(workdir));
+
+                (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+
+                // No `this.error`-capable context is even needed: dev never reaches it.
+                await expect((plugin.buildStart as (this: unknown) => Promise<void>).call(undefined)).resolves.toBeUndefined();
+
+                expect(errors.some((line) => line.includes("index_references_unknown_field"))).toBe(true);
+                // Codegen still wrote its output — dev is log-only, not blocking.
+                expect(existsSync(join(workdir, "lunora", "_generated", "api.ts"))).toBe(true);
+            } finally {
+                // eslint-disable-next-line no-console
+                console.error = originalError;
+            }
+        });
+
         it("buildStart logs a warning when schema.ts is missing (does not crash)", () => {
             expect.assertions(2);
 

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { spawnShellCompat } from "../../src/util/spawn";
+import { defaultSpawner, spawnShellCompat } from "../../src/util/spawn";
 
 describe("spawnShellCompat", () => {
     it("passes through untouched on POSIX", () => {
@@ -86,5 +86,55 @@ describe("spawnShellCompat", () => {
             command: "pnpm",
             shell: true,
         });
+    });
+});
+
+describe("defaultSpawner", () => {
+    // Regression test for the `lunora deploy --format json` corruption bug:
+    // `offerMissingSecrets` shells out to `wrangler secret list --format json`
+    // on every real deploy via `captureStdoutSilently`. If that capture ever
+    // teed to the parent's stdout again, the secret-list JSON would print
+    // ahead of the final deploy JSON and break `JSON.parse(stdout)` in CI.
+    it("captures a child's stdout without writing it to the parent's stdout when captureStdoutSilently is set", async () => {
+        expect.assertions(3);
+
+        const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+        try {
+            const result = await defaultSpawner({
+                args: ["-e", "process.stdout.write('secret-list-json-payload')"],
+                captureStdoutSilently: true,
+                command: process.execPath,
+            });
+
+            expect(result.code).toBe(0);
+            expect(result.stdout).toBe("secret-list-json-payload");
+            expect(writeSpy).not.toHaveBeenCalled();
+        } finally {
+            writeSpy.mockRestore();
+        }
+    });
+
+    // `captureStdout` (used by deploy's auto-link URL capture) must keep
+    // teeing so interactive users still see live progress — only the silent
+    // variant added for parsed-not-displayed output changes behavior.
+    it("still tees to the parent's stdout when the caller asks for captureStdout", async () => {
+        expect.assertions(3);
+
+        const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+        try {
+            const result = await defaultSpawner({
+                args: ["-e", "process.stdout.write('deploy-progress')"],
+                captureStdout: true,
+                command: process.execPath,
+            });
+
+            expect(result.code).toBe(0);
+            expect(result.stdout).toBe("deploy-progress");
+            expect(writeSpy).toHaveBeenCalledWith(Buffer.from("deploy-progress"));
+        } finally {
+            writeSpy.mockRestore();
+        }
     });
 });

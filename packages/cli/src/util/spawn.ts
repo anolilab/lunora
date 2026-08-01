@@ -31,9 +31,21 @@ export interface SpawnDescriptor {
      * Capture the child's stdout (in addition to streaming it to the parent), so
      * the caller can parse it — used by `deploy` to read the deployed URL from
      * `wrangler deploy` output. Each chunk is still teed to the parent's stdout
-     * so the user sees live progress. Mutually exclusive with `stdoutToStderr`.
+     * so the user sees live progress. Mutually exclusive with `stdoutToStderr`
+     * and `captureStdoutSilently`.
      */
     captureStdout?: boolean;
+
+    /**
+     * Capture the child's stdout WITHOUT teeing it to the parent's stdout —
+     * for output that is parsed, never displayed (e.g. `wrangler secret list
+     * --format json`). Unlike `captureStdout`, nothing is written to
+     * `process.stdout`, so it can't interleave with — and corrupt — a
+     * caller's own stdout (notably `lunora deploy --format json`, which must
+     * emit exactly one JSON document). Mutually exclusive with `captureStdout`
+     * and `stdoutToStderr`.
+     */
+    captureStdoutSilently?: boolean;
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
@@ -58,7 +70,7 @@ export interface SpawnResult {
     code: number;
     /** The captured stderr, present only when the descriptor set `captureStderr`. */
     stderr?: string;
-    /** The captured stdout, present only when the descriptor set `captureStdout`. */
+    /** The captured stdout, present only when the descriptor set `captureStdout` or `captureStdoutSilently`. */
     stdout?: string;
 }
 
@@ -122,15 +134,17 @@ export const defaultSpawner: Spawner = (descriptor) =>
     new Promise<SpawnResult>((resolve, reject) => {
         const hasInput = typeof descriptor.input === "string";
         const wantCapture = descriptor.captureStdout === true;
+        const wantSilentCapture = descriptor.captureStdoutSilently === true;
         // When the caller pipes input we need a writable stdin handle — "inherit"
         // gives us the parent's stdin which we can't write to. stderr always stays
         // inherited so errors land where the user can see them. stdout is normally
         // inherited; in `--format json` mode it is mapped to the parent's stderr fd
         // (2) so the child's human output never pollutes the JSON on stdout; and in
-        // capture mode it is piped so we can buffer + tee it.
+        // either capture mode it is piped so we can buffer it (and, for
+        // `captureStdout` only, tee it to the parent too).
         let stdout: "inherit" | "pipe" | number = "inherit";
 
-        if (wantCapture) {
+        if (wantCapture || wantSilentCapture) {
             stdout = "pipe";
         } else if (descriptor.stdoutToStderr) {
             stdout = 2;
@@ -154,11 +168,16 @@ export const defaultSpawner: Spawner = (descriptor) =>
             });
         }
 
-        if (wantCapture && child.stdout) {
+        if ((wantCapture || wantSilentCapture) && child.stdout) {
             child.stdout.on("data", (chunk: Buffer) => {
                 captured += chunk.toString("utf8");
-                // Tee to the parent so the user still sees live deploy progress.
-                process.stdout.write(chunk);
+
+                if (wantCapture) {
+                    // Tee to the parent so the user still sees live deploy progress.
+                    process.stdout.write(chunk);
+                }
+                // `captureStdoutSilently`: buffer only — this output is parsed,
+                // never displayed, and must never reach the parent's stdout.
             });
         }
 
@@ -173,7 +192,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
             resolve({
                 code: code ?? (signal ? 1 : 0),
                 stderr: descriptor.captureStderr === true ? capturedError : undefined,
-                stdout: wantCapture ? captured : undefined,
+                stdout: wantCapture || wantSilentCapture ? captured : undefined,
             });
         });
 

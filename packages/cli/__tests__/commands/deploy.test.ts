@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
+import { runCodegen } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +12,20 @@ import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+
+// A pass-through wrapper around the real `runCodegen` — every existing test in
+// this file runs the genuine codegen pass unmodified. Only the platform-
+// diagnostics / advisory gate tests below override a single call's result (via
+// `mockImplementationOnce`, layered on the REAL result so the rest of the
+// deploy pipeline still gets a valid `CodegenResult`) to exercise a diagnostic
+// shape the shipped `cloudflare` capability matrix can never actually produce
+// (it rates every feature `native`/`emulated`, never `unsupported`).
+// eslint-disable-next-line vitest/prefer-import-in-mock -- `vi.mock(import("@lunora/codegen"), ...)` type-checks the mock's shape against the module's `default`-bearing type, which this partial re-export doesn't satisfy
+vi.mock("@lunora/codegen", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@lunora/codegen")>();
+
+    return { ...actual, runCodegen: vi.fn<typeof actual.runCodegen>(actual.runCodegen) };
+});
 
 // Keep the deploy suite hermetic: the deploy-time missing-secret gate lists the
 // target's remote secrets via `wrangler secret list`, which would shell out to a
@@ -57,6 +73,36 @@ const VALID_WRANGLER = `{
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
+}
+`;
+
+/**
+ * `VALID_WRANGLER` plus a declared `env.&lt;name>` block repeating the same
+ * (non-inheritable) bindings — real wrangler only WARNS on an undeclared
+ * `--env &lt;name>` and then deploys with NO bindings at all (confirmed against
+ * wrangler 4.114.0: `wrangler deploy --dry-run --env doesnotexist` prints
+ * "No bindings found."), which is exactly the silent failure mode the deploy
+ * validator's env-scoping gate exists to turn into a loud one — so any test
+ * exercising a real `--env &lt;name>` deploy needs a matching declared block,
+ * same as a correctly-configured project would have.
+ */
+const validWranglerWithEnv = (name: string): string => `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "env": {
+        "${name}": {
+            "durable_objects": {
+                "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+            },
+            "d1_databases": [{ "binding": "DB", "database_name": "x-${name}", "database_id": "real-db-id-${name}" }]
+        }
+    }
 }
 `;
 
@@ -385,7 +431,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
         it("forwards --env to wrangler", async () => {
             expect.assertions(2);
 
-            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
 
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
@@ -396,6 +442,69 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             expect(args).toContain("--env");
             expect(args).toContain("production");
+        });
+
+        describe("env-scoped wrangler validation (CONFIG-02)", () => {
+            it("blocks --env production when the SHARD binding exists only at the top level (env.production has none)", async () => {
+                expect.assertions(3);
+
+                // Top-level-only bindings, `env.production` declares nothing —
+                // the exact shape a `deploy --env production` gate used to wave
+                // through despite wrangler deploying with NO bindings at all for
+                // that environment (durable_objects is non-inheritable).
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "env": { "production": {} }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(1);
+                expect(result.error).toBe("wrangler validation failed");
+                // Never reached the wrangler spawn.
+                expect(calls).toHaveLength(0);
+            });
+
+            it("deploys once env.production repeats its own bindings", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("blocks --env <name> that names no declared environment", async () => {
+                expect.assertions(3);
+
+                // No "env" block at all in the config.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "canary", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(1);
+                expect(calls).toHaveLength(0);
+                expect(errors.some((line) => line.includes("names no environment declared"))).toBe(true);
+            });
         });
 
         it("forwards --temporary to wrangler", async () => {
@@ -908,6 +1017,31 @@ export const backfillNames = defineMigration({
                 expect(argv.some((line) => line.includes("wrangler deploy"))).toBe(true);
             });
 
+            it("aborts an interactive deploy when the confirmed secret push fails instead of deploying anyway", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // Every spawn (including the confirmed `wrangler secret put`) fails.
+                const { calls, spawner } = createRecordingSpawner(1);
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(1);
+                // Never reached the wrangler deploy spawn — a failed secret push must
+                // not fall through to shipping a worker still missing that secret.
+                expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
+                expect(errors.some((line) => line.includes("failed to push required secret"))).toBe(true);
+            });
+
             it("launches wrangler through npx (secret-push + deploy) when the project declares npm", async () => {
                 expect.assertions(5);
 
@@ -965,6 +1099,130 @@ export const backfillNames = defineMigration({
                 // Never reached the wrangler deploy spawn.
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
+            });
+
+            it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(1);
+                expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
+            });
+        });
+
+        describe("platform-diagnostics / advisory gate", () => {
+            /** Append an index referencing a column that doesn't exist — `index_references_unknown_field` is an ERROR-level advisory. */
+            const addBogusIndexToSchema = (dir: string): void => {
+                const schemaPath = join(dir, "lunora", "schema.ts");
+                const schema = readFileSync(schemaPath, "utf8");
+                const patched = schema.replace(
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+                );
+
+                expect(patched).not.toBe(schema);
+
+                writeFileSync(schemaPath, patched, "utf8");
+            };
+
+            it("deploys a clean project with the gate in place", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: true });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("aborts a strict deploy on an ERROR-level codegen advisory", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema(workdir);
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: true });
+
+                expect(result.code).toBe(1);
+                expect(calls).toHaveLength(0);
+                expect(result.error).toContain("ERROR-level");
+                expect(errors.some((line) => line.includes("index_references_unknown_field"))).toBe(true);
+            });
+
+            it("--no-strict-advisories deploys anyway despite the same ERROR-level advisory", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema(workdir);
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: false });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("aborts on an error-level platform diagnostic even with the advisory opt-out set", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // The shipped `cloudflare` capability matrix rates every feature
+                // native/emulated — never unsupported — so a real project can't
+                // produce this diagnostic today. Layer it onto the REAL codegen
+                // result (one call only) so the rest of the pipeline still sees a
+                // valid `CodegenResult`.
+                const actual = await vi.importActual<typeof import("@lunora/codegen")>("@lunora/codegen");
+                const diagnostic: PlatformDiagnostic = {
+                    level: "error",
+                    message: `ctx.ai is used, but target "cloudflare" does not support it`,
+                    name: "platform_unsupported_feature",
+                    remediation: "remove the usage, or choose a target that supports it",
+                    target: "cloudflare",
+                };
+
+                vi.mocked(runCodegen).mockImplementationOnce((options): CodegenResult => {
+                    return { ...actual.runCodegen(options), platformDiagnostics: [diagnostic] };
+                });
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    // The opt-out downgrades ERROR advisories, never platform
+                    // diagnostics — those mean the emitted surface doesn't match
+                    // what the target can actually serve.
+                    strictAdvisories: false,
+                });
+
+                expect(result.code).toBe(1);
+                expect(calls).toHaveLength(0);
+                expect(result.error).toContain("ctx.ai");
+                expect(errors.some((line) => line.includes("platform_unsupported_feature"))).toBe(true);
             });
         });
     });
