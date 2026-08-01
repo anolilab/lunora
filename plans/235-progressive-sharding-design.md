@@ -3,6 +3,38 @@
 **Baseline:** `ad873e805` (2026-07-31)
 **Status:** DONE (spike) — design + test-only prototype; no `src/` routing changes.
 
+**Errata (post-spike correctness pass):** the prototype's first draft had two
+protocol bugs, both now fixed in the same test-only files with new regression
+coverage — see §2.4 (watermark) and §3 (dual-read/delete). Neither reached
+`src/`; both were caught and fixed before any phase-2 build work started.
+
+1. **Watermark advanced by the wrong quantity.** `catchUpVnodes` advanced
+   `appliedWatermark` only for entries belonging to a moving vnode, so it
+   tracked "highest moving-vnode seq applied" rather than "WAL position
+   consumed." `quiesceSeq` (the cutover gate's other side) is the shard's
+   GLOBAL high-watermark across every vnode (`readCdcCursor(source)`), so
+   whenever the log's last entry before quiesce happened to be an ordinary
+   write to a vnode that never moves — the realistic case under mixed
+   traffic, not the edge case — `appliedWatermark` would lag `quiesceSeq`
+   forever and `cutover()` would throw its precondition error even though the
+   moving vnodes were fully replicated. Fixed by advancing the watermark for
+   every entry consumed, moving or not; the moving-vnode filter now gates only
+   which entries get *applied* to target, not which advance the cursor.
+2. **Dual-read's "target-wins-if-present" rule resurrected deletes.** A
+   target miss during the dual-read window is ambiguous between "target
+   hasn't replicated this id yet" (fall through to `source`, correct) and
+   "target has authoritatively deleted this id" (must NOT fall through —
+   `source` still physically holds the stale pre-move row until drain-close).
+   The original `dualRead` treated both cases identically, so a delete
+   forwarded to `target` during the propagation window came back from a
+   fan-out read as `source`'s stale, undeleted copy — resurrecting a row the
+   caller believed was gone. Fixed with a per-shard `__tombstones` table:
+   `deleteMessage`/`applyChangeToTarget`'s delete branch mark a tombstone,
+   `dualRead` treats a target tombstone as authoritative and does not fall
+   through to `source`. `routeWrite` also gained a delete branch — it had
+   none before, so a delete issued against a moved key during the
+   propagation window had no forwarding path at all.
+
 ## 0. Headline finding
 
 The applied-watermark + dual-read protocol below is achievable with the
@@ -16,9 +48,9 @@ prototype (`packages/shard-engine/__tests__/progressive-shard-move.test.ts`,
 `__tests__/_helpers/progressive-shard-move.ts`) implements the full
 snapshot → catch-up → quiesce → cutover → forward lifecycle against two real
 in-memory SQLite shards and asserts exactly-once resolution, dual-read dedup,
-and mid-move write correctness. All 24 tests (7 new + 17 pre-existing
-`shard-ring.test.ts`) pass. `git diff --stat` against `ad873e805` touches only
-`__tests__/*` and this doc.
+delete/tombstone correctness, and mid-move write correctness. All 28 tests
+(11 in this suite + 17 pre-existing `shard-ring.test.ts`) pass. `git diff
+--stat` against `ad873e805` touches only `__tests__/*` and this doc.
 
 The one correctness insight worth carrying into implementation: **placement
 authority for writes is enforced by the shard receiving the write, not by
@@ -81,10 +113,20 @@ Protocol, in order:
    see §7) — it would make `catchUpVnodes` wait forever for a WAL tail that
    the snapshot, not the WAL, already accounts for.
 4. **Catch-up.** Target repeatedly calls `readCdcChanges(source, {
-   sinceSeq: appliedWatermark, tables })`, applies each entry belonging to a
-   moving vnode (upsert on insert/update, delete on delete), and advances
-   `appliedWatermark` to the highest replayed `seq`. Runs however many times
-   is needed while source keeps taking writes.
+   sinceSeq: appliedWatermark, tables })`, pages through as many calls as the
+   WAL tail requires (the prototype's `catchUpVnodes` loops until a page
+   comes back short of `readCdcChanges`'s page limit), applies each entry
+   belonging to a moving vnode (upsert on insert/update, delete on delete),
+   and advances `appliedWatermark` to the highest `seq` **consumed** —
+   every entry walked past, not only the ones that belonged to a moving
+   vnode and got applied. This distinction is load-bearing, not cosmetic:
+   `quiesceSeq` (step 6) is the shard's GLOBAL high-watermark across every
+   vnode, so the log's last entry before quiesce is just as likely to be an
+   ordinary write to a vnode that never moves as it is to be a moving-vnode
+   write. A watermark that only advanced inside the moving-vnode filter would
+   never consume that tail entry and would lag `quiesceSeq` forever —
+   deadlocking cutover even though every moving vnode is fully replicated.
+   (This was the errata's bug #1 — see the top of this doc.)
 5. **Cutover gate (quiesce).** Coordinator briefly stops admitting new writes
    to the moving vnode's keys on `source` (queue-and-retry in a real
    deployment; the prototype's `routeWrite` returns a `"quiesced"` sentinel).
@@ -125,6 +167,7 @@ out to **both** shards during this window and merge:
 const dualRead = (source, target, ids) => {
     const merged = new Map<string, Row>(); // one entry per id, structurally
     for (const id of ids) {
+        if (hasTombstone(target, id)) continue; // target's delete is authoritative — see below
         const fromTarget = readRow(target, id);
         if (fromTarget) {
             merged.set(id, fromTarget);
@@ -143,6 +186,21 @@ vnode(s), and any write since cutover only ever landed on target (via
 forwarding) — so target's copy, when present, is always the freshest. Keying
 the merge by `(table, id)` in a `Map` makes "each row exactly once" a
 structural property of the merge, not a manually-counted invariant.
+
+**Deletes need a tombstone — a plain miss is ambiguous.** "Target wins
+whenever it has the row" is not the same rule as "fall through to source
+whenever target doesn't." A target that has never replicated an id (fall
+through is correct) and a target that has authoritatively **deleted** an id
+(fall through is wrong) look identical to `readRow(target, id)` — both return
+nothing. Falling through in the delete case hands back `source`'s stale,
+physically-present pre-move row, resurrecting a delete the caller believes
+already happened. This was the errata's bug #2 (see the top of this doc): the
+fix is a per-shard tombstone (`hasTombstone` above) that a delete marks and a
+fall-through checks first, so a target-side delete short-circuits the merge to
+"absent" instead of degrading to a source lookup. `routeWrite` — the
+prototype's write-side forwarding stand-in for step 8 above — needed the
+matching fix: forwarding a delete for a ceded vnode the same way it already
+forwarded upserts, which it did not do before this pass.
 
 The prototype's own dual-read test caught a real bug in an earlier draft: an
 assertion that only checked `merged.size === batch.length` (no duplicates,
@@ -177,15 +235,18 @@ Nothing anomalous, by construction of the above:
 `packages/shard-engine/__tests__/_helpers/progressive-shard-move.ts` (helper,
 not exported from any package) implements: `createShardHarness` (wraps the
 existing `_helpers/node-sqlite.ts` in-memory SQLite harness + the existing
-`migrateCdcLog`), `writeMessage`/`deleteMessage`/`readMessage` (append to the
-real `__cdc_log` via `appendCdcChange`), `beginVnodeMove`, `snapshotVnodes`,
-`catchUpVnodes`, `MoveCoordinator` + `quiesceVnodes`/`cedeVnodes` (the
-directory-flip + forwarding stand-in), `routeWrite`,
-`resolveAuthoritativeShard`, and `dualRead`.
+`migrateCdcLog`, plus a `__tombstones` side table — see §3), `writeMessage`/
+`deleteMessage`/`readMessage` (append to the real `__cdc_log` via
+`appendCdcChange`; `writeMessage` clears a tombstone, `deleteMessage` marks
+one), `beginVnodeMove`, `snapshotVnodes`, `catchUpVnodes` (pages past
+`readCdcChanges`'s row limit and advances the watermark by position
+consumed — see §2.4), `MoveCoordinator` + `quiesceVnodes`/`cedeVnodes` (the
+directory-flip + forwarding stand-in), `routeWrite` (forwards both upserts
+and deletes), `resolveAuthoritativeShard`, and `dualRead` (tombstone-aware).
 
 `packages/shard-engine/__tests__/progressive-shard-move.test.ts` seeds 200
 documents on a source shard, moves half the ring (8 of 16 vnodes, a "key
-range") to a second shard, and asserts across three `describe` blocks:
+range") to a second shard, and asserts across five `describe` blocks:
 
 - **`exactly-once resolution`** (3 tests): every key resolves to `source`
   before the move; still resolves to `source` through snapshot and catch-up
@@ -193,22 +254,33 @@ range") to a second shard, and asserts across three `describe` blocks:
   protocol's core signal); flips moved keys to `target` and leaves staying
   keys on `source` after cutover, with content verified against ground truth
   for all 200 ids.
-- **`dual-read window dedup`** (2 tests): a diverged sample (source stale,
+- **`applied-watermark protocol under interleaved traffic`** (1 test): the
+  regression test for errata bug #1 — the log's last entry before quiesce is
+  an ordinary write to a *staying* vnode, not a moving one, and cutover's
+  `appliedWatermark === quiesceSeq` gate must still close.
+- **`catch-up paging`** (1 test): a WAL tail of 1,200 entries (past
+  `readCdcChanges`'s 1,000-row page limit) is fully replayed by a single
+  `catchUpVnodes` call, proving the "runs however many times is needed"
+  claim in §2.4 rather than a mover that silently stops at the first page.
+- **`dual-read window dedup`** (3 tests): a diverged sample (source stale,
   target forward-updated) merges to target's fresh value, not source's stale
   one, and the merge is exactly one row per id; a 200-id mixed batch merges
   with zero drops and zero duplicates, content-checked against ground truth
-  for every id.
-- **`mid-move write correctness`** (2 tests): a write issued during
+  for every id; the regression test for errata bug #2 — a delete forwarded to
+  `target` on a moved key is not resurrected from `source`'s stale copy by a
+  subsequent `dualRead`.
+- **`mid-move write correctness`** (3 tests): a write issued during
   catch-up lands on `source`, is absent from `target` until replay runs, and
   is visible on `target` after cutover, at the correct id; a write to a
   quiesced vnode is rejected (not silently lost) and succeeds via forwarding
-  once cutover has committed.
+  once cutover has committed; a delete issued on `source` during catch-up is
+  replayed onto `target` via the WAL (`applyChangeToTarget`'s delete branch).
 
-Result: **7/7 new tests pass**, plus the pre-existing 17-test
-`shard-ring.test.ts` suite unaffected. `git diff --stat` against `ad873e805`
-touches only files under `packages/shard-engine/__tests__/` and this
-document — `resolveVnodePlacement`, `shard-ring.ts`, and `shard-do.ts` are
-untouched.
+Result: **11/11 tests pass** in this suite, plus the pre-existing 17-test
+`shard-ring.test.ts` suite unaffected — 28 total. `git diff --stat` against
+`ad873e805` touches only files under `packages/shard-engine/__tests__/` and
+this document — `resolveVnodePlacement`, `shard-ring.ts`, and `shard-do.ts`
+are untouched.
 
 ## 6. Open questions
 
@@ -251,6 +323,21 @@ untouched.
   the drain window. This determines how long the dual-read window realistically
   stays open and therefore how long `source` must keep the stale rows around
   before drain-close can purge them.
+- **Tombstone retention and a real delete-forwarding path.** The prototype's
+  per-shard `__tombstones` table (§3) is never trimmed — it fixes the
+  dual-read resurrection hazard within the spike's own lifetime but does not
+  answer how long a real target keeps a tombstone before it is safe to drop.
+  Almost certainly "at least until drain-close purges `source`'s stale copy,
+  same as the row data itself" — a tombstone dropped before drain-close
+  reopens the exact resurrection hazard it exists to close, so retention needs
+  to be coupled to the same drain-close trigger, not decided independently.
+  Separately, this spike's `routeWrite` forwards a delete as a direct RPC-like
+  call, standing in for a shard-to-shard forwarding path that does not exist
+  yet in `src/` — a real implementation needs `ShardDO` to forward a delete
+  the same way it will need to forward an upsert, and that forwarding
+  transport (not just the tombstone bookkeeping on either end) is unbuilt and
+  untested against real network partitions or partial failure, same caveat as
+  phase 2's STOP gate below.
 
 ## 7. Phased build order
 

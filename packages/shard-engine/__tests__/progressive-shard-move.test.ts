@@ -26,6 +26,7 @@ import {
     cedeVnodes,
     createMoveCoordinator,
     createShardHarness,
+    deleteMessage,
     dualRead,
     quiesceVnodes,
     readMessage,
@@ -134,7 +135,7 @@ describe("progressive shard move (plan 235 spike)", () => {
     describe("exactly-once resolution", () => {
         it("resolves every key to source before the move starts", () => {
             // One `resolveAuthoritativeShard` check per seeded document.
-            expect.assertions(200);
+            expect.assertions(SEED_COUNT);
 
             for (const id of groundTruth.keys()) {
                 expect(resolveAuthoritativeShard(coordinator, id)).toBe("source");
@@ -143,7 +144,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
         it("keeps resolving to source through snapshot and catch-up — cutover has not committed yet", () => {
             // 1 watermark check + one resolve check and one content check per seeded document.
-            expect.assertions(401);
+            expect.assertions(2 * SEED_COUNT + 1);
 
             const move = runToQuiesced();
 
@@ -163,7 +164,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
         it("flips moved keys to target and leaves staying keys on source after cutover — each with the correct content", () => {
             // One resolve check per seeded document + one content check per seeded document.
-            expect.assertions(400);
+            expect.assertions(2 * SEED_COUNT);
 
             const move = runToQuiesced();
 
@@ -184,6 +185,78 @@ describe("progressive shard move (plan 235 spike)", () => {
 
                 expect(readMessage(shard, id)?.body).toBe(body);
             }
+        });
+    });
+
+    describe("applied-watermark protocol under interleaved traffic", () => {
+        it("advances past a staying-vnode's tail write, so cutover does not deadlock when it — not a moving-vnode write — is last before quiesce", () => {
+            // Every one of the other scenarios writes everything in `seed()` before
+            // the move starts, or makes the last pre-quiesce write land inside the
+            // moving range — both dodge the realistic case where an ordinary write
+            // to a vnode that never moves happens to be the log's tail when quiesce
+            // fires. `quiesceSeq` is `readCdcCursor(source)`, the shard's GLOBAL
+            // high-watermark across every vnode, so a watermark that only advanced
+            // for moving-vnode entries would never consume that tail write and
+            // would lag `quiesceSeq` forever — cutover's precondition would never
+            // close even though the moving vnodes are fully replicated.
+            expect.assertions(2);
+
+            let move = beginVnodeMove(source);
+
+            snapshotVnodes(source, target, RING_SIZE, MOVING_VNODES);
+            move = catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move);
+
+            quiesceVnodes(coordinator, MOVING_VNODES);
+
+            const stayingId = stayingIds()[0] as string;
+
+            clock += 1;
+
+            const route = routeWrite(coordinator, source, target, stayingId, { body: "last-write-before-quiesce-on-a-staying-vnode" }, clock);
+
+            expect(route).toBe("source");
+
+            const quiesceSeq = readCdcCursor(source.sql);
+
+            move = catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move, quiesceSeq);
+
+            // The watermark protocol's core signal, and cutover's precondition —
+            // both must hold even though the tail entry belonged to a vnode that
+            // never moves.
+            expect(move.appliedWatermark).toBe(quiesceSeq);
+        });
+    });
+
+    describe("catch-up paging", () => {
+        it("replays a WAL tail longer than one `readCdcChanges` page (1000 rows) in a single `catchUpVnodes` call", () => {
+            // Design doc §2.4 says catch-up "runs however many times is needed" —
+            // a mover that only ever reads one bounded page would silently stop
+            // short of a real WAL tail once a busy shard's backlog crosses
+            // `readCdcChanges`'s 1000-row page limit.
+            expect.assertions(3);
+
+            let move = beginVnodeMove(source);
+
+            snapshotVnodes(source, target, RING_SIZE, MOVING_VNODES);
+
+            const pagedId = findIdInVnodes("doc_paged", MOVING_VNODES);
+            const finalBody = "final-body-after-1200-writes";
+            const writeCount = 1200;
+
+            for (let index = 0; index < writeCount; index += 1) {
+                clock += 1;
+                writeMessage(source, pagedId, index === writeCount - 1 ? finalBody : `intermediate-${String(index)}`, clock);
+            }
+
+            quiesceVnodes(coordinator, MOVING_VNODES);
+
+            const quiesceSeq = readCdcCursor(source.sql);
+
+            move = catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move, quiesceSeq);
+
+            expect(move.appliedWatermark).toBe(quiesceSeq);
+            expect(() => cutover({ ...move, quiesceSeq })).not.toThrow();
+            expect(readMessage(target, pagedId)?.body).toBe(finalBody);
         });
     });
 
@@ -211,7 +284,7 @@ describe("progressive shard move (plan 235 spike)", () => {
             clock += 1;
 
             const newBody = "forwarded-update";
-            const route = routeWrite(coordinator, source, target, sampleId as string, newBody, clock);
+            const route = routeWrite(coordinator, source, target, sampleId as string, { body: newBody }, clock);
 
             expect(route).toBe("forwarded");
             // Source's undeleted copy still reads the OLD body — the divergence the
@@ -232,7 +305,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
         it("never drops or duplicates a row across a larger mixed batch", () => {
             // 1 size check + one content check per seeded document.
-            expect.assertions(201);
+            expect.assertions(SEED_COUNT + 1);
 
             const move = runToQuiesced();
 
@@ -246,6 +319,45 @@ describe("progressive shard move (plan 235 spike)", () => {
             for (const [id, body] of groundTruth) {
                 expect(merged.get(id)?.body).toBe(body);
             }
+        });
+
+        it("forwards a delete on a moved row to target and does not resurrect source's stale pre-move copy via dualRead", () => {
+            // The delete path was entirely untested before this: `deleteMessage`
+            // was exported but unused, `applyChangeToTarget`'s delete branch was
+            // never reached, and `routeWrite` had no delete branch at all. Without
+            // a target-side tombstone, a target miss during the dual-read window
+            // is indistinguishable from "target hasn't replicated this id yet" —
+            // and the read would fall through to source's stale, still-physically-
+            // present copy, resurrecting a row the caller believes is gone.
+            expect.assertions(5);
+
+            const move = runToQuiesced();
+
+            cutover(move);
+
+            const [movedId] = movingIds();
+            const originalBody = groundTruth.get(movedId as string);
+
+            expect(movedId).toBeDefined();
+            // Cutover purges nothing from source (drain-close is a separate,
+            // deferred step) — source still physically holds the pre-move row.
+            expect(readMessage(source, movedId as string)?.body).toBe(originalBody);
+
+            clock += 1;
+
+            // The vnode was ceded at cutover, so this delete is forwarded to
+            // target — exercising `routeWrite`'s delete branch and `deleteMessage`.
+            const route = routeWrite(coordinator, source, target, movedId as string, { op: "delete" }, clock);
+
+            expect(route).toBe("forwarded");
+            expect(readMessage(target, movedId as string)).toBeUndefined();
+
+            // The assertion that actually catches the bug: a dualRead during the
+            // propagation window must see the row as absent — not fall through to
+            // source's undeleted, stale copy.
+            const merged = dualRead(source, target, [movedId as string]);
+
+            expect(merged.has(movedId as string)).toBe(false);
         });
     });
 
@@ -265,7 +377,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
             clock += 1;
 
-            const route = routeWrite(coordinator, source, target, midMoveId, midMoveBody, clock);
+            const route = routeWrite(coordinator, source, target, midMoveId, { body: midMoveBody }, clock);
 
             expect(route).toBe("source");
             // Not yet caught up — target has no idea this write happened.
@@ -305,7 +417,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
             clock += 1;
 
-            const duringQuiesce = routeWrite(coordinator, source, target, id as string, "should-not-land-yet", clock);
+            const duringQuiesce = routeWrite(coordinator, source, target, id as string, { body: "should-not-land-yet" }, clock);
 
             expect(duringQuiesce).toBe("quiesced");
 
@@ -318,9 +430,36 @@ describe("progressive shard move (plan 235 spike)", () => {
 
             clock += 1;
 
-            const afterCutover = routeWrite(coordinator, source, target, id as string, "retried-after-cutover", clock);
+            const afterCutover = routeWrite(coordinator, source, target, id as string, { body: "retried-after-cutover" }, clock);
 
             expect(afterCutover).toBe("forwarded");
+        });
+
+        it("replays a delete issued on source during catch-up onto target via the WAL", () => {
+            // Exercises `applyChangeToTarget`'s op==="delete" branch, which — like
+            // the delete path generally — nothing reached before this: a delete
+            // that happens on source (still authoritative pre-quiesce) must be
+            // walked past by the SAME `catchUpVnodes` replay as an insert/update,
+            // removing the row `snapshotVnodes` already base-copied onto target.
+            expect.assertions(3);
+
+            let move = beginVnodeMove(source);
+
+            snapshotVnodes(source, target, RING_SIZE, MOVING_VNODES);
+
+            const [deletedId] = movingIds();
+
+            expect(deletedId).toBeDefined();
+            // Base-copied by `snapshotVnodes` above — present on target until the
+            // delete replays below.
+            expect(readMessage(target, deletedId as string)).toBeDefined();
+
+            clock += 1;
+            deleteMessage(source, deletedId as string, clock);
+
+            move = catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move);
+
+            expect(readMessage(target, deletedId as string)).toBeUndefined();
         });
     });
 });
