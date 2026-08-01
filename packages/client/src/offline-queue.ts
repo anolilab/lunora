@@ -166,26 +166,7 @@ class OfflineQueue {
                 reportPersistenceError(this.onPersistenceError, "append", error, item.id);
             });
 
-        while (this.items.length > this.maxItems) {
-            const dropped = this.items.shift();
-
-            if (dropped) {
-                if (dropped.id) {
-                    this.persistence?.remove(dropped.id).catch((error: unknown) => {
-                        reportPersistenceError(this.onPersistenceError, "remove", error, dropped.id);
-                    });
-                }
-
-                const error = new Error("offline queue overflow");
-
-                (error as Error & { code?: string }).code = "OFFLINE_QUEUE_OVERFLOW";
-                dropped.reject(error);
-                // Also surface on the client's terminal-verdict observer: a
-                // hydrated entry's `reject` is a no-op, so without this an
-                // overflow eviction would silently drop a durable write.
-                this.onEvict?.(dropped, error);
-            }
-        }
+        this.evictOverflow();
 
         this.notifySize();
     }
@@ -222,7 +203,6 @@ class OfflineQueue {
             throw error;
         }
 
-        const shardKeys = new Set<string | undefined>();
         const restored: QueuedMutation[] = [];
 
         for (const mutation of persisted) {
@@ -249,12 +229,33 @@ class OfflineQueue {
                 resolve: () => undefined,
                 shardKey: mutation.shardKey,
             });
-            shardKeys.add(mutation.shardKey);
         }
 
         this.items.unshift(...restored);
 
+        // A durable store holding more than `maxItems` records (e.g. `maxItems`
+        // was lowered between sessions, or writes piled up while the app was
+        // fully offline across restarts) must not bypass the cap — evict from
+        // the front (the oldest restored entries) exactly as `enqueue` does, so
+        // the in-memory queue never exceeds `maxItems` regardless of how it got
+        // there (CLIENT-03).
+        this.evictOverflow();
+
         this.notifySize();
+
+        // Compute shard keys AFTER eviction, from whichever restored entries
+        // actually survived: `evictOverflow` drops from the front of `items`
+        // (the oldest restored entries first), so a shard key gathered before
+        // eviction can point at a mutation that no longer exists — the caller
+        // would then call `ensureSocket()` for a shard with nothing queued.
+        const survivingItems = new Set(this.items);
+        const shardKeys = new Set<string | undefined>();
+
+        for (const mutation of restored) {
+            if (survivingItems.has(mutation)) {
+                shardKeys.add(mutation.shardKey);
+            }
+        }
 
         return [...shardKeys];
     }
@@ -353,6 +354,37 @@ class OfflineQueue {
 
         this.items.length = 0;
         this.notifySize();
+    }
+
+    /**
+     * Evict entries from the FRONT of `items` (the oldest — FIFO order) until
+     * the queue is at or under `maxItems`, rejecting each with
+     * `OFFLINE_QUEUE_OVERFLOW`, un-persisting it, and firing `onEvict`. Shared
+     * by `enqueue` (a live write pushes past capacity) and `hydrate` (a durable
+     * store restored more than `maxItems` records — CLIENT-03) so an overflow
+     * always drops the same way regardless of which caller triggered it.
+     */
+    private evictOverflow(): void {
+        while (this.items.length > this.maxItems) {
+            const dropped = this.items.shift();
+
+            if (dropped) {
+                if (dropped.id) {
+                    this.persistence?.remove(dropped.id).catch((error: unknown) => {
+                        reportPersistenceError(this.onPersistenceError, "remove", error, dropped.id);
+                    });
+                }
+
+                const error = new Error("offline queue overflow");
+
+                (error as Error & { code?: string }).code = "OFFLINE_QUEUE_OVERFLOW";
+                dropped.reject(error);
+                // Also surface on the client's terminal-verdict observer: a
+                // hydrated entry's `reject` is a no-op, so without this an
+                // overflow eviction would silently drop a durable write.
+                this.onEvict?.(dropped, error);
+            }
+        }
     }
 
     /** Notify the size observer (the client's pending-sync count) after any change. */

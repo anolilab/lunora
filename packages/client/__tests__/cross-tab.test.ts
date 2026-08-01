@@ -1,9 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { TabCoordinator } from "../src/cross-tab";
+import { LunoraClient } from "../src/lunora-client";
+import { SubscriptionRegistry } from "../src/subscription";
+import type { FunctionReference } from "../src/types";
 
 /** Wire shape mirrored from `cross-tab.ts`'s internal message union, for raw test-side sends. */
 type RawMessage = { tabId: string; ts: number; type: "claim-leadership" | "heartbeat" };
+
+/** Wire shape of a leader's `subscription-data` / `subscription-settled` broadcast, for raw test-side sends simulating a leader tab. */
+type RawLeaderMessage =
+    | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
+    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" };
+
+const fnRef = (ref: string): FunctionReference => {
+    return { __lunoraRef: ref };
+};
+
+const jsonResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" }, status: 200 });
 
 // Real `TabCoordinator` ids always start with `"tab_"` (see `cross-tab.ts`). These
 // fabricated ids are chosen to sort deterministically on either side of that
@@ -150,6 +164,236 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
         } finally {
             rogue.close();
             coordinator.stop();
+        }
+    });
+});
+
+describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
+    it("broadcastSubscriptionData/broadcastSubscriptionSettled carry cursor/epoch on the wire when supplied, and omit them when not", async () => {
+        expect.assertions(4);
+
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const coordinator = new TabCoordinator({ channelName, heartbeatInterval: HEARTBEAT_INTERVAL_MS, leaderTimeout: LEADER_TIMEOUT_MS });
+        const rogue = new BroadcastChannel(channelName);
+        const received: RawLeaderMessage[] = [];
+
+        rogue.addEventListener("message", (event: MessageEvent<RawLeaderMessage>): void => {
+            received.push(event.data);
+        });
+
+        try {
+            coordinator.start();
+
+            // Solo boot: self-promotes to leader once the leader-timeout window
+            // elapses (mirrors the other tests in this file).
+            await delay(LEADER_TIMEOUT_MS + 20);
+
+            coordinator.broadcastSubscriptionData("q:1::{}::", { hello: "world" }, 10, "epoch-1");
+            coordinator.broadcastSubscriptionSettled("q:1::{}::", 12, "epoch-2");
+            // No cursor/epoch supplied — a CDC-off shard, or a leader relaying a
+            // frame it never got a cursor for.
+            coordinator.broadcastSubscriptionData("q:2::{}::", 1);
+
+            await delay(20);
+
+            const dataFrame = received.find((m) => m.type === "subscription-data" && m.key === "q:1::{}::");
+            const settledFrame = received.find((m) => m.type === "subscription-settled");
+            const bareFrame = received.find((m) => m.type === "subscription-data" && m.key === "q:2::{}::");
+
+            expect(dataFrame).toMatchObject({ cursor: 10, epoch: "epoch-1" });
+            expect(settledFrame).toMatchObject({ cursor: 12, epoch: "epoch-2" });
+            // Omitted cursor/epoch aren't sent as `undefined` properties on the
+            // wire — a stale receiver checking `"cursor" in message` (rather than
+            // `!== undefined`) must see it absent, not present-but-undefined.
+            expect(bareFrame).toBeDefined();
+            expect(bareFrame && "cursor" in bareFrame).toBe(false);
+        } finally {
+            rogue.close();
+            coordinator.stop();
+        }
+    });
+
+    it("broadcastSubscriptionSettled carries lastMutationId on the wire when supplied, and omits it when not", async () => {
+        expect.assertions(2);
+
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const coordinator = new TabCoordinator({ channelName, heartbeatInterval: HEARTBEAT_INTERVAL_MS, leaderTimeout: LEADER_TIMEOUT_MS });
+        const rogue = new BroadcastChannel(channelName);
+        const received: RawLeaderMessage[] = [];
+
+        rogue.addEventListener("message", (event: MessageEvent<RawLeaderMessage>): void => {
+            received.push(event.data);
+        });
+
+        try {
+            coordinator.start();
+            await delay(LEADER_TIMEOUT_MS + 20);
+
+            // A custom-mutator watermark rides along so a follower's `@lunora/db`
+            // `onCheckpoint` gate can advance too, not just cursor/epoch.
+            coordinator.broadcastSubscriptionSettled("q:1::{}::", 12, "epoch-2", 7);
+            // No `lastMutationId` supplied — a plain `useQuery` subscription with
+            // no custom-mutator watermark to forward.
+            coordinator.broadcastSubscriptionSettled("q:2::{}::", 1);
+
+            await delay(20);
+
+            const withId = received.find((m) => m.type === "subscription-settled" && m.key === "q:1::{}::");
+            const withoutId = received.find((m) => m.type === "subscription-settled" && m.key === "q:2::{}::");
+
+            expect(withId).toMatchObject({ lastMutationId: 7 });
+            expect(withoutId && "lastMutationId" in withoutId).toBe(false);
+        } finally {
+            rogue.close();
+            coordinator.stop();
+        }
+    });
+});
+
+describe("lunoraClient — cross-tab follower drops confirmed optimistic layers (CLIENT-01)", () => {
+    it("a follower drops a per-call optimistic layer once a leader-broadcast cursor reaches its commit cursor", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (value) => received.push(value));
+
+            // Per-call optimistic write. The RPC response echoes commitCursor 10;
+            // this (non-leader, cross-tab) client's socket never opens — see
+            // `ensureSocket`'s cross-tab leader gate — so the layer stays pending
+            // until a leader frame confirms it.
+            await client.mutation(fnRef("counter:get"), {}, { optimistic: (current) => (typeof current === "number" ? current + 1 : 1) });
+
+            expect(received.at(-1)).toBe(1);
+
+            // The leader tab broadcasts a `subscription-data` frame whose cursor
+            // has reached the write's commit cursor.
+            const key = SubscriptionRegistry.key("counter:get", {});
+
+            rogue.postMessage({ cursor: 10, data: 11, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+
+            await delay(30);
+
+            // The overlay is dropped; the leader's authoritative value shows —
+            // not 12 (which a still-applied +1 layer would fold on top of 11).
+            expect(received.at(-1)).toBe(11);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a follower's setQuery overlay is released once a leader-broadcast cursor reaches its commit cursor", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, (value) => received.push(value));
+
+            await client.mutation(
+                fnRef("m:set"),
+                {},
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("q:list"), {}, 42);
+                    },
+                },
+            );
+
+            // The constant `setQuery` layer masks the (still-unknown) server value.
+            expect(received.at(-1)).toBe(42);
+
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            rogue.postMessage({ cursor: 10, data: 99, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+
+            await delay(30);
+
+            // The overlay is released; the leader's authoritative value shows.
+            expect(received.at(-1)).toBe(99);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a cursor-less subscription-data frame (mixed-version leader) keeps the historical fold-without-drop behavior", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (value) => received.push(value));
+
+            await client.mutation(fnRef("counter:get"), {}, { optimistic: (current) => (typeof current === "number" ? current + 1 : 1) });
+
+            expect(received.at(-1)).toBe(1);
+
+            // A mixed-version leader (no CLIENT-01 cursor on the wire) — the layer
+            // stays folded on top instead of being dropped.
+            const key = SubscriptionRegistry.key("counter:get", {});
+
+            rogue.postMessage({ data: 5, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+
+            await delay(30);
+
+            // 5 (new base) folded through the still-active +1 layer = 6, not the
+            // raw leader value — the historical no-cursor behavior, preserved for
+            // backward compat with a mixed-version deploy.
+            expect(received.at(-1)).toBe(6);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a follower's onCheckpoint fires with the leader-broadcast lastMutationId on a subscription-settled frame", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const checkpoints: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            // The leader relays a `settled` frame (no value change, cursor advanced)
+            // carrying the custom-mutator watermark it already applied — without
+            // forwarding `lastMutationId`, a follower's `@lunora/db` `onCheckpoint`
+            // gate would never see this confirmed write and would hang.
+            rogue.postMessage({
+                cursor: 10,
+                epoch: "epoch-1",
+                key,
+                lastMutationId: 7,
+                tabId: "leader-tab",
+                type: "subscription-settled",
+            } satisfies RawLeaderMessage);
+
+            await delay(30);
+
+            expect(checkpoints).toStrictEqual([{ checkpoint: 10, mutationId: 7 }]);
+        } finally {
+            rogue.close();
+            client.close();
         }
     });
 });

@@ -377,6 +377,19 @@ interface ShardConnection {
     connectTimer: ReturnType<typeof setTimeout> | undefined;
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+    /**
+     * Wall-clock time (`Date.now()`) of the most recently received frame on
+     * this connection's socket — ANY frame, including the plain-string
+     * `lunora-pong` keepalive reply, which never reaches `handleServerMessage`'s
+     * JSON parsing. Reset on every `open` so a fresh (re)connect starts its
+     * watchdog window clean. The heartbeat tick force-closes a socket that's
+     * gone quiet for more than `heartbeatIntervalMs * 2.5` despite reporting
+     * `wsState === "open"` — a half-open socket (a proxy that swallowed the
+     * close, a hibernation edge case) that would otherwise never fire `close`
+     * and silently stale every live query bound to it forever.
+     */
+    lastFrameAt: number;
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
@@ -928,39 +941,75 @@ class LunoraClient {
                         this.connections.delete(key);
                     }
                 },
-                onSubscriptionData: (key, data) => {
+                onSubscriptionData: (key, data, cursor, epoch) => {
                     // A follower tab received the authoritative server value from
                     // the leader. Update serverBase and re-fold any local optimistic
                     // layers so the displayed value reflects both the new base and
                     // the follower's own pending writes.
                     const state = this.subscriptions.get(key);
 
-                    if (state) {
-                        state.serverBase = data;
-
-                        const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
-
-                        state.lastValue = folded;
-
-                        for (const callback of state.callbacks) {
-                            try {
-                                callback(folded);
-                            } catch {
-                                /* user callback threw — ignore */
-                            }
-                        }
+                    if (!state) {
+                        return;
                     }
+
+                    state.serverBase = data;
+
+                    // `cursor` rides the broadcast only from a CLIENT-01-aware
+                    // leader tab. When present, advance this follower's own resume
+                    // cursor/epoch and run the SAME confirmed-layer drop + notify
+                    // tail `handleDataMessage` uses on the leader — so a follower's
+                    // optimistic overlay (per-call or `setQuery`) is released the
+                    // moment the confirming frame arrives instead of staying masked
+                    // forever (CLIENT-01). A mixed-version deploy where the leader
+                    // hasn't shipped the cursor yet falls through to the historical
+                    // fold-and-notify-without-drop behavior below — backward
+                    // compatible with a cursor-less wire frame.
+                    if (cursor !== undefined) {
+                        state.serverCursor = cursor;
+
+                        if (epoch !== undefined) {
+                            state.serverEpoch = epoch;
+                        }
+
+                        dropConfirmedLayers(state, cursor);
+                        notifySubscription(state, state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers));
+
+                        return;
+                    }
+
+                    const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
+
+                    notifySubscription(state, folded);
                 },
                 onSubscriptionError: (key, error) => {
                     const state = this.subscriptions.get(key);
 
                     if (state) {
-                        for (const callback of state.errorCallbacks) {
-                            try {
-                                callback(error);
-                            } catch {
-                                /* user callback threw — ignore */
-                            }
+                        fanSubscriptionError(state.errorCallbacks, error);
+                    }
+                },
+                onSubscriptionSettled: (key, cursor, epoch, lastMutationId) => {
+                    // The leader's `settled` checkpoint advanced with no value
+                    // change — reuse the exact same tail the leader itself runs
+                    // (ack + advance cursor/epoch + drop confirmed layers +
+                    // notify) so a follower's `setQuery`/per-call overlay a
+                    // byte-identical write just confirmed gets released here too.
+                    const state = this.subscriptions.get(key);
+
+                    if (state) {
+                        this.ackAndAdvanceCursor(state, cursor, epoch);
+
+                        if (lastMutationId !== undefined) {
+                            state.lastMutationId = lastMutationId;
+                        }
+
+                        // Fan out to every registered checkpoint subscriber, same
+                        // as the leader's own `handleSettledMessage` tail — a
+                        // `@lunora/db` `onCheckpoint` gate on a follower tab must
+                        // advance too, or it hangs on a confirmed write the leader
+                        // already acknowledged.
+                        for (const onCheckpoint of state.checkpointCallbacks) {
+                            onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
                         }
                     }
                 },
@@ -3914,6 +3963,7 @@ class LunoraClient {
             conn = {
                 connectTimer: undefined,
                 heartbeatTimer: undefined,
+                lastFrameAt: 0,
                 pendingUnsubscribes: [],
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
@@ -4320,6 +4370,10 @@ class LunoraClient {
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
+            // Fresh (re)connect — start the half-open watchdog window clean
+            // rather than carrying over a stale timestamp from before a
+            // disconnect/reconnect cycle (see `ShardConnection.lastFrameAt`).
+            conn.lastFrameAt = Date.now();
             this.emitConnectionStatus();
 
             // Announce the connection (and its app context) before resubscribing,
@@ -4382,6 +4436,15 @@ class LunoraClient {
         });
 
         socket.addEventListener("message", (event: MessageEvent): void => {
+            // Ignore a late message from a socket the connection already moved
+            // past (see `open`/`close`/`error` above) — `handleServerMessage`
+            // looks the connection up by shard key, not by socket identity, so
+            // without this guard a stale socket's frame would stamp the newer
+            // socket's `lastFrameAt` and defeat the heartbeat watchdog.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             this.handleServerMessage(event.data, shardKey);
         });
 
@@ -4481,7 +4544,12 @@ class LunoraClient {
     }
 
     /**
-     * Begin the keepalive heartbeat on an open connection. Each tick sends a
+     * Begin the keepalive heartbeat on an open connection. Each tick first
+     * checks the half-open watchdog (see {@link ShardConnection.lastFrameAt}):
+     * if no frame at all has arrived within `heartbeatIntervalMs * 2.5`, the far
+     * end has gone quiet without the socket ever firing `close` — force it
+     * closed so `handleDisconnect` arms the normal reconnect/backoff instead of
+     * every live query on it silently staling forever. Otherwise it sends a
      * {@link WS_KEEPALIVE_PING} text frame the server answers from its
      * hibernation auto-response without waking the DO. A no-op when the
      * heartbeat is disabled (an interval of zero or less); idempotent — any
@@ -4500,8 +4568,25 @@ class LunoraClient {
                 return;
             }
 
+            const { socket } = conn;
+
+            if (Date.now() - conn.lastFrameAt > this.heartbeatIntervalMs * 2.5) {
+                // Mirrors the fail-fast connect-timeout pattern in `ensureSocket`:
+                // a stuck socket may throw on close, but the disconnect call
+                // below still arms reconnect either way.
+                try {
+                    socket.close();
+                } catch {
+                    /* a stuck socket may throw on close — the disconnect below still arms reconnect */
+                }
+
+                this.handleDisconnect(conn);
+
+                return;
+            }
+
             try {
-                conn.socket.send(WS_KEEPALIVE_PING);
+                socket.send(WS_KEEPALIVE_PING);
             } catch {
                 // A send race against a closing socket is harmless — the close
                 // handler will tear the heartbeat down.
@@ -4586,6 +4671,17 @@ class LunoraClient {
     }
 
     private handleServerMessage(raw: unknown, shardKey?: string): void {
+        // Any inbound frame — including the plain-string `lunora-pong` keepalive
+        // reply, which the JSON.parse guard below silently drops — proves the
+        // socket is still alive. Stamp it unconditionally, before the parsing
+        // below, so the heartbeat watchdog (see `startHeartbeat`) can tell a
+        // half-open socket from a healthy one.
+        const conn = this.getConnection(shardKey);
+
+        if (conn) {
+            conn.lastFrameAt = Date.now();
+        }
+
         const text = decodeServerFrame(raw);
 
         if (text === undefined) {
@@ -4875,7 +4971,7 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 
-            this.tabCoordinator.broadcastSubscriptionData(key, payload);
+            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch);
         }
     }
 
@@ -4926,6 +5022,16 @@ class LunoraClient {
         // checkpoint callback never (un)subscribes to this same state mid-flush.
         for (const onCheckpoint of state.checkpointCallbacks) {
             onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+        }
+
+        // Cross-tab: propagate the checkpoint advance to follower tabs too, or a
+        // `setQuery`/per-call optimistic overlay this byte-identical write just
+        // confirmed would stay masked on a follower until the next VISIBLE data
+        // frame (see `onSubscriptionSettled` in the constructor).
+        if (this.tabCoordinator?.isLeader()) {
+            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+
+            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch, state.lastMutationId);
         }
     }
 
@@ -5026,11 +5132,24 @@ class LunoraClient {
         this.tokenExpiredListeners.emit();
     }
 
+    /**
+     * CLIENT-04: `type: "complete"` today is sent ONLY by `@lunora/do`'s
+     * `handleStream` (see `shard-do.ts`), gated to the `stream` envelope type
+     * and minting only `stream_*` ids — the `subscribe` path never sends it, so
+     * a live SUBSCRIPTION provably never receives `complete` from the current
+     * server. But `ServerCompleteMessage` is a generic `id`-keyed frame and
+     * `ShardDO` is user-subclassable, so this stays defensive rather than
+     * assuming a `sub_*` id can never reach here: unlike the historical
+     * `subscriptions.remove(state)`, which dropped the state out of
+     * `subscriptions.all()` — the set the reconnect resubscribe loop walks
+     * (`ensureSocket`'s `open` handler) — and so froze the query forever across
+     * every future reconnect, this fans a cancellation error to any listener
+     * and marks the registration un-acked instead. Non-destructive: the state
+     * stays in the registry, so the very next reconnect resubscribes it. The
+     * two id-spaces don't overlap (`sub_*` vs `stream_*`), so the stream and
+     * subscription lookups below are mutually exclusive.
+     */
     private handleCompleteMessage(id: string): void {
-        // Streams complete normally — close the iterator. Subscriptions
-        // can also receive `complete` (cancelled server-side); remove them
-        // from the registry. The two id-spaces don't overlap (`sub_*` vs
-        // `stream_*`) so the two lookups are mutually exclusive.
         const stream = this.streams.get(id);
 
         if (stream) {
@@ -5043,7 +5162,8 @@ class LunoraClient {
         const state = this.subscriptions.getById(id);
 
         if (state) {
-            this.subscriptions.remove(state);
+            state.acked = false;
+            fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
     }
 

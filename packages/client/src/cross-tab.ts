@@ -44,22 +44,40 @@ interface TabCoordinatorOptions {
     onStopBeingLeader?: () => void;
 
     /**
-     * Called when the leader broadcasts subscription data.
+     * Called when the leader broadcasts subscription data. `cursor`/`epoch`
+     * ride along when the leader is CLIENT-01-aware, so the follower can drop
+     * its own confirmed optimistic layers instead of just displaying the raw
+     * value; both are absent on a mixed-version leader that hasn't shipped the
+     * cursor yet (the follower falls back to its historical behavior — see
+     * `lunora-client.ts`'s `onSubscriptionData` wiring).
      */
-    onSubscriptionData?: (key: string, data: unknown) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string) => void;
 
     /**
      * Called when the leader broadcasts a subscription error.
      */
     onSubscriptionError?: (key: string, error: SubscriptionError) => void;
+
+    /**
+     * Called when the leader broadcasts a `settled` frame's checkpoint advance
+     * (no value change, but the resume cursor moved). A follower needs this
+     * too — otherwise a `setQuery`/per-call optimistic overlay that a
+     * byte-identical write just confirmed stays masked on follower tabs until
+     * the next VISIBLE data frame arrives, even though the leader already
+     * dropped it. `lastMutationId` rides along the same way so a follower's
+     * `@lunora/db` `onCheckpoint` gate advances too, instead of waiting on a
+     * confirmed write the leader already acknowledged.
+     */
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void;
 }
 
 type WsFollowerMessage =
     { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
 
 type WsLeaderMessage =
-    | { data: unknown; key: string; tabId: string; type: "subscription-data" }
-    | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" };
+    | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
+    | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" }
+    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" };
 
 type TabCoordinatorMessage = WsFollowerMessage | WsLeaderMessage;
 
@@ -97,8 +115,9 @@ class TabCoordinator {
     /** Callbacks set via constructor options. */
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
-    private readonly onSubscriptionData: ((key: string, data: unknown) => void) | undefined;
+    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string) => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
+    private readonly onSubscriptionSettled: ((key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void) | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -114,6 +133,7 @@ class TabCoordinator {
         this.onStopBeingLeader = options.onStopBeingLeader;
         this.onSubscriptionData = options.onSubscriptionData;
         this.onSubscriptionError = options.onSubscriptionError;
+        this.onSubscriptionSettled = options.onSubscriptionSettled;
 
         // BroadcastChannel is browser-only — no-op in SSR/Node/React Native.
         if (typeof BroadcastChannel === "undefined") {
@@ -234,14 +254,24 @@ class TabCoordinator {
 
     /**
      * Broadcast subscription data to all follower tabs. Only the leader should
-     * call this.
+     * call this. `cursor`/`epoch` are omitted from the wire frame when
+     * `undefined` (e.g. a CDC-off shard) — a follower on ANY version treats a
+     * missing `cursor` as "no confirmed-layer drop this frame", so omitting it
+     * here is equivalent to sending it as `undefined`.
      */
-    public broadcastSubscriptionData(key: string, data: unknown): void {
+    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "subscription-data", tabId: this.tabId, key, data });
+        this.broadcast({
+            type: "subscription-data",
+            tabId: this.tabId,
+            key,
+            data,
+            ...(cursor === undefined ? {} : { cursor }),
+            ...(epoch === undefined ? {} : { epoch }),
+        });
     }
 
     /**
@@ -254,6 +284,26 @@ class TabCoordinator {
         }
 
         this.broadcast({ type: "subscription-error", tabId: this.tabId, key, error });
+    }
+
+    /**
+     * Broadcast a `settled` frame's checkpoint advance to all follower tabs
+     * (no value change, but the resume cursor/epoch moved — see
+     * `LunoraClient.handleSettledMessage`). Only the leader should call this.
+     */
+    public broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number): void {
+        if (!this.leader) {
+            return;
+        }
+
+        this.broadcast({
+            type: "subscription-settled",
+            tabId: this.tabId,
+            key,
+            ...(cursor === undefined ? {} : { cursor }),
+            ...(epoch === undefined ? {} : { epoch }),
+            ...(lastMutationId === undefined ? {} : { lastMutationId }),
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -284,7 +334,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data);
+                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch);
 
                 break;
             }
@@ -295,6 +345,16 @@ class TabCoordinator {
                 }
 
                 this.onSubscriptionError?.(message.key, message.error);
+
+                break;
+            }
+
+            case "subscription-settled": {
+                if (this.leader || message.tabId === this.tabId) {
+                    break;
+                }
+
+                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId);
 
                 break;
             }

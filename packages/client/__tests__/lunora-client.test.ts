@@ -782,6 +782,80 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("force-closes a half-open socket once no frame has arrived for heartbeatIntervalMs * 2.5, and arms reconnect (CLIENT-02)", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 1000,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(client.connectionStatus()).toBe("connected");
+
+            // Two heartbeat ticks pass with no reply at all (not even a pong) —
+            // still under the 2.5x window (2500ms), so the socket stays open and
+            // a ping keeps going out each tick.
+            vi.advanceTimersByTime(2000);
+
+            expect(socket.readyState).toBe(1);
+
+            // The third tick crosses `heartbeatIntervalMs * 2.5`: the far end has
+            // gone quiet without the socket ever firing `close` (a half-open
+            // socket — a swallowed RST, a stuck proxy) — the watchdog force-closes
+            // it instead of leaving it reporting "open" forever while every live
+            // query on it silently stales, and the normal reconnect/backoff arms.
+            vi.advanceTimersByTime(1000);
+
+            expect(socket.readyState).toBe(3);
+            expect(client.connectionStatus()).toBe("offline");
+
+            client.close();
+        });
+
+        it("a socket that keeps receiving ANY frame (even the non-JSON lunora-pong) is never force-closed by the watchdog (CLIENT-02)", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 1000,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // The server answers every ping with `lunora-pong` — a plain,
+            // non-JSON string the `handleServerMessage` JSON.parse guard drops —
+            // but it must still reset the watchdog (it proves the socket is
+            // alive). Five ticks span 5000ms, well past the 2500ms window, so a
+            // watchdog that ignored the pong would have force-closed by now.
+            for (let tick = 0; tick < 5; tick += 1) {
+                vi.advanceTimersByTime(1000);
+                socket.receive("lunora-pong");
+            }
+
+            expect(socket.readyState).toBe(1);
+            expect(client.connectionStatus()).toBe("connected");
+
+            client.close();
+        });
+
         it("does not send keepalive pings when the heartbeat is disabled", () => {
             expect.assertions(1);
 
@@ -1015,6 +1089,57 @@ describe("lunoraClient", () => {
             socket.receive({ error: { code: "ADMIN_FORBIDDEN", message: "admin gate not cleared" }, id: firstSub(socket).id, type: "error" });
 
             expect(errors).toEqual([{ code: "ADMIN_FORBIDDEN", message: "admin gate not cleared" }]);
+        });
+
+        it("a complete frame for a live subscription surfaces SUBSCRIPTION_CANCELLED and re-subscribes on the next reconnect instead of freezing (CLIENT-04)", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const errors: { code?: string; message: string }[] = [];
+            const data: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => data.push(d), { onError: (error) => errors.push(error) });
+
+            const first = latestSocket();
+
+            first.open();
+
+            const subId = firstSub(first).id as string;
+
+            // A subscription-scoped `complete` frame — today's server only sends
+            // `complete` for stream ids (see the source comment on
+            // `handleCompleteMessage`), but this pins the defensive behavior for
+            // a `sub_*` id in case a future/subclassed `ShardDO` ever cancels a
+            // subscription this way. The historical behavior removed the state
+            // from the registry entirely, so it never resubscribed on ANY future
+            // reconnect and the query froze forever.
+            first.receive({ id: subId, type: "complete" });
+
+            expect(errors).toEqual([{ code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" }]);
+
+            // The socket drops and reconnects.
+            first.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const second = latestSocket();
+
+            second.open();
+
+            // Non-destructive: the subscription is still registered and gets
+            // re-sent on the fresh socket instead of having silently vanished.
+            expect(second).not.toBe(first);
+            expect(firstSub(second)?.query?.functionPath).toBe("messages:list");
+            expect(data).toHaveLength(0);
+
+            vi.useRealTimers();
         });
 
         it("re-sends an admin subscription with its token on reconnect", () => {

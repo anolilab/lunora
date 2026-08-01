@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { get } from "svelte/store";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AgentChatApi, AgentLiveEvent } from "../src/agent-chat";
 import { agentChat } from "../src/agent-chat";
@@ -33,6 +33,18 @@ const buildApi = (): AgentChatApi =>
     }) as unknown as AgentChatApi;
 
 describe(agentChat, () => {
+    beforeEach(() => {
+        // `agentChat` gates its history/thread subscriptions on a browser
+        // `window` (SVELTE-01); the vitest env is `node` (no `window`), so
+        // define one for these client-path tests. The SSR test below removes
+        // it to exercise the guard, mirroring `presence.test.ts`.
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("surfaces durable history and live status over the agents:* subscriptions", () => {
         const fake = createFakeClient();
         const handle = agentChat(fake.client, { api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
@@ -223,5 +235,54 @@ describe(agentChat, () => {
         await expect(handle.approve("call-1")).rejects.toThrow("no in-flight run");
 
         handle.teardown();
+    });
+
+    it("does not open the history/thread subscriptions during SSR (no window) (SVELTE-01)", () => {
+        const fake = createFakeClient();
+
+        // Simulate the server render: no browser `window` (this package pairs
+        // with `@lunora/nuxt`'s server rendering, where a component's init runs
+        // inside `renderToString` with no `window`). Opening a live WS
+        // subscription there fires during `renderToString` with no
+        // corresponding `onDestroy` to close it — every server render would
+        // leak a subscription.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = agentChat(fake.client, { api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(get(handle.messages)).toStrictEqual([]);
+        expect(get(handle.status)).toBeUndefined();
+
+        // Teardown itself must not throw with nothing live to unsubscribe.
+        expect(() => {
+            handle.teardown();
+        }).not.toThrow();
+        expect(fake.unsubscribeSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not open the eager token stream during SSR (no window) (SVELTE-01)", () => {
+        const fake = createFakeClient();
+
+        // Same server-render scenario as above, but with a `stream` reference
+        // configured — the eager `stream(...).chunks.subscribe(...)` call must
+        // be gated on `isBrowser` too, or it opens (and leaks) a live stream
+        // during `renderToString` just like an ungated history/thread
+        // subscription would.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = agentChat(fake.client, {
+            api: buildApi(),
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            stream: makeStreamRef(STREAM_REF),
+            threadKey: "t1",
+        });
+
+        expect(fake.streamCalls).toHaveLength(0);
+        expect(get(handle.streamingText)).toBe("");
+
+        expect(() => {
+            handle.teardown();
+        }).not.toThrow();
     });
 });

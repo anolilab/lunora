@@ -127,22 +127,34 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
 
     // Heartbeat: immediately, on an interval, and whenever the tab regains
     // visibility. Cleared on unmount so no timer leaks.
+    //
+    // `document` is guarded (`typeof document !== "undefined"`, matching
+    // vue/solid/svelte/angular's presence) rather than read bare: React Native
+    // has no `document` global at all, so an unguarded read throws a
+    // ReferenceError on mount (RN-01) instead of just skipping the
+    // visibility-driven heartbeat, which is a web-only refinement anyway (the
+    // interval heartbeat still covers RN).
     useEffect(() => {
         sendHeartbeat();
 
         const handle = setInterval(sendHeartbeat, intervalMs);
 
         const onVisible = (): void => {
-            if (document.visibilityState === "visible") {
+            if (typeof document !== "undefined" && document.visibilityState === "visible") {
                 sendHeartbeat();
             }
         };
 
-        document.addEventListener("visibilitychange", onVisible);
+        if (typeof document !== "undefined") {
+            document.addEventListener("visibilitychange", onVisible);
+        }
 
         return () => {
             clearInterval(handle);
-            document.removeEventListener("visibilitychange", onVisible);
+
+            if (typeof document !== "undefined") {
+                document.removeEventListener("visibilitychange", onVisible);
+            }
         };
     }, [sendHeartbeat, intervalMs]);
 
