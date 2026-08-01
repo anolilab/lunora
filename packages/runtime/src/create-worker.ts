@@ -2,6 +2,7 @@ import { isLunoraError, toErrorBody } from "@lunora/errors";
 
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -1957,30 +1958,6 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
  * `Authorization` header handling is also plain — the per-shard gate is what
  * provides the constant-time check downstream.
  */
-
-/**
- * Length-independent constant-time string compare for token checks.
- *
- * Keep in sync with `packages/do/src/shard-do.ts` constantTimeEqual — the
- * two packages don't import from each other to avoid a circular dep.
- */
-const constantTimeEqual = (expected: string, supplied: string): boolean => {
-    const max = Math.max(expected.length, supplied.length);
-    // Bitwise XOR/OR are load-bearing for the branch-free constant-time
-    // comparison that protects token/HMAC checks from timing side channels.
-    // eslint-disable-next-line no-bitwise
-    let diff = expected.length ^ supplied.length;
-
-    for (let index = 0; index < max; index += 1) {
-        const expectedCode = index < expected.length ? (expected.codePointAt(index) ?? 0) : 0;
-        const suppliedCode = index < supplied.length ? (supplied.codePointAt(index) ?? 0) : 0;
-
-        // eslint-disable-next-line no-bitwise
-        diff |= expectedCode ^ suppliedCode;
-    }
-
-    return diff === 0;
-};
 
 /**
  * Verify an HMAC-SHA-256 (base64url, unpadded) signature over `body` against
