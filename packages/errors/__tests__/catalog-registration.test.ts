@@ -30,6 +30,26 @@ const SKIP_DIRECTORIES = new Set([
 // same cheap way a reviewer would grep for one.
 const CODE_PATTERN = /code:\s*"([A-Z][A-Z0-9_]*)"|new LunoraError\(\s*"([A-Z][A-Z0-9_]*)"/g;
 
+/**
+ * Codes the gate would otherwise flag as unregistered but that are not
+ * `LunoraError` codes at all — plain `{ code: "X", ... }` literals belonging to
+ * an unrelated, non-catalog code union. Registering them in `ERROR_CATALOG`
+ * would misstate the catalog's domain (it documents `LunoraError` wire
+ * behaviour, and these never reach `isInternalCode`/`toErrorBody`).
+ *
+ * Each entry is asserted to still occur in its named file (see the integrity
+ * `it` below) so the allowlist cannot rot into covering something new once the
+ * original site is edited or removed.
+ */
+const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
+    // A hand-rolled `Response.json(...)` error body for an oversized upload,
+    // never a `LunoraError` construction.
+    ["REQUEST_ENTITY_TOO_LARGE", "packages/storage/src/upload-handler.ts"],
+    // `fanSubscriptionError`'s callback payload — a plain object, never a
+    // `LunoraError` construction.
+    ["SUBSCRIPTION_CANCELLED", "packages/client/src/lunora-client.ts"],
+]);
+
 /** Recursively collect `.ts`/`.tsx` source files under `dir`, skipping build/vendor/test directories. */
 const collectSourceFiles = (dir: string): string[] => {
     const entries = readdirSync(dir);
@@ -95,9 +115,23 @@ describe("error catalog registration", () => {
             }
         }
 
+        const unexpected = [...missing.entries()].filter(([code]) => !KNOWN_NON_LUNORA_CODES.has(code));
+
         expect(
-            [...missing.entries()].map(([code, file]) => `${code} (first seen in ${file})`),
+            unexpected.map(([code, file]) => `${code} (first seen in ${file})`),
             "Found error code(s) minted outside ERROR_CATALOG. Register each with a status/title (and internal: true if its message can carry backend detail) in packages/errors/src/catalog.ts.",
         ).toStrictEqual([]);
+    });
+
+    it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
+        expect.assertions(2);
+
+        for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
+            const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
+
+            expect(content, `Expected ${code} to still appear in ${relativeFile} — update or remove the allowlist entry if it moved.`).toContain(
+                `"${code}"`,
+            );
+        }
     });
 });
