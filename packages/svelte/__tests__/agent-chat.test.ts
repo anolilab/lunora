@@ -260,4 +260,29 @@ describe(agentChat, () => {
         }).not.toThrow();
         expect(fake.unsubscribeSpy).not.toHaveBeenCalled();
     });
+
+    it("does not open the eager token stream during SSR (no window) (SVELTE-01)", () => {
+        const fake = createFakeClient();
+
+        // Same server-render scenario as above, but with a `stream` reference
+        // configured — the eager `stream(...).chunks.subscribe(...)` call must
+        // be gated on `isBrowser` too, or it opens (and leaks) a live stream
+        // during `renderToString` just like an ungated history/thread
+        // subscription would.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = agentChat(fake.client, {
+            api: buildApi(),
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            stream: makeStreamRef(STREAM_REF),
+            threadKey: "t1",
+        });
+
+        expect(fake.streamCalls).toHaveLength(0);
+        expect(get(handle.streamingText)).toBe("");
+
+        expect(() => {
+            handle.teardown();
+        }).not.toThrow();
+    });
 });
