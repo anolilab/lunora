@@ -227,4 +227,142 @@ describe("discoverMaskHasNonLiteralPolicy", () => {
 
         expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(false);
     });
+
+    it("is false for a nested custom-strategy object at the column value (NOT a fail-open — a spread there is inside the strategy value, not a table/column key)", () => {
+        expect.assertions(1);
+
+        // Regression: `objectLiteralHasUnnameableMember` originally recursed
+        // unboundedly into every nested object literal, so a THIRD level here
+        // (the strategy value itself, e.g. `{ kind: "custom", ...opts }`) was
+        // wrongly treated the same as an unnameable table/column key. Every
+        // table and column key in this call is a fully literal, fully
+        // enumerable string — `strategyOf` labels the "ssn" column "custom"
+        // without ever needing to look inside its value — so this must stay
+        // `false`, matching `extractMaskColumns`'s exact two-level walk.
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const opts = { note: "sensitive" };
+
+    export const list = c.query.use(mask({ users: { ssn: { kind: "custom", ...opts } } })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(false);
+    });
+
+    it("is true for a set-accessor table member (a member kind memberName rejects, just like a spread)", () => {
+        expect.assertions(1);
+
+        // `memberName` only accepts PropertyAssignment/ShorthandPropertyAssignment/
+        // MethodDeclaration/GetAccessorDeclaration — a SetAccessorDeclaration table
+        // entry is silently skipped by `extractMaskColumns` (same as a spread), so
+        // it must count as unnameable here too.
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    export const list = c.query.use(mask({ set users(_value: unknown) {} })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true for a set-accessor column member (nested under a literal table key)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    export const list = c.query.use(mask({ users: { set email(_value: unknown) {}, name: "hash" } })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    // A table entry can be an unenumerable non-object-literal value (or an
+    // unenumerable KEY shape) while the top-level `mask(...)` argument is
+    // still a plain object literal — `extractMaskColumns`'s table loop skips
+    // any such entry (`continue`), contributing zero columns for it, same as
+    // a spread/computed table key. Each of these must be `true`.
+
+    it("is true when a table's value is an identifier reference, not an inline object literal", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const piiColumns = { email: "redact" as const };
+
+    export const list = c.query.use(mask({ users: piiColumns })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true when a table's value is an object literal wrapped in `as const`", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    export const list = c.query.use(mask({ users: { email: "redact" } as const })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true when a table's value is an object literal wrapped in `satisfies`", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    export const list = c.query.use(mask({ users: { email: "redact" } satisfies Record<string, Strategy> })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true when a table's value is a call expression", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    declare function buildPolicy(): Record<string, Strategy>;
+
+    export const list = c.query.use(mask({ users: buildPolicy() })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
+
+    it("is true when a table entry is a shorthand property (referencing a variable, not a plain key: value pair)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "users.ts"),
+            `${PREAMBLE}
+    const users = { email: "redact" as const };
+
+    export const list = c.query.use(mask({ users })).query(() => null);
+`,
+            "utf8",
+        );
+
+        expect(discoverMaskHasNonLiteralPolicy(project, join(workdir, "lunora"))).toBe(true);
+    });
 });

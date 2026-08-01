@@ -509,28 +509,81 @@ const hasComputedName = (member: TsNode): boolean => {
 };
 
 /**
- * True when `object` — a `mask(...)` policies literal, or one of its
- * table-level initializers — has a member {@link extractMaskColumns} can't
- * enumerate: a `SpreadAssignment` (`...shared`) or a computed property name
- * (`[expr]: …`), at EITHER the table level or, recursively, the column level
- * (`mask({ users: { ...piiColumns } })` hides columns of a perfectly literal,
- * named table). Mirrors the two-level table→column walk
- * {@link extractMaskColumns}/{@link extractMaskColumnMetadata} perform, so
- * "this object has a member the extractors would skip" and "this object has
- * an unnameable member" agree by construction.
+ * True when `member` is something {@link memberName} can't turn into a usable
+ * table/column name — mirrors `memberName`'s accepted-kinds list BY
+ * CONSTRUCTION rather than enumerating specific unsupported kinds by name:
+ * anything that isn't one of the four kinds `memberName` accepts
+ * (`PropertyAssignment`, `ShorthandPropertyAssignment`, `MethodDeclaration`,
+ * `GetAccessorDeclaration`) is unnameable — this covers `SpreadAssignment`,
+ * `SetAccessorDeclaration`, and any other object-literal member kind
+ * ts-morph exposes now or later, matching exactly what the extractors'
+ * `memberName(...) === undefined` skip already treats as unenumerable. Among
+ * the four accepted kinds, a COMPUTED name is unnameable too even though
+ * `memberName` resolves some text for it (see {@link hasComputedName}).
  */
-const objectLiteralHasUnnameableMember = (object: ObjectLiteralExpression): boolean => {
+const isUnnameableMember = (member: TsNode): boolean => {
+    if (
+        Node.isPropertyAssignment(member) ||
+        Node.isShorthandPropertyAssignment(member) ||
+        Node.isMethodDeclaration(member) ||
+        Node.isGetAccessorDeclaration(member)
+    ) {
+        return hasComputedName(member);
+    }
+
+    return true;
+};
+
+/**
+ * True when `object` — a `mask(...)` policies literal — has a member
+ * {@link extractMaskColumns} can't enumerate, checked at the table level and,
+ * for each table entry that IS enumerable, ONE further level at the column
+ * level. This is exactly the two-level table→column walk
+ * {@link extractMaskColumns}/{@link extractMaskColumnMetadata} perform — NOT
+ * unbounded recursion, and NOT the same test at both levels.
+ *
+ * Table level applies {@link isUnnameableMember} plus a stricter shape check:
+ * the extractor's table loop requires the entry to be a plain property
+ * assignment (a shorthand, method, or get-accessor table entry — e.g.
+ * `{ users }` referencing a variable — is skipped there even though
+ * {@link memberName} can name it) whose value is a bare object literal; an
+ * identifier reference (`{ users: piiColumns }`), an `as const`/`satisfies`
+ * wrapper, or a call expression all fail that shape check and are treated as
+ * unnameable, matching the extractor's fall-through-and-skip.
+ *
+ * Column level (recursed one level in, `atColumnLevel: true`) applies only
+ * {@link isUnnameableMember} — a column's value is a STRATEGY, not required
+ * to be an object literal. {@link strategyOf} labels any non-string-literal
+ * strategy `"custom"` without needing to enumerate inside it, so column
+ * values are never shape-checked or recursed into further. A legitimately
+ * nested object at that depth — e.g.
+ * `mask({ users: { ssn: { kind: "custom", ...opts } } })`, a fully literal
+ * and fully enumerable table/column pair — is therefore NOT a fail-open the
+ * extractors miss, and flagging it would be a false positive (recursing past
+ * the column level was an earlier bug here).
+ */
+const objectLiteralHasUnnameableMember = (object: ObjectLiteralExpression, atColumnLevel = false): boolean => {
     for (const property of object.getProperties()) {
-        if (Node.isSpreadAssignment(property) || hasComputedName(property)) {
+        if (isUnnameableMember(property)) {
             return true;
         }
 
-        if (Node.isPropertyAssignment(property)) {
-            const initializer = property.getInitializer();
+        if (atColumnLevel) {
+            continue;
+        }
 
-            if (initializer && Node.isObjectLiteralExpression(initializer) && objectLiteralHasUnnameableMember(initializer)) {
-                return true;
-            }
+        if (!Node.isPropertyAssignment(property)) {
+            return true;
+        }
+
+        const initializer = property.getInitializer();
+
+        if (!initializer || !Node.isObjectLiteralExpression(initializer)) {
+            return true;
+        }
+
+        if (objectLiteralHasUnnameableMember(initializer, true)) {
+            return true;
         }
     }
 
