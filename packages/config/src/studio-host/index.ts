@@ -23,5 +23,5 @@ export type { SeedRequest, SeedRequestBody, SeedResponse } from "./seed-handler"
 export { handleSeedRequest, SEED_ENDPOINT } from "./seed-handler";
 export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
 export { serveJsonHandler } from "./serve-json-handler";
-export { headerValue, isLoopbackAddress, transportRejectionReason } from "./transport-guard";
+export { ALLOW_FORWARDED_ENV, headerValue, isLoopbackAddress, transportRejectionReason } from "./transport-guard";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";

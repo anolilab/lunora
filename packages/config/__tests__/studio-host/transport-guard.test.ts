@@ -1,8 +1,8 @@
 import type { IncomingMessage } from "node:http";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isLoopbackAddress, transportRejectionReason } from "../../src/studio-host/transport-guard";
+import { ALLOW_FORWARDED_ENV, isLoopbackAddress, transportRejectionReason } from "../../src/studio-host/transport-guard";
 
 /* eslint-disable sonarjs/no-hardcoded-ip -- intentional test fixtures asserting the loopback/rebinding guard's classification; no real connection is made */
 
@@ -77,15 +77,106 @@ describe("transportRejectionReason", () => {
     });
 
     it.each(["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded"])(
-        "rejects a proxied request carrying %s on a loopback peer",
+        "rejects a proxied request carrying %s on a loopback peer, naming the header",
         (forwardingHeader) => {
             expect.assertions(1);
 
-            expect(
-                transportRejectionReason(
-                    request({ headers: { host: "localhost:5173", [forwardingHeader]: "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
-                ),
-            ).toBe("Lunora studio refuses a proxied (X-Forwarded-*) request in dev.");
+            const reason = transportRejectionReason(
+                request({ headers: { host: "localhost:5173", [forwardingHeader]: "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
+            );
+
+            // The header name and the escape hatch are both named in the reason,
+            // so the failure points at its cause instead of an opaque 403.
+            expect(reason).toBe(
+                `Lunora studio refuses a proxied request in dev (saw the "${forwardingHeader}" header). ` +
+                    `If you're intentionally running behind a trusted dev tunnel/proxy (e.g. Codespaces, devcontainers, Gitpod, ngrok), ` +
+                    `set ${ALLOW_FORWARDED_ENV}=1 to allow it.`,
+            );
         },
     );
+
+    it("logs a warnOnce naming the header and the escape hatch when a logger is supplied", () => {
+        expect.assertions(2);
+
+        const warnOnce = vi.fn<(message: string) => void>();
+
+        const reason = transportRejectionReason(
+            request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
+            { warnOnce },
+        );
+
+        expect(reason).toBeDefined();
+        expect(warnOnce).toHaveBeenCalledWith(expect.stringContaining(`"x-forwarded-for"`));
+    });
+
+    it("does not log when there is nothing to reject", () => {
+        expect.assertions(1);
+
+        const warnOnce = vi.fn<(message: string) => void>();
+
+        transportRejectionReason(request({ headers: { host: "localhost:5173" }, remoteAddress: "127.0.0.1" }), { warnOnce });
+
+        expect(warnOnce).not.toHaveBeenCalled();
+    });
+
+    describe(`${ALLOW_FORWARDED_ENV} escape hatch`, () => {
+        const original = process.env[ALLOW_FORWARDED_ENV];
+
+        afterEach(() => {
+            if (original === undefined) {
+                Reflect.deleteProperty(process.env, ALLOW_FORWARDED_ENV);
+            } else {
+                process.env[ALLOW_FORWARDED_ENV] = original;
+            }
+        });
+
+        it("permits a forwarded request from a loopback peer once set to 1 (Codespaces/devcontainers/Gitpod/ngrok/etc.)", () => {
+            expect.assertions(1);
+
+            process.env[ALLOW_FORWARDED_ENV] = "1";
+
+            expect(
+                transportRejectionReason(
+                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
+                ),
+            ).toBeUndefined();
+        });
+
+        it("does not relax the socket-peer or Host checks — only the forwarding-header refusal", () => {
+            expect.assertions(2);
+
+            process.env[ALLOW_FORWARDED_ENV] = "1";
+
+            expect(
+                transportRejectionReason(
+                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "203.0.113.7" }),
+                ),
+            ).toBe("Lunora studio is only available on loopback connections in dev.");
+            expect(
+                transportRejectionReason(
+                    request({ headers: { host: "evil.example.com", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
+                ),
+            ).toBe("Lunora studio rejects a non-localhost Host header in dev.");
+        });
+
+        it("any other value (including unset) keeps refusing the forwarded request", () => {
+            expect.assertions(2);
+
+            process.env[ALLOW_FORWARDED_ENV] = "true";
+
+            expect(
+                transportRejectionReason(
+                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
+                ),
+            ).toBeDefined();
+
+            Reflect.deleteProperty(process.env, ALLOW_FORWARDED_ENV);
+
+            expect(
+                transportRejectionReason(
+                    request({ headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, remoteAddress: "127.0.0.1" }),
+                ),
+            ).toBeDefined();
+        });
+    });
 });

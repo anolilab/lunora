@@ -266,7 +266,7 @@ const createStudioHandler = (
         // actual transport (catches middleware-mode public binds, where Vite's
         // own `server.host` is undefined while the embedding server listens
         // publicly, plus DNS rebinding via the Host header).
-        if (isNonLoopbackBind || transportRejectionReason(request) !== undefined) {
+        if (isNonLoopbackBind || transportRejectionReason(request, server.config.logger) !== undefined) {
             response.statusCode = 403;
             response.setHeader("Content-Type", "text/plain");
             response.end("Lunora studio is only available on loopback hosts in dev.");

@@ -242,8 +242,17 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // reach the admin proxy either. A non-loopback bind never embeds the
         // token and refuses proxy/mutating endpoints below, so it can serve
         // the read-only shell to the LAN host that the browser sends here.
+        //
+        // The forwarding-header refusal 403s every port-forwarded dev
+        // environment that legitimately proxies from loopback (Codespaces,
+        // devcontainers, Gitpod, Cloud Workstations, ngrok, Docker reverse
+        // proxies), so it names the specific header it saw (response body +
+        // a `warnOnce` through `options.logger`, so the cause shows up in the
+        // terminal running `lunora dev`, not just as an opaque 403 in the
+        // browser) and can be opted out of with `LUNORA_STUDIO_ALLOW_FORWARDED=1`
+        // once you've confirmed the forwarding is your own trusted tunnel.
         if (isLoopback) {
-            const rejection = transportRejectionReason(request);
+            const rejection = transportRejectionReason(request, options.logger);
 
             if (rejection !== undefined) {
                 response.statusCode = 403;
@@ -307,7 +316,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // path. There is no response object to carry a reason here, so a
         // rejection just destroys the socket (matches the pre-existing
         // behaviour of this path).
-        if (!isLoopback || transportRejectionReason(request) !== undefined) {
+        if (!isLoopback || transportRejectionReason(request, options.logger) !== undefined) {
             socket.destroy();
 
             return;

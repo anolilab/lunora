@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { connect, createServer } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { ALLOW_FORWARDED_ENV } from "@lunora/config/studio-host";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startStudioServer } from "../../src/util/studio-server";
 
@@ -238,15 +239,16 @@ describe("startStudioServer", () => {
         }
     });
 
-    it("refuses a forwarded request even with a localhost Host (shared transport guard)", async () => {
-        expect.assertions(4);
+    it("refuses a forwarded request even with a localhost Host (shared transport guard), naming the header and logging it", async () => {
+        expect.assertions(6);
 
         // Fails against pre-fix code: the CLI's old `isLoopbackHost` only
         // checked the `Host` literal, so a relay presenting `Host: localhost`
         // plus an `X-Forwarded-For`/`Forwarded` header was served the
         // token-bearing document (200), not refused (403).
+        const warnOnce = vi.fn<(message: string) => void>();
         const port = await getFreePort();
-        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: "http://localhost:8787" });
+        const studio = await startStudioServer({ cwd: "/tmp", logger: { warnOnce }, port, workerOrigin: "http://localhost:8787" });
 
         try {
             const xForwardedFor = await requestStudioWithHeaders(port, "/", { "x-forwarded-for": "203.0.113.7", host: `localhost:${String(port)}` });
@@ -256,9 +258,66 @@ describe("startStudioServer", () => {
             expect(xForwardedFor.body).not.toContain("<!doctype html>");
             expect(forwarded.statusCode).toBe(403);
             expect(forwarded.body).not.toContain("<!doctype html>");
+
+            // The failure names its cause (the specific header) instead of
+            // landing as an opaque 403 — both in the response body and, since a
+            // logger was supplied, in the terminal running `lunora dev`.
+            expect(xForwardedFor.body).toContain('"x-forwarded-for"');
+            expect(warnOnce).toHaveBeenCalledWith(expect.stringContaining('"x-forwarded-for"'));
         } finally {
             await studio.close();
         }
+    });
+
+    describe(`${ALLOW_FORWARDED_ENV} escape hatch (Codespaces/devcontainers/Gitpod/Cloud Workstations/ngrok/Docker reverse proxies)`, () => {
+        const original = process.env[ALLOW_FORWARDED_ENV];
+
+        afterEach(() => {
+            if (original === undefined) {
+                Reflect.deleteProperty(process.env, ALLOW_FORWARDED_ENV);
+            } else {
+                process.env[ALLOW_FORWARDED_ENV] = original;
+            }
+        });
+
+        it("serves the token-bearing document once set to 1, despite the forwarding header", async () => {
+            expect.assertions(2);
+
+            process.env[ALLOW_FORWARDED_ENV] = "1";
+
+            const port = await getFreePort();
+            const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: "http://localhost:8787" });
+
+            try {
+                const response = await requestStudioWithHeaders(port, "/", { "x-forwarded-for": "203.0.113.7", host: `localhost:${String(port)}` });
+
+                expect(response.statusCode).toBe(200);
+                expect(response.body).toContain("<!doctype html>");
+            } finally {
+                await studio.close();
+            }
+        });
+
+        it("does not relax the Host check — only the forwarding-header refusal (the socket-peer non-relaxation is unit-tested at the config level)", async () => {
+            expect.assertions(2);
+
+            process.env[ALLOW_FORWARDED_ENV] = "1";
+
+            const port = await getFreePort();
+            const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: "http://localhost:8787" });
+
+            try {
+                const nonLocalhostHost = await requestStudioWithHeaders(port, "/", {
+                    "x-forwarded-for": "203.0.113.7",
+                    host: "evil.example.com",
+                });
+
+                expect(nonLocalhostHost.statusCode).toBe(403);
+                expect(nonLocalhostHost.body).toContain("non-localhost Host header");
+            } finally {
+                await studio.close();
+            }
+        });
     });
 
     it("refuses a forwarded request to the worker admin proxy without contacting the worker", async () => {
