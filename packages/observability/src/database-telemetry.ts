@@ -22,6 +22,7 @@ import type { LogFields } from "../../../shared/log-fields";
 import { otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TraceAnchor } from "./context-telemetry";
+import { redactArgs } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -110,7 +111,16 @@ const describeFailure = (failure: unknown): string => {
         return failure.message;
     }
 
-    return typeof failure === "string" ? failure : JSON.stringify(failure);
+    if (typeof failure === "string") {
+        return failure;
+    }
+
+    // `JSON.stringify` is typed `=> string` but returns `undefined` for a
+    // function/symbol/undefined value — fall back to `String`, mirroring
+    // `request-log.ts`'s `renderLogMessage`.
+    const json = JSON.stringify(failure) as string | undefined;
+
+    return json ?? String(failure);
 };
 
 /**
@@ -136,7 +146,7 @@ const buildDatabaseSpan = (input: {
             "db.system.name": "sqlite",
         },
         durationMs,
-        ...(failure === undefined ? {} : { error: { message: describeFailure(failure), type: toErrorType(failure) } }),
+        ...(failure === undefined ? {} : { error: { message: redactArgs(describeFailure(failure), deps.captureRaw) as string, type: toErrorType(failure) } }),
         functionPath: deps.functionPath,
         // CLIENT: from the handler's point of view this is a call OUT to a
         // datastore, which is what lets a collector render it as a dependency
@@ -180,6 +190,16 @@ type DatabaseInstrumentation = "off" | "spans" | "summary";
 interface DatabaseTelemetryDeps {
     /** The trace produced spans belong to (`"spans"` mode only). */
     anchor: TraceAnchor;
+
+    /**
+     * Whether to record a failed call's error message verbatim rather than
+     * redacted (`"spans"` mode only) — the same dev-only escape hatch as
+     * `TracerDeps.captureRaw`. A constraint-error message quotes the
+     * conflicting row, so this CLIENT span gets the same default-redacted
+     * posture as the request log and function-metrics sinks.
+     */
+    captureRaw?: boolean;
+
     /** Function path spans and attributes are attributed to. */
     functionPath: string;
     /** Detail level; see {@link DatabaseInstrumentation}. */
@@ -330,4 +350,4 @@ const formatTally = (tally: DatabaseTally): LogFields => {
 };
 
 export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps };
-export { createDatabaseTally, formatTally, instrumentDatabase };
+export { createDatabaseTally, describeFailure, formatTally, instrumentDatabase };

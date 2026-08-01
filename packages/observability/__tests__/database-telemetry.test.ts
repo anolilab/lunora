@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
 import type { DatabaseTally } from "../src/database-telemetry";
-import { createDatabaseTally, formatTally, instrumentDatabase } from "../src/database-telemetry";
+import { createDatabaseTally, describeFailure, formatTally, instrumentDatabase } from "../src/database-telemetry";
 
 /**
  * Automatic `ctx.db` instrumentation.
@@ -14,9 +14,10 @@ import { createDatabaseTally, formatTally, instrumentDatabase } from "../src/dat
  * a cheap-but-present proxy.
  */
 
-const deps = (mode: "off" | "spans" | "summary", tally: DatabaseTally, record: (span: SpanEvent) => void) => {
+const deps = (mode: "off" | "spans" | "summary", tally: DatabaseTally, record: (span: SpanEvent) => void, captureRaw?: boolean) => {
     return {
         anchor: { rootSpanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" },
+        ...(captureRaw === undefined ? {} : { captureRaw }),
         functionPath: "orders:checkout",
         mode,
         record,
@@ -178,5 +179,119 @@ describe("instrumentDatabase", () => {
         // Repeated property access must not mint a new closure each time —
         // callers legitimately destructure or compare these.
         expect(instrumented.findMany).toBe(instrumented.findMany);
+    });
+});
+
+describe("client-span error-message redaction (captureRaw)", () => {
+    it("redacts a constraint error's message by default, matching the request-log posture", async () => {
+        expect.assertions(2);
+
+        const database = fakeDatabase();
+
+        database.insert.mockRejectedValueOnce(new Error("User 12345 not found"));
+
+        const tally = createDatabaseTally();
+        const spans: SpanEvent[] = [];
+        const instrumented = instrumentDatabase(
+            database,
+            deps("spans", tally, (recorded) => {
+                spans.push(recorded);
+            }),
+        );
+
+        await expect(instrumented.insert("orders", {})).rejects.toThrow("User 12345 not found");
+
+        // Redacted like `@visulima/redact`'s `standardRules` masks a bare
+        // 5-digit run as `<DL>` — same treatment the request log gives
+        // `errorMessage` by default.
+        expect(spans[0]?.error?.message).toBe("User <DL> not found");
+    });
+
+    it("keeps the raw message when captureRaw is true (the dev escape hatch)", async () => {
+        expect.assertions(2);
+
+        const database = fakeDatabase();
+
+        database.insert.mockRejectedValueOnce(new Error("User 12345 not found"));
+
+        const tally = createDatabaseTally();
+        const spans: SpanEvent[] = [];
+        const instrumented = instrumentDatabase(
+            database,
+            deps(
+                "spans",
+                tally,
+                (recorded) => {
+                    spans.push(recorded);
+                },
+                true,
+            ),
+        );
+
+        await expect(instrumented.insert("orders", {})).rejects.toThrow("User 12345 not found");
+
+        expect(spans[0]?.error?.message).toBe("User 12345 not found");
+    });
+});
+
+describe("describeFailure fallback (a non-Error, non-string failure)", () => {
+    // `JSON.stringify` is typed `=> string` but returns `undefined` for a
+    // function/symbol/undefined value. `SpanEvent["error"].message` is declared
+    // `string`, so `describeFailure` must still render one of these as a string —
+    // never the literal `undefined` value — exactly like `request-log.ts`'s
+    // `renderLogMessage` fallback.
+    it.each([
+        { label: "a function", value: () => "nope" },
+        { label: "a symbol", value: Symbol("x") },
+        { label: "undefined", value: undefined },
+    ])("renders $label as a string, not undefined", ({ value }) => {
+        expect.assertions(1);
+
+        expect(typeof describeFailure(value)).toBe("string");
+    });
+
+    it('renders undefined as the literal string "undefined"', () => {
+        expect.assertions(1);
+
+        expect(describeFailure(undefined)).toBe("undefined");
+    });
+
+    it("renders a symbol via String()", () => {
+        expect.assertions(1);
+
+        expect(describeFailure(Symbol("x"))).toBe("Symbol(x)");
+    });
+
+    it("still returns the raw Error.message for an Error input", () => {
+        expect.assertions(1);
+
+        expect(describeFailure(new Error("boom"))).toBe("boom");
+    });
+
+    it("still returns a plain string unchanged", () => {
+        expect.assertions(1);
+
+        expect(describeFailure("already a string")).toBe("already a string");
+    });
+
+    it("propagates the rendered message onto the recorded CLIENT span via instrumentDatabase", async () => {
+        expect.assertions(2);
+
+        const database = fakeDatabase();
+
+        database.insert.mockRejectedValueOnce(() => "nope");
+
+        const tally = createDatabaseTally();
+        const spans: SpanEvent[] = [];
+        const instrumented = instrumentDatabase(
+            database,
+            deps("spans", tally, (recorded) => {
+                spans.push(recorded);
+            }),
+        );
+
+        await expect(instrumented.insert("orders", {})).rejects.toBeTypeOf("function");
+
+        expect(typeof spans[0]?.error?.message).toBe("string");
     });
 });
