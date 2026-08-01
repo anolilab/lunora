@@ -114,7 +114,7 @@ const createAsyncSql = (database: Database.Database): ShardAsyncSqlExec => {
  * persisting it: a caller reading `get()` after a restart would see a
  * "pending" alarm that will never fire.
  */
-const createAlarms = (database: Database.Database): ShardAlarms => {
+const createAlarms = (database: Database.Database): { alarms: ShardAlarms; dispose: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -130,15 +130,17 @@ const createAlarms = (database: Database.Database): ShardAlarms => {
         }
     };
 
-    return {
+    const clearAlarmTimeout = (): void => {
+        if (alarmTimeout !== undefined) {
+            clearTimeout(alarmTimeout);
+            alarmTimeout = undefined;
+        }
+    };
+
+    const alarms: ShardAlarms = {
         delete: () => {
             alarmAt = undefined;
-
-            if (alarmTimeout !== undefined) {
-                clearTimeout(alarmTimeout);
-                alarmTimeout = undefined;
-            }
-
+            clearAlarmTimeout();
             persist(undefined);
         },
         // The contract's `get` returns `number | null`, not `number | undefined`
@@ -151,19 +153,31 @@ const createAlarms = (database: Database.Database): ShardAlarms => {
 
             alarmAt = ms;
             persist(ms);
-
-            if (alarmTimeout !== undefined) {
-                clearTimeout(alarmTimeout);
-            }
+            clearAlarmTimeout();
 
             const delay = Math.max(0, ms - Date.now());
 
             alarmTimeout = setTimeout(() => {
                 alarmAt = undefined;
-                persist(undefined);
+
+                // A caller may close the database before this timer fires — e.g.
+                // it set a future alarm, then tore the platform down (process
+                // shutdown, test cleanup). `persist` runs a prepared statement
+                // against `database`; on a closed better-sqlite3 connection that
+                // throws synchronously *inside* the `setTimeout` callback, which
+                // is an uncaught exception Node has no way to route back to a
+                // caller's try/catch — it crashes the process. Guard on the
+                // connection's own open/closed state rather than trying to track
+                // "did dispose() already run" separately, since `close()` is the
+                // one fact that actually determines whether `.run()` is safe.
+                if (database.open) {
+                    persist(undefined);
+                }
             }, delay);
         },
     };
+
+    return { alarms, dispose: clearAlarmTimeout };
 };
 
 /** Options for {@link createNodeShardHost}. */
@@ -198,15 +212,23 @@ interface NodeShardHostOptions {
  * callers must use `storage.transaction`) because better-sqlite3 is a plain
  * embedded database with no platform-level transaction primitive layered over
  * it.
+ *
+ * The returned `dispose()` is this host's lifecycle owner: it clears the
+ * pending alarm `setTimeout` (so it can never fire against a connection this
+ * call is about to close) and then closes the database. Call it whenever a
+ * caller is done with the host — composition roots (`createNodePlatform`,
+ * the conformance host) route their own `close()`/`cleanup()` through it
+ * rather than closing `database` directly, so the alarm timer and the
+ * connection are always retired together.
  */
-const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Database.Database; host: ShardHost } => {
+const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Database.Database; dispose: () => void; host: ShardHost } => {
     const database = new Database(options.path ?? ":memory:");
 
     database.pragma("journal_mode = WAL");
 
     const sql = createSql(database);
     const asyncSql = createAsyncSql(database);
-    const alarms = createAlarms(database);
+    const { alarms, dispose: disposeAlarms } = createAlarms(database);
 
     let tail: Promise<unknown> = Promise.resolve();
 
@@ -251,7 +273,15 @@ const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Da
         },
     };
 
-    return { database, host };
+    const dispose = (): void => {
+        disposeAlarms();
+
+        if (database.open) {
+            database.close();
+        }
+    };
+
+    return { database, dispose, host };
 };
 
 export type { NodeShardHostOptions };

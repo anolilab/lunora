@@ -25,8 +25,22 @@ import { createNodeSocketHost } from "./node-socket-host";
 
 /** Every contract this package provides, composed for one Node process. */
 export interface NodePlatform {
+    /** `using platform = createNodePlatform(...)` support — delegates to `close()`. */
+    [Symbol.dispose]: () => void;
+
     /** What this target supports — see `NODE_CAPABILITIES` in `@lunora/platform`. */
     capabilities: PlatformCapabilities;
+
+    /**
+     * Tear this platform instance down: clears the shard host's pending alarm
+     * timer and closes its `better-sqlite3` database (and, with it, `kv`'s
+     * table — both live on the same connection), then clears every armed
+     * scheduler job timer. Nothing in this package closes these resources on
+     * its own — a `NodePlatform` a caller stops using without calling `close()`
+     * leaks the open file handle (plus its WAL/SHM sidecar files) and keeps
+     * the process alive on outstanding timers. Safe to call more than once.
+     */
+    close: () => void;
     /** In-process shard directory (see `createNodeShardDirectory`'s docstring for what it cannot do). */
     directory: ShardDirectory;
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
@@ -44,11 +58,16 @@ export type NodePlatformOptions = NodeShardHostOptions;
 
 /** Compose every contract this package provides over one `better-sqlite3` database. */
 export const createNodePlatform = (options: NodePlatformOptions = {}): NodePlatform => {
-    const { database, host: shard } = createNodeShardHost(options);
+    const { database, dispose: disposeShard, host: shard } = createNodeShardHost(options);
     const kv = createNodeShardKvStore(database);
     const directory = createNodeShardDirectory();
     const { socket: sockets } = createNodeSocketHost();
-    const { scheduler } = createNodeSchedulerHost();
+    const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost();
 
-    return { capabilities: NODE_CAPABILITIES, directory, kv, scheduler, shard, sockets };
+    const close = (): void => {
+        disposeShard();
+        disposeScheduler();
+    };
+
+    return { capabilities: NODE_CAPABILITIES, close, directory, kv, scheduler, shard, sockets, [Symbol.dispose]: close };
 };

@@ -24,11 +24,11 @@ import { createNodeSocketHost } from "../node-socket-host";
  * gives, and fast because there is no file I/O.
  */
 export const createNodeConformanceHost = (): ConformanceHost => {
-    const { database, host: shard } = createNodeShardHost();
+    const { database, dispose: disposeShard, host: shard } = createNodeShardHost();
     const kv = createNodeShardKvStore(database);
     const directory = createNodeShardDirectory();
     const { readFrames, restoreSocket, simulateRecycle, socket } = createNodeSocketHost();
-    const { scheduler, simulateDeadLetter } = createNodeSchedulerHost();
+    const { dispose: disposeScheduler, scheduler, simulateDeadLetter } = createNodeSchedulerHost();
 
     return {
         awaitAlarmFired: async (target) => {
@@ -40,7 +40,16 @@ export const createNodeConformanceHost = (): ConformanceHost => {
             });
         },
         cleanup: () => {
-            database.close();
+            // Route through the same disposers `createNodePlatform`'s `close()`
+            // uses, mirroring the reference host's `cleanup` (`clearTimeout` on
+            // the alarm, plus every scheduled job's timer) rather than just
+            // `database.close()`. A bare `database.close()` left the alarm
+            // timeout and every armed scheduler job timer alive — handles that
+            // keep the event loop open — which is what produced the "worker
+            // process failed to exit gracefully" / up-to-10s delay closing out
+            // a TCK run.
+            disposeShard();
+            disposeScheduler();
         },
         directory,
         kv,

@@ -39,6 +39,16 @@ interface NodeJob {
  * to "exhausted its retry budget" without waiting out a real retry schedule.
  */
 export interface NodeSchedulerHost {
+    /**
+     * Clear every `setTimeout` this host has armed (every job still in
+     * `pending`). Dead-lettered jobs never carry a live timer — their `timer`
+     * is always `undefined` by the time they land in `dead` — so this only
+     * needs to walk `pending`. Call it on teardown: an armed job timer is a
+     * handle that keeps the event loop (and, transitively, the process) alive
+     * until it fires, so leaving it uncleared on shutdown is what produces the
+     * "worker process failed to exit gracefully" delay.
+     */
+    dispose: () => void;
     scheduler: SchedulerHost;
     simulateDeadLetter: (id: string) => Promise<boolean>;
 }
@@ -126,6 +136,11 @@ export const createNodeSchedulerHost = (): NodeSchedulerHost => {
     };
 
     return {
+        dispose: () => {
+            for (const job of pending.values()) {
+                clearTimeout(job.timer);
+            }
+        },
         scheduler,
         // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
         simulateDeadLetter: async (id) => {
