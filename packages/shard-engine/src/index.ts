@@ -151,6 +151,7 @@ export type {
     TableInfo,
     TablePage,
     TablesColumnsResult,
+    TablesIndexesResult,
     WorkflowMetadata,
     WorkflowsResult,
 } from "./introspect";

@@ -321,6 +321,9 @@ const userRequest = (functionPath: string): Request =>
         method: "POST",
     });
 
+/** Test-stub shape for a `tableIndexes` override, shared by the single-table and batched `listTablesIndexes` tests below. */
+type TestTableIndexInfo = { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[];
+
 describe("shardDO admin introspection", () => {
     let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
@@ -403,9 +406,7 @@ describe("shardDO admin introspection", () => {
         // The codegen subclass overrides `tableIndexes` from the schema; mimic it.
         class IndexedShard extends AdminShard {
             // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override tableIndexes(
-                table: string,
-            ): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
+            protected override tableIndexes(table: string): TestTableIndexInfo {
                 return table === "messages" ? [{ fields: ["author"], name: "by_author", type: "index", unique: true }] : [];
             }
         }
@@ -496,6 +497,40 @@ describe("shardDO admin introspection", () => {
                         { name: "text", optional: false, type: "string" },
                     ],
                     users: [{ name: "_id", optional: false, pk: true, type: "id" }],
+                },
+            },
+        });
+    });
+
+    it("returns indexes for several tables in one listTablesIndexes call (STUDIO-04)", async () => {
+        expect.assertions(2);
+
+        class IndexedShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override tableIndexes(table: string): TestTableIndexInfo {
+                if (table === "messages") {
+                    return [{ fields: ["author"], name: "by_author", type: "index", unique: true }];
+                }
+
+                return table === "users" ? [{ fields: ["email"], name: "by_email", type: "index" }] : [];
+            }
+        }
+
+        const shard = new IndexedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Base hook still reports nothing per-table for an unknown table.
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.listTablesIndexes, { tables: ["messages"] }, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({ result: { indexesByTable: { messages: [] } } });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTablesIndexes, { tables: ["messages", "users"] }, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: {
+                indexesByTable: {
+                    messages: [{ fields: ["author"], name: "by_author", type: "index", unique: true }],
+                    users: [{ fields: ["email"], name: "by_email", type: "index" }],
                 },
             },
         });

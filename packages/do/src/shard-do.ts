@@ -6349,14 +6349,32 @@ abstract class ShardDO {
     }
 
     /**
+     * Shared shape behind `describeTables` and `listTablesIndexes`: read the
+     * `tables` arg, run `lookup` (a cheap, synchronous, schema-sourced `this.*()`
+     * hook) over each, and report the requested set as the read's table
+     * dependency (or the {@link ADMIN_WILDCARD} sentinel when none were named).
+     * Factored out so `readAdminTableSignal` states each batched RPC as one line
+     * rather than duplicating the array-filter/fan-out shape per sibling.
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept as an instance method alongside `readAdminTableSignal` (its only caller) even though `lookup` is injected rather than read off `this`; a bare module function would read as unrelated to the admin-signal resolvers it exists for
+    private batchedTableLookup<T>(args: Record<string, unknown>, lookup: (table: string) => T): { byTable: Record<string, T>; tables: Set<string> } {
+        const requested = Array.isArray(args["tables"]) ? args["tables"].filter((table): table is string => typeof table === "string") : [];
+        const byTable: Record<string, T> = Object.fromEntries(requested.map((table) => [table, lookup(table)]));
+
+        return { byTable, tables: new Set(requested.length === 0 ? [ADMIN_WILDCARD] : requested) };
+    }
+
+    /**
      * Resolve the table-scoped introspection reads whose payload is a single
      * `this.*()` lookup keyed by an optional `table` arg — `listTableIndexes`
      * (declared indexes), `describeTable` (declared columns) and `migrationStatus`
-     * (the migration ledger). The first two carry their `table` (or the
-     * {@link ADMIN_WILDCARD} sentinel when unscoped); `migrationStatus` is
-     * deployment-wide, so it always carries the wildcard. Returns `undefined` for
-     * any other path so {@link readAdminOp} falls through; folded into one helper
-     * to keep that dispatcher under its complexity budget.
+     * (the migration ledger); plus their batched siblings `describeTables` and
+     * `listTablesIndexes` (one RPC for N tables via {@link batchedTableLookup}).
+     * The single-table pair carries its `table` (or the {@link ADMIN_WILDCARD}
+     * sentinel when unscoped); `migrationStatus` is deployment-wide, so it always
+     * carries the wildcard. Returns `undefined` for any other path so
+     * {@link readAdminOp} falls through; folded into one helper to keep that
+     * dispatcher under its complexity budget.
      * @returns the read result and its table-dependency set, or `undefined` when the path is not owned by this resolver
      */
     private readAdminTableSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): undefined | { result: unknown; tables: Set<string> } {
@@ -6368,10 +6386,18 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.describeTables) {
-            const requested = Array.isArray(args["tables"]) ? args["tables"].filter((table): table is string => typeof table === "string") : [];
-            const columnsByTable: Record<string, ColumnMeta[]> = Object.fromEntries(requested.map((table) => [table, this.tableColumns(table)]));
+            const { byTable: columnsByTable, tables } = this.batchedTableLookup(args, (table) => this.tableColumns(table));
 
-            return { result: { columnsByTable }, tables: new Set(requested.length === 0 ? [ADMIN_WILDCARD] : requested) };
+            return { result: { columnsByTable }, tables };
+        }
+
+        // Batched sibling of `listTableIndexes` — one admin RPC for N tables
+        // instead of N, following `describeTables`'s exact shape: the fan-out
+        // this collapses used to cost a full admin RPC PER table.
+        if (functionPath === ADMIN_FUNCTIONS.listTablesIndexes) {
+            const { byTable: indexesByTable, tables } = this.batchedTableLookup(args, (table) => this.tableIndexes(table));
+
+            return { result: { indexesByTable }, tables };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {

@@ -64,6 +64,7 @@ export const ADMIN_FUNCTIONS = {
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
+    listTablesIndexes: "__lunora_admin__:listTablesIndexes",
     listWorkflows: "__lunora_admin__:listWorkflows",
     getLogs: "__lunora_admin__:getLogs",
     getMetricHistory: "__lunora_admin__:getMetricHistory",
@@ -400,6 +401,16 @@ export interface TableIndexInfo {
 /** Payload of a `__lunora_admin__:listTableIndexes` call, mirroring `@lunora/do`'s `TableIndexesResult`. */
 export interface TableIndexesResult {
     indexes: TableIndexInfo[];
+}
+
+/**
+ * Payload of a `__lunora_admin__:listTablesIndexes` call, mirroring
+ * `@lunora/do`'s `TablesIndexesResult` — the batched sibling of
+ * {@link TableIndexesResult}, one RPC for every requested table instead of one
+ * per table (mirrors `TablesColumnsResult`'s relation to `TableColumnsResult`).
+ */
+export interface TablesIndexesResult {
+    indexesByTable: Record<string, TableIndexInfo[]>;
 }
 
 /**

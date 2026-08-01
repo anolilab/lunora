@@ -43,6 +43,7 @@ const ADMIN_FUNCTIONS: {
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
+    readonly listTablesIndexes: "__lunora_admin__:listTablesIndexes";
     readonly getLogs: "__lunora_admin__:getLogs";
     readonly getMetrics: "__lunora_admin__:getMetrics";
     readonly getPitrBookmark: "__lunora_admin__:getPitrBookmark";
@@ -2617,6 +2618,14 @@ interface TableReaderLike {
 ```ts
 interface TablesColumnsResult {
     columnsByTable: Record<string, ColumnMeta[]>;
+}
+```
+
+### `TablesIndexesResult` (interface)
+
+```ts
+interface TablesIndexesResult {
+    indexesByTable: Record<string, TableIndexInfo[]>;
 }
 ```
 
