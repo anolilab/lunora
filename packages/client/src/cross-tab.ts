@@ -106,6 +106,13 @@ class TabCoordinator {
     /** `true` once `start()` has been called. */
     private running: boolean = false;
 
+    /**
+     * `true` while a `claimAndPromote()` claim window is open. Guards the yield
+     * handler and `checkLeaderHealth`'s belt-and-braces else-branch so the two
+     * promotion paths can't both arm a `becomeLeader` timeout for the same gap.
+     */
+    private promotionPending: boolean = false;
+
     /** Timestamp of the most recent leader heartbeat. */
     private lastHeartbeat: number = 0;
 
@@ -360,9 +367,17 @@ class TabCoordinator {
             }
 
             case "yield-leadership": {
-                // The leader is stepping down. If it's the one we know, clear.
+                // The leader is stepping down. If it's the one we know, clear
+                // and immediately attempt to claim leadership ourselves —
+                // waiting for the next health-check tick (up to
+                // `leaderTimeout`) before even starting the claim window would
+                // double the freeze every remaining tab experiences.
                 if (this.knownLeader === message.tabId) {
                     this.knownLeader = undefined;
+
+                    if (this.running && !this.leader) {
+                        this.claimAndPromote();
+                    }
                 }
 
                 break;
@@ -480,23 +495,50 @@ class TabCoordinator {
             return;
         }
 
-        // If we have a known leader but haven't heard from them...
-        if (this.knownLeader !== undefined) {
-            const elapsed = Date.now() - this.lastHeartbeat;
+        // No known leader at all — belt-and-braces recovery for any path
+        // (besides `yield-leadership`, which already claims immediately) that
+        // strands `knownLeader`. `claimAndPromote` no-ops while a claim
+        // window is already open, so this can't stack a second `becomeLeader`
+        // timeout on top of one already in flight.
+        if (this.knownLeader === undefined) {
+            this.claimAndPromote();
 
-            if (elapsed > this.leaderTimeout) {
-                // Leader is gone — attempt to claim.
-                this.knownLeader = undefined;
-                this.broadcast({ type: "claim-leadership", tabId: this.tabId, ts: Date.now() });
-
-                // Become leader if no one responds within a short window.
-                setTimeout(() => {
-                    if (this.running && this.knownLeader === undefined) {
-                        this.becomeLeader();
-                    }
-                }, this.leaderTimeout);
-            }
+            return;
         }
+
+        // We have a known leader but haven't heard from them...
+        const elapsed = Date.now() - this.lastHeartbeat;
+
+        if (elapsed > this.leaderTimeout) {
+            // Leader is gone — attempt to claim.
+            this.knownLeader = undefined;
+            this.claimAndPromote();
+        }
+    }
+
+    /**
+     * Broadcast a leadership claim and arm a `becomeLeader` fallback: if no
+     * other tab has asserted itself as leader by the time the window elapses,
+     * self-promote. Shared by `checkLeaderHealth`'s stale-leader path and the
+     * `yield-leadership` handler so both promotion triggers use one claim
+     * window instead of each arming its own timeout.
+     */
+    private claimAndPromote(): void {
+        if (this.promotionPending) {
+            return;
+        }
+
+        this.promotionPending = true;
+        this.broadcast({ type: "claim-leadership", tabId: this.tabId, ts: Date.now() });
+
+        // Become leader if no one responds within a short window.
+        setTimeout(() => {
+            this.promotionPending = false;
+
+            if (this.running && this.knownLeader === undefined) {
+                this.becomeLeader();
+            }
+        }, this.leaderTimeout);
     }
 }
 

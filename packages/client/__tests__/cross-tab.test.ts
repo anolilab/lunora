@@ -168,6 +168,145 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
     });
 });
 
+describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", () => {
+    it("a follower promotes once the leader stops and yields", async () => {
+        expect.assertions(3);
+
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const eventsA: string[] = [];
+        const eventsB: string[] = [];
+
+        const coordinatorA = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onBecomeLeader: () => eventsA.push("become-leader"),
+        });
+        const coordinatorB = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onBecomeLeader: () => eventsB.push("become-leader"),
+        });
+
+        try {
+            coordinatorA.start();
+            coordinatorB.start();
+
+            // Let the pair converge on a single leader (the smaller tabId, per
+            // the existing claim tie-break).
+            await delay(LEADER_TIMEOUT_MS + 60);
+
+            const aIsLeader = coordinatorA.isLeader();
+
+            // Exactly one of the pair is leader.
+            expect(coordinatorB.isLeader()).toBe(!aIsLeader);
+
+            const leader = aIsLeader ? coordinatorA : coordinatorB;
+            const follower = aIsLeader ? coordinatorB : coordinatorA;
+            const followerEvents = aIsLeader ? eventsB : eventsA;
+
+            // The leader tab closes (sign-out, SPA teardown, HMR dispose) —
+            // `stop()` broadcasts `yield-leadership`. Before the fix nothing
+            // ever promoted a new leader after this, so every remaining tab's
+            // live queries would freeze forever.
+            leader.stop();
+
+            await delay(LEADER_TIMEOUT_MS + 60);
+
+            expect(follower.isLeader()).toBe(true);
+            expect(followerEvents).toContain("become-leader");
+        } finally {
+            coordinatorA.stop();
+            coordinatorB.stop();
+        }
+    });
+
+    it("exactly one of several followers promotes after the leader yields — no split-brain", async () => {
+        expect.assertions(2);
+
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const coordinators = [0, 1, 2].map(
+            () => new TabCoordinator({ channelName, heartbeatInterval: HEARTBEAT_INTERVAL_MS, leaderTimeout: LEADER_TIMEOUT_MS }),
+        );
+
+        try {
+            for (const coordinator of coordinators) {
+                coordinator.start();
+            }
+
+            // Three-tab election converges via the same claim tie-break +
+            // heartbeat-override mechanism CLIENT-02 already covers for two
+            // tabs (see `resolveLeaderVsLeaderTieBreak`'s doc comment).
+            await delay(LEADER_TIMEOUT_MS + 100);
+
+            const leader = coordinators.find((coordinator) => coordinator.isLeader());
+
+            expect(leader).toBeDefined();
+
+            const followers = coordinators.filter((coordinator) => coordinator !== leader);
+
+            leader?.stop();
+
+            await delay(LEADER_TIMEOUT_MS + 100);
+
+            const nowLeaders = followers.filter((coordinator) => coordinator.isLeader());
+
+            expect(nowLeaders).toHaveLength(1);
+        } finally {
+            for (const coordinator of coordinators) {
+                coordinator.stop();
+            }
+        }
+    });
+
+    it("a stopped coordinator does not act on a yield-leadership frame (the running guard)", async () => {
+        expect.assertions(1);
+
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const events: string[] = [];
+
+        const coordinator = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onBecomeLeader: () => events.push("become-leader"),
+        });
+
+        try {
+            coordinator.start();
+
+            // Establish a known leader (some other tab) via a raw heartbeat so
+            // `knownLeader` is set to something this coordinator will later be
+            // told is yielding.
+            const rogue = new BroadcastChannel(channelName);
+
+            rogue.postMessage({ tabId: LARGER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await delay(20);
+            rogue.close();
+
+            coordinator.stop();
+
+            // White-box: invoke the private message handler directly to
+            // simulate a `yield-leadership` frame observed after `stop()` (a
+            // real `BroadcastChannel` can't reliably force this ordering, but
+            // the `running` guard in the handler exists for exactly this
+            // race — an in-flight frame delivered just as the tab tears down
+            // must not spin up a new claim window on a coordinator that's
+            // already gone).
+            const internals = coordinator as unknown as { handleMessage: (message: { tabId: string; type: "yield-leadership" }) => void };
+
+            internals.handleMessage({ tabId: LARGER_ID, type: "yield-leadership" });
+
+            await delay(LEADER_TIMEOUT_MS + 40);
+
+            expect(events).not.toContain("become-leader");
+        } finally {
+            coordinator.stop();
+        }
+    });
+});
+
 describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
     it("broadcastSubscriptionData/broadcastSubscriptionSettled carry cursor/epoch on the wire when supplied, and omit them when not", async () => {
         expect.assertions(4);
