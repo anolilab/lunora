@@ -96,7 +96,19 @@ class TransactionHeadroomTracker {
     /** Charge one written document, sized by {@link estimateBytes}. */
     public recordWrite(row: unknown): void {
         this.writtenRows += 1;
-        this.writtenBytes += estimateBytes(row, this.limits.maxWrittenBytes);
+
+        const bytes = estimateBytes(row);
+
+        // A value `estimateBytes` cannot size (a cycle, a function) has no
+        // honest byte count to charge — treating it as free, or as the whole
+        // cap (the old behavior), both hide the real problem. Fail immediately
+        // and name it, rather than let it surface one write later as a
+        // misleading TRANSACTION_LIMIT_EXCEEDED.
+        if (bytes === undefined) {
+            throw new LunoraError("BAD_REQUEST", "this document is not JSON-serializable (cyclic or non-JSON value); it cannot be written");
+        }
+
+        this.writtenBytes += bytes;
 
         if (this.writtenRows > this.limits.maxWrittenRows) {
             throw new LunoraError(

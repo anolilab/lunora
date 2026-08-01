@@ -52,6 +52,7 @@ interface FakeGeoBuilder {
 }
 
 interface FakeReader {
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
 
     /**
@@ -295,6 +296,10 @@ const enableQueryReader = (
 ): void => {
     const makeReader = (list: Record<string, unknown>[]): FakeReader => {
         return {
+            // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+            async *[Symbol.asyncIterator]() {
+                yield* list;
+            },
             collect: async () => list,
 
             collectWithScores: async () =>
@@ -439,6 +444,95 @@ describe("mask — read path", () => {
 
         expect(row?.["email"]).toBeNull();
         expect(row?.["name"]).toBe("Ann");
+    });
+
+    // Plan 270: the mask wrapper's reader object literal omitted
+    // `[Symbol.asyncIterator]`, so `for await` threw `TypeError: … is not async
+    // iterable` on any masked table's `query()` reader — even though the raw
+    // and RLS-wrapped readers both keep it. The public `TableReader` type
+    // (`types.ts`) promises the iterator unconditionally.
+    it("yields masked rows through `for await` over query() (plan 270)", async () => {
+        expect.assertions(3);
+
+        const seed = [
+            { _id: "u1", email: "a@x.com", name: "Ann", table: "users" },
+            { _id: "u2", email: "b@x.com", name: "Bo", table: "users" },
+        ];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => {
+            const rows: Record<string, unknown>[] = [];
+
+            for await (const row of (ctx as unknown as TestContext).db.query("users")) {
+                rows.push(row);
+            }
+
+            return rows;
+        });
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.["email"]).toBeNull();
+        expect(rows[1]?.["email"]).toBeNull();
+    });
+
+    it("yields masked rows through `for await` over a chained query().withIndex() (plan 270)", async () => {
+        expect.assertions(3);
+
+        const seed = [
+            { _id: "u1", email: "a@x.com", name: "Ann", table: "users" },
+            { _id: "u2", email: "b@x.com", name: "Bo", table: "users" },
+        ];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        // The wrapper re-wraps on every chainable link — the iterator must
+        // survive `.withIndex()`, not just the bare `query()` reader.
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => {
+            const rows: Record<string, unknown>[] = [];
+
+            for await (const row of (ctx as unknown as TestContext).db.query("users").withIndex("by_email")) {
+                rows.push(row);
+            }
+
+            return rows;
+        });
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.["email"]).toBeNull();
+        expect(rows[1]?.["email"]).toBeNull();
+    });
+
+    it("`for await` over an UNMASKED table's query() still works through the mask middleware (no regression)", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "p1", table: "posts", title: "hi" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        // No columns configured for "posts" → `wrapReader` is never installed
+        // (`columns ? wrapReader(...) : reader`) — the raw reader's iterator
+        // must still work.
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => {
+            const rows: Record<string, unknown>[] = [];
+
+            for await (const row of (ctx as unknown as TestContext).db.query("posts")) {
+                rows.push(row);
+            }
+
+            return rows;
+        });
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
     });
 
     it("masks documents (not the score) through query().withSearchIndex().collectWithScores()", async () => {
