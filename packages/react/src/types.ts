@@ -66,6 +66,10 @@ export interface UseAuthResult {
 
 export {
     type ArgsOf,
+    type AuthImpersonation,
+    type AuthPage,
+    type AuthSession,
+    type AuthUser,
     type FunctionReference,
     type HttpStreamArgsOf,
     type HttpStreamChunkOf,
