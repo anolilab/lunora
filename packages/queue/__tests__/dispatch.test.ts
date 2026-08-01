@@ -362,6 +362,54 @@ describe("dispatchQueueBatch capture", () => {
         );
     });
 
+    it("forwards a message property the MessageLike type doesn't declare (dev/prod parity)", async () => {
+        expect.assertions(1);
+
+        // A real workerd Message may carry more than the four `MessageLike`
+        // declares. The old capture wrapper rebuilt each message from an
+        // object literal listing exactly those four (plus ack/retry), so an
+        // undeclared property like this one read `undefined` under capture
+        // but its real value with capture off — the bug this test guards.
+        const withExtra = { ...captureMessage({ n: 1 }), region: "wnam" };
+        let seenRegion: unknown;
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                seenRegion = (b.messages[0] as unknown as { region: string }).region;
+            },
+        });
+
+        await dispatchQueueBatch(
+            batch("q", [withExtra as unknown as MessageLike]),
+            { q: { definition: queue, exportName: "q" } },
+            { capture: vi.fn<QueueCaptureSink>(), env: {} },
+        );
+
+        expect(seenRegion).toBe("wnam");
+    });
+
+    it("forwards a batch property MessageBatchLike doesn't declare, alongside messages/queue", async () => {
+        expect.assertions(3);
+
+        const rawBatch = batch("q", [captureMessage({ n: 1 })]);
+        const withExtra = { ...rawBatch, region: "wnam" };
+        let seenRegion: unknown;
+        let seenQueue: unknown;
+        let seenMessageCount: unknown;
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                seenRegion = (b as unknown as { region: string }).region;
+                seenQueue = b.queue;
+                seenMessageCount = b.messages.length;
+            },
+        });
+
+        await dispatchQueueBatch(withExtra, { q: { definition: queue, exportName: "q" } }, { capture: vi.fn<QueueCaptureSink>(), env: {} });
+
+        expect(seenRegion).toBe("wnam");
+        expect(seenQueue).toBe("q");
+        expect(seenMessageCount).toBe(1);
+    });
+
     it("logs a warning when the capture sink rejects (observability of the observability feature)", async () => {
         expect.assertions(2);
 

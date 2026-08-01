@@ -105,6 +105,53 @@ const createHarness = (): { close: () => void; exec: SqlCtxExec; raw: (query: st
     };
 };
 
+/**
+ * A real `node:sqlite`-backed exec that additionally implements `batch`,
+ * running every statement in the array against the same database and
+ * counting how many times `batch` itself was called (vs `run`). Exercises the
+ * write paths' batch seam against a genuine engine rather than a stub, so a
+ * test asserting "one batch call" also proves the batched rows actually land.
+ */
+const createBatchingHarness = (): {
+    batchCalls: () => number;
+    close: () => void;
+    exec: SqlCtxExec;
+    raw: (query: string, ...parameters: unknown[]) => Record<string, unknown>[];
+    runCalls: () => number;
+} => {
+    const database = new DatabaseSync(":memory:");
+    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
+    let batches = 0;
+    let runs = 0;
+
+    return {
+        batchCalls: () => batches,
+        close: () => {
+            database.close();
+        },
+        exec: {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            batch: (statements) => {
+                batches += 1;
+
+                for (const statement of statements) {
+                    all(statement.sql, statement.params);
+                }
+
+                return Promise.resolve();
+            },
+            run: (query, parameters) => {
+                runs += 1;
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        },
+        raw: (query, ...parameters) => all(query, parameters),
+        runCalls: () => runs,
+    };
+};
+
 /** An exec that records the SQL it is handed and returns nothing — for the rendering assertions. */
 const recordingExec = (): { exec: SqlCtxExec; statements: string[] } => {
     const statements: string[] = [];
@@ -360,6 +407,34 @@ describe("search layouts", () => {
             await invertedLayout.indexDocument(harness.exec, dialect, companion, "big", { body }, byBody);
 
             expect(companionRows()).toHaveLength(260);
+        });
+
+        it("issues one batch call (not one per chunk) when the exec supports batch", async () => {
+            expect.assertions(3);
+
+            const batching = createBatchingHarness();
+
+            try {
+                // 260 tokens spans 6 chunks at INSERT_CHUNK_ROWS = 50; without
+                // the batch seam this would be 6 sequential `run()` calls.
+                const body = Array.from({ length: 260 }, (_, index) => `token${String(index)}`).join(" ");
+
+                await invertedLayout.ensureCompanion(batching.exec, dialect, companion);
+
+                // ensureCompanion's DDL goes through `run`; `indexDocument`
+                // itself still purges the old rows via `run` (a single
+                // DELETE) before the chunked insert loop, which is the one
+                // expected to move to `batch`.
+                const runsBeforeIndexing = batching.runCalls();
+
+                await invertedLayout.indexDocument(batching.exec, dialect, companion, "big", { body }, byBody);
+
+                expect(batching.batchCalls()).toBe(1);
+                expect(batching.raw(`SELECT "__token__" FROM "notes__fts_by_body" ORDER BY "__token__"`)).toHaveLength(260);
+                expect(batching.runCalls()).toBe(runsBeforeIndexing + 1);
+            } finally {
+                batching.close();
+            }
         });
 
         it("caps how many tokens one oversized document contributes", async () => {

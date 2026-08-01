@@ -38,7 +38,7 @@ import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, decodeRows, queryAll, queryRun, serializeColumnValue } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, decodeRows, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
 
 /** The staged `.withSearchIndex().search()` query a layout executes. */
 interface SearchStage {
@@ -361,6 +361,7 @@ const invertedLayout: SearchLayout = {
             [FTS_TOKEN_COLUMN, FTS_ID_COLUMN, FTS_COUNT_COLUMN].map((column) => sql.identifier(column)),
             sql`, `,
         );
+        const chunks: SQL[] = [];
 
         for (let start = 0; start < rows.length; start += INSERT_CHUNK_ROWS) {
             const values = sql.join(
@@ -368,9 +369,14 @@ const invertedLayout: SearchLayout = {
                 sql`, `,
             );
 
-            // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the single shared connection, like every other write path here.
-            await queryRun(exec, dialect, sql`INSERT INTO ${sql.identifier(companion)} (${columns}) VALUES ${values}`);
+            chunks.push(sql`INSERT INTO ${sql.identifier(companion)} (${columns}) VALUES ${values}`);
         }
+
+        // One round trip per document write when the exec exposes `batch`
+        // (still chunked at INSERT_CHUNK_ROWS, so the bound-parameter count of
+        // any one statement stays far under every engine's cap); a per-chunk
+        // sequential `run()` loop otherwise.
+        await queryBatch(exec, dialect, chunks);
     },
     name: "inverted",
     runSearch: runInvertedSearch,

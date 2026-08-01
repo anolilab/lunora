@@ -115,39 +115,91 @@ interface CaptureHarness {
 }
 
 /**
- * Build a {@link CaptureHarness} over `batch`. Message objects are wrapped (not
- * mutated) because a real workerd `Message` is a non-extensible host object —
- * reassigning `message.ack` would throw. The wrapped messages delegate every
- * accessor to the original and merely observe `ack`/`retry`.
+ * Wrap one message so `ack`/`retry` record their disposition (keyed by the
+ * REAL, un-proxied `message` — the same key {@link buildCaptureRecords} looks
+ * up against `harness.originals`) before delegating to the real method. Every
+ * OTHER property — `attempts`/`body`/`id`/`timestamp`, and anything a real
+ * workerd `Message` carries beyond the four the structural `MessageLike` type
+ * declares — forwards through `Reflect.get`, so an undeclared property reads
+ * its real value under capture exactly like it would with capture off.
+ *
+ * A `Proxy` over `message` (not a rebuilt object literal, and not
+ * `Object.create(message)`) is required for that "anything else" case: a
+ * hand-picked property list is exactly the bug this fixes, and
+ * `Object.create` can't fix the same problem because an inherited accessor
+ * looked up through a prototype chain still runs with the WRAPPER as `this`.
+ * The `get` trap sidesteps that by pinning the receiver to `message` itself —
+ * a workerd `Message` is a host object, and an accessor invoked with a
+ * non-genuine `this` can throw ("illegal invocation") — so every forwarded
+ * read runs against the real instance, never the proxy.
+ */
+const wrapMessage = (message: MessageLike, dispositions: Map<MessageLike, QueueMessageOutcome>): MessageLike =>
+    new Proxy(message, {
+        get: (target, property): unknown => {
+            if (property === "ack") {
+                return (): void => {
+                    dispositions.set(target, "ack");
+                    target.ack();
+                };
+            }
+
+            if (property === "retry") {
+                return (options?: QueueRetryOptions): void => {
+                    dispositions.set(target, "retry");
+                    target.retry(options);
+                };
+            }
+
+            return Reflect.get(target, property, target);
+        },
+    });
+
+/**
+ * Wrap the batch itself, same rationale as {@link wrapMessage}: `ackAll` /
+ * `retryAll` observe the disposition fill and `messages` answers with the
+ * WRAPPED messages (so a handler iterating `batch.messages` gets instrumented
+ * ones), but `queue` and any other property the real `MessageBatch` carries
+ * forward through `Reflect.get` against the real batch.
+ */
+const wrapBatch = (
+    batch: MessageBatchLike,
+    wrappedMessages: ReadonlyArray<MessageLike>,
+    fillUndecided: (outcome: QueueMessageOutcome) => void,
+): MessageBatchLike =>
+    new Proxy(batch, {
+        get: (target, property): unknown => {
+            if (property === "ackAll") {
+                return (): void => {
+                    fillUndecided("ack");
+                    target.ackAll();
+                };
+            }
+
+            if (property === "retryAll") {
+                return (options?: QueueRetryOptions): void => {
+                    fillUndecided("retry");
+                    target.retryAll(options);
+                };
+            }
+
+            if (property === "messages") {
+                return wrappedMessages;
+            }
+
+            return Reflect.get(target, property, target);
+        },
+    });
+
+/**
+ * Build a {@link CaptureHarness} over `batch`. Message and batch objects are
+ * wrapped (not mutated) because a real workerd `Message`/`MessageBatch` is a
+ * non-extensible host object — reassigning `message.ack` would throw.
  */
 const instrumentBatch = (batch: MessageBatchLike): CaptureHarness => {
     const dispositions = new Map<MessageLike, QueueMessageOutcome>();
     const originals = batch.messages;
 
-    const wrappedMessages = originals.map((message): MessageLike => {
-        return {
-            ack: (): void => {
-                dispositions.set(message, "ack");
-                message.ack();
-            },
-            get attempts(): number {
-                return message.attempts;
-            },
-            get body(): unknown {
-                return message.body;
-            },
-            get id(): string {
-                return message.id;
-            },
-            retry: (options?: QueueRetryOptions): void => {
-                dispositions.set(message, "retry");
-                message.retry(options);
-            },
-            get timestamp(): Date {
-                return message.timestamp;
-            },
-        };
-    });
+    const wrappedMessages = originals.map((message) => wrapMessage(message, dispositions));
 
     /** Fill the disposition for every message the handler didn't explicitly decide. */
     const fillUndecided = (outcome: QueueMessageOutcome): void => {
@@ -158,18 +210,7 @@ const instrumentBatch = (batch: MessageBatchLike): CaptureHarness => {
         }
     };
 
-    const wrappedBatch: MessageBatchLike = {
-        ackAll: (): void => {
-            fillUndecided("ack");
-            batch.ackAll();
-        },
-        messages: wrappedMessages,
-        queue: batch.queue,
-        retryAll: (options?: QueueRetryOptions): void => {
-            fillUndecided("retry");
-            batch.retryAll(options);
-        },
-    };
+    const wrappedBatch = wrapBatch(batch, wrappedMessages, fillUndecided);
 
     return { dispositions, originals, wrappedBatch };
 };

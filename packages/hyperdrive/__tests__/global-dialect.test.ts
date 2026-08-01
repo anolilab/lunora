@@ -146,4 +146,47 @@ describe("exec adapters", () => {
 
         expect(result).toEqual({ rowsAffected: 0 });
     });
+
+    it("buildPgExec.batch dispatches every statement (concurrently, not one-per-round-trip)", async () => {
+        expect.assertions(1);
+
+        const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
+        const exec = buildPgExec({
+            query: async (text, params = []) => {
+                calls.push({ params, sql: text });
+
+                return [];
+            },
+        });
+
+        await exec.batch?.([
+            { params: ["a"], sql: "INSERT INTO t (x) VALUES ($1)" },
+            { params: ["b"], sql: "INSERT INTO t (x) VALUES ($1)" },
+        ]);
+
+        expect(calls).toEqual([
+            { params: ["a"], sql: "INSERT INTO t (x) VALUES ($1)" },
+            { params: ["b"], sql: "INSERT INTO t (x) VALUES ($1)" },
+        ]);
+    });
+
+    it("buildMysqlExec.batch dispatches every statement", async () => {
+        expect.assertions(1);
+
+        const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
+        const exec = buildMysqlExec({
+            execute: async (text, params = []) => {
+                calls.push({ params, sql: text });
+
+                return [{ affectedRows: params[0] === "a" ? 1 : 2 }, undefined];
+            },
+        });
+
+        await exec.batch?.([
+            { params: ["a"], sql: "INSERT INTO `t` (`x`) VALUES (?)" },
+            { params: ["b"], sql: "INSERT INTO `t` (`x`) VALUES (?)" },
+        ]);
+
+        expect(calls).toHaveLength(2);
+    });
 });

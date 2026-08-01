@@ -48,6 +48,34 @@ const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Sq
 };
 
 /**
+ * Run several write statements as one round trip when the exec exposes
+ * {@link SqlCtxExec.batch}, in the given array ORDER; falls back to the
+ * historical sequential `run()`-per-statement loop when it doesn't, so an
+ * exec built before `batch` existed keeps working unchanged.
+ *
+ * The one place that renders and dispatches a companion write batch — the
+ * search-index chunk insert, the aggregate tally backfill, and the rank-tuple
+ * backfill all route through this instead of each re-deriving the
+ * has-`batch`-or-fall-back branch.
+ */
+const queryBatch = async (exec: SqlCtxExec, dialect: SqlDialect, queries: ReadonlyArray<SQL>): Promise<void> => {
+    if (queries.length === 0) {
+        return;
+    }
+
+    if (!exec.batch) {
+        for (const query of queries) {
+            // eslint-disable-next-line no-await-in-loop -- fallback path: this exec has no batch seam, so statements run sequentially like every write did before batch existed.
+            await queryRun(exec, dialect, query);
+        }
+
+        return;
+    }
+
+    await exec.batch(queries.map((query) => renderSql(dialect.name, query)));
+};
+
+/**
  * Create an index idempotently across engines. SQLite/Postgres support
  * `CREATE [UNIQUE] INDEX IF NOT EXISTS`; **MySQL does not** (only `CREATE TABLE`
  * takes `IF NOT EXISTS`), so it creates unconditionally and swallows the
@@ -87,6 +115,13 @@ const createIndexIfNotExists = async (
  */
 interface SqlCtxExec {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    // Optional, mirroring `SqlExec.batch` (see dialect.ts): run several
+    // mutually-independent write statements as one round trip. No caller
+    // consumes a return value — some engines dispatch these concurrently, so
+    // there's no ordered result to report — hence `void`. Absent it,
+    // `queryBatch` falls back to the sequential `run()` loop every companion
+    // write used before this existed.
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     // `void` for D1/node:sqlite (the result is ignored on those paths); a
     // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
     // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale
@@ -251,6 +286,7 @@ export {
     forEachRowPaged,
     physicalColumn,
     queryAll,
+    queryBatch,
     queryRun,
     serializeColumnValue,
 };

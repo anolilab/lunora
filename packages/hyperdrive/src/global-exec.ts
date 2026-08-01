@@ -30,10 +30,26 @@ export type Mysql2Execute = Mysql2Like;
  * `fromNodePg`) as a {@link SqlExec}. The core already renders `$N` placeholders
  * for Postgres, so `all`/`run` forward verbatim. Postgres uses `RETURNING` for
  * OCC (read via `all`), so `run` reports no affected-row count.
+ *
+ * `batch` dispatches every statement concurrently (`Promise.all`) over `client`
+ * rather than awaiting each `query` call in turn — `RowClient` only exposes a
+ * single-statement `query`, so there is no wire-level multi-statement command
+ * to reach for. When `client` is backed by a pool (the common production
+ * shape), this genuinely spreads the statements across multiple physical
+ * connections instead of serializing one full round trip at a time; against a
+ * single connection it still removes the sequential *await*, though the
+ * underlying driver may itself queue the sends. Either way it stays
+ * non-atomic, at-least-once, and unordered between elements, same as the
+ * sequential fallback minus the ordering — safe only for statements whose
+ * effects don't depend on each other, which is what every current caller
+ * batches (distinct-keyed companion rows).
  */
 export const buildPgExec = (client: RowClient): SqlExec => {
     return {
         all: (sql, params) => client.query(sql, params),
+        batch: async (statements) => {
+            await Promise.all(statements.map((statement) => client.query(statement.sql, statement.params)));
+        },
         run: async (sql, params): Promise<SqlRunResult> => {
             await client.query(sql, params);
 
@@ -54,6 +70,13 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  * (mysql2: `createPool({ flags: ["FOUND_ROWS"] })`). Without it, `affectedRows`
  * counts *changed* rows, so an idempotent `patch`/`replace` that re-writes the
  * same values reports 0 and the OCC guard raises a spurious conflict.
+ *
+ * `batch` dispatches every statement concurrently (`Promise.all`), same
+ * rationale as {@link buildPgExec}'s `batch` — `Mysql2Like` only exposes a
+ * single-statement `execute`, so this is "spread across a pool's connections"
+ * rather than one wire-level multi-statement command; still non-atomic,
+ * at-least-once, and unordered between elements, safe only for statements
+ * with no cross-effect (what every current caller batches).
  */
 export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
     return {
@@ -61,6 +84,9 @@ export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
             const [rows] = await connection.execute(sql, params);
 
             return rows as Record<string, unknown>[];
+        },
+        batch: async (statements) => {
+            await Promise.all(statements.map((statement) => connection.execute(statement.sql, statement.params)));
         },
         run: async (sql, params): Promise<SqlRunResult> => {
             const [result] = await connection.execute(sql, params);

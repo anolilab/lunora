@@ -101,7 +101,7 @@ import { migrateSearchState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import { createPointReadBatcher } from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryRun, serializeColumnValue } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
 import { effectiveColumnKind } from "./value-codec";
 
 /** Order fields that already provide a stable tiebreak (no extra `id ASC` needed). */
@@ -1160,14 +1160,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(aggTable)}`);
 
+        const inserts: SQL[] = [];
+
         for (const [encoded, tally] of tallies) {
-            // eslint-disable-next-line no-await-in-loop -- counter rows are inserted sequentially on the single shared D1 connection; SqlCtxExec exposes no batch API here.
-            await queryRun(
-                exec,
-                dialect,
+            inserts.push(
                 sql`INSERT INTO ${sql.identifier(aggTable)} (${sql.identifier("__key__")}, ${sql.identifier("__value__")}, ${sql.identifier("__count__")}) VALUES (${encoded}, ${tally.value}, ${tally.count})`,
             );
         }
+
+        // One round trip for the whole backfill when the exec exposes `batch`
+        // (rows are keyed by distinct `__key__`, so order across them doesn't
+        // matter); a sequential `run()` loop otherwise.
+        await queryBatch(exec, dialect, inserts);
 
         backfilled.set(cacheKey, true);
 
@@ -1542,15 +1546,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             rankTuples.push([document["_id"], partitionKey, ...sortValues]);
         });
 
-        for (const tuple of rankTuples) {
+        const inserts = rankTuples.map((tuple) => {
             const valueList = sql.join(
                 tuple.map((value) => sql`${value}`),
                 sql`, `,
             );
 
-            // eslint-disable-next-line no-await-in-loop -- rank rows are inserted sequentially on the single shared D1 connection; SqlCtxExec exposes no batch API here.
-            await queryRun(exec, dialect, sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${valueList})`);
-        }
+            return sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${valueList})`;
+        });
+
+        // One round trip for the whole backfill when the exec exposes `batch`
+        // (rows are keyed by distinct `__id__`, so order across them doesn't
+        // matter); a sequential `run()` loop otherwise.
+        await queryBatch(exec, dialect, inserts);
 
         rankBackfilled.set(cacheKey, true);
 
