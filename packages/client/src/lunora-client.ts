@@ -979,27 +979,13 @@ class LunoraClient {
 
                     const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
 
-                    state.lastValue = folded;
-
-                    for (const callback of state.callbacks) {
-                        try {
-                            callback(folded);
-                        } catch {
-                            /* user callback threw — ignore */
-                        }
-                    }
+                    notifySubscription(state, folded);
                 },
                 onSubscriptionError: (key, error) => {
                     const state = this.subscriptions.get(key);
 
                     if (state) {
-                        for (const callback of state.errorCallbacks) {
-                            try {
-                                callback(error);
-                            } catch {
-                                /* user callback threw — ignore */
-                            }
-                        }
+                        fanSubscriptionError(state.errorCallbacks, error);
                     }
                 },
                 onSubscriptionSettled: (key, cursor, epoch) => {
