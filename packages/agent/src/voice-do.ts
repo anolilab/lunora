@@ -37,6 +37,16 @@ const MAX_DRAIN_WAIT_MS = 5000;
  */
 interface VoiceSocketAttachment {
     connectionId: string;
+
+    /**
+     * Token-expiry (epoch ms) of the credential resolved at upgrade, when the
+     * runtime forwarded one (`x-lunora-identity-exp`). The DO drops the socket
+     * with a `TOKEN_EXPIRED` error + close code `4001` the next time it
+     * receives a frame at or after this instant, so the client reconnects and
+     * re-resolves a fresh identity. Absent for sockets whose identity declares
+     * no expiry.
+     */
+    expiresAt?: number;
     identity?: Record<string, unknown>;
     threadKey: string;
     turn: number;
@@ -52,6 +62,7 @@ interface VoiceSessionState {
 
 /** The hibernation-attachment methods the runtime adds to every accepted socket. */
 interface HibernatableWebSocket {
+    close?: (code?: number, reason?: string) => void;
     deserializeAttachment?: () => unknown;
     send: (data: ArrayBuffer | ArrayBufferView | string) => void;
     serializeAttachment?: (value: unknown) => void;
@@ -138,11 +149,16 @@ class VoiceSessionDO {
         const connectionId = crypto.randomUUID();
         const identity = parseIdentity(request.headers.get("x-lunora-identity"));
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
+        // Optional credential expiry (epoch ms) forwarded by the runtime. A
+        // malformed value is ignored (the socket simply never auto-expires).
+        const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
+        const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
 
         (server as unknown as HibernatableWebSocket).serializeAttachment?.({
             connectionId,
             threadKey,
             turn: 0,
+            ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(userId === undefined ? {} : { userId }),
         } satisfies VoiceSocketAttachment);
@@ -164,6 +180,12 @@ class VoiceSessionDO {
         const attachment = (ws as unknown as HibernatableWebSocket).deserializeAttachment?.() as VoiceSocketAttachment | undefined;
 
         if (!attachment) {
+            return;
+        }
+
+        if (this.isSocketExpired(attachment)) {
+            this.dropExpiredSocket(ws);
+
             return;
         }
 
@@ -429,6 +451,30 @@ class VoiceSessionDO {
         this.controllers.delete(attachment.connectionId);
         this.audioBuffers.delete(attachment.connectionId);
         this.bufferedBytes.delete(attachment.connectionId);
+    }
+
+    /** Whether `attachment` carries a credential whose expiry (stamped at upgrade) is now past. */
+    // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with dropExpiredSocket; operates only on the passed attachment
+    private isSocketExpired(attachment: VoiceSocketAttachment): boolean {
+        return typeof attachment.expiresAt === "number" && Date.now() >= attachment.expiresAt;
+    }
+
+    /**
+     * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
+     * the client distinguishes an expired-credential drop from an ordinary one
+     * and refreshes before reconnecting. Best-effort: a throw (socket already
+     * gone) is swallowed — this must never escape the hibernation handlers.
+     */
+    // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
+    private dropExpiredSocket(ws: WebSocket): void {
+        try {
+            (ws as unknown as HibernatableWebSocket).send(
+                JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }),
+            );
+            (ws as unknown as HibernatableWebSocket).close?.(4001, "token_expired");
+        } catch {
+            /* socket already gone */
+        }
     }
 
     /** Send a JSON control frame, swallowing a closed-socket error (never throw from a handler). */
