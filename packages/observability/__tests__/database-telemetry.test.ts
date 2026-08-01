@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
 import type { DatabaseTally } from "../src/database-telemetry";
-import { createDatabaseTally, describeFailure, formatTally, instrumentDatabase } from "../src/database-telemetry";
+import { createDatabaseTally, formatTally, instrumentDatabase } from "../src/database-telemetry";
 
 /**
  * Automatic `ctx.db` instrumentation.
@@ -234,52 +234,29 @@ describe("client-span error-message redaction (captureRaw)", () => {
     });
 });
 
-describe("describeFailure fallback (a non-Error, non-string failure)", () => {
-    // `JSON.stringify` is typed `=> string` but returns `undefined` for a
-    // function/symbol/undefined value. `SpanEvent["error"].message` is declared
-    // `string`, so `describeFailure` must still render one of these as a string —
+describe("describeFailure fallback (a non-Error, non-string failure), exercised through instrumentDatabase", () => {
+    // `describeFailure` is a private module helper (not exported) — reached
+    // here through `instrumentDatabase`'s public surface, the only production
+    // consumer. `JSON.stringify` is typed `=> string` but returns `undefined`
+    // for a function/symbol/undefined value; `SpanEvent["error"].message` is
+    // declared `string`, so the rendered message must still be a string —
     // never the literal `undefined` value — exactly like `request-log.ts`'s
     // `renderLogMessage` fallback.
+    //
+    // A bare `throw undefined` isn't exercised here: `buildDatabaseSpan`
+    // treats `failure === undefined` as "no failure" (the same sentinel
+    // `createTracer`'s `let error: SpanEvent["error"]` uses), so a literal
+    // `undefined` rejection never reaches `describeFailure` through this
+    // path — a separate, pre-existing limitation this plan doesn't touch.
     it.each([
         { label: "a function", value: () => "nope" },
         { label: "a symbol", value: Symbol("x") },
-        { label: "undefined", value: undefined },
-    ])("renders $label as a string, not undefined", ({ value }) => {
-        expect.assertions(1);
-
-        expect(typeof describeFailure(value)).toBe("string");
-    });
-
-    it('renders undefined as the literal string "undefined"', () => {
-        expect.assertions(1);
-
-        expect(describeFailure(undefined)).toBe("undefined");
-    });
-
-    it("renders a symbol via String()", () => {
-        expect.assertions(1);
-
-        expect(describeFailure(Symbol("x"))).toBe("Symbol(x)");
-    });
-
-    it("still returns the raw Error.message for an Error input", () => {
-        expect.assertions(1);
-
-        expect(describeFailure(new Error("boom"))).toBe("boom");
-    });
-
-    it("still returns a plain string unchanged", () => {
-        expect.assertions(1);
-
-        expect(describeFailure("already a string")).toBe("already a string");
-    });
-
-    it("propagates the rendered message onto the recorded CLIENT span via instrumentDatabase", async () => {
+    ])("renders $label's message as a string, not undefined", async ({ value }) => {
         expect.assertions(2);
 
         const database = fakeDatabase();
 
-        database.insert.mockRejectedValueOnce(() => "nope");
+        database.insert.mockRejectedValueOnce(value);
 
         const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
@@ -290,8 +267,29 @@ describe("describeFailure fallback (a non-Error, non-string failure)", () => {
             }),
         );
 
-        await expect(instrumented.insert("orders", {})).rejects.toBeTypeOf("function");
+        await expect(instrumented.insert("orders", {})).rejects.toBe(value);
 
         expect(typeof spans[0]?.error?.message).toBe("string");
+    });
+
+    it("still uses the raw Error.message for an Error rejection", async () => {
+        expect.assertions(2);
+
+        const database = fakeDatabase();
+
+        database.insert.mockRejectedValueOnce(new Error("boom"));
+
+        const tally = createDatabaseTally();
+        const spans: SpanEvent[] = [];
+        const instrumented = instrumentDatabase(
+            database,
+            deps("spans", tally, (recorded) => {
+                spans.push(recorded);
+            }),
+        );
+
+        await expect(instrumented.insert("orders", {})).rejects.toThrow("boom");
+
+        expect(spans[0]?.error?.message).toBe("boom");
     });
 });

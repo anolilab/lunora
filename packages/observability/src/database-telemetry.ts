@@ -350,4 +350,4 @@ const formatTally = (tally: DatabaseTally): LogFields => {
 };
 
 export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps };
-export { createDatabaseTally, describeFailure, formatTally, instrumentDatabase };
+export { createDatabaseTally, formatTally, instrumentDatabase };
