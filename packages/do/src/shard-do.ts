@@ -558,6 +558,20 @@ interface ShapeMemo {
 }
 
 /**
+ * One distinct statement's folded activity within a dispatch — see
+ * {@link ShardDO.currentStmtSamples}. `count` is how many raw executions
+ * folded into this entry; `totalDurationMs`/`rowsRead`/`rowsWritten` are sums
+ * across all of them, so `totalDurationMs / count` recovers the per-execution
+ * average `recordQueryMetric`'s bucket histogram places the entry by.
+ */
+interface StmtSample {
+    count: number;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+
+/**
  * Classification of a watermarked custom-mutator push against the shard's
  * `__client_watermark`: `expected` is the next in-order sequence, `kind`
  * whether the push is a replay (`"already"`), the next one (`"next"`), or an
@@ -691,6 +705,19 @@ const MAX_TRACKED_DISPATCH_SPANS = 256;
  * runaway single trace, not a working set.
  */
 const MAX_HELD_SPANS_PER_TRACE = 500;
+
+/**
+ * Bound on distinct normalised statements folded into
+ * {@link ShardDO.currentStmtSamples} per dispatch. Mirrors
+ * `database-telemetry.ts`'s `MAX_DB_SPANS_PER_CTX`: a handler that queries in a
+ * loop already folds repeats of the SAME statement into one running entry (see
+ * `sql` getter), so this only bounds the number of DISTINCT statement shapes one
+ * dispatch can accumulate before {@link ShardDO.flushStmtSamples} starts
+ * dropping brand-new ones — a handler building ad-hoc SQL per iteration
+ * (dynamic column lists, generated `IN (...)` clauses) would otherwise grow the
+ * buffer, and the flush that drains it, without bound.
+ */
+const MAX_STMT_SAMPLES_PER_DISPATCH = 200;
 
 /**
  * `event.name` of the per-dispatch wide event. Namespaced so it never collides
@@ -1277,19 +1304,39 @@ abstract class ShardDO {
     private currentRequestReadTables: Set<string> | undefined;
 
     /**
-     * Per-statement SQL samples collected during the current `/rpc` dispatch by
-     * the instrumented `sql` getter. Drained into the durable
-     * `__lunora_metrics_queries` table after the handler returns (same pattern as
-     * `currentScannedTables` / `currentIndexHits`). `undefined` when no dispatch
-     * is in flight; allocated fresh per dispatch so a previous request's samples
-     * never leak into the next one.
+     * Per-DISTINCT-statement SQL samples collected during the current `/rpc`
+     * dispatch by the instrumented `sql` getter, keyed by the raw query text.
+     * Drained into the durable `__lunora_metrics_queries` table after the
+     * handler returns (same pattern as `currentScannedTables` /
+     * `currentIndexHits`). `undefined` when no dispatch is in flight; allocated
+     * fresh per dispatch so a previous request's samples never leak into the
+     * next one.
      *
-     * Each entry is `[rawSql, durationMs, rowsRead, rowsWritten]`. DML rows
-     * written is always 0 here — the ctx-db adapter doesn't expose a
+     * Keyed by the raw query string rather than a growing array: a handler
+     * that queries in a loop reuses the SAME prepared-statement text on every
+     * iteration (bind parameters travel separately via `...params`, never
+     * inlined into `query`), so folding each call into its entry as it lands
+     * collapses the loop to one entry — {@link ShardDO.flushStmtSamples} then
+     * pays one upsert per DISTINCT statement instead of one per raw execution.
+     * Bounded at {@link MAX_STMT_SAMPLES_PER_DISPATCH} distinct entries; past
+     * that, a brand-new statement shape (ad-hoc SQL built per iteration) is
+     * dropped and `currentStmtSamplesTruncated` is set — already-tracked
+     * statements keep folding regardless.
+     *
+     * `rowsWritten` is always 0 here — the ctx-db adapter doesn't expose a
      * `changes()` count through the structural `SqlExec` surface, so we
      * attribute only SELECT result sizes as `rowsRead`.
      */
-    private currentStmtSamples: [string, number, number, number][] | undefined;
+    private currentStmtSamples: Map<string, StmtSample> | undefined;
+
+    /**
+     * Set when `currentStmtSamples` hit {@link MAX_STMT_SAMPLES_PER_DISPATCH}
+     * distinct statements and a brand-new shape was dropped this dispatch.
+     * Folded onto the dispatch's wide event as `db.stmt_samples_truncated`
+     * (mirrors `database-telemetry.ts`'s `db.spans_truncated`) so a truncated
+     * leaderboard contribution reads as partial rather than complete.
+     */
+    private currentStmtSamplesTruncated: boolean | undefined;
 
     /** Whether the current dispatch's cached query was served from cache; `undefined` until `runCachedQuery` resolves one. */
     private currentRequestCacheHit: boolean | undefined;
@@ -1543,7 +1590,7 @@ abstract class ShardDO {
 
     /**
      * Instrumented SQL handle. Wraps `state.storage.sql` so that every `exec`
-     * call during a user RPC dispatch is timed and its result size captured into
+     * call during a user RPC dispatch is timed and its result size folded into
      * `currentStmtSamples`. The samples are flushed to the durable
      * `__lunora_metrics_queries` table after the handler returns (same lifecycle
      * as `currentScannedTables`/`currentIndexHits`).
@@ -1574,6 +1621,36 @@ abstract class ShardDO {
             return rawSql;
         }
 
+        // Fold one execution's timing/result-size into its statement's running
+        // entry (keyed by the raw query text — see `currentStmtSamples`), rather
+        // than appending a new array entry per execution. A handler that queries
+        // in a loop reuses the same prepared-statement text every iteration, so
+        // this collapses the loop to one entry that `flushStmtSamples` drains
+        // with a single upsert. Bounded at `MAX_STMT_SAMPLES_PER_DISPATCH`
+        // DISTINCT entries; a brand-new statement shape past that cap is
+        // dropped and `currentStmtSamplesTruncated` is set — already-tracked
+        // statements keep folding regardless of the cap.
+        const foldSample = (query: string, durationMs: number, rowsRead: number, rowsWritten: number): void => {
+            const existing = samples.get(query);
+
+            if (existing !== undefined) {
+                existing.count += 1;
+                existing.totalDurationMs += durationMs;
+                existing.rowsRead += rowsRead;
+                existing.rowsWritten += rowsWritten;
+
+                return;
+            }
+
+            if (samples.size >= MAX_STMT_SAMPLES_PER_DISPATCH) {
+                this.currentStmtSamplesTruncated = true;
+
+                return;
+            }
+
+            samples.set(query, { count: 1, rowsRead, rowsWritten, totalDurationMs: durationMs });
+        };
+
         const instrumentedExec = (query: string, ...params: unknown[]): unknown => {
             const start = Date.now();
             const cursor = (rawExec as (...args: unknown[]) => unknown).call(rawSql, query, ...params);
@@ -1591,7 +1668,7 @@ abstract class ShardDO {
                         const rows = (originalToArray as () => unknown[])();
                         const durationMs = Date.now() - start;
 
-                        samples.push([query, durationMs, rows.length, 0]);
+                        foldSample(query, durationMs, rows.length, 0);
 
                         return rows;
                     };
@@ -1605,7 +1682,7 @@ abstract class ShardDO {
                         const row = (originalOne as () => unknown)();
                         const durationMs = Date.now() - start;
 
-                        samples.push([query, durationMs, 1, 0]);
+                        foldSample(query, durationMs, 1, 0);
 
                         return row;
                     };
@@ -1615,20 +1692,20 @@ abstract class ShardDO {
                 // DDL / DML that the caller discards without iterating), record
                 // a zero-rows sample immediately so the statement still appears
                 // in the leaderboard. The `toArray`/`one` overrides above take
-                // priority when they are used — they push their own samples and
+                // priority when they are used — they fold their own samples and
                 // the caller never reaches a point where this fallback fires
                 // again for the same execution.
                 if (typeof c["toArray"] !== "function" && typeof c["one"] !== "function") {
                     const durationMs = Date.now() - start;
 
-                    samples.push([query, durationMs, 0, 0]);
+                    foldSample(query, durationMs, 0, 0);
                 }
             } else {
                 // Non-object return (shouldn't happen with workerd's SqlStorage
                 // but guard defensively).
                 const durationMs = Date.now() - start;
 
-                samples.push([query, durationMs, 0, 0]);
+                foldSample(query, durationMs, 0, 0);
             }
 
             return cursor;
@@ -4017,9 +4094,10 @@ abstract class ShardDO {
         // Collect per-statement SQL samples from the instrumented `sql`
         // getter so `flushStmtSamples` can persist them to the durable
         // `__lunora_metrics_queries` table after the handler resolves.
-        // Allocating a fresh array here activates the instrumentation (the
+        // Allocating a fresh map here activates the instrumentation (the
         // `sql` getter only wraps when this field is defined).
-        this.currentStmtSamples = [];
+        this.currentStmtSamples = new Map<string, StmtSample>();
+        this.currentStmtSamplesTruncated = undefined;
 
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
@@ -4231,6 +4309,7 @@ abstract class ShardDO {
             this.currentRequestReadTables = undefined;
             this.currentRequestCacheHit = undefined;
             this.currentStmtSamples = undefined;
+            this.currentStmtSamplesTruncated = undefined;
         }
     }
 
@@ -4432,10 +4511,17 @@ abstract class ShardDO {
         // Auto-instrumentation counters ride whatever root span is being recorded;
         // they never cause one (see `instrumentDb`).
         const databaseAttributes = wide?.dbTally === undefined || wide.dbTally.calls === 0 ? undefined : formatTally(wide.dbTally);
+        // Mirrors `db.spans_truncated`: the per-dispatch statement-sample buffer
+        // (see `currentStmtSamples`) hit its distinct-statement cap, so the
+        // query-metrics leaderboard's contribution from this dispatch is partial.
+        const stmtSamplesAttributes: LogFields | undefined = this.currentStmtSamplesTruncated ? { "db.stmt_samples_truncated": true } : undefined;
         const collected =
             wide?.collector === undefined
                 ? undefined
-                : { ...wide.collector.collected, attributes: { ...databaseAttributes, ...wide.collector.collected.attributes } };
+                : {
+                      ...wide.collector.collected,
+                      attributes: { ...databaseAttributes, ...stmtSamplesAttributes, ...wide.collector.collected.attributes },
+                  };
 
         try {
             this.spans.push(
@@ -4875,9 +4961,16 @@ abstract class ShardDO {
     }
 
     /**
-     * Flush per-statement SQL samples accumulated during the current dispatch
-     * into the durable `__lunora_metrics_queries` table. Called after
-     * `recordFunctionCall` on both the success and error paths.
+     * Flush the per-DISTINCT-statement SQL samples accumulated during the
+     * current dispatch into the durable `__lunora_metrics_queries` table.
+     * Called after `recordFunctionCall` on both the success and error paths.
+     *
+     * Already folded by the instrumented `sql` getter (see
+     * `currentStmtSamples`), so this pays exactly one `recordQueryMetric` call
+     * — one accumulator upsert plus one bucket upsert — per distinct statement
+     * the dispatch ran, however many times it actually ran. `count` carries the
+     * real execution count through so the durable `exec_count`/`total_duration_ms`
+     * still reflect every execution, not just one.
      *
      * Best-effort: a SQL failure (e.g. a test double without a usable `sql`
      * handle) must never fail the response, so every call is swallowed.
@@ -4888,16 +4981,16 @@ abstract class ShardDO {
     private flushStmtSamples(): void {
         const samples = this.currentStmtSamples;
 
-        if (!samples || samples.length === 0) {
+        if (!samples || samples.size === 0) {
             return;
         }
 
         try {
             const sqlHandle = this.shardHost.sql as unknown as SqlExec;
 
-            for (const [rawSql, durationMs, rowsRead, rowsWritten] of samples) {
+            for (const [rawSql, sample] of samples) {
                 try {
-                    recordQueryMetric(sqlHandle, rawSql, durationMs, rowsRead, rowsWritten);
+                    recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, Date.now(), sample.count);
                 } catch {
                     // Per-statement failures are swallowed so a bad statement
                     // never breaks the whole flush.

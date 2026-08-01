@@ -254,26 +254,33 @@ const pruneQueryBuckets = (sql: SqlExec, now: number): void => {
 };
 
 /**
- * Record one execution into its time bucket. Best-effort: a failure here must
- * never break the lifetime counters, which are the older and more load-bearing
- * of the two.
+ * Record one or more executions into their time bucket. `execCount` (default
+ * 1) lets a caller that already folded several same-statement executions into
+ * one aggregate — `shard-do.ts`'s per-dispatch statement-sample folding — flush
+ * them as a single upsert instead of one call per execution: `durationMs` is
+ * then the SUM across `execCount` executions, and the histogram places the
+ * whole entry by the per-execution AVERAGE rather than the sum, so a folded
+ * batch of many fast calls doesn't read as one enormous slow one. Best-effort:
+ * a failure here must never break the lifetime counters, which are the older
+ * and more load-bearing of the two.
  */
-const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number): void => {
+const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number, execCount: number = 1): void => {
     try {
         ensureQueryBucketsTable(sql);
 
-        const column = latencyColumn(latencyBucketIndex(durationMs));
+        const avgDurationMs = execCount > 0 ? durationMs / execCount : durationMs;
+        const column = latencyColumn(latencyBucketIndex(avgDurationMs));
 
         const upsert = `INSERT INTO "${QUERY_BUCKETS_TABLE}" (sql_hash, bucket_ms, exec_count, total_duration_ms, rows_read, rows_written, ${column})
-             VALUES (?, ?, 1, ?, ?, ?, 1)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sql_hash, bucket_ms) DO UPDATE SET
-                 exec_count = exec_count + 1,
+                 exec_count = exec_count + excluded.exec_count,
                  total_duration_ms = total_duration_ms + excluded.total_duration_ms,
                  rows_read = rows_read + excluded.rows_read,
                  rows_written = rows_written + excluded.rows_written,
-                 ${column} = ${column} + 1`;
+                 ${column} = ${column} + excluded.${column}`;
 
-        runSql(sql, upsert, hashStatement(normalized), bucketFloor(now), durationMs, rowsRead, rowsWritten);
+        runSql(sql, upsert, hashStatement(normalized), bucketFloor(now), execCount, durationMs, rowsRead, rowsWritten, execCount);
 
         // Prune once per WINDOW, detected by the bucket changing rather than by
         // sampling a 50ms slice of it. In a DO `Date.now()` is pinned to the last
@@ -494,14 +501,31 @@ const admitStatement = (sql: SqlExec, normalized: string): boolean => {
 };
 
 /**
- * Record one statement execution. Creates the table on first call. Silently
+ * Record one statement's activity. Creates the table on first call. Silently
  * skips recording when the normalised statement is empty (shouldn't happen
  * in practice) or when the table is already at the
  * {@link QUERY_METRICS_MAX_STATEMENTS} cap and the statement is not yet
  * tracked. See `admitStatement` for how the cap check avoids an unconditional
  * `COUNT(*)` on every execution.
+ *
+ * `execCount` (default 1) lets a caller fold several executions of the SAME
+ * statement into one call — `shard-do.ts` does this per dispatch so a
+ * query-in-a-loop handler pays one upsert here instead of one per raw
+ * execution. `durationMs`/`rowsRead`/`rowsWritten` are then the SUM across
+ * `execCount` executions, exactly as `exec_count`/`total_duration_ms` already
+ * accumulate sums across separate calls — folding before calling is
+ * indistinguishable, from this table's point of view, from `execCount`
+ * separate calls with the same totals.
  */
-const recordQueryMetric = (sql: SqlExec, rawSql: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number = Date.now()): void => {
+const recordQueryMetric = (
+    sql: SqlExec,
+    rawSql: string,
+    durationMs: number,
+    rowsRead: number,
+    rowsWritten: number,
+    now: number = Date.now(),
+    execCount: number = 1,
+): void => {
     const normalized = normalizeSql(rawSql);
 
     if (normalized.length === 0) {
@@ -516,15 +540,15 @@ const recordQueryMetric = (sql: SqlExec, rawSql: string, durationMs: number, row
 
     // eslint-disable-next-line no-secrets/no-secrets -- SQL keyword "CONFLICT" triggers the entropy scanner; this is plain DDL, not a secret
     const upsertSql = `INSERT INTO "${QUERY_METRICS_TABLE}" (normalized_sql, exec_count, total_duration_ms, rows_read, rows_written)
-         VALUES (?, 1, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(normalized_sql) DO UPDATE SET
-             exec_count = exec_count + 1,
+             exec_count = exec_count + excluded.exec_count,
              total_duration_ms = total_duration_ms + excluded.total_duration_ms,
              rows_read = rows_read + excluded.rows_read,
              rows_written = rows_written + excluded.rows_written`;
 
-    runSql(sql, upsertSql, normalized, durationMs, rowsRead, rowsWritten);
-    recordQueryBucket(sql, normalized, durationMs, rowsRead, rowsWritten, now);
+    runSql(sql, upsertSql, normalized, execCount, durationMs, rowsRead, rowsWritten);
+    recordQueryBucket(sql, normalized, durationMs, rowsRead, rowsWritten, now, execCount);
 };
 
 /**

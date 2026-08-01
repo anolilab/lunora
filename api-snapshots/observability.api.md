@@ -878,7 +878,7 @@ const recordMetricHistory: (sql: SqlExec, event: MetricEvent, exemplarTraceId?: 
 ### `recordQueryMetric` (const)
 
 ```ts
-const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rowsRead: number, rowsWritten: number, now?: number) => void;
+const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rowsRead: number, rowsWritten: number, now?: number, execCount?: number) => void;
 ```
 
 ### `resolveTraceAnchor` (const)
