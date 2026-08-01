@@ -10,6 +10,7 @@
  * React Native, Node.js).
  */
 
+import type { ConnectionStatus } from "./lunora-client";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,16 @@ interface TabCoordinatorOptions {
      * Called when this tab becomes the leader (should open WS connections).
      */
     onBecomeLeader?: () => void;
+
+    /**
+     * Called when the leader broadcasts its aggregate `ConnectionStatus`
+     * (see `LunoraClient.emitConnectionStatus`) — a follower owns no socket
+     * of its own, so this is its only truthful signal for a status indicator
+     * or the offline-queue gate. Sent on every leader-side status change and
+     * once more right after a new leader takes over, so a follower already
+     * mid-mirroring isn't stuck on a stale value from the PREVIOUS leader.
+     */
+    onConnectionStatus?: (status: ConnectionStatus) => void;
 
     /**
      * Called when this tab loses leadership (should close WS connections).
@@ -77,7 +88,8 @@ type WsFollowerMessage =
 type WsLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
     | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" }
-    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" };
+    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
+    | { status: ConnectionStatus; tabId: string; type: "connection-status" };
 
 type TabCoordinatorMessage = WsFollowerMessage | WsLeaderMessage;
 
@@ -122,6 +134,7 @@ class TabCoordinator {
     /** Callbacks set via constructor options. */
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
+    private readonly onConnectionStatus: ((status: ConnectionStatus) => void) | undefined;
     private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string) => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
     private readonly onSubscriptionSettled: ((key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void) | undefined;
@@ -138,6 +151,7 @@ class TabCoordinator {
         this.leaderTimeout = options.leaderTimeout ?? DEFAULT_LEADER_TIMEOUT_MS;
         this.onBecomeLeader = options.onBecomeLeader;
         this.onStopBeingLeader = options.onStopBeingLeader;
+        this.onConnectionStatus = options.onConnectionStatus;
         this.onSubscriptionData = options.onSubscriptionData;
         this.onSubscriptionError = options.onSubscriptionError;
         this.onSubscriptionSettled = options.onSubscriptionSettled;
@@ -313,6 +327,20 @@ class TabCoordinator {
         });
     }
 
+    /**
+     * Broadcast this tab's aggregate `ConnectionStatus` to follower tabs, so
+     * they can mirror a truthful status without a socket of their own (see
+     * `LunoraClient.computeStatus`/`emitConnectionStatus`). Only the leader
+     * should call this.
+     */
+    public broadcastConnectionStatus(status: ConnectionStatus): void {
+        if (!this.leader) {
+            return;
+        }
+
+        this.broadcast({ type: "connection-status", tabId: this.tabId, status });
+    }
+
     // -----------------------------------------------------------------------
     // Internal
     // -----------------------------------------------------------------------
@@ -326,6 +354,16 @@ class TabCoordinator {
         switch (message.type) {
             case "claim-leadership": {
                 this.handleClaimLeadership(message);
+
+                break;
+            }
+
+            case "connection-status": {
+                if (this.leader || message.tabId === this.tabId) {
+                    break;
+                }
+
+                this.onConnectionStatus?.(message.status);
 
                 break;
             }

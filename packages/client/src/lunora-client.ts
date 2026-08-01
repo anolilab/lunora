@@ -814,6 +814,26 @@ class LunoraClient {
      */
     private tabCoordinator: TabCoordinator | undefined;
 
+    /**
+     * The leader's last-broadcast aggregate {@link ConnectionStatus}, mirrored
+     * on a follower tab — which owns no `ShardConnection` of its own to
+     * compute a status from (see `computeStatus`). `undefined` until the
+     * leader's first broadcast (falls back to `"idle"`), and reset back to
+     * `undefined` whenever this tab stops being a follower of the CURRENT
+     * leader (becomes leader itself, or the leader changes), so a stale
+     * mirror from a previous leader never survives a leadership change.
+     */
+    private leaderStatus: ConnectionStatus | undefined;
+
+    /**
+     * Sticky "has the mirrored leader status ever reported `connected`" flag —
+     * the follower's counterpart to {@link ShardConnection.wasEverConnected},
+     * since a follower has no `ShardConnection` of its own. Feeds the
+     * offline-queue gate (see `mutation`) exactly like the real per-shard flag
+     * does on the leader/single-tab path.
+     */
+    private leaderWasEverConnected = false;
+
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
 
@@ -865,6 +885,18 @@ class LunoraClient {
      * See `identityFingerprint` for the fingerprint shape.
      */
     private readonly queuedIdentities = new Map<string, string | null>();
+
+    /**
+     * Distinct shard keys with a mutation currently sitting in `offlineQueue`
+     * — fresh writes queued this session (`enqueueOfflineMutation`) or writes
+     * restored from durable storage (`hydratePersistedQueue`). A follower tab
+     * has no per-shard `ShardConnection` to iterate when its mirrored leader
+     * status turns `"connected"` (see the `onConnectionStatus` coordinator
+     * option), so this is what that flush walks instead. Entries are never
+     * removed — flushing an already-empty shard is a cheap no-op, and the set
+     * is bounded by the app's own distinct shard-key cardinality.
+     */
+    private readonly queuedOfflineShardKeys = new Set<string | undefined>();
 
     private closed = false;
 
@@ -949,12 +981,52 @@ class LunoraClient {
                         this.ensureSocket(state.shardKey);
                         this.sendSubscribeIfOpen(state);
                     }
+
+                    // Broadcast our aggregate status once immediately, so a
+                    // follower that was mirroring the PREVIOUS leader isn't
+                    // stuck displaying a stale value until this tab's own
+                    // status happens to change (which may be a while, e.g. no
+                    // active subscription ever opens a socket).
+                    this.tabCoordinator?.broadcastConnectionStatus(this.computeStatus());
                 },
                 onStopBeingLeader: () => {
-                    // Close all WS connections now that another tab leads.
+                    // Close all WS connections now that another tab leads —
+                    // reuse the same timer-teardown sequence `close()` uses so
+                    // a demoted leader can't leak a `reconnectTimer` /
+                    // `heartbeatTimer` the way an inline `conn.socket?.close()`
+                    // (which skips both) used to.
                     for (const [key, conn] of this.connections) {
-                        conn.socket?.close();
+                        this.teardownConnection(conn);
                         this.connections.delete(key);
+                    }
+
+                    // We're now a follower of whoever won leadership — clear
+                    // any stale mirror from the previous leader until the new
+                    // one's first `connection-status` broadcast arrives.
+                    this.leaderStatus = undefined;
+                    this.leaderWasEverConnected = false;
+                },
+                onConnectionStatus: (status) => {
+                    // A follower has no `ShardConnection` of its own — this is
+                    // its only truthful status signal. Mirror it and re-run
+                    // the same notify path a real status change takes so this
+                    // tab's own `onConnectionStatus`/`connectionStatus()`
+                    // consumers see it.
+                    const transitionedToConnected = status === "connected" && this.leaderStatus !== "connected";
+
+                    this.leaderStatus = status;
+
+                    if (status === "connected") {
+                        this.leaderWasEverConnected = true;
+                    }
+
+                    this.emitConnectionStatus();
+
+                    // Flush this tab's own queued offline writes now that the
+                    // (leader's) connection is back — they replay over HTTP
+                    // RPC, which needs no socket of this follower's own.
+                    if (transitionedToConnected) {
+                        this.flushAllOfflineQueues();
                     }
                 },
                 onSubscriptionData: (key, data, cursor, epoch) => {
@@ -1967,11 +2039,10 @@ class LunoraClient {
         // queue when we're mid-reconnect (wsState === "connecting") provided
         // we've been connected before — otherwise the mutation would race
         // the resubscribe. State is scoped to the mutation's own shard so a
-        // dropped shard only queues writes destined for it.
-        const conn = this.getConnection(options.shardKey);
-        const wsState: WSState = conn?.wsState ?? "idle";
-        const hasSocket = conn?.socket !== undefined;
-        const wasEverConnected = conn?.wasEverConnected ?? false;
+        // dropped shard only queues writes destined for it. A follower tab
+        // has no `ShardConnection` of its own — `connectionGateState` derives
+        // the same triple from the mirrored leader status instead.
+        const { hasSocket, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
         const { queueBeforeFirstConnect } = this.offlineQueue;
         const connectedGate = wasEverConnected || queueBeforeFirstConnect;
         const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
@@ -3515,29 +3586,7 @@ class LunoraClient {
         this.streams.clear();
 
         for (const conn of this.connections.values()) {
-            if (conn.reconnectTimer !== undefined) {
-                clearTimeout(conn.reconnectTimer);
-                conn.reconnectTimer = undefined;
-            }
-
-            if (conn.connectTimer !== undefined) {
-                clearTimeout(conn.connectTimer);
-                conn.connectTimer = undefined;
-            }
-
-            this.stopHeartbeat(conn);
-
-            if (conn.socket) {
-                try {
-                    conn.socket.close();
-                } catch {
-                    /* ignore */
-                }
-
-                conn.socket = undefined;
-            }
-
-            conn.wsState = "closed";
+            this.teardownConnection(conn);
         }
 
         this.offlineQueue.clear();
@@ -3574,6 +3623,42 @@ class LunoraClient {
         // Stop cross-tab coordination and release the BroadcastChannel.
         this.tabCoordinator?.stop();
         this.tabCoordinator = undefined;
+    }
+
+    /**
+     * Tear down one {@link ShardConnection}'s live state: clear its reconnect/
+     * connect timers, stop its heartbeat, and close its socket (if any).
+     * Shared by `close()` (terminal) and the cross-tab `onStopBeingLeader`
+     * handler (demoted, but still alive) so a demoted leader can't leak a
+     * pending `reconnectTimer` or an open socket's `heartbeatTimer` the way
+     * an inline `conn.socket?.close()` — which skips both — used to.
+     */
+    private teardownConnection(conn: ShardConnection): void {
+        /* eslint-disable no-param-reassign -- mutate the shared, long-lived ShardConnection record so every timer/socket field observes the same teardown (matches `handleDisconnect`'s established pattern in this file) */
+        if (conn.reconnectTimer !== undefined) {
+            clearTimeout(conn.reconnectTimer);
+            conn.reconnectTimer = undefined;
+        }
+
+        if (conn.connectTimer !== undefined) {
+            clearTimeout(conn.connectTimer);
+            conn.connectTimer = undefined;
+        }
+
+        this.stopHeartbeat(conn);
+
+        if (conn.socket) {
+            try {
+                conn.socket.close();
+            } catch {
+                /* ignore */
+            }
+
+            conn.socket = undefined;
+        }
+
+        conn.wsState = "closed";
+        /* eslint-enable no-param-reassign */
     }
 
     // --- Internals ----------------------------------------------------------
@@ -3672,6 +3757,10 @@ class LunoraClient {
             };
 
             this.offlineQueue.enqueue<ReturnOf<F>>(entry);
+            // Track the shard so a follower tab (no `ShardConnection` of its
+            // own to iterate) knows to flush it once the mirrored leader
+            // status turns `"connected"` — see `flushAllOfflineQueues`.
+            this.queuedOfflineShardKeys.add(shardKey);
 
             // `enqueue` assigns `entry.id` when absent; stamp the captured
             // identity against it for the flush-time check.
@@ -3691,6 +3780,11 @@ class LunoraClient {
             const shardKeys = await this.offlineQueue.hydrate();
 
             for (const shardKey of shardKeys) {
+                // Track the shard even on a follower tab, where `ensureSocket`
+                // is a no-op — `flushAllOfflineQueues` is what actually
+                // replays a follower's restored writes, once the mirrored
+                // leader status turns `"connected"`.
+                this.queuedOfflineShardKeys.add(shardKey);
                 this.ensureSocket(shardKey);
             }
         } catch {
@@ -3853,6 +3947,15 @@ class LunoraClient {
 
     /** Derive the aggregate status from the per-shard socket states. */
     private computeStatus(): ConnectionStatus {
+        // A follower owns no `ShardConnection` of its own (that's the whole
+        // point of cross-tab sync — see `ensureSocket`) — mirror whatever the
+        // leader last broadcast instead of reading the (always-empty)
+        // `connections` map, which would otherwise report `"idle"` forever
+        // regardless of the leader's real socket state.
+        if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
+            return this.leaderStatus ?? "idle";
+        }
+
         const conns = [...this.connections.values()];
 
         if (conns.length === 0) {
@@ -3883,6 +3986,14 @@ class LunoraClient {
         this.lastStatus = next;
 
         this.statusListeners.emit(next);
+
+        // Mirror our own aggregate status to follower tabs, which have no
+        // socket of their own to compute it from (see `computeStatus`). A
+        // no-op on a follower or single-tab client — `broadcastConnectionStatus`
+        // itself gates on `isLeader()`.
+        if (this.tabCoordinator?.isLeader()) {
+            this.tabCoordinator.broadcastConnectionStatus(next);
+        }
     }
 
     /**
@@ -3987,6 +4098,36 @@ class LunoraClient {
 
     private getConnection(shardKey: string | undefined): ShardConnection | undefined {
         return this.connections.get(connectionKey(shardKey));
+    }
+
+    /**
+     * The `(wsState, hasSocket, wasEverConnected)` triple `mutation()`'s
+     * offline-queue gate reads. On the leader/single-tab path this is exactly
+     * the real `ShardConnection`'s state (byte-identical to the pre-cross-tab
+     * behavior). A follower has no `ShardConnection` of its own (see
+     * `ensureSocket`), so it derives the same triple from the mirrored
+     * `leaderStatus`/`leaderWasEverConnected` instead: `"connected"` maps to
+     * `"open"` (queue-eligible once `wasEverConnected`), `"connecting"` stays
+     * `"connecting"` (the mid-reconnect queue branch), anything else is
+     * `"idle"`. `hasSocket` is always `false` for a follower — it never has
+     * one.
+     */
+    private connectionGateState(shardKey: string | undefined): { hasSocket: boolean; wasEverConnected: boolean; wsState: WSState } {
+        if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
+            let wsState: WSState = "idle";
+
+            if (this.leaderStatus === "connected") {
+                wsState = "open";
+            } else if (this.leaderStatus === "connecting") {
+                wsState = "connecting";
+            }
+
+            return { hasSocket: false, wasEverConnected: this.leaderWasEverConnected, wsState };
+        }
+
+        const conn = this.getConnection(shardKey);
+
+        return { hasSocket: conn?.socket !== undefined, wasEverConnected: conn?.wasEverConnected ?? false, wsState: conn?.wsState ?? "idle" };
     }
 
     private getOrCreateConnection(shardKey: string | undefined): ShardConnection {
@@ -5444,6 +5585,23 @@ class LunoraClient {
         this.pendingCacheWrites.clear();
         this.hydratedQueryCache.clear();
         this.queryCache?.clear().catch(() => undefined);
+    }
+
+    /**
+     * Flush every shard with a mutation currently queued in `offlineQueue`
+     * (see `queuedOfflineShardKeys`). Used on a FOLLOWER tab when the
+     * mirrored leader status transitions to `"connected"` — a follower has no
+     * per-shard `ShardConnection` reconnect event to hang the usual
+     * single-shard `flushOfflineQueue(shardKey)` call off of (see the
+     * `handleConnect` call site), so this walks every shard that might have
+     * something queued instead. Flushing an already-empty shard is a cheap
+     * no-op (`flushOfflineQueue` returns immediately once `drain` yields
+     * nothing), so over-inclusion here is harmless.
+     */
+    private flushAllOfflineQueues(): void {
+        for (const shardKey of this.queuedOfflineShardKeys) {
+            this.flushOfflineQueue(shardKey).catch(() => undefined);
+        }
     }
 
     private async flushOfflineQueue(shardKey: string | undefined): Promise<void> {

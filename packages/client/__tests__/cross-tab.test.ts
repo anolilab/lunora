@@ -8,10 +8,11 @@ import type { FunctionReference } from "../src/types";
 /** Wire shape mirrored from `cross-tab.ts`'s internal message union, for raw test-side sends. */
 type RawMessage = { tabId: string; ts: number; type: "claim-leadership" | "heartbeat" };
 
-/** Wire shape of a leader's `subscription-data` / `subscription-settled` broadcast, for raw test-side sends simulating a leader tab. */
+/** Wire shape of a leader's `subscription-data` / `subscription-settled` / `connection-status` broadcast, for raw test-side sends simulating a leader tab. */
 type RawLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
-    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" };
+    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
+    | { status: "connected" | "connecting" | "idle" | "offline"; tabId: string; type: "connection-status" };
 
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -533,6 +534,140 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
         } finally {
             rogue.close();
             client.close();
+        }
+    });
+});
+
+describe("lunoraClient — follower connection-status mirror + offline-queue gate (plan 266 S2)", () => {
+    it("a follower queues an offline mutation instead of rejecting it, gated by the mirrored leader status", async () => {
+        expect.assertions(3);
+
+        // A rejecting fetch stands in for "the network is actually down" — the
+        // fix's whole point is that the follower queues BEFORE ever reaching
+        // this call, not that the call itself somehow succeeds.
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            throw new TypeError("Failed to fetch");
+        });
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            // The leader reports connected once (establishing the follower's
+            // sticky `leaderWasEverConnected`), then offline.
+            rogue.postMessage({ status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            await delay(30);
+            rogue.postMessage({ status: "offline", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(client.connectionStatus()).toBe("offline");
+
+            let rejected = false;
+
+            client.mutation(fnRef("posts:create"), { title: "a" }).catch(() => {
+                rejected = true;
+            });
+
+            // Queued, not sent — `fetchMock` (which would reject) is never
+            // called. (Fails pre-fix: a follower's `conn` is always
+            // `undefined`, so `wasEverConnected` is always `false` and the
+            // write falls through to the rejecting `fetchMock`.)
+            expect(client.pendingCount()).toBe(1);
+
+            await delay(30);
+
+            expect(rejected).toBe(false);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a follower's connectionStatus mirrors the leader's aggregate status instead of staying idle forever", async () => {
+        expect.assertions(4);
+
+        const client = new LunoraClient({ crossTabSync: true, fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })), url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+        const statuses: string[] = [];
+
+        client.onConnectionStatus((status) => statuses.push(status));
+
+        try {
+            expect(client.connectionStatus()).toBe("idle");
+
+            rogue.postMessage({ status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            // Fails pre-fix: `computeStatus()` reads the follower's own (always
+            // empty) `connections` map and reports `"idle"` forever.
+            expect(client.connectionStatus()).toBe("connected");
+
+            rogue.postMessage({ status: "offline", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(client.connectionStatus()).toBe("offline");
+            expect(statuses).toStrictEqual(["idle", "connected", "offline"]);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("demotion tears down a connection's timers via the shared teardown sequence (no leak)", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const client = new LunoraClient({ crossTabSync: true, fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })), url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            // Solo self-promotion: no competing claim, so this client becomes
+            // leader after the coordinator's default leader-timeout window.
+            await vi.advanceTimersByTimeAsync(3100);
+
+            // White-box: inject a `ShardConnection`-shaped record directly into
+            // the connections map with its own armed timers and a `socket`
+            // whose `close()` has no side effects of its own — isolates this
+            // test from the real socket-close -> `handleDisconnect` path
+            // (which already stops the heartbeat independently of demotion),
+            // so it targets exactly what `onStopBeingLeader`/`teardownConnection`
+            // do. `ShardConnection`'s fields aren't part of the public API,
+            // but `private` isn't runtime-enforced.
+            const heartbeatTimer = setInterval(() => undefined, 1000);
+            const connectTimer = setTimeout(() => undefined, 1000);
+            const socketClose = vi.fn<() => void>();
+
+            const internals = client as unknown as {
+                connections: Map<
+                    string,
+                    { connectTimer?: unknown; heartbeatTimer?: unknown; reconnectTimer?: unknown; socket?: { close: () => void }; wsState?: string }
+                >;
+            };
+
+            internals.connections.set("", { connectTimer, heartbeatTimer, reconnectTimer: undefined, socket: { close: socketClose }, wsState: "open" });
+
+            const conn = internals.connections.get("");
+
+            expect(conn?.heartbeatTimer).toBeDefined();
+
+            // A smaller-tabId heartbeat forces this client's coordinator to
+            // step down — the same demotion CLIENT-02 covers for a bare
+            // `TabCoordinator`, now exercised through the full `LunoraClient`.
+            rogue.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" });
+
+            await vi.advanceTimersByTimeAsync(20);
+
+            // Before the fix, `onStopBeingLeader` only called
+            // `conn.socket?.close()` — the connect timer and heartbeat
+            // interval survived the map deletion (a leak). `teardownConnection`
+            // clears both, and still closes the socket.
+            expect(conn?.heartbeatTimer).toBeUndefined();
+            expect(conn?.connectTimer).toBeUndefined();
+            expect(socketClose).toHaveBeenCalledTimes(1);
+        } finally {
+            rogue.close();
+            client.close();
+            vi.useRealTimers();
         }
     });
 });
