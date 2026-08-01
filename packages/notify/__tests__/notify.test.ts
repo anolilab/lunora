@@ -173,6 +173,33 @@ describe("ctx.push.broadcast pagination (plan 222 / NOTIFY-01)", () => {
         expect(listSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
     });
 
+    it("broadcast({ limit }) caps the CUMULATIVE audience across pages, not per page", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setupPaged();
+        const total = pageSize + 10; // audience bigger than the cap, spanning multiple pages
+        const limit = pageSize + 2; // bigger than one page, so the walk must still span >= 2 pages
+
+        for (let index = 0; index < total; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/cap/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        const result = await push.broadcast({ body: "capped", title: "t" }, { limit });
+
+        // Reaches EXACTLY `limit` subscriptions overall — not `limit` PER PAGE
+        // (which would deliver to the whole `total` audience across pages).
+        expect(result.total).toBe(limit);
+        expect(result.sent).toBe(limit);
+
+        const ids = result.outcomes.map((outcome) => outcome.id);
+
+        expect(new Set(ids).size).toBe(limit);
+
+        // The rest of the audience was registered but never delivered to.
+        await expect(store.list()).resolves.toHaveLength(total);
+    });
+
     it("broadcastPage returns one bounded page plus a resumable nextCursor", async () => {
         expect.hasAssertions();
 

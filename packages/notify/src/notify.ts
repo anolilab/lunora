@@ -475,20 +475,37 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * `filter.after` (see its doc comment). The `nextCursor === cursor` check
      * is an extra backstop against a pathological store whose `nextCursor`
      * somehow fails to advance despite reporting more rows remain.
+     *
+     * `filter.limit`, when set, is a CUMULATIVE cap across the whole walk (see
+     * its JSDoc) — `broadcastPage` itself only enforces `limit` as a per-page
+     * cap, so each page here is handed the shrinking REMAINING budget
+     * (`overallLimit - aggregate.total`) rather than the original `filter.limit`
+     * unmodified; forwarding it verbatim would let every page reach up to
+     * `limit` MORE subscriptions instead of the whole broadcast topping out
+     * there. The walk also stops as soon as the cumulative total meets the cap,
+     * even if more pages remain.
      */
     const broadcast = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastResult> => {
         const aggregate: BroadcastResult = { failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 };
         let cursor = filter?.after;
+        const overallLimit = filter?.limit;
 
         for (;;) {
+            const pageFilter: SubscriptionFilter | undefined =
+                overallLimit === undefined ? { ...filter, after: cursor } : { ...filter, after: cursor, limit: overallLimit - aggregate.total };
+
             // eslint-disable-next-line no-await-in-loop -- pages are inherently sequential: page N's cursor comes from page N-1's result
-            const { nextCursor, result } = await broadcastPage(payload, { ...filter, after: cursor });
+            const { nextCursor, result } = await broadcastPage(payload, pageFilter);
 
             aggregate.failed += result.failed;
             aggregate.pruned += result.pruned;
             aggregate.sent += result.sent;
             aggregate.total += result.total;
             aggregate.outcomes.push(...result.outcomes);
+
+            if (overallLimit !== undefined && aggregate.total >= overallLimit) {
+                break;
+            }
 
             if (nextCursor === undefined || nextCursor === cursor) {
                 break;
