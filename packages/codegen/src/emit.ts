@@ -4451,6 +4451,15 @@ const vectorsStub: VectorSearchLike = {
 `
         : "";
     const vectorNamespaceOption = hasShardedVectors ? "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, " : "";
+    // Read-side counterpart to `vectorNamespaceOption`: the same sentinel-mapped
+    // shard key, but threaded into `createContextVectors` so `ctx.vectors`
+    // (query/getByIds/deleteByIds/upsert/upsertNow) defaults to this DO's own
+    // namespace too — otherwise `ctx.vectors.query` searches every tenant's
+    // vectors (namespace-less Vectorize queries match the whole index) even
+    // though the auto-sync write hook above is already scoped. Gated on
+    // `hasShardedVectors` so an unsharded (or no-vectors) schema keeps emitting
+    // the bare `createContextVectors(lunora)` call, byte-identical.
+    const vectorsContextNamespaceOption = hasShardedVectors ? ", { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey }" : "";
     const vectorsBuild = hasVectors
         ? `
             let vectors: VectorSearchLike;
@@ -4459,7 +4468,7 @@ const vectorsStub: VectorSearchLike = {
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 ${vectorNamespaceField}
-                vectors = createContextVectors(lunora);
+                vectors = createContextVectors(lunora${vectorsContextNamespaceOption});
                 onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;

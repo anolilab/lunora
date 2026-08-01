@@ -1,6 +1,6 @@
 import { resolveDocumentPath } from "../../../../shared/document-path";
 import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
-import type { LunoraVectors } from "./types";
+import type { LunoraVectors, VectorizeVector } from "./types";
 
 /**
  * `(input: string) => vector`. Matches `@lunora/server`'s `VectorEmbedder` so
@@ -22,6 +22,7 @@ interface VectorMatchesLike {
 interface VectorRecordLike {
     id: string;
     metadata?: Record<string, unknown>;
+    namespace?: string;
     values: ReadonlyArray<number>;
 }
 
@@ -63,32 +64,91 @@ interface VectorSearchLike {
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
 }
 
+/** Options for {@link createContextVectors}. */
+interface CreateContextVectorsOptions {
+    /**
+     * The DO's own shard/tenant key, applied as the default `namespace` for
+     * every read/write that doesn't pass one explicitly. Vectorize indexes are
+     * account-global, so without this a sharded app's `ctx.vectors.query` (and
+     * `getByIds`/`deleteByIds`, which Vectorize can't filter by namespace
+     * remotely at all) matches or returns every tenant's vectors. `undefined`
+     * (the default, and always the case for a root-mode/unsharded DO) keeps
+     * today's namespace-less behaviour — byte-identical codegen for schemas
+     * with no `.shardBy()`'d vector table.
+     */
+    namespace?: string;
+}
+
 /**
  * Bridge `LunoraVectors` (returns Vectorize mutation receipts) to the server's
  * `VectorSearch` contract (void mutations, server match/record shapes). Both
  * `upsert` and `upsertNow` write inline — this design has no post-commit queue,
  * so "now" and "deferred" collapse to the same synchronous call.
+ *
+ * Tenant isolation (read side) — IMPORTANT: `options.namespace`, when passed,
+ * defaults every operation's `namespace` to the caller's shard/tenant key
+ * whenever the operation itself doesn't specify one explicitly (an explicit
+ * `input.namespace` always wins). `query`/`upsert`/`upsertNow` forward the
+ * default straight to Vectorize, which filters remotely. `getByIds` and
+ * `deleteByIds` can't — Vectorize's id-based operations take no `namespace`
+ * option at all — so isolation there is enforced client-side: `getByIds`
+ * drops any returned record whose `namespace` doesn't match (fail closed: a
+ * record with no `namespace` field is treated as a mismatch, never treated as
+ * "belongs to everyone"), and `deleteByIds` resolves ids via `getByIds` first
+ * and only deletes the subset that belongs to the caller's namespace.
  */
-const createContextVectors = (lunora: LunoraVectors): VectorSearchLike => {
+const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVectorsOptions): VectorSearchLike => {
+    const defaultNamespace = options?.namespace;
+
     const upsert = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
         await lunora.upsert(indexName, {
             embed: input.embed,
             id: input.id,
             input: input.input,
             metadata: input.metadata,
-            namespace: input.namespace,
+            namespace: input.namespace ?? defaultNamespace,
         });
+    };
+
+    // Shared by `getByIds` and `deleteByIds`: fetch the raw records and keep
+    // only the ones whose `namespace` matches the active default. Vectorize's
+    // id-based operations carry no remote namespace filter, so this is the
+    // only enforcement point for the id path. Fail closed on a record with no
+    // `namespace` at all — absent is not "belongs to everyone".
+    const getMatchingRecords = async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => {
+        const records = await lunora.getByIds(indexName, ids);
+
+        if (defaultNamespace === undefined) {
+            return records;
+        }
+
+        return records.filter((record) => record.namespace === defaultNamespace);
     };
 
     return {
         deleteByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<void> => {
-            await lunora.deleteByIds(indexName, ids);
+            if (defaultNamespace === undefined) {
+                await lunora.deleteByIds(indexName, ids);
+
+                return;
+            }
+
+            const matching = await getMatchingRecords(indexName, ids);
+
+            if (matching.length === 0) {
+                return;
+            }
+
+            await lunora.deleteByIds(
+                indexName,
+                matching.map((record) => record.id),
+            );
         },
         getByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorRecordLike>> => {
-            const records = await lunora.getByIds(indexName, ids);
+            const records = await getMatchingRecords(indexName, ids);
 
             return records.map((record) => {
-                return { id: record.id, metadata: record.metadata, values: record.values };
+                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: record.values };
             });
         },
         query: async (indexName: string, input: VectorQueryInputLike): Promise<VectorMatchesLike> => {
@@ -96,7 +156,7 @@ const createContextVectors = (lunora: LunoraVectors): VectorSearchLike => {
                 embed: input.embed,
                 filter: input.filter,
                 input: input.input,
-                namespace: input.namespace,
+                namespace: input.namespace ?? defaultNamespace,
                 // Default to "indexed" rather than "all": returning every
                 // metadata field by default leaks whatever was stored on the
                 // vector (potentially cross-tenant if namespaces aren't wired).
@@ -174,6 +234,14 @@ const sharedNamespaceWarned = new Set<string>();
  * index carries no metadata, so the warning fires on ANY namespace-less sync,
  * not only when metadata is present. Side-effect-only: never touches the upsert
  * payload. At most one warning per index name per process.
+ *
+ * Note (plan 255): for a `.shardBy()`'d vectorized table, codegen wires the
+ * matching read-side default automatically — the `createContextVectors`
+ * instance handed to `ctx.vectors` gets the same shard key as `namespace`,
+ * so this warning firing (write side unscoped) implies the read side is
+ * unscoped too. It only fires when the app itself constructs an unscoped
+ * sync hook (no `.shardBy()`'d table, or a hand-rolled `createVectorSyncHook`
+ * call outside codegen).
  */
 const warnSharedNamespace = (indexName: string): void => {
     if (sharedNamespaceWarned.has(indexName)) {
@@ -222,6 +290,19 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * owns this hook. Any namespace-less sync emits a one-time-per-index dev warning
  * (regardless of whether metadata is present); a genuinely single-tenant app
  * suppresses it with `allowSharedNamespace: true`.
+ *
+ * Since plan 255, codegen satisfies the query-side requirement automatically
+ * for a `.shardBy()`'d vectorized table: the `vectors` instance passed in
+ * `options` here is the SAME `createContextVectors(...)` instance exposed as
+ * `ctx.vectors`, constructed with the identical shard-key `namespace` default —
+ * so `ctx.vectors.query`/`getByIds`/`deleteByIds` are scoped without any app
+ * code changes. One consequence of sharing that instance: this hook's own
+ * internal `deleteByIds` calls (on row delete, on a cleared inline field, and
+ * on compensation after a failed upsert) now also go through the
+ * namespace-verifying path described on {@link createContextVectors} — an
+ * extra `getByIds` subrequest per delete-shaped write, not a behavior change
+ * (the row being deleted was written under this same shard's namespace, so
+ * the verification passes).
  *
  * Consistency — IMPORTANT: this hook runs inline within the mutation but talks
  * to Vectorize, which is external and non-transactional. The per-index calls
@@ -344,6 +425,7 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
 };
 
 export type {
+    CreateContextVectorsOptions,
     SchemaLike,
     TableDefinitionLike,
     TableVectorIndexLike,

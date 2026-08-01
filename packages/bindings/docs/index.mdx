@@ -115,6 +115,14 @@ export const search = action({
 
 `query(index, { input })` embeds `input` with the index's configured embedder, then runs the search; pass a precomputed `vector` instead of `input` to skip embedding. `upsert` / `upsertMany` write vectors back. The index name is narrowed to the ones your schema declares, so a typo is a compile error.
 
+### Tenant isolation on `.shardBy()` tables
+
+Vectorize indexes are **account-global** — every shard DO shares the same index, so a query with no `namespace` matches every tenant's vectors. When a `.shardBy()`'d table declares a vector index, codegen scopes both sides automatically: the auto-sync write hook and `ctx.vectors` itself default `namespace` to the owning DO's shard key, so `ctx.vectors.query`/`getByIds`/`deleteByIds`/`upsert`/`upsertNow` only ever see this tenant's vectors unless you pass an explicit `namespace` yourself (which always wins over the default).
+
+Vectorize's id-based operations (`getByIds`, `deleteByIds`) take no `namespace` option at all, so that isolation is enforced client-side rather than by a remote filter: `getByIds` drops any returned record whose `namespace` doesn't match (a record with no `namespace` is treated as a mismatch, never as "belongs to everyone"), and `deleteByIds` resolves the ids first and only deletes the ones that belong to the caller's namespace.
+
+A vectorized table with **no** `.shardBy()` (or the single default DO) keeps today's namespace-less behavior — there is no per-tenant key to scope by.
+
 ### Filtering on metadata
 
 `.vectorize(field, { metadata: ["authorId"] })` mirrors those columns into each vector's metadata so `query(index, { filter })` can narrow by them:

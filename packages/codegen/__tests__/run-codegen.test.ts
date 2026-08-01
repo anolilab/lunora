@@ -2752,7 +2752,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("emits the bare (namespace-less) createVectorSyncHook call for an unsharded (root) vectorized table", () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             const schema: SchemaIR = {
                 tables: [
@@ -2776,13 +2776,15 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // shard key to scope by — so the emit must stay byte-identical to
             // today: no `namespace`, no `ROOT_SHARD_NAME` import, no shard-key read.
             expect(output).toContain("onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });");
+            // The read side (`ctx.vectors`) must stay just as bare as the write side.
+            expect(output).toContain("vectors = createContextVectors(lunora);");
             expect(output).not.toContain("namespace:");
             expect(output).not.toContain("ROOT_SHARD_NAME");
             expect(output).not.toContain("currentShardKey");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is .shardBy()'d", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             const schema: SchemaIR = {
                 tables: [
@@ -2813,12 +2815,16 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
+            // The read side gets the same sentinel-mapped namespace default —
+            // the cross-tenant leak this plan closes was on `ctx.vectors`, not
+            // just the auto-sync write hook above.
+            expect(output).toContain("vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey });");
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite,");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is indexed via a standalone defineVectorIndex (Shape B), not inline .vectorize()", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             const schema: SchemaIR = {
                 tables: [
@@ -2851,6 +2857,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
+            expect(output).toContain("vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey });");
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite,");
         });

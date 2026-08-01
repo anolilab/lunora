@@ -95,6 +95,179 @@ describe("createContextVectors", () => {
     });
 });
 
+describe("createContextVectors — namespace default (tenant isolation, plan 255)", () => {
+    it("the 1-arg form forwards `undefined` (no behaviour change)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.query("docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("query defaults to the constructor namespace when the input has none", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+
+        await context.query("docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-a" }));
+    });
+
+    it("an explicit input.namespace wins over the constructor default", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+
+        await context.query("docs", { namespace: "tenant-b", vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-b" }));
+    });
+
+    it("upsert/upsertNow default to the constructor namespace when the input has none", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: undefined, namespace: "tenant-a", values: [5] }]);
+        expect(index.upsert).toHaveBeenNthCalledWith(2, [{ id: "b", metadata: undefined, namespace: "tenant-a", values: [2] }]);
+    });
+
+    it("upsert honors an explicit input.namespace over the constructor default", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsert("docs", { embed, id: "a", input: "hello", namespace: "tenant-b" });
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: "tenant-b", values: [5] }]);
+    });
+
+    it("getByIds under a default namespace returns only the matching records (fails pre-fix: returns all)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+
+        const records = await context.getByIds("docs", ["a", "b"]);
+
+        expect(records).toEqual([{ id: "a", metadata: undefined, namespace: "tenant-a", values: [1, 2] }]);
+    });
+
+    it("getByIds fails closed on a record with no namespace at all", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+
+        const records = await context.getByIds("docs", ["a"]);
+
+        expect(records).toEqual([]);
+    });
+
+    it("getByIds with no default namespace passes every record through unfiltered", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        const records = await context.getByIds("docs", ["a", "b"]);
+
+        expect(records).toEqual([
+            { id: "a", metadata: undefined, namespace: "tenant-a", values: [1, 2] },
+            { id: "b", metadata: undefined, namespace: "tenant-b", values: [1, 2] },
+        ]);
+    });
+
+    it("deleteByIds under a default namespace only deletes the matching subset (fails pre-fix: deletes all)", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+
+        await context.deleteByIds("docs", ["a", "b"]);
+
+        expect(index.getByIds).toHaveBeenCalledWith(["a", "b"]);
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a"]);
+    });
+
+    it("deleteByIds under a default namespace is a no-op (skips the underlying delete) when nothing matches", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a" });
+
+        await context.deleteByIds("docs", ["a"]);
+
+        expect(index.deleteByIds).not.toHaveBeenCalled();
+    });
+
+    it("deleteByIds with no default namespace passes every id through unfiltered (no getByIds pre-read)", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.deleteByIds("docs", ["a", "b"]);
+
+        expect(index.getByIds).not.toHaveBeenCalled();
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a", "b"]);
+    });
+});
+
 const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArray<string>][]; upserts: [string, unknown][] } => {
     const upserts: [string, unknown][] = [];
     const deletes: [string, ReadonlyArray<string>][] = [];
