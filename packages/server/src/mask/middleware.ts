@@ -400,22 +400,32 @@ const wrapDatabase = <Context>(
      * trilaterates a masked `v.geoPoint()` column to geohash precision.
      *
      * Unlike `assertIndexFieldsAllowed`, this guards the index's DECLARED fields —
-     * it needs `indexFields`, the per-table index→fields map an app supplies via
-     * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
-     * ({@link MaskOptions.indexFields}). Fails OPEN (returns without throwing) for
-     * the un-hardenable cases: `indexFields` wasn't supplied, or the table/index
+     * it needs `indexFields`, the per-table, per-KIND index→fields map an app
+     * supplies via `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
+     * ({@link MaskOptions.indexFields}). The caller passes its own `kind` — one of
+     * `"index" | "geo" | "rank"`, the same vocabulary `@lunora/shard-engine`'s
+     * `IndexUseHook` already uses — because the engine resolves `withIndex` /
+     * `withGeoIndex` / rank reads in THREE SEPARATE namespaces
+     * (`tableDefinition.indexes` / `.geoIndexes` / `.rankIndexes`), so the same
+     * index NAME can legally denote a different index per kind. Looking up only
+     * `[tableName][indexName]` on a flat map would let one kind's fields shadow
+     * another's for a colliding name — checking the wrong index's fields instead
+     * of the documented fail-open — which is exactly the bug this kind parameter
+     * closes (plan 258). Fails OPEN (returns without throwing) for the
+     * un-hardenable cases: `indexFields` wasn't supplied, or the table/kind/index
      * name isn't declared in it (an unknown index name errors downstream anyway,
      * so there is nothing left to protect by throwing here too). Only a KNOWN
-     * index whose declared fields intersect the masked column set throws.
+     * index (of the CALLER'S kind) whose declared fields intersect the masked
+     * column set throws.
      */
-    const assertIndexDeclarationAllowed = (tableName: string, indexName: string, method: string): void => {
+    const assertIndexDeclarationAllowed = (tableName: string, indexName: string, method: string, kind: "geo" | "index" | "rank"): void => {
         const columns = perTable.get(tableName);
 
         if (!columns) {
             return;
         }
 
-        const declaredFields = indexFields?.[tableName]?.[indexName];
+        const declaredFields = indexFields?.[tableName]?.[kind]?.[indexName];
 
         if (!declaredFields) {
             return;
@@ -529,7 +539,7 @@ const wrapDatabase = <Context>(
                 // Declared-fields guard FIRST: it closes the BARE scan (no `range`),
                 // which the callback-recorder just below can't see — see the guard
                 // function's own docblock, above `wrapDatabase`.
-                assertIndexDeclarationAllowed(tableName, indexName, "withIndex");
+                assertIndexDeclarationAllowed(tableName, indexName, "withIndex", "index");
                 assertIndexFieldsAllowed(range, columns, tableName, "withIndex");
 
                 return wrapReader(reader.withIndex(indexName, range), columns, tableName);
@@ -549,7 +559,7 @@ const wrapDatabase = <Context>(
             // keyed off the geo index's declared field (see
             // `indexFieldsFromSchema`).
             withGeoIndex: (indexName, build) => {
-                assertIndexDeclarationAllowed(tableName, indexName, "withGeoIndex");
+                assertIndexDeclarationAllowed(tableName, indexName, "withGeoIndex", "geo");
 
                 return wrapReader(reader.withGeoIndex(indexName, build), columns, tableName);
             },
@@ -839,14 +849,14 @@ const wrapDatabase = <Context>(
 
         async rank(tableName, indexName, options) {
             assertRankWhereAllowed(tableName, options, "rank");
-            assertIndexDeclarationAllowed(tableName, indexName, "rank");
+            assertIndexDeclarationAllowed(tableName, indexName, "rank", "rank");
 
             return base.rank(tableName, indexName, options);
         },
 
         async rankPage(tableName, indexName, options) {
             assertRankWhereAllowed(tableName, options, "rankPage");
-            assertIndexDeclarationAllowed(tableName, indexName, "rankPage");
+            assertIndexDeclarationAllowed(tableName, indexName, "rankPage", "rank");
 
             const page = await base.rankPage(tableName, indexName, options);
             const columns = perTable.get(tableName);
@@ -861,7 +871,7 @@ const wrapDatabase = <Context>(
             ? {
                   rankBefore(tableName: string, indexName: string, options: unknown) {
                       assertRankWhereAllowed(tableName, options, "rankBefore");
-                      assertIndexDeclarationAllowed(tableName, indexName, "rankBefore");
+                      assertIndexDeclarationAllowed(tableName, indexName, "rankBefore", "rank");
 
                       return baseRankBefore(tableName, indexName, options);
                   },

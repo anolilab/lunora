@@ -338,8 +338,8 @@ describe("indexFieldsFromSchema (plan 250 — mask() bare-index-scan / rank orac
 
         expect(indexFieldsFromSchema(schema)).toStrictEqual({
             users: {
-                by_score: ["score", "ssn"],
-                by_ssn: ["ssn"],
+                index: { by_ssn: ["ssn"] },
+                rank: { by_score: ["score", "ssn"] },
             },
         });
     });
@@ -359,7 +359,7 @@ describe("indexFieldsFromSchema (plan 250 — mask() bare-index-scan / rank orac
             messages: defineTable({ createdAt: v.number() }).rankIndex("byTime", { sortBy: [{ field: "createdAt" }] }),
         });
 
-        expect(indexFieldsFromSchema(schema)).toStrictEqual({ messages: { byTime: ["createdAt"] } });
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({ messages: { rank: { byTime: ["createdAt"] } } });
     });
 
     it("maps a geo index's declared `field` (closes the withGeoIndex position oracle)", () => {
@@ -371,7 +371,7 @@ describe("indexFieldsFromSchema (plan 250 — mask() bare-index-scan / rank orac
 
         expect(indexFieldsFromSchema(schema)).toStrictEqual({
             users: {
-                by_location: ["homeLocation"],
+                geo: { by_location: ["homeLocation"] },
             },
         });
     });
