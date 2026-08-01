@@ -782,6 +782,80 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("force-closes a half-open socket once no frame has arrived for heartbeatIntervalMs * 2.5, and arms reconnect (CLIENT-02)", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 1000,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(client.connectionStatus()).toBe("connected");
+
+            // Two heartbeat ticks pass with no reply at all (not even a pong) —
+            // still under the 2.5x window (2500ms), so the socket stays open and
+            // a ping keeps going out each tick.
+            vi.advanceTimersByTime(2000);
+
+            expect(socket.readyState).toBe(1);
+
+            // The third tick crosses `heartbeatIntervalMs * 2.5`: the far end has
+            // gone quiet without the socket ever firing `close` (a half-open
+            // socket — a swallowed RST, a stuck proxy) — the watchdog force-closes
+            // it instead of leaving it reporting "open" forever while every live
+            // query on it silently stales, and the normal reconnect/backoff arms.
+            vi.advanceTimersByTime(1000);
+
+            expect(socket.readyState).toBe(3);
+            expect(client.connectionStatus()).toBe("offline");
+
+            client.close();
+        });
+
+        it("a socket that keeps receiving ANY frame (even the non-JSON lunora-pong) is never force-closed by the watchdog (CLIENT-02)", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 1000,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // The server answers every ping with `lunora-pong` — a plain,
+            // non-JSON string the `handleServerMessage` JSON.parse guard drops —
+            // but it must still reset the watchdog (it proves the socket is
+            // alive). Five ticks span 5000ms, well past the 2500ms window, so a
+            // watchdog that ignored the pong would have force-closed by now.
+            for (let tick = 0; tick < 5; tick += 1) {
+                vi.advanceTimersByTime(1000);
+                socket.receive("lunora-pong");
+            }
+
+            expect(socket.readyState).toBe(1);
+            expect(client.connectionStatus()).toBe("connected");
+
+            client.close();
+        });
+
         it("does not send keepalive pings when the heartbeat is disabled", () => {
             expect.assertions(1);
 

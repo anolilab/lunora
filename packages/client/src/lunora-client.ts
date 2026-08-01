@@ -377,6 +377,19 @@ interface ShardConnection {
     connectTimer: ReturnType<typeof setTimeout> | undefined;
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+    /**
+     * Wall-clock time (`Date.now()`) of the most recently received frame on
+     * this connection's socket — ANY frame, including the plain-string
+     * `lunora-pong` keepalive reply, which never reaches `handleServerMessage`'s
+     * JSON parsing. Reset on every `open` so a fresh (re)connect starts its
+     * watchdog window clean. The heartbeat tick force-closes a socket that's
+     * gone quiet for more than `heartbeatIntervalMs * 2.5` despite reporting
+     * `wsState === "open"` — a half-open socket (a proxy that swallowed the
+     * close, a hibernation edge case) that would otherwise never fire `close`
+     * and silently stale every live query bound to it forever.
+     */
+    lastFrameAt: number;
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
@@ -3951,6 +3964,7 @@ class LunoraClient {
             conn = {
                 connectTimer: undefined,
                 heartbeatTimer: undefined,
+                lastFrameAt: 0,
                 pendingUnsubscribes: [],
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
@@ -4357,6 +4371,10 @@ class LunoraClient {
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
+            // Fresh (re)connect — start the half-open watchdog window clean
+            // rather than carrying over a stale timestamp from before a
+            // disconnect/reconnect cycle (see `ShardConnection.lastFrameAt`).
+            conn.lastFrameAt = Date.now();
             this.emitConnectionStatus();
 
             // Announce the connection (and its app context) before resubscribing,
@@ -4518,7 +4536,12 @@ class LunoraClient {
     }
 
     /**
-     * Begin the keepalive heartbeat on an open connection. Each tick sends a
+     * Begin the keepalive heartbeat on an open connection. Each tick first
+     * checks the half-open watchdog (see {@link ShardConnection.lastFrameAt}):
+     * if no frame at all has arrived within `heartbeatIntervalMs * 2.5`, the far
+     * end has gone quiet without the socket ever firing `close` — force it
+     * closed so `handleDisconnect` arms the normal reconnect/backoff instead of
+     * every live query on it silently staling forever. Otherwise it sends a
      * {@link WS_KEEPALIVE_PING} text frame the server answers from its
      * hibernation auto-response without waking the DO. A no-op when the
      * heartbeat is disabled (an interval of zero or less); idempotent — any
@@ -4537,8 +4560,25 @@ class LunoraClient {
                 return;
             }
 
+            const { socket } = conn;
+
+            if (Date.now() - conn.lastFrameAt > this.heartbeatIntervalMs * 2.5) {
+                // Mirrors the fail-fast connect-timeout pattern in `ensureSocket`:
+                // a stuck socket may throw on close, but the disconnect call
+                // below still arms reconnect either way.
+                try {
+                    socket.close();
+                } catch {
+                    /* a stuck socket may throw on close — the disconnect below still arms reconnect */
+                }
+
+                this.handleDisconnect(conn);
+
+                return;
+            }
+
             try {
-                conn.socket.send(WS_KEEPALIVE_PING);
+                socket.send(WS_KEEPALIVE_PING);
             } catch {
                 // A send race against a closing socket is harmless — the close
                 // handler will tear the heartbeat down.
@@ -4623,6 +4663,17 @@ class LunoraClient {
     }
 
     private handleServerMessage(raw: unknown, shardKey?: string): void {
+        // Any inbound frame — including the plain-string `lunora-pong` keepalive
+        // reply, which the JSON.parse guard below silently drops — proves the
+        // socket is still alive. Stamp it unconditionally, before the parsing
+        // below, so the heartbeat watchdog (see `startHeartbeat`) can tell a
+        // half-open socket from a healthy one.
+        const conn = this.getConnection(shardKey);
+
+        if (conn) {
+            conn.lastFrameAt = Date.now();
+        }
+
         const text = decodeServerFrame(raw);
 
         if (text === undefined) {
