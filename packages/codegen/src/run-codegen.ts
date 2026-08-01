@@ -473,6 +473,53 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     setStandardTypeResolver(resolveStandardSchemaType);
 
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
+
+    // Cold-start bootstrap (issue #283): `discoverFunctions` below infers each
+    // handler's return type against `project` as it stands RIGHT NOW. On a fresh
+    // clone, CI, or after `rm -rf lunora/_generated`, that project has no
+    // `Doc<T>`/`Id<T>`/typed `ctx.db` for a handler to resolve against — so a
+    // return type that depends on them (a `Doc<…>` read, a paginated result)
+    // collapses to `{}`/`unknown`, and THAT gets written into `api.ts`/
+    // `functions.ts`. A second `lunora codegen` run re-infers against the first
+    // run's own (now-present) output and recovers more — the backend's own
+    // `tsc --noEmit` can even read 0 errors a full pass before a CONSUMING app
+    // does, since the backend mostly doesn't read its own inferred types back
+    // through `api.ts` the way a consumer does. Reproduced by `rm -rf
+    // lunora/_generated && lunora codegen`.
+    //
+    // `dataModel.ts` depends only on `schema` (already known here) and
+    // `server.ts`'s core `Doc`/`Id`/typed builders are schema-only too — the
+    // identity/env/container/workflow/queue narrowing computed further below
+    // only adds detail, it doesn't change whether `ctx.db` resolves — so
+    // pre-writing both with the schema-only info on hand NOW, before
+    // `discoverFunctions` runs, lets pass 1 see the same declarations pass 2
+    // would have. The full `server.ts` (with that later detail) overwrites
+    // this provisional one before `runCodegen` returns, via the normal write
+    // phase below — `writeIfChanged` no-ops there if content is unchanged, so a
+    // warm run pays nothing extra beyond two cheap string renders.
+    if (!options.dryRun) {
+        const declaredDependenciesForBootstrap = readPackageDependencies(options.projectRoot);
+        const useUmbrellaForBootstrap = (declaredDependenciesForBootstrap ?? new Set<string>()).has("lunorash");
+        const bootstrapDirectory = join(lunoraDirectory, "_generated");
+        const bootstrapDataModelPath = join(bootstrapDirectory, "dataModel.ts");
+        const bootstrapServerPath = join(bootstrapDirectory, "server.ts");
+        const bootstrapDataModelContent = emitDataModel(schema, useUmbrellaForBootstrap);
+        const bootstrapServerContent = emitServer({ schema, useUmbrella: useUmbrellaForBootstrap });
+
+        if (!existsSync(bootstrapDirectory)) {
+            mkdirSync(bootstrapDirectory, { recursive: true });
+        }
+
+        writeIfChanged(bootstrapDataModelPath, bootstrapDataModelContent);
+        writeIfChanged(bootstrapServerPath, bootstrapServerContent);
+
+        // Make sure `project` sees this content even if its module resolution
+        // would otherwise cache the pre-write (missing/stale) state — belt and
+        // suspenders alongside the disk write above.
+        project.createSourceFile(bootstrapDataModelPath, bootstrapDataModelContent, { overwrite: true });
+        project.createSourceFile(bootstrapServerPath, bootstrapServerContent, { overwrite: true });
+    }
+
     const functions = discoverFunctions(project, lunoraDirectory);
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);
