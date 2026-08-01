@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { UMBRELLA_BASE_PACKAGES } from "../src/emit";
 import {
     createCodegenProject,
     emitApi,
@@ -2290,6 +2291,87 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitApi({ functions: [makeFunction({ returnType: "{ ok: boolean }" })] });
 
             expect(output).not.toContain("./dataModel.js");
+        });
+
+        it("leaves a checker-rendered @lunora/flags qualifier untouched for a non-umbrella project", () => {
+            expect.assertions(1);
+
+            const output = emitApi({ functions: [makeFunction({ returnType: 'import("@lunora/flags").LunoraFlags' })] });
+
+            expect(output).toContain('import("@lunora/flags").LunoraFlags');
+        });
+
+        it("rewrites a checker-rendered qualifier for each of the five newly-covered umbrella packages (errors, flags, observability, platform, ratelimit)", () => {
+            expect.assertions(10);
+
+            for (const pkg of ["errors", "flags", "observability", "platform", "ratelimit"]) {
+                const output = emitApi({ functions: [makeFunction({ returnType: `import("@lunora/${pkg}").Placeholder` })], useUmbrella: true });
+
+                expect(output).toContain(`import("lunorash/${pkg}").Placeholder`);
+                expect(output).not.toContain(`import("@lunora/${pkg}")`);
+            }
+        });
+
+        it("forwards a mirrored deep subpath (flags/web) but leaves an unmirrored one (flags/providers/env) unrewritten under the umbrella", () => {
+            expect.assertions(2);
+
+            const mirrored = emitApi({ functions: [makeFunction({ returnType: 'import("@lunora/flags/web").WebProvider' })], useUmbrella: true });
+            const unmirrored = emitApi({
+                functions: [makeFunction({ exportName: "list2", returnType: 'import("@lunora/flags/providers/env").EnvProvider' })],
+                useUmbrella: true,
+            });
+
+            expect(mirrored).toContain('import("lunorash/flags/web").WebProvider');
+            // Not mirrored by the umbrella (`./flags/env`, not `./flags/providers/env`) — left as-is rather than rewritten into a dead specifier.
+            expect(unmirrored).toContain('import("@lunora/flags/providers/env").EnvProvider');
+        });
+
+        it("leaves a platform conformance subpath unrewritten (the umbrella exports only bare `./platform`) but still rewrites the bare import", () => {
+            expect.assertions(2);
+
+            const subpath = emitApi({ functions: [makeFunction({ returnType: 'import("@lunora/platform/conformance").Suite' })], useUmbrella: true });
+            const bare = emitApi({ functions: [makeFunction({ exportName: "list2", returnType: 'import("@lunora/platform").ShardHost' })], useUmbrella: true });
+
+            expect(subpath).toContain('import("@lunora/platform/conformance").Suite');
+            expect(bare).toContain('import("lunorash/platform").ShardHost');
+        });
+    });
+
+    describe("umbrella_base_packages parity (anti-drift lock for the umbrella qualifier rewrite)", () => {
+        // Read the umbrella's manifest directly rather than importing it, so this
+        // test exercises the same "static list vs. source of truth" comparison a
+        // reviewer would do by hand — and fails loudly (ENOENT) if the umbrella
+        // package ever moves, per plan 295 §8's accepted risk.
+        const umbrellaPackageJsonPath = join(here, "..", "..", "lunora", "package.json");
+        const umbrellaExports = JSON.parse(readFileSync(umbrellaPackageJsonPath, "utf8")) as { exports: Record<string, unknown> };
+
+        /** First path segment of a subpath export key, e.g. `"./server/types"` -> `"server"`. */
+        const topLevelExportNames: ReadonlyArray<string> = [
+            ...new Set(
+                Object.keys(umbrellaExports.exports)
+                    .filter((key) => key !== "." && key !== "./package.json")
+                    .map((key) => key.replace(/^\.\//u, "").split("/")[0] ?? ""),
+            ),
+        ];
+
+        it("every UMBRELLA_BASE_PACKAGES entry has a matching top-level export in packages/lunora/package.json", () => {
+            // One assertion per entry in the (10-entry) constant.
+            expect.assertions(10);
+
+            for (const pkg of UMBRELLA_BASE_PACKAGES) {
+                expect(topLevelExportNames).toContain(pkg);
+            }
+        });
+
+        it("every top-level export in packages/lunora/package.json (other than `.`/`./package.json`) is covered by UMBRELLA_BASE_PACKAGES", () => {
+            // One assertion per distinct top-level export segment — currently the
+            // same 10 as UMBRELLA_BASE_PACKAGES; a divergence changes this count
+            // and fails loudly rather than silently under- or over-asserting.
+            expect.assertions(10);
+
+            for (const name of topLevelExportNames) {
+                expect(UMBRELLA_BASE_PACKAGES as ReadonlyArray<string>).toContain(name);
+            }
         });
     });
 
