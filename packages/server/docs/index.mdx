@@ -133,11 +133,11 @@ mechanisms cooperate to guarantee this on the DO-backed runtime:
   `(identity, mutationId)` — a replay of an unacknowledged write returns the
   **cached** result without re-running the handler at all.
 - **OCC surfaces as an error, not a retry.** A write guarded by optimistic
-  concurrency that loses the race throws a `ConflictError` (409) back to the
-  caller. The runtime does not catch it and re-invoke the handler internally —
-  the caller decides whether to retry, and a retry is a **new** dispatch (a
-  fresh idempotency key if the client mints one per attempt), not a replay of
-  the one that failed.
+  concurrency that loses the race fails the request with a `409 Conflict`
+  response back to the caller. The runtime does not catch it and re-invoke the
+  handler internally — the caller decides whether to retry, and a retry is a
+  **new** dispatch (a fresh idempotency key if the client mints one per
+  attempt), not a replay of the one that failed.
 
 So `Date.now()` / `crypto.randomUUID()` inside an ordinary `mutation` handler
 is stable for one logical write — the handler body runs exactly once. This is
