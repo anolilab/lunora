@@ -344,11 +344,10 @@ const useDataBrowser = ({
     // are all in scope.
     const [filter, setFilter] = useState<string>(initialSearch ?? "");
 
-    // Structured column filters. Held in a ref too so a write's bulk-delete reads
-    // the current value without threading it through; the page query reads the
-    // state directly via `pageArgs`.
+    // Structured column filters. `bulkDelete` / `toggleFacet` read this state
+    // directly (both are recreated every render and read it synchronously, never
+    // across an `await`), same as the page query via `pageArgs`.
     const [filters, setFilters] = useState<EditableFilter[]>(() => toEditableFilters(initialFilters ?? []));
-    const filtersRef = useMirroredRef<EditableFilter[]>(filters);
 
     // Facets (Datasette-style per-column value/count summaries): the columns the
     // operator has toggled into the facet sidebar, each with its loaded summary.
@@ -412,7 +411,6 @@ const useDataBrowser = ({
         const nextFilters = toEditableFilters(initialFilters ?? []);
 
         setFilters(nextFilters);
-        filtersRef.current = nextFilters;
         // Re-seed the shard from the new URL too, so a switch that also changes
         // shard (a saved query / cross-shard deep link) points reads AND writes
         // at the URL's shard instead of leaving the previous table's shard live.
@@ -552,7 +550,7 @@ const useDataBrowser = ({
     // drops it entirely. With no table selected the hook seeds the slot without
     // fetching (a null fetcher).
     const toggleFacet = (column: string): void => {
-        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(debouncedShard, selectedTable, filtersRef.current, search));
+        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(debouncedShard, selectedTable, filters, search));
     };
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
@@ -731,9 +729,9 @@ const useDataBrowser = ({
     // whatever DID get deleted) while leaving the operator with no signal that
     // more rows are still out there, so this reports the outcome and surfaces a
     // truncation notice on `writeError` instead of staying silent.
-    const drainBulk = async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<BulkDrainOutcome | undefined> => {
+    const drainBulk = async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<void> => {
         if (selectedTable === null) {
-            return undefined;
+            return;
         }
 
         setWriteError(null);
@@ -757,12 +755,8 @@ const useDataBrowser = ({
             if (outcome === "cap-hit") {
                 setWriteError(`Stopped after ${MAX_BULK_DELETE_BATCHES.toString()} batches — rows still match this delete. Run it again to remove the rest.`);
             }
-
-            return outcome;
         } catch (error) {
             setWriteError((error as Error).message);
-
-            return undefined;
         }
     };
 
@@ -823,7 +817,7 @@ const useDataBrowser = ({
     };
 
     const bulkDelete = (): void => {
-        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filtersRef.current), search, table: selectedTable }));
+        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filters), search, table: selectedTable }));
     };
 
     const emptyTable = (): void => {
