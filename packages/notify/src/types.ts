@@ -110,6 +110,17 @@ export interface SubscriptionFilter {
      * `CreateNotifyOptions`'s `broadcastPageSize`, default 250) so a caller
      * that sets `limit` to bound the audience doesn't also have to reason
      * about page sizing.
+     *
+     * The non-positive sentinel means something different at each layer: at
+     * the STORE layer (`list`, and the `d1-store`/`memory-store` fetch-size
+     * hint) a non-positive `limit` means "no cap" — fetch everything. At the
+     * `broadcast`/`broadcastPage` layer, where `limit` is an AUDIENCE cap, a
+     * non-positive value instead means "no deliveries" — `broadcast({ limit: 0
+     * })` reaches nobody, not everybody. This asymmetry is deliberate: the two
+     * layers answer different questions ("how many rows to fetch" vs. "how
+     * many recipients to reach"), and unifying them would either break `list`
+     * callers relying on "no cap" or reintroduce the over-delivery this
+     * distinction fixes (see `broadcastPage`'s doc comment).
      */
     limit?: number;
     /** Restrict to a single owning user. */
