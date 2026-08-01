@@ -69,6 +69,31 @@ export type RegisterInput =
 
 /** Filter narrowing which stored subscriptions a `list`/`broadcast` targets. */
 export interface SubscriptionFilter {
+    /**
+     * Keyset pagination cursor: return only rows with `id` strictly GREATER
+     * than this value, ordered ascending by `id`. `id` is a stable,
+     * content-derived hash (see `webPushId`/`fcmId`), so ordering by it is
+     * immune to concurrent inserts/deletes elsewhere in the table — a page
+     * already walked never re-delivers or skips a row when another device
+     * registers mid-broadcast (the reviewer-flagged "stable under concurrent
+     * registers" property). `broadcastPage`/`broadcast` set this internally to
+     * walk pages; a direct `list()` caller may also page through results with
+     * it.
+     *
+     * OPTIONAL for a reason: `SubscriptionStore` is implementable outside this
+     * package. An external store that does not support cursoring may ignore
+     * `after` entirely and keep returning its (from-the-top) unpaged result —
+     * `broadcastPage` defensively re-filters whatever the store returns down
+     * to `id > after` itself, so a non-cursoring store can never cause a
+     * double-send or an infinite page-walk (each page's result only ever
+     * contains ids the previous page didn't already deliver), but it also
+     * cannot deliver the FULL matched audience beyond whatever the store's own
+     * (unpaged) response window happens to contain — implement `after`
+     * (ordered ascending by `id`, exclusive) to get real, complete pagination
+     * over a large audience.
+     */
+    after?: string;
+
     /** Restrict to a delivery kind. */
     kind?: SubscriptionKind;
 
@@ -76,8 +101,15 @@ export interface SubscriptionFilter {
      * Cap the number of rows returned (a `LIMIT`). Applied server-side by the
      * store, so a large audience never materializes wholesale in the isolate.
      * A non-positive/absent value means "no cap"; a fractional value is truncated.
-     * `broadcast` deliberately leaves this unset (it must reach every matched
-     * device); admin/list reads set it to bound the page.
+     *
+     * For `list`/admin reads this bounds the returned page as before. For
+     * `broadcast`, this is now an OVERALL cap on the total number of
+     * subscriptions reached across every internally-walked page (still
+     * deliberately left unset by default — it must reach every matched
+     * device); the PER-PAGE batch size is a separate, independent knob (see
+     * `CreateNotifyOptions`'s `broadcastPageSize`, default 250) so a caller
+     * that sets `limit` to bound the audience doesn't also have to reason
+     * about page sizing.
      */
     limit?: number;
     /** Restrict to a single owning user. */
@@ -94,7 +126,14 @@ export interface SubscriptionStore {
     delete: (id: string) => Promise<void>;
     /** Read a subscription by id, or `undefined`. */
     get: (id: string) => Promise<StoredSubscription | undefined>;
-    /** List subscriptions, optionally filtered. */
+
+    /**
+     * List subscriptions, optionally filtered. When `filter.after` is set,
+     * results are keyset-paginated: only rows with `id` strictly greater than
+     * `filter.after` are returned, ordered ascending by `id`. Implementing
+     * `after` is OPTIONAL (see {@link SubscriptionFilter.after}) — a store
+     * that ignores it may keep returning its unpaged result.
+     */
     list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
     /** Record the latest delivery outcome for a subscription (best-effort). */
     markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;
@@ -124,6 +163,19 @@ export interface BroadcastResult {
     sent: number;
     /** Total subscriptions attempted. */
     total: number;
+}
+
+/**
+ * Result of `broadcastPage` — one bounded page of a fan-out, plus the cursor
+ * to fetch the next page. `nextCursor` is `undefined` when this was the last
+ * page (or the store doesn't support cursoring — see
+ * {@link SubscriptionFilter.after}'s documented unpaged fallback).
+ */
+export interface BroadcastPageResult {
+    /** Cursor for the next page (pass as `filter.after`), or `undefined` when done. */
+    nextCursor?: string;
+    /** The delivery outcome for just this page. */
+    result: BroadcastResult;
 }
 
 /**
@@ -184,8 +236,29 @@ export interface LunoraPush {
      * Reuses the engine's retry/circuit-breaker middleware; prunes subscriptions
      * the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). The `to`
      * target is derived from each subscription, so it is omitted from the payload.
+     *
+     * Internally walks the audience in bounded pages (via {@link LunoraPush.broadcastPage},
+     * keyset-paginated on the subscription `id`) so a huge audience is never
+     * materialized wholesale in the isolate — see `CreateNotifyOptions`'s
+     * `broadcastPageSize`. This call still processes the WHOLE matched
+     * audience in one request/queue message; use {@link LunoraPush.broadcastPage}
+     * directly (as `runPushBroadcastJob` does) to bound a single queue message
+     * to one page.
      */
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
+
+    /**
+     * Fan-out a push to ONE bounded page of stored subscriptions matching
+     * `filter` (page size: `CreateNotifyOptions`'s `broadcastPageSize`, default
+     * 250, capped by `filter.limit` when set). Same delivery semantics as
+     * {@link LunoraPush.broadcast} (retry/circuit-breaker, gone-pruning) but
+     * scoped to a single page; returns the page's own {@link BroadcastResult}
+     * plus a `nextCursor` to fetch the next page (`undefined` when done).
+     * Backs `runPushBroadcastJob` so one queue message does bounded work
+     * regardless of audience size — most app code should call
+     * {@link LunoraPush.broadcast} instead.
+     */
+    broadcastPage: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastPageResult>;
 
     /**
      * List stored subscriptions (optionally filtered), with the delivery

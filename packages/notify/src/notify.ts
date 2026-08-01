@@ -7,6 +7,7 @@ import { memorySubscriptionStore } from "./subscriptions/memory-store";
 import { isGoneError, normalizeRegisterInput, targetOf } from "./subscriptions/normalize";
 import type {
     BroadcastOutcome,
+    BroadcastPageResult,
     BroadcastResult,
     LunoraNotify,
     LunoraPush,
@@ -22,6 +23,15 @@ import type {
     SubscriptionFilter,
     SubscriptionStore,
 } from "./types";
+
+/**
+ * Default page size for `push.broadcast`'s internal keyset pagination (see
+ * `CreateNotifyOptions`'s `broadcastPageSize`). A few hundred keeps one
+ * page's store round trip + fan-out comfortably inside Worker CPU/wall
+ * limits while still being large enough that a typical small app's
+ * broadcast completes in one page.
+ */
+const DEFAULT_BROADCAST_PAGE_SIZE = 250;
 
 const resolveMaybeFactory = <T>(value: T | ((env: NotifyEnv) => T | undefined) | undefined, env: NotifyEnv): T | undefined =>
     typeof value === "function" ? (value as (env: NotifyEnv) => T | undefined)(env) : value;
@@ -119,6 +129,17 @@ const runtimeFor = (definition: NotifyDefinition, env: NotifyEnv): NotifyRuntime
 
 /** Options for {@link createNotify}. */
 export interface CreateNotifyOptions {
+    /**
+     * Page size for `push.broadcast`'s internal keyset pagination over the
+     * subscription store (default {@link DEFAULT_BROADCAST_PAGE_SIZE}, 250).
+     * Each page is fetched, delivered, and counted independently before the
+     * next page's store round trip, so a huge audience is never materialized
+     * wholesale in the isolate. Also the per-message bound `push.broadcastPage`
+     * (and so `runPushBroadcastJob`) uses. A test/tuning seam — most apps never
+     * need to set this.
+     */
+    broadcastPageSize?: number;
+
     /** Max concurrent sends during a `broadcast` (default 10). */
     concurrency?: number;
 
@@ -203,6 +224,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     const subscriptionStore = store;
     const concurrency = Math.max(1, options.concurrency ?? 10);
+    const broadcastPageSize = Math.max(1, options.broadcastPageSize ?? DEFAULT_BROADCAST_PAGE_SIZE);
     const { log, metrics } = options;
 
     /**
@@ -341,62 +363,163 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         return { error, receipt, status };
     };
 
+    /**
+     * Deliver `payload` to exactly the given (already-paged) `subscriptions`
+     * batch, bounded by `concurrency`, and fold the outcomes into one
+     * {@link BroadcastResult}. Shared by `broadcastPage` (one page) and, via
+     * its page-walk loop, `broadcast` (the whole audience) — the bucketed
+     * metric-count / outcome-shaping logic that used to live inline in
+     * `broadcast` lives here once instead of twice.
+     */
+    const deliverPage = async (payload: PushContent, subscriptions: StoredSubscription[]): Promise<BroadcastResult> => {
+        const rows = await mapWithConcurrency(subscriptions, concurrency, async (subscription) => {
+            // `deliver` is total (it never rejects — a throwing recipient
+            // becomes a `failed` outcome inside it), so the bounded `Promise.all`
+            // pool in `mapWithConcurrency` can never be rejected by one bad send.
+            const { error, status } = await deliver(subscription, payload, false);
+
+            return { error, kind: subscription.kind, status, subscription };
+        });
+
+        // Fold the per-recipient statuses into one metric count per (kind,
+        // status) bucket — at most kinds×3 emits — instead of one durable
+        // SQLite write per recipient. (The per-recipient FAILURE LOGS already
+        // fired inside `deliver`.)
+        const buckets = new Map<string, { count: number; kind: string; status: NotifyDeliveryStatus }>();
+
+        for (const { kind, status } of rows) {
+            const key = `${kind} ${status}`;
+            const bucket = buckets.get(key);
+
+            if (bucket === undefined) {
+                buckets.set(key, { count: 1, kind, status });
+            } else {
+                bucket.count += 1;
+            }
+        }
+
+        for (const { count, kind, status } of buckets.values()) {
+            countSend("push", kind, status, count);
+        }
+
+        const outcomes: BroadcastOutcome[] = rows.map(({ error, status, subscription }) => {
+            if (status === "accepted") {
+                return { id: subscription.id, status: "ok" };
+            }
+
+            return status === "gone" ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
+        });
+
+        return {
+            failed: outcomes.filter((outcome) => outcome.status === "failed").length,
+            outcomes,
+            pruned: outcomes.filter((outcome) => outcome.status === "expired").length,
+            sent: outcomes.filter((outcome) => outcome.status === "ok").length,
+            total: outcomes.length,
+        };
+    };
+
+    /**
+     * Fetch and deliver ONE bounded page of `filter`'s matching subscriptions
+     * (see {@link LunoraPush.broadcastPage}). Pages are keyset-paginated on
+     * `id` (`filter.after`, exclusive): the store is asked for `pageSize + 1`
+     * rows so an exactly-full page can be told apart from the true last page
+     * without a second (empty) round trip — the `+1`th row, when present, is
+     * trimmed off and its predecessor's `id` becomes `nextCursor`.
+     *
+     * DEFENSIVE RE-FILTER: `filter.after` is OPTIONAL for a `SubscriptionStore`
+     * to honor (see {@link SubscriptionFilter.after}'s documented "unpaged if
+     * unsupported" fallback). Rather than trust the store, the fetched rows are
+     * re-filtered here to `id > filter.after` unconditionally — a compliant
+     * store's rows already all satisfy this (the filter is then a no-op cost),
+     * while a store that ignores `after` and keeps returning its same unpaged
+     * window gets its stale (already-delivered) rows dropped before they reach
+     * `deliverPage`. This is what makes `broadcast`'s page-walk both
+     * NEVER-DOUBLE-DELIVER and guaranteed to terminate against such a store:
+     * `nextCursor` only ever advances (each page's eligible rows are, by
+     * construction, all greater than the cursor just used), so the "new since
+     * cursor" window against a fixed-size store response shrinks every
+     * iteration until it empties out.
+     */
+    const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
+        // `filter.limit`, when set, is an OVERALL cap (see its JSDoc) — never
+        // let a single page exceed it even when the configured page size is larger.
+        const cap = filter?.limit !== undefined && filter.limit > 0 ? Math.trunc(filter.limit) : undefined;
+        const pageSize = cap === undefined ? broadcastPageSize : Math.min(cap, broadcastPageSize);
+
+        const rows = await subscriptionStore.list({ after: filter?.after, kind: filter?.kind, limit: pageSize + 1, userId: filter?.userId });
+        const eligible = filter?.after === undefined ? rows : rows.filter((row) => row.id > (filter.after as string));
+        const hasMore = eligible.length > pageSize;
+        const page = hasMore ? eligible.slice(0, pageSize) : eligible;
+
+        if (page.length === 0 && filter?.after === undefined) {
+            // A broadcast that matched nobody on its FIRST page — surface the
+            // no-op rather than a silent all-zero result (per-send metrics never
+            // fire). Only on the first page so a legitimately-exhausted later
+            // page of an otherwise-nonempty broadcast doesn't also count as a skip.
+            observeSkip("push", "no-subscriptions-matched");
+        }
+
+        const result = await deliverPage(payload, page);
+        const nextCursor = hasMore ? page[page.length - 1]?.id : undefined;
+
+        return { nextCursor, result };
+    };
+
+    /**
+     * Walk every page of `filter`'s matching audience (see
+     * {@link LunoraPush.broadcast}), merging each page's {@link BroadcastResult}
+     * into one aggregate. Stops when a page reports no `nextCursor` — the
+     * normal end, which `broadcastPage`'s defensive re-filter also guarantees
+     * to eventually reach even against a `SubscriptionStore` that ignores
+     * `filter.after` (see its doc comment). The `nextCursor === cursor` check
+     * is an extra backstop against a pathological store whose `nextCursor`
+     * somehow fails to advance despite reporting more rows remain.
+     *
+     * `filter.limit`, when set, is a CUMULATIVE cap across the whole walk (see
+     * its JSDoc) — `broadcastPage` itself only enforces `limit` as a per-page
+     * cap, so each page here is handed the shrinking REMAINING budget
+     * (`overallLimit - aggregate.total`) rather than the original `filter.limit`
+     * unmodified; forwarding it verbatim would let every page reach up to
+     * `limit` MORE subscriptions instead of the whole broadcast topping out
+     * there. The walk also stops as soon as the cumulative total meets the cap,
+     * even if more pages remain.
+     */
+    const broadcast = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastResult> => {
+        const aggregate: BroadcastResult = { failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 };
+        let cursor = filter?.after;
+        const overallLimit = filter?.limit;
+
+        for (;;) {
+            const pageFilter: SubscriptionFilter | undefined =
+                overallLimit === undefined ? { ...filter, after: cursor } : { ...filter, after: cursor, limit: overallLimit - aggregate.total };
+
+            // eslint-disable-next-line no-await-in-loop -- pages are inherently sequential: page N's cursor comes from page N-1's result
+            const { nextCursor, result } = await broadcastPage(payload, pageFilter);
+
+            aggregate.failed += result.failed;
+            aggregate.pruned += result.pruned;
+            aggregate.sent += result.sent;
+            aggregate.total += result.total;
+            aggregate.outcomes.push(...result.outcomes);
+
+            if (overallLimit !== undefined && aggregate.total >= overallLimit) {
+                break;
+            }
+
+            if (nextCursor === undefined || nextCursor === cursor) {
+                break;
+            }
+
+            cursor = nextCursor;
+        }
+
+        return aggregate;
+    };
+
     const push: LunoraPush = {
-        broadcast: async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastResult> => {
-            const subscriptions = await subscriptionStore.list(filter);
-
-            if (subscriptions.length === 0) {
-                // A broadcast that matched nobody — surface the no-op rather than
-                // returning a silent all-zero result (per-send metrics never fire).
-                observeSkip("push", "no-subscriptions-matched");
-            }
-
-            const rows = await mapWithConcurrency(subscriptions, concurrency, async (subscription) => {
-                // `deliver` is total (it never rejects — a throwing recipient
-                // becomes a `failed` outcome inside it), so the bounded `Promise.all`
-                // pool in `mapWithConcurrency` can never be rejected by one bad send.
-                const { error, status } = await deliver(subscription, payload, false);
-
-                return { error, kind: subscription.kind, status, subscription };
-            });
-
-            // Fold the per-recipient statuses into one metric count per (kind,
-            // status) bucket — at most kinds×3 emits — instead of one durable
-            // SQLite write per recipient. (The per-recipient FAILURE LOGS already
-            // fired inside `deliver`.)
-            const buckets = new Map<string, { count: number; kind: string; status: NotifyDeliveryStatus }>();
-
-            for (const { kind, status } of rows) {
-                const key = `${kind} ${status}`;
-                const bucket = buckets.get(key);
-
-                if (bucket === undefined) {
-                    buckets.set(key, { count: 1, kind, status });
-                } else {
-                    bucket.count += 1;
-                }
-            }
-
-            for (const { count, kind, status } of buckets.values()) {
-                countSend("push", kind, status, count);
-            }
-
-            const outcomes: BroadcastOutcome[] = rows.map(({ error, status, subscription }) => {
-                if (status === "accepted") {
-                    return { id: subscription.id, status: "ok" };
-                }
-
-                return status === "gone" ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
-            });
-
-            return {
-                failed: outcomes.filter((outcome) => outcome.status === "failed").length,
-                outcomes,
-                pruned: outcomes.filter((outcome) => outcome.status === "expired").length,
-                sent: outcomes.filter((outcome) => outcome.status === "ok").length,
-                total: outcomes.length,
-            };
-        },
+        broadcast,
+        broadcastPage,
         list: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listProjected(filter),
         register: (input: RegisterInput): Promise<StoredSubscription> => {
             // A web-push registration accepts a client-controlled endpoint — the SSRF

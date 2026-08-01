@@ -99,6 +99,15 @@ interface FakeRow {
     user_id: string | null;
 }
 
+/** Ascending `id` comparator — mirrors the real store's `ORDER BY id ASC`. */
+const compareById = (a: { id: string }, b: { id: string }): number => {
+    if (a.id < b.id) {
+        return -1;
+    }
+
+    return a.id > b.id ? 1 : 0;
+};
+
 /**
  * A minimal functional fake of the D1 slice the subscription store uses. Branches
  * on the statement text (CREATE/INSERT…ON CONFLICT/SELECT/DELETE/UPDATE) against
@@ -127,8 +136,8 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
 
                 let results = [...rows.values()];
                 // Consume bindings in the same order the store appends them:
-                // [kind?, userId?, limit?]. A cursor keeps the filters correct even
-                // when a trailing `LIMIT ?` binding is present.
+                // [kind?, userId?, after?, limit?]. A cursor keeps the filters
+                // correct even when a trailing `LIMIT ?` binding is present.
                 let cursor = 0;
 
                 if (sql.includes("kind = ?")) {
@@ -145,6 +154,17 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
 
                     cursor += 1;
                     results = results.filter((row) => row.user_id === userId);
+                }
+
+                if (sql.includes("id > ?")) {
+                    const after = bound[cursor] as string;
+
+                    cursor += 1;
+                    results = results.filter((row) => row.id > after);
+                }
+
+                if (sql.includes("ORDER BY id ASC")) {
+                    results = results.toSorted(compareById);
                 }
 
                 if (sql.includes("LIMIT ?")) {
@@ -231,4 +251,4 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
     return { prepare: prepared };
 };
 
-export { fakeD1, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider };
+export { compareById, fakeD1, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider };

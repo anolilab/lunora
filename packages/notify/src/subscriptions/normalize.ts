@@ -9,6 +9,68 @@ interface LooseSubscription {
     keys?: { auth?: unknown; p256dh?: unknown };
 }
 
+/**
+ * Cap on a `register()` input's serialised `metadata` size (NOTIFY-02): a
+ * client controls this field end-to-end, and it is `JSON.stringify`'d
+ * straight into the D1 row with no prior shape/size check, so an
+ * unbounded value lets a client persist an arbitrarily large blob per
+ * subscription. A few KB is comfortably enough for the documented use
+ * (device name, locale, topic tags) while bounding worst-case row growth.
+ */
+const MAX_METADATA_BYTES = 4096;
+
+/**
+ * Validate a `register()` input's `metadata` (NOTIFY-02) before it is
+ * STORED: must be a plain object (not an array, class instance, or
+ * primitive — those are legal `typeof "object"` values a client could send
+ * despite the `Record&lt;string, unknown&gt;` type, since the input crosses an RPC
+ * boundary untyped at runtime), must be JSON-serialisable (a circular
+ * reference or a `BigInt` value makes `JSON.stringify` throw), and its
+ * serialised form must not exceed {@link MAX_METADATA_BYTES}.
+ *
+ * Serialising here — ONCE, at validation time — rather than leaving it to
+ * the store means the later `JSON.stringify(subscription.metadata)` inside
+ * `d1SubscriptionStore.put` (a pure, deterministic re-serialisation of the
+ * SAME already-proven-serialisable object) can no longer throw mid-write: by
+ * the time a `StoredSubscription` reaches any store, its `metadata` has
+ * already round-tripped through `JSON.stringify` successfully once here.
+ */
+const validateMetadata = (metadata: unknown): Record<string, unknown> | undefined => {
+    if (metadata === undefined) {
+        return undefined;
+    }
+
+    const prototype: unknown = typeof metadata === "object" && metadata !== null ? Object.getPrototypeOf(metadata) : undefined;
+    const isPlainObject =
+        typeof metadata === "object" && metadata !== null && !Array.isArray(metadata) && (prototype === Object.prototype || prototype === null);
+
+    if (!isPlainObject) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/notify: register() `metadata` must be a plain object");
+    }
+
+    let serialized: string;
+
+    try {
+        serialized = JSON.stringify(metadata);
+    } catch (error) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: register() \`metadata\` is not JSON-serialisable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+    }
+
+    const byteLength = new TextEncoder().encode(serialized).length;
+
+    if (byteLength > MAX_METADATA_BYTES) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: register() \`metadata\` is ${byteLength.toString()} bytes, exceeding the ${MAX_METADATA_BYTES.toString()}-byte cap`,
+        );
+    }
+
+    return metadata as Record<string, unknown>;
+};
+
 /** One 16-bit limb of a 64-bit hash as 4 lowercase hex digits. */
 const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
 
@@ -210,7 +272,8 @@ const assertPushEndpoint = (endpoint: string, allowedPushOrigins?: string[]): vo
  * Normalise a `register(...)` input into a {@link StoredSubscription}. Validates
  * the shape (a web-push subscription needs `endpoint` + `keys.{p256dh,auth}`; an
  * FCM entry needs a non-empty `token`), enforces the anti-SSRF endpoint boundary
- * (see {@link assertPushEndpoint}), and stamps `createdAt`/`lastSeenAt`.
+ * (see {@link assertPushEndpoint}), validates `metadata` (see
+ * {@link validateMetadata}), and stamps `createdAt`/`lastSeenAt`.
  */
 const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), options: NormalizeOptions = {}): StoredSubscription => {
     if ("token" in input) {
@@ -220,7 +283,15 @@ const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), 
             throw new LunoraError("BAD_REQUEST", "@lunora/notify: register() fcm input requires a non-empty `token`");
         }
 
-        return { createdAt: now, id: fcmId(token), kind: "fcm", lastSeenAt: now, metadata: input.metadata, token, userId: input.userId ?? null };
+        return {
+            createdAt: now,
+            id: fcmId(token),
+            kind: "fcm",
+            lastSeenAt: now,
+            metadata: validateMetadata(input.metadata),
+            token,
+            userId: input.userId ?? null,
+        };
     }
 
     const subscription = parseSubscription(input.subscription);
@@ -241,7 +312,7 @@ const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), 
         keys: { auth, p256dh },
         kind: "web-push",
         lastSeenAt: now,
-        metadata: input.metadata,
+        metadata: validateMetadata(input.metadata),
         userId: input.userId ?? null,
     };
 };
