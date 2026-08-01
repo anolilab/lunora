@@ -44,6 +44,7 @@ const ADMIN_FUNCTIONS: {
     readonly listQueues: "__lunora_admin__:listQueues";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
+    readonly listTablesIndexes: "__lunora_admin__:listTablesIndexes";
     readonly listWorkflows: "__lunora_admin__:listWorkflows";
     readonly getLogs: "__lunora_admin__:getLogs";
     readonly getMetricHistory: "__lunora_admin__:getMetricHistory";

@@ -1,5 +1,5 @@
 import type { SqlExec } from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
     normalizeSql,
@@ -12,6 +12,7 @@ import {
     readQueryMetrics,
     recordQueryMetric,
 } from "../src/query-metrics";
+import freshHandleOver from "./_helpers/fresh-handle";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 describe("normalizeSql", () => {
@@ -250,6 +251,72 @@ describe("recordQueryMetric + readQueryMetrics", () => {
 
         expect(QUERY_METRICS_TABLE).toBe("__lunora_metrics_queries");
     });
+});
+
+describe("per-handle memoization (OBS-02)", () => {
+    it("issues no CREATE TABLE and no COUNT(*) on the second execution of an already-seen statement", () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        // Warm the handle: creates both tables and marks the statement known.
+        recordQueryMetric(sql, "SELECT * FROM posts WHERE id = 1", 5, 1, 0);
+
+        const original = sql.exec.bind(sql);
+        const seen: string[] = [];
+
+        vi.spyOn(sql, "exec").mockImplementation((query: string, ...parameters: unknown[]) => {
+            seen.push(query);
+
+            return (original as any)(query, ...parameters);
+        });
+
+        recordQueryMetric(sql, "SELECT * FROM posts WHERE id = 2", 6, 1, 0);
+
+        expect(seen.some((query) => query.includes("CREATE TABLE"))).toBe(false);
+        expect(seen.some((query) => query.includes("COUNT(*)"))).toBe(false);
+    });
+
+    it("re-ensures and re-verifies against durable state on a fresh post-hibernation handle", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+
+        recordQueryMetric(harness.sql, "SELECT * FROM posts WHERE id = 1", 5, 1, 0);
+
+        // A brand-new handle over the same storage — the WeakSet/WeakMap
+        // caches from the first handle must not leak across.
+        const fresh = freshHandleOver(harness);
+
+        expect(() => {
+            recordQueryMetric(fresh, "SELECT * FROM posts WHERE id = 2", 6, 1, 0);
+        }).not.toThrow();
+
+        const rows = readQueryMetrics(fresh);
+
+        expect(rows[0]?.execCount).toBe(2);
+    });
+
+    it("re-verifies the distinct-statement cap against durable state on a fresh post-hibernation handle", () => {
+        expect.assertions(1);
+
+        const harness = createSqliteExec();
+
+        for (let index = 0; index < QUERY_METRICS_MAX_STATEMENTS; index += 1) {
+            recordQueryMetric(harness.sql, `SELECT col${String(index)} FROM t`, 1, 0, 0);
+        }
+
+        // A fresh handle has no local cache of what's tracked — it must fall
+        // back to the durable count rather than assuming an empty local cache
+        // means the cap hasn't been reached.
+        const fresh = freshHandleOver(harness);
+
+        recordQueryMetric(fresh, "SELECT extra_col FROM t", 999, 0, 0);
+
+        const rows = readQueryMetrics(fresh);
+
+        expect(rows.some((row) => row.normalizedSql.includes("extra_col"))).toBe(false);
+    }, 15_000);
 });
 
 describe("time-bucketed query insights", () => {

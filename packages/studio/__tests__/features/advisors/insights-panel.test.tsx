@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { InsightsPanel } from "../../../src/features/advisors/insights-panel";
@@ -222,6 +222,160 @@ describe("insightsPanel", () => {
 
         expect(view.textContent).toContain("Index utilization");
         expect(view.textContent).toContain('Index "byTitle" on table "posts" has recorded no reads');
+    });
+
+    it("batches the index enumeration into one listTablesIndexes call for several tables (STUDIO-04)", async () => {
+        expect.assertions(3);
+
+        const metrics: MetricsSnapshot = { ...HEALTHY, indexHits: [{ index: "byAuthor", reads: 5, table: "posts" }] };
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                    return metrics;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                    return EMPTY_STATS;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                    return { advisories: [] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [
+                        { name: "posts", rowCount: 3 },
+                        { name: "users", rowCount: 2 },
+                    ];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTablesIndexes) {
+                    return {
+                        indexesByTable: {
+                            posts: [
+                                { fields: ["authorId"], name: "byAuthor", type: "index" },
+                                { fields: ["title"], name: "byTitle", type: "index" },
+                            ],
+                            users: [],
+                        },
+                    };
+                }
+
+                // The per-table RPC must NOT fire when the batched call succeeds —
+                // reaching here means the panel fell back unnecessarily.
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // The same dead-index reconciliation as the per-table test above, this
+        // time answered entirely from the batched response.
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
+        await screen.findByText("Index utilization");
+
+        const view = screen.getByTestId("lunora-insights");
+
+        expect(view.textContent).toContain("Index utilization");
+        expect(view.textContent).toContain('Index "byTitle" on table "posts" has recorded no reads');
+
+        // One call covering both tables, not one per table.
+        const batchedCalls = mock.query.mock.calls.filter(
+            (call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes,
+        );
+
+        expect(batchedCalls).toHaveLength(1);
+    });
+
+    it("degrades a stale batched reply once a shard change supersedes it (stale-shard guard)", async () => {
+        expect.assertions(2);
+
+        // shardA's listTablesIndexes reply is deferred — resolved only after
+        // shardB's own enumeration has already completed — proving a late-arriving
+        // reply for a superseded shard can't clobber the current shard's state.
+        let resolveStaleReply: (value: unknown) => void = (_value: unknown) => undefined;
+        const staleReply = new Promise((resolve) => {
+            resolveStaleReply = resolve;
+        });
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                const shard = (options as { shardKey?: string } | undefined)?.shardKey ?? "";
+
+                if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                    return { ...HEALTHY, indexHits: [] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                    return EMPTY_STATS;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                    return { advisories: [] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return shard === "shardA" ? [{ name: "legacy", rowCount: 1 }] : [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTablesIndexes) {
+                    return shard === "shardA" ? staleReply : { indexesByTable: { posts: [] } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <InsightsPanel initialShardKey="shardA" />
+            </LunoraProvider>,
+        );
+
+        // Wait for shardA's batched call to have been issued (and left pending)
+        // before switching shards.
+        await waitFor(() => {
+            const issued = mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes);
+
+            if (!issued) {
+                throw new Error("shardA's listTablesIndexes not yet issued");
+            }
+        });
+
+        // Switch to shardB before shardA's reply lands (debounced 400ms).
+        fireEvent.change(screen.getByTestId("in-shard-input"), { target: { value: "shardB" } });
+
+        await waitFor(
+            () => {
+                const started = mock.query.mock.calls.some(
+                    (call) =>
+                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTables &&
+                        (call[2] as { shardKey?: string } | undefined)?.shardKey === "shardB",
+                );
+
+                if (!started) {
+                    throw new Error("shardB enumeration not yet started");
+                }
+            },
+            { timeout: 2000 },
+        );
+
+        // NOW resolve shardA's stale reply, well after shardB has taken over —
+        // it names a table/index shardB's enumeration never reported.
+        resolveStaleReply({ indexesByTable: { legacy: [{ fields: ["x"], name: "stale_index", type: "index" }] } });
+
+        // Give the stale promise's continuation a tick to run — if the guard were
+        // broken, this is where it would overwrite `declaredIndexes`.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 50);
+        });
+
+        const empty = await screen.findByTestId("lunora-insights-empty");
+
+        // shardB's clean state survived: no dead-index advisory at all, and
+        // specifically nothing naming the stale shardA index.
+        expect(empty.textContent).toContain("No errors detected");
+        expect(screen.queryByText(/stale_index/)).toBeNull();
     });
 
     it("auto-refreshes advisories when the tab regains focus (no manual Refresh)", async () => {

@@ -113,6 +113,22 @@ interface FunctionMetricBucket {
     errors: number;
 }
 
+/** {@link readFunctionMetricBuckets} result: the time-series window plus whether the read limit cut it short. */
+interface FunctionMetricBucketsResult {
+    buckets: (FunctionMetricBucket & { path: string })[];
+
+    /**
+     * True when more rows existed than {@link FUNCTION_METRICS_READ_LIMIT} could
+     * return, so `buckets` is a partial (newest) window rather than the app's
+     * full retained history. Mirrors `readQueryInsights`'s `capped` and
+     * `foldTraces`'s `total`: a silently truncated read looks identical to a
+     * complete one to a caller that doesn't check for it — the Metrics chart's
+     * window would appear to shrink as the app grows, with a wrong leftmost
+     * bar, and nothing would say why.
+     */
+    truncated: boolean;
+}
+
 /** One declared index a dispatch exercised (used to narrow a read). */
 interface IndexHit {
     /** The declared index name. */
@@ -193,6 +209,22 @@ const dedupeIndexHits = (hits: ReadonlyArray<IndexHit>): IndexHit[] => {
 };
 
 /**
+ * SQL handles whose four reserved tables (and, for `__lunora_metrics`, its
+ * back-filled columns) have already been ensured this instance. Every read
+ * and write path calls {@link ensureFunctionMetricsTables} defensively, and
+ * `recordFunctionMetric` runs once per RPC dispatch — without memoizing,
+ * every dispatch re-ran `CREATE TABLE IF NOT EXISTS` four times plus the two
+ * back-fill `ALTER TABLE`s below, and the `ALTER`s throw `duplicate column
+ * name` on every call after the first (a column that already exists cannot be
+ * re-added), so two SQLite errors were being constructed and swallowed per
+ * dispatch forever. Memoizing per handle drops all of that off the hot path
+ * after the first call. A `WeakSet` so a torn-down shard's handle is
+ * collectable; a fresh handle (a new isolate after hibernation) re-ensures,
+ * which is correct — mirrors `metric-history.ts`'s `ensuredHandles`.
+ */
+const ensuredHandles = new WeakSet<SqlExec>();
+
+/**
  * Create the four reserved metrics tables. Idempotent, so the read and write
  * paths can call it defensively. The accumulator table is keyed by `path` (one
  * row per function); the bucket table by `(path, bucketMs)` (one row per
@@ -204,9 +236,15 @@ const dedupeIndexHits = (hits: ReadonlyArray<IndexHit>): IndexHit[] => {
  * than baked into the `CREATE` so a shard whose `__lunora_metrics` predates the
  * causal-attribution feature gains the column on the next call without a
  * migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column
- * error from a re-run is swallowed.
+ * error from a re-run is swallowed. Both the `CREATE`s and the back-fill only
+ * run once per handle (see {@link ensuredHandles}) — a handle already marked
+ * ensured returns immediately.
  */
 const ensureFunctionMetricsTables = (sql: SqlExec): void => {
+    if (ensuredHandles.has(sql)) {
+        return;
+    }
+
     runSql(
         sql,
         `CREATE TABLE IF NOT EXISTS "${FUNCTION_METRICS_TABLE}" (
@@ -266,6 +304,72 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
             PRIMARY KEY (table_name, index_name)
         )`,
     );
+
+    ensuredHandles.add(sql);
+};
+
+/**
+ * Paths this handle has confirmed are already tracked in the accumulator
+ * table — once a path is in here, {@link admitPath} skips the cap check
+ * entirely on every later dispatch for it. Bounded implicitly by
+ * {@link FUNCTION_METRICS_MAX_PATHS}: a path is only ever added once it's
+ * confirmed tracked (admitted-under-the-cap or found already present), and a
+ * rejected path is never added, so this can't grow past the cap itself. A
+ * `WeakMap` so a torn-down shard's handle is collectable; a fresh handle (a
+ * new isolate after hibernation) starts cold and re-verifies.
+ */
+const knownPaths = new WeakMap<SqlExec, Set<string>>();
+
+const knownPathsFor = (sql: SqlExec): Set<string> => {
+    let set = knownPaths.get(sql);
+
+    if (set === undefined) {
+        set = new Set<string>();
+        knownPaths.set(sql, set);
+    }
+
+    return set;
+};
+
+/**
+ * Admit `path` against the distinct-path cap without an unconditional
+ * `SELECT COUNT(*)` on every dispatch. Mirrors `metric-history.ts`'s
+ * series-cap check. A path this handle has already confirmed tracked
+ * ({@link knownPaths}) is admitted with no SQL at all — the steady-path case
+ * once every registered function has been seen once. A first-sight path pays
+ * one indexed PK lookup to tell "already tracked" (admitted, no count needed
+ * — an existing path always keeps accumulating past the cap) from "genuinely
+ * new to this shard". Only a genuinely new path reaches the actual
+ * `COUNT(*)` gate, which is the rare case after warm-up (a few thousand
+ * registered functions is already far beyond any real app). This is what
+ * keeps the cap honest: a cache that instead guessed at the row count
+ * without re-verifying a first-sight path against the table would let a
+ * steady trickle of new paths slip past the limit indefinitely.
+ */
+const admitPath = (sql: SqlExec, path: string): boolean => {
+    const known = knownPathsFor(sql);
+
+    if (known.has(path)) {
+        return true;
+    }
+
+    const alreadyTracked = runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${FUNCTION_METRICS_TABLE}" WHERE path = ? LIMIT 1`, path).toArray().length > 0;
+
+    if (alreadyTracked) {
+        known.add(path);
+
+        return true;
+    }
+
+    const pathCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`).one();
+
+    if (pathCountRow.n >= FUNCTION_METRICS_MAX_PATHS) {
+        return false;
+    }
+
+    known.add(path);
+
+    return true;
 };
 
 /**
@@ -286,16 +390,11 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     // Distinct-path cap (mirrors `query-metrics.ts`): when the accumulator is at
     // the limit and this `path` isn't tracked yet, skip the write entirely so a
     // flood of unregistered/random paths can't grow the metrics tables without
-    // bound. The check is a single cheap PK `COUNT(*)`; an already-tracked path
-    // (the normal registered-function case) still records past the cap.
-    const pathCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`).one();
-
-    if (pathCountRow.n >= FUNCTION_METRICS_MAX_PATHS) {
-        const tracked = runSql<{ c: number }>(sql, `SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}" WHERE path = ?`, input.path).one();
-
-        if (tracked.c === 0) {
-            return;
-        }
+    // bound. An already-tracked path (the normal registered-function case)
+    // still records past the cap. See `admitPath` for how this avoids the
+    // unconditional `COUNT(*)` the old version paid on every single dispatch.
+    if (!admitPath(sql, input.path)) {
+        return;
     }
 
     // Dedupe defensively: a handler can stamp the same table's SCAN_DEP more
@@ -533,9 +632,9 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
 /**
  * Read the coarse time-series buckets for `path` (every path when omitted),
  * oldest-bucket first so a chart can plot them left-to-right. Creates the table
- * first so reads on a never-called shard return `[]`.
+ * first so reads on a never-called shard return `{ buckets: [], truncated: false }`.
  */
-const readFunctionMetricBuckets = (sql: SqlExec, path?: string): (FunctionMetricBucket & { path: string })[] => {
+const readFunctionMetricBuckets = (sql: SqlExec, path?: string): FunctionMetricBucketsResult => {
     ensureFunctionMetricsTables(sql);
 
     // Bounded like the other reads, and for the same reason: the all-paths arm is
@@ -547,21 +646,32 @@ const readFunctionMetricBuckets = (sql: SqlExec, path?: string): (FunctionMetric
     // most recent, then reversed to restore the oldest-first order a chart plots
     // left-to-right. Ordering the scan ASC and limiting would have kept the
     // stalest window and thrown away what the panel is actually for.
+    //
+    // LIMIT is one past the real cap so a full page of results (exactly
+    // `FUNCTION_METRICS_READ_LIMIT + 1` rows back) is distinguishable from a read
+    // that happened to end exactly at the cap — the extra row is trimmed below
+    // and never returned, it only flips `truncated`.
     const rows =
         path === undefined
             ? runSql<{ bucket_ms: number; calls: number; errors: number; path: string }>(
                   sql,
-                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" ORDER BY bucket_ms DESC, path ASC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
+                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" ORDER BY bucket_ms DESC, path ASC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT + 1)}`,
               ).toArray()
             : runSql<{ bucket_ms: number; calls: number; errors: number; path: string }>(
                   sql,
-                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ? ORDER BY bucket_ms DESC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT)}`,
+                  `SELECT path, bucket_ms, calls, errors FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ? ORDER BY bucket_ms DESC LIMIT ${String(FUNCTION_METRICS_READ_LIMIT + 1)}`,
                   path,
               ).toArray();
 
-    return rows.toReversed().map((row) => {
-        return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path };
-    });
+    const truncated = rows.length > FUNCTION_METRICS_READ_LIMIT;
+    const kept = truncated ? rows.slice(0, FUNCTION_METRICS_READ_LIMIT) : rows;
+
+    return {
+        buckets: kept.toReversed().map((row) => {
+            return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path };
+        }),
+        truncated,
+    };
 };
 
 /**
@@ -599,4 +709,4 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 };
-export type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput };
+export type { FunctionMetricBucket, FunctionMetricBucketsResult, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput };

@@ -1,4 +1,5 @@
 import {
+    ensureFunctionMetricsTables,
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_INDEX_TABLE,
@@ -195,7 +196,7 @@ describe("function-metrics module", () => {
             recordFunctionMetric(database.sql, { durationMs: 1, errored: true, errorMessage: "x", path: "f:a", ts: base + 1 });
             recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "f:a", ts: base + FUNCTION_METRICS_BUCKET_MS });
 
-            const buckets = readFunctionMetricBuckets(database.sql, "f:a");
+            const { buckets } = readFunctionMetricBuckets(database.sql, "f:a");
 
             // Two distinct minute windows.
             expect(buckets).toHaveLength(2);
@@ -335,7 +336,7 @@ describe("function-metrics module", () => {
 
         try {
             expect(readFunctionMetrics(database.sql)).toEqual([]);
-            expect(readFunctionMetricBuckets(database.sql)).toEqual([]);
+            expect(readFunctionMetricBuckets(database.sql)).toEqual({ buckets: [], truncated: false });
             expect(readFunctionMetricScans(database.sql).size).toBe(0);
             expect(readFunctionMetricIndexHits(database.sql)).toEqual([]);
             expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 0, requests: 0 });
@@ -381,6 +382,30 @@ describe("function-metrics module", () => {
             }
 
             expect(readFunctionMetrics(database.sql)).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("reports truncated on the all-paths bucket read once the LIMIT cuts it (OBS-03)", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            ensureFunctionMetricsTables(database.sql);
+
+            for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT + 50; index += 1) {
+                database.raw(
+                    `INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('fn:a', ?, 1, 0)`,
+                    index * FUNCTION_METRICS_BUCKET_MS,
+                );
+            }
+
+            const { buckets, truncated } = readFunctionMetricBuckets(database.sql);
+
+            expect(buckets).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+            expect(truncated).toBe(true);
         } finally {
             database.close();
         }
@@ -589,6 +614,38 @@ describe("shardDO persisted metrics", () => {
             expect(body.result.errors).toBe(1);
             expect(body.result.cache).toBeNull();
             expect(body.result.shard).toBeTypeOf("string");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("surfaces historyTruncated on getMetrics once the durable bucket table exceeds the read limit (OBS-03)", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            ensureFunctionMetricsTables(database.sql);
+
+            // Seed past the read limit directly — reaching it through real
+            // dispatches would mean thousands of fetch() round-trips for what
+            // is purely a read-path assertion.
+            for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT + 50; index += 1) {
+                database.raw(
+                    `INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('messages:list', ?, 1, 0)`,
+                    index * FUNCTION_METRICS_BUCKET_MS,
+                );
+            }
+
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getMetrics"));
+            const body = await response.json<{ result: { history: unknown[]; historyTruncated: boolean } }>();
+
+            expect(body.result.history).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+            // The chart's window silently shrinking as the app grows is exactly
+            // what this field exists to make visible to the studio panel.
+            expect(body.result.historyTruncated).toBe(true);
         } finally {
             database.close();
         }

@@ -1041,6 +1041,7 @@ const MESSAGE_IDS = [
     "One or more service levels are breached.",
     "Some service levels need attention.",
     "All service levels are within target.",
+    "Showing a partial request/error history — one or more shards have more data than the trend chart can display.",
     // Analytics Engine usage panel.
     "Analytics",
     "Analytics is not configured.",

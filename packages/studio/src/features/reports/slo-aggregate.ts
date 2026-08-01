@@ -21,6 +21,13 @@ interface SloTotals {
     failed: number;
     /** Every shard's per-function buckets, concatenated; collapse on `bucketMs` for the trend sparkline. */
     history: MetricsHistoryBucket[];
+
+    /**
+     * True when ANY reachable shard's `history` was cut by its read limit — one
+     * truncated shard is enough to make the app-wide trend a partial window, so
+     * this is an OR across shards, not a per-shard flag the caller re-derives.
+     */
+    historyTruncated: boolean;
     /** Shards that returned a snapshot. */
     reachable: number;
     requests: number;
@@ -37,6 +44,7 @@ const sumShardMetrics = (results: ReadonlyArray<ShardSloResult>): SloTotals => {
     let errors = 0;
     let reachable = 0;
     let failed = 0;
+    let historyTruncated = false;
     const history: MetricsHistoryBucket[] = [];
 
     for (const { metrics } of results) {
@@ -50,9 +58,10 @@ const sumShardMetrics = (results: ReadonlyArray<ShardSloResult>): SloTotals => {
         requests += metrics.requests;
         errors += metrics.errors;
         history.push(...(metrics.history ?? []));
+        historyTruncated ||= metrics.historyTruncated === true;
     }
 
-    return { errors, failed, history, reachable, requests };
+    return { errors, failed, history, historyTruncated, reachable, requests };
 };
 
 /**

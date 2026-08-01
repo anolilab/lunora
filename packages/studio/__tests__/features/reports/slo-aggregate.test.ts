@@ -4,8 +4,8 @@ import type { ShardSloResult } from "../../../src/features/reports/slo-aggregate
 import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "../../../src/features/reports/slo-aggregate";
 import type { FunctionCallStat, MetricsSnapshot, MigrationStatusRow } from "../../../src/lib/admin";
 
-const snapshot = (requests: number, errors: number, history: MetricsSnapshot["history"] = []): MetricsSnapshot => {
-    return { cache: null, databaseSize: null, errors, history, requests, shard: "", sinceMs: 0, uptimeMs: 0 };
+const snapshot = (requests: number, errors: number, history: MetricsSnapshot["history"] = [], historyTruncated?: boolean): MetricsSnapshot => {
+    return { cache: null, databaseSize: null, errors, history, historyTruncated, requests, shard: "", sinceMs: 0, uptimeMs: 0 };
 };
 
 const stat = (path: string, calls: number, errors: number): FunctionCallStat => {
@@ -41,6 +41,22 @@ describe("sumShardMetrics", () => {
         ]);
 
         expect(totals.history).toHaveLength(2);
+    });
+
+    it("reports historyTruncated when ANY reachable shard's history was cut", () => {
+        expect.assertions(1);
+
+        const totals = sumShardMetrics([result({ metrics: snapshot(10, 0, [], false) }), result({ metrics: snapshot(20, 0, [], true) })]);
+
+        expect(totals.historyTruncated).toBe(true);
+    });
+
+    it("does not report historyTruncated when no shard was cut", () => {
+        expect.assertions(1);
+
+        const totals = sumShardMetrics([result({ metrics: snapshot(10, 0, [], false) }), result({ metrics: snapshot(20, 0) })]);
+
+        expect(totals.historyTruncated).toBe(false);
     });
 });
 

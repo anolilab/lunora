@@ -126,11 +126,27 @@ const normalizeSql = (sql: string): string => {
 };
 
 /**
+ * SQL handles whose reserved tables have already been ensured this instance.
+ * `recordQueryMetric` runs once per instrumented statement — potentially many
+ * times per dispatch — so without memoizing, a query-in-a-loop handler re-ran
+ * `CREATE TABLE IF NOT EXISTS` (twice, counting the bucket table) on every
+ * single execution. A `WeakSet` so a torn-down shard's handle is collectable;
+ * a fresh handle (a new isolate after hibernation) re-ensures, which is
+ * correct — mirrors `metric-history.ts`'s `ensuredHandles` and
+ * `function-metrics.ts`'s twin.
+ */
+const ensuredMetricsHandles = new WeakSet<SqlExec>();
+
+/**
  * Create the reserved query-metrics table. Idempotent — safe to call on every
  * hot path; SQLite's `CREATE TABLE IF NOT EXISTS` is a no-op when the table
- * already exists.
+ * already exists. Only runs once per handle (see {@link ensuredMetricsHandles}).
  */
 const ensureQueryMetricsTable = (sql: SqlExec): void => {
+    if (ensuredMetricsHandles.has(sql)) {
+        return;
+    }
+
     runSql(
         sql,
         `CREATE TABLE IF NOT EXISTS "${QUERY_METRICS_TABLE}" (
@@ -141,6 +157,8 @@ const ensureQueryMetricsTable = (sql: SqlExec): void => {
             rows_written   INTEGER NOT NULL DEFAULT 0
         )`,
     );
+
+    ensuredMetricsHandles.add(sql);
 };
 
 /**
@@ -190,8 +208,21 @@ const latencyBucketIndex = (durationMs: number): number => {
 /** Column name for one histogram bucket. */
 const latencyColumn = (index: number): string => `lat_${String(index)}`;
 
-/** Create the bucket table. Idempotent; one column per histogram bucket plus the overflow. */
+/**
+ * SQL handles whose bucket table has already been ensured this instance.
+ * Separate from {@link ensuredMetricsHandles} because `recordQueryBucket`
+ * fires per statement execution too, and the two tables are independently
+ * idempotent — memoized the same way for the same reason (see
+ * {@link ensuredMetricsHandles}).
+ */
+const ensuredBucketsHandles = new WeakSet<SqlExec>();
+
+/** Create the bucket table. Idempotent; one column per histogram bucket plus the overflow. Only runs once per handle (see {@link ensuredBucketsHandles}). */
 const ensureQueryBucketsTable = (sql: SqlExec): void => {
+    if (ensuredBucketsHandles.has(sql)) {
+        return;
+    }
+
     const latencyColumns = Array.from({ length: LATENCY_BUCKET_EDGES.length + 1 }, (_, index) => `${latencyColumn(index)} INTEGER NOT NULL DEFAULT 0`).join(
         ", ",
     );
@@ -209,6 +240,8 @@ const ensureQueryBucketsTable = (sql: SqlExec): void => {
             PRIMARY KEY (sql_hash, bucket_ms)
         )`,
     );
+
+    ensuredBucketsHandles.add(sql);
 };
 
 /**
@@ -221,26 +254,33 @@ const pruneQueryBuckets = (sql: SqlExec, now: number): void => {
 };
 
 /**
- * Record one execution into its time bucket. Best-effort: a failure here must
- * never break the lifetime counters, which are the older and more load-bearing
- * of the two.
+ * Record one or more executions into their time bucket. `execCount` (default
+ * 1) lets a caller that already folded several same-statement executions into
+ * one aggregate — `shard-do.ts`'s per-dispatch statement-sample folding — flush
+ * them as a single upsert instead of one call per execution: `durationMs` is
+ * then the SUM across `execCount` executions, and the histogram places the
+ * whole entry by the per-execution AVERAGE rather than the sum, so a folded
+ * batch of many fast calls doesn't read as one enormous slow one. Best-effort:
+ * a failure here must never break the lifetime counters, which are the older
+ * and more load-bearing of the two.
  */
-const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number): void => {
+const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number, execCount: number = 1): void => {
     try {
         ensureQueryBucketsTable(sql);
 
-        const column = latencyColumn(latencyBucketIndex(durationMs));
+        const avgDurationMs = execCount > 0 ? durationMs / execCount : durationMs;
+        const column = latencyColumn(latencyBucketIndex(avgDurationMs));
 
         const upsert = `INSERT INTO "${QUERY_BUCKETS_TABLE}" (sql_hash, bucket_ms, exec_count, total_duration_ms, rows_read, rows_written, ${column})
-             VALUES (?, ?, 1, ?, ?, ?, 1)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sql_hash, bucket_ms) DO UPDATE SET
-                 exec_count = exec_count + 1,
+                 exec_count = exec_count + excluded.exec_count,
                  total_duration_ms = total_duration_ms + excluded.total_duration_ms,
                  rows_read = rows_read + excluded.rows_read,
                  rows_written = rows_written + excluded.rows_written,
-                 ${column} = ${column} + 1`;
+                 ${column} = ${column} + excluded.${column}`;
 
-        runSql(sql, upsert, hashStatement(normalized), bucketFloor(now), durationMs, rowsRead, rowsWritten);
+        runSql(sql, upsert, hashStatement(normalized), bucketFloor(now), execCount, durationMs, rowsRead, rowsWritten, execCount);
 
         // Prune once per WINDOW, detected by the bucket changing rather than by
         // sampling a 50ms slice of it. In a DO `Date.now()` is pinned to the last
@@ -404,14 +444,88 @@ const readQueryInsights = (sql: SqlExec, rangeMs: number, now: number = Date.now
 };
 
 /**
- * Record one statement execution. Creates the table on first call. Silently
+ * Normalised statements this handle has confirmed are already tracked in the
+ * lifetime table — once a statement is in here, {@link admitStatement} skips
+ * the cap check entirely on every later execution of it. Bounded implicitly
+ * by {@link QUERY_METRICS_MAX_STATEMENTS} for the same reason
+ * `function-metrics.ts`'s `knownPaths` is: a statement is only ever added
+ * once confirmed tracked, and a rejected one is never added. A `WeakMap` so a
+ * torn-down shard's handle is collectable; a fresh handle (a new isolate
+ * after hibernation) starts cold and re-verifies.
+ */
+const knownStatements = new WeakMap<SqlExec, Set<string>>();
+
+const knownStatementsFor = (sql: SqlExec): Set<string> => {
+    let set = knownStatements.get(sql);
+
+    if (set === undefined) {
+        set = new Set<string>();
+        knownStatements.set(sql, set);
+    }
+
+    return set;
+};
+
+/**
+ * Admit `normalized` against the distinct-statement cap without an
+ * unconditional `SELECT COUNT(*)` on every execution. Same shape as
+ * `function-metrics.ts`'s `admitPath`: a known statement is free, a
+ * first-sight one pays one indexed PK lookup to tell "already tracked" from
+ * "genuinely new", and only a genuinely new statement reaches the actual
+ * `COUNT(*)` gate — the rare case once the leaderboard has warmed up.
+ */
+const admitStatement = (sql: SqlExec, normalized: string): boolean => {
+    const known = knownStatementsFor(sql);
+
+    if (known.has(normalized)) {
+        return true;
+    }
+
+    const alreadyTracked = runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${QUERY_METRICS_TABLE}" WHERE normalized_sql = ? LIMIT 1`, normalized).toArray().length > 0;
+
+    if (alreadyTracked) {
+        known.add(normalized);
+
+        return true;
+    }
+
+    const countRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${QUERY_METRICS_TABLE}"`).one();
+
+    if (countRow.n >= QUERY_METRICS_MAX_STATEMENTS) {
+        return false;
+    }
+
+    known.add(normalized);
+
+    return true;
+};
+
+/**
+ * Record one statement's activity. Creates the table on first call. Silently
  * skips recording when the normalised statement is empty (shouldn't happen
  * in practice) or when the table is already at the
  * {@link QUERY_METRICS_MAX_STATEMENTS} cap and the statement is not yet
- * tracked. The cap check is a single cheap `COUNT(*)` on the primary-key
- * index, so the hot-path cost is minimal.
+ * tracked. See `admitStatement` for how the cap check avoids an unconditional
+ * `COUNT(*)` on every execution.
+ *
+ * `execCount` (default 1) lets a caller fold several executions of the SAME
+ * statement into one call — `shard-do.ts` does this per dispatch so a
+ * query-in-a-loop handler pays one upsert here instead of one per raw
+ * execution. `durationMs`/`rowsRead`/`rowsWritten` are then the SUM across
+ * `execCount` executions, exactly as `exec_count`/`total_duration_ms` already
+ * accumulate sums across separate calls — folding before calling is
+ * indistinguishable, from this table's point of view, from `execCount`
+ * separate calls with the same totals.
  */
-const recordQueryMetric = (sql: SqlExec, rawSql: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number = Date.now()): void => {
+const recordQueryMetric = (
+    sql: SqlExec,
+    rawSql: string,
+    durationMs: number,
+    rowsRead: number,
+    rowsWritten: number,
+    now: number = Date.now(),
+    execCount: number = 1,
+): void => {
     const normalized = normalizeSql(rawSql);
 
     if (normalized.length === 0) {
@@ -420,30 +534,21 @@ const recordQueryMetric = (sql: SqlExec, rawSql: string, durationMs: number, row
 
     ensureQueryMetricsTable(sql);
 
-    // Cap guard: if the table is at the limit and this statement is new, skip.
-    const countRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${QUERY_METRICS_TABLE}"`).one();
-    const count = countRow.n;
-
-    if (count >= QUERY_METRICS_MAX_STATEMENTS) {
-        // Only skip if the statement isn't tracked yet.
-        const existing = runSql<{ c: number }>(sql, `SELECT COUNT(*) AS c FROM "${QUERY_METRICS_TABLE}" WHERE normalized_sql = ?`, normalized).one();
-
-        if (existing.c === 0) {
-            return;
-        }
+    if (!admitStatement(sql, normalized)) {
+        return;
     }
 
     // eslint-disable-next-line no-secrets/no-secrets -- SQL keyword "CONFLICT" triggers the entropy scanner; this is plain DDL, not a secret
     const upsertSql = `INSERT INTO "${QUERY_METRICS_TABLE}" (normalized_sql, exec_count, total_duration_ms, rows_read, rows_written)
-         VALUES (?, 1, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(normalized_sql) DO UPDATE SET
-             exec_count = exec_count + 1,
+             exec_count = exec_count + excluded.exec_count,
              total_duration_ms = total_duration_ms + excluded.total_duration_ms,
              rows_read = rows_read + excluded.rows_read,
              rows_written = rows_written + excluded.rows_written`;
 
-    runSql(sql, upsertSql, normalized, durationMs, rowsRead, rowsWritten);
-    recordQueryBucket(sql, normalized, durationMs, rowsRead, rowsWritten, now);
+    runSql(sql, upsertSql, normalized, execCount, durationMs, rowsRead, rowsWritten);
+    recordQueryBucket(sql, normalized, durationMs, rowsRead, rowsWritten, now, execCount);
 };
 
 /**

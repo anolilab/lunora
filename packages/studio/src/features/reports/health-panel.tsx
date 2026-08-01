@@ -478,6 +478,11 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
                         {metricsError}
                     </div>
                 )}
+                {metricsError === null && totals?.historyTruncated === true && (
+                    <div className="border-t border-border bg-warning/5 px-4 py-2 text-sm text-muted-foreground" data-testid="hl-history-truncated">
+                        {t("Showing a partial request/error history — one or more shards have more data than the trend chart can display.")}
+                    </div>
+                )}
             </Card>
 
             {/* Service-level KPIs — status-coloured, with trend sparklines. */}

@@ -20,6 +20,7 @@ import type {
     ShardTrafficResult,
     TableIndexesResult,
     TableInfo,
+    TablesIndexesResult,
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
@@ -50,6 +51,7 @@ interface InsightsPanelProps {
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
+const LIST_TABLES_INDEXES = adminRef(ADMIN_FUNCTIONS.listTablesIndexes);
 
 /** A 0–1 rate as a one-decimal percentage. */
 const percent = (rate: number): string => `${(rate * 100).toFixed(1)}%`;
@@ -233,80 +235,118 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         }
     };
 
-    // Enumerate the declared indexes (listTables + listTableIndexes per table) and
-    // fan out the cross-shard traffic feed for `shard` — the two imperative,
-    // multi-step flows that don't fit a single live read. The live `metricsQuery`
-    // already owns the recorded-reads (`indexHits`) half of the dead-index
-    // reconciliation; this supplies the declared-index half. Best-effort and
-    // independent of the metrics reads — a worker without listTables /
-    // listTableIndexes (or without an admin token for them) just yields no declared
-    // indexes, so the dead-index check stays quiet rather than failing the panel.
-    // `recordShard` runs only on a successful read, mirroring the old refresh.
-    const enumerateShard = useCallback(
-        async (shard: string): Promise<void> => {
-            // Claim this as the latest enumeration; any earlier in-flight call now
-            // sees a ref mismatch after its awaits and drops its (stale) writes.
-            latestEnumeratedShard.current = shard;
+    // Per-table fan-out fallback: one `listTableIndexes` call per table, kept
+    // for a worker predating the batched `listTablesIndexes` RPC. `Promise.allSettled`
+    // so ONE table's rejected call doesn't drop every other table's declared
+    // indexes — a partial reply degrades gracefully rather than going dormant.
+    const fetchDeclaredIndexesPerTable = async (tableNames: ReadonlyArray<string>, shard: string): Promise<DeclaredIndex[]> => {
+        const indexResults = await Promise.allSettled(
+            tableNames.map(
+                async (name) => [name, (await client.query(LIST_TABLE_INDEXES, { table: name }, callOptions(shard))) as TableIndexesResult] as const,
+            ),
+        );
 
-            let tableNames: string[] = [];
+        const declared: DeclaredIndex[] = [];
 
-            try {
-                const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+        for (const result of indexResults) {
+            if (result.status === "fulfilled") {
+                const [name, payload] = result.value;
 
-                if (latestEnumeratedShard.current !== shard) {
-                    return;
-                }
+                declared.push(...declaredIndexesFor(name, payload.indexes));
+            }
+        }
 
-                recordShard(shard);
-                tableNames = tables.map((table) => table.name);
+        return declared;
+    };
 
-                const indexResults = await Promise.allSettled(
-                    tables.map(
-                        async (table) =>
-                            [table.name, (await client.query(LIST_TABLE_INDEXES, { table: table.name }, callOptions(shard))) as TableIndexesResult] as const,
-                    ),
-                );
+    // Enumerate the declared indexes (listTables + one batched listTablesIndexes
+    // call) and fan out the cross-shard traffic feed for `shard` — the two
+    // imperative, multi-step flows that don't fit a single live read. The live
+    // `metricsQuery` already owns the recorded-reads (`indexHits`) half of the
+    // dead-index reconciliation; this supplies the declared-index half.
+    // Best-effort and independent of the metrics reads — a worker without
+    // listTables / listTablesIndexes (or without an admin token for them) just
+    // yields no declared indexes, so the dead-index check stays quiet rather than
+    // failing the panel. `recordShard` runs only on a successful read, mirroring
+    // the old refresh.
+    //
+    // AN EFFECT EVENT, not a `useCallback`: it reads `fanShardTraffic` /
+    // `loadShardTrafficFeed` / `fetchDeclaredIndexesPerTable`, render-fresh
+    // closures over `loadShardTraffic` and `client`. A memoized callback pinned
+    // to `[client]` would keep whichever of those closures was in scope the
+    // render it was (re)created — so an injected `loadShardTraffic` override
+    // changing later, with `client` unchanged, would silently keep fanning out
+    // through the STALE override. An effect event always resolves through the
+    // latest committed closures without becoming a reactive dependency itself,
+    // so callers (the effect below, and `refreshOnVisible`) don't re-run just
+    // because it was called.
+    const enumerateShard = useEffectEvent(async (shard: string): Promise<void> => {
+        // Claim this as the latest enumeration; any earlier in-flight call now
+        // sees a ref mismatch after its awaits and drops its (stale) writes.
+        latestEnumeratedShard.current = shard;
 
-                if (latestEnumeratedShard.current !== shard) {
-                    return;
-                }
+        let tableNames: string[] = [];
 
-                const declared: DeclaredIndex[] = [];
+        try {
+            const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
 
-                for (const result of indexResults) {
-                    if (result.status === "fulfilled") {
-                        const [name, payload] = result.value;
+            if (latestEnumeratedShard.current !== shard) {
+                return;
+            }
 
-                        declared.push(...declaredIndexesFor(name, payload.indexes));
+            recordShard(shard);
+            tableNames = tables.map((table) => table.name);
+
+            let declared: DeclaredIndex[] = [];
+
+            if (tableNames.length > 0) {
+                try {
+                    // One RPC for every table instead of one per table — the
+                    // fan-out this collapses used to cost a full admin RPC PER
+                    // table on every shard change and `visibilitychange` refresh.
+                    const batched = (await client.query(LIST_TABLES_INDEXES, { tables: tableNames }, callOptions(shard))) as TablesIndexesResult;
+
+                    if (latestEnumeratedShard.current !== shard) {
+                        return;
                     }
-                }
 
-                setDeclaredIndexes(declared);
-            } catch {
-                // listTables unavailable (older worker / no admin token) — no
-                // declared-index enumeration, so the dead-index check is dormant.
-                if (latestEnumeratedShard.current === shard) {
-                    setDeclaredIndexes(null);
+                    for (const [name, indexes] of Object.entries(batched.indexesByTable)) {
+                        declared.push(...declaredIndexesFor(name, indexes));
+                    }
+                } catch {
+                    // Older worker without listTablesIndexes — fall back to the
+                    // per-table fan-out so the dead-index check still works.
+                    declared = await fetchDeclaredIndexesPerTable(tableNames, shard);
+
+                    if (latestEnumeratedShard.current !== shard) {
+                        return;
+                    }
                 }
             }
 
-            await loadShardTrafficFeed(tableNames, shard);
-        },
-        // `fanShardTraffic`/`loadShardTrafficFeed` are render-fresh closures; the
-        // enumeration only needs to re-run on a shard change (or a manual visibility
-        // refresh), so they're intentionally excluded from the cache key.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [client],
-    );
+            setDeclaredIndexes(declared);
+        } catch {
+            // listTables unavailable (older worker / no admin token) — no
+            // declared-index enumeration, so the dead-index check is dormant.
+            if (latestEnumeratedShard.current === shard) {
+                setDeclaredIndexes(null);
+            }
+        }
+
+        await loadShardTrafficFeed(tableNames, shard);
+    });
 
     // Drive the imperative enumeration + traffic fan-out on the debounced shard —
     // the live reads (metrics/function-stats/advisories) re-fetch via their own
     // cache key. Previously the panel only reloaded on mount + visibility change, so
     // typing a different shard key never re-fetched the enumeration either.
+    // `enumerateShard` is an effect event, so it's deliberately omitted below —
+    // listing it would be listing a value that's stable by construction and
+    // exists precisely so it ISN'T a reactive dependency.
     useEffect(() => {
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- drives an imperative enumeration over the debounced shard — an async load, not derived state
         fireAndForget(enumerateShard(debouncedShard));
-    }, [debouncedShard, enumerateShard]);
+    }, [debouncedShard]);
 
     // Auto-refresh when the tab regains focus. The studio is a standalone app
     // (not a Vite HMR client), so it can't hear codegen reloads directly — but

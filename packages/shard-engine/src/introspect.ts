@@ -78,6 +78,7 @@ const ADMIN_FUNCTIONS = {
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
+    listTablesIndexes: "__lunora_admin__:listTablesIndexes",
     getLogs: "__lunora_admin__:getLogs",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
@@ -254,6 +255,18 @@ interface TableIndexInfo {
 /** Payload of a `__lunora_admin__:listTableIndexes` call: every declared index on the table. */
 interface TableIndexesResult {
     indexes: TableIndexInfo[];
+}
+
+/**
+ * Payload of a `__lunora_admin__:listTablesIndexes` call: declared indexes per
+ * requested table, keyed by table name. The batched sibling of
+ * {@link TableIndexesResult}, mirroring {@link TablesColumnsResult}'s relation
+ * to {@link TableColumnsResult} — one admin RPC for N tables instead of N,
+ * since `tableIndexes` is a cheap, synchronous, schema-sourced lookup (no SQL
+ * query per table to amortize away).
+ */
+interface TablesIndexesResult {
+    indexesByTable: Record<string, TableIndexInfo[]>;
 }
 
 /**
@@ -1706,6 +1719,7 @@ export type {
     TableInfo,
     TablePage,
     TablesColumnsResult,
+    TablesIndexesResult,
     WorkflowInstanceState,
     WorkflowInstanceStatusResult,
     WorkflowMetadata,
