@@ -104,6 +104,7 @@ import type {
     RelationDefinitionLike,
     RestrictableQueryOptions,
     SchemaLike,
+    ScoredDocument,
     SearchIndexDefinitionLike,
     ServerDefaultContextLike,
     TableDefinitionLike,
@@ -476,8 +477,19 @@ const scanCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARC
  * One branch per term rather than one `WHERE … OR …`: SQLite's planner silently
  * drops a range constraint OR'd with an equality on this module, returning no
  * rows for the range half rather than an error.
+ *
+ * Returns the score alongside each document (not just the document) so
+ * `.collectWithScores()` can surface the same `__score__` this function
+ * already orders by, instead of recomputing it — see {@link ScoredDocument}.
+ * The bare-doc callers (`.collect()` / `.take()` / …) map it away.
  */
-const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
+const searchViaFts = (
+    sql: SqlExec,
+    tableName: string,
+    search: SearchStage,
+    limit: number,
+    scopeCondition?: SQL,
+): { document: Record<string, unknown>; score: number }[] => {
     const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
 
     if (tokens.length === 0) {
@@ -513,7 +525,7 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
         whereClauses.push(scopeCondition);
     }
 
-    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM (${scored}) s JOIN ${dsql.identifier(tableName)} m ON m.id = s.${dsql.identifier(FTS_ID_COLUMN)}`;
+    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, s.${dsql.identifier("__score__")} AS ${dsql.identifier("__score__")} FROM (${scored}) s JOIN ${dsql.identifier(tableName)} m ON m.id = s.${dsql.identifier(FTS_ID_COLUMN)}`;
 
     if (whereClauses.length > 0) {
         query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
@@ -521,17 +533,19 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
 
     query = dsql`${query} ORDER BY s.${dsql.identifier("__score__")} DESC, m._creationTime DESC, m.id ASC LIMIT ${dsql.raw(String(limit))}`;
 
-    const documents: Record<string, unknown>[] = [];
+    const results: { document: Record<string, unknown>; score: number }[] = [];
 
     for (const row of runDrizzle(sql, query)) {
         const record = tryRowToDocument(row);
 
         if (record) {
-            documents.push(record);
+            const rawScore = row["__score__"];
+
+            results.push({ document: record, score: typeof rawScore === "number" ? rawScore : Number(rawScore ?? 0) });
         }
     }
 
-    return documents;
+    return results;
 };
 
 /**
@@ -540,8 +554,18 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
  * field in JS, and rank with `scoreDoc`. Matches the FTS path's AND +
  * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
  * by creation time (newest first).
+ *
+ * Returns the score alongside each document, same as {@link searchViaFts} —
+ * the JS scorer already computes it per candidate, this just keeps it on the
+ * result instead of dropping it at the final `.map()`.
  */
-const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
+const searchViaScan = (
+    sql: SqlExec,
+    tableName: string,
+    search: SearchStage,
+    limit: number,
+    scopeCondition?: SQL,
+): { document: Record<string, unknown>; score: number }[] => {
     const analyzer = createSearchAnalyzer(search.definition.language);
     const tokens = tokenizeSearch(search.query, analyzer);
 
@@ -605,7 +629,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     // Same total order the FTS path sorts by, id-terminated (see `searchViaFts`).
     scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    return scored.slice(0, limit).map((entry) => entry.doc);
+    return scored.slice(0, limit).map((entry) => {return { document: entry.doc, score: entry.score }});
 };
 
 /** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
@@ -670,21 +694,20 @@ const scoreGeoRow = (record: Record<string, unknown>, geo: GeoStage): { creation
 };
 
 /**
- * Resolve a `withGeoIndex(...)` query: gather the covering geohash prefixes for
- * the near-circle / bounding-box, range-scan the geohash companion for candidate
- * rows, JOIN back to the document table, then refine + order exactly in JS —
- * Haversine distance (nearest-first) for `.near()`, an inclusive box test
- * (creation-time order) for `.within()`. `.take(n)` is applied AFTER the refine.
+ * Gather the covering geohash prefixes for the near-circle / bounding-box,
+ * range-scan the geohash companion for candidate rows, JOIN back to the
+ * document table, then refine + order exactly in JS — Haversine distance
+ * (nearest-first) for `.near()`, an inclusive box test (creation-time order)
+ * for `.within()`. Unlimited and unsliced: {@link runGeoFetch} and
+ * {@link runGeoFetchScored} both slice this same candidate set, so the query
+ * + scoring logic lives in exactly one place.
  */
-const runGeoFetch = (
+const resolveGeoCandidates = (
     sql: SqlExec,
     tableName: string,
     geo: GeoStage,
-    limit: number | undefined,
     scopeCondition?: SQL,
-    /** Reports the candidate count BEFORE the limit slice — what the read materialized. */
-    onScanned: (count: number) => void = () => undefined,
-): Record<string, unknown>[] => {
+): { creationTime: number; distance: number; doc: Record<string, unknown> }[] => {
     if (!geo.near && !geo.within) {
         throw new LunoraError("INTERNAL", `geo index "${geo.indexName}" on table "${tableName}": call .near(point, radius) or .within(box)`);
     }
@@ -722,7 +745,23 @@ const runGeoFetch = (
     // distance metric, so it orders newest-first like a default list read.
     scored.sort((a, b) => a.distance - b.distance || b.creationTime - a.creationTime);
 
-    const docs = scored.map((entry) => entry.doc);
+    return scored;
+};
+
+/**
+ * Resolve a `withGeoIndex(...)` query into bare documents. `.take(n)` is
+ * applied AFTER the refine.
+ */
+const runGeoFetch = (
+    sql: SqlExec,
+    tableName: string,
+    geo: GeoStage,
+    limit: number | undefined,
+    scopeCondition?: SQL,
+    /** Reports the candidate count BEFORE the limit slice — what the read materialized. */
+    onScanned: (count: number) => void = () => undefined,
+): Record<string, unknown>[] => {
+    const docs = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => entry.doc);
 
     // Every candidate was decoded and scored before the slice, so the meter must
     // see all of them — `.take(1)` over a wide radius still materializes the
@@ -730,6 +769,33 @@ const runGeoFetch = (
     onScanned(docs.length);
 
     return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+};
+
+/**
+ * Same candidate set as {@link runGeoFetch}, but pairs each document with the
+ * distance {@link scoreGeoRow} already computed to order it — see
+ * {@link ScoredDocument}. `.near()` rows carry their haversine distance;
+ * `.within()` rows carry `null` (a box match has no point-distance metric, and
+ * `0` would misleadingly read as "exactly here").
+ */
+const runGeoFetchScored = (
+    sql: SqlExec,
+    tableName: string,
+    geo: GeoStage,
+    limit: number | undefined,
+    scopeCondition?: SQL,
+    onScanned: (count: number) => void = () => undefined,
+): { distanceMeters: null | number; document: Record<string, unknown> }[] => {
+    const isWithin = geo.within !== undefined;
+    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {return {
+        // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
+        distanceMeters: isWithin ? null : entry.distance,
+        document: entry.doc,
+    }});
+
+    onScanned(results.length);
+
+    return typeof limit === "number" ? results.slice(0, Math.max(0, Math.floor(limit))) : results;
 };
 
 /**
@@ -764,6 +830,48 @@ const runGeoTerminal = (
     for (const record of docs) {
         if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
             result.push(record);
+
+            if (typeof limit === "number" && result.length >= limit) {
+                break;
+            }
+        }
+    }
+
+    return result;
+};
+
+/**
+ * Scored twin of {@link runGeoTerminal} — same in-memory-filter handling
+ * (RLS pushes its policy down this exact way, so `.collectWithScores()` must
+ * apply it too), but tests each predicate against `entry.document` and keeps
+ * `distanceMeters` on the surviving rows instead of collapsing to bare docs.
+ */
+const runGeoTerminalScored = (
+    sql: SqlExec,
+    tableName: string,
+    stage: QueryStage,
+    scopeCondition: SQL | undefined,
+    limit: number | undefined,
+    onScanned: (count: number) => void = () => undefined,
+): { distanceMeters: null | number; document: Record<string, unknown> }[] => {
+    const { geo } = stage;
+
+    if (!geo) {
+        throw new LunoraError("INTERNAL", "runGeoTerminalScored called without a staged geo query");
+    }
+
+    const filtered = stage.inMemoryFilters.length > 0;
+    const entries = runGeoFetchScored(sql, tableName, geo, filtered ? undefined : limit, scopeCondition, onScanned);
+
+    if (!filtered) {
+        return entries;
+    }
+
+    const result: { distanceMeters: null | number; document: Record<string, unknown> }[] = [];
+
+    for (const entry of entries) {
+        if (stage.inMemoryFilters.every((predicate) => predicate(entry.document))) {
+            result.push(entry);
 
             if (typeof limit === "number" && result.length >= limit) {
                 break;
@@ -1123,7 +1231,14 @@ const buildReader = (
     /** Pre-filter window of the last search terminal — see `runFetch`'s metering. */
     let searchScanned = 0;
 
-    const runSearchFetch = (limit: number | undefined): Record<string, unknown>[] => {
+    /**
+     * The real search-terminal logic, keeping each document's `__score__`
+     * alongside it — see {@link ScoredDocument}. {@link runSearchFetch} (the
+     * bare-doc path every existing caller uses) is a thin wrapper over this
+     * that maps the score away, so `.collect()` / `.take()` / `.paginate()`
+     * stay byte-identical to before this terminal existed.
+     */
+    const runSearchFetchScored = (limit: number | undefined): { document: Record<string, unknown>; score: number }[] => {
         const { search } = stage;
 
         if (!search) {
@@ -1143,7 +1258,7 @@ const buildReader = (
         // `.filter()` runs on top, which narrows *within* that window rather than
         // widening the read.
         const engineLimit = resolveSearchScan(filtered ? undefined : limit);
-        const docs = isFtsAvailable(sql)
+        const scored = isFtsAvailable(sql)
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
@@ -1151,19 +1266,19 @@ const buildReader = (
             // An unbounded read asked for one row past the cap; if it came back
             // full, the caller would otherwise receive a prefix that looks whole.
             if (limit === undefined) {
-                assertSearchWithinCap(docs);
+                assertSearchWithinCap(scored);
             }
 
-            return docs;
+            return scored;
         }
 
-        const result: Record<string, unknown>[] = [];
+        const result: { document: Record<string, unknown>; score: number }[] = [];
 
-        searchScanned = docs.length;
+        searchScanned = scored.length;
 
-        for (const record of docs) {
-            if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
-                result.push(record);
+        for (const entry of scored) {
+            if (stage.inMemoryFilters.every((predicate) => predicate(entry.document))) {
+                result.push(entry);
 
                 if (typeof limit === "number" && result.length >= limit) {
                     break;
@@ -1173,6 +1288,8 @@ const buildReader = (
 
         return result;
     };
+
+    const runSearchFetch = (limit: number | undefined): Record<string, unknown>[] => runSearchFetchScored(limit).map((entry) => entry.document);
 
     /**
      * One page of a relevance-ordered search. The window is fetched one row
@@ -1254,6 +1371,42 @@ const buildReader = (
         return rows;
     };
 
+    /**
+     * `.collectWithScores()`'s dispatcher — the scored twin of {@link runFetch}.
+     * Only a staged search or geo query has a score/distance to surface, so
+     * this requires one of `.withSearchIndex()` / `.withGeoIndex()` (mirrors
+     * `.paginate()`'s geo-unsupported guard). Otherwise identical to
+     * `runFetch`: it stamps the same dependency footprint and meters the same
+     * row count, so a live `.collectWithScores()` query invalidates and is
+     * quota-charged exactly like `.collect()` does.
+     */
+    const runFetchScored = (): ScoredDocument[] => {
+        if (!stage.search && !stage.geo) {
+            throw new LunoraError("INTERNAL", `ctx.db.query("${tableName}").collectWithScores() requires a staged .withSearchIndex(...) or .withGeoIndex(...)`);
+        }
+
+        stampTerminal();
+
+        let scanned = 0;
+        const rows = ((): ScoredDocument[] => {
+            if (stage.search) {
+                const found = runSearchFetchScored(undefined);
+
+                scanned = searchScanned;
+
+                return found;
+            }
+
+            return runGeoTerminalScored(sql, tableName, stage, scopeCondition, undefined, (count) => {
+                scanned = count;
+            });
+        })();
+
+        meterRows(Math.max(scanned, rows.length));
+
+        return rows;
+    };
+
     const reader: TableReaderLike = {
         /**
          * Lazy row iteration — `for await (const row of ctx.db.query(t)…)`.
@@ -1310,6 +1463,10 @@ const buildReader = (
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async collect() {
             return runFetch(undefined);
+        },
+        // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
+        async collectWithScores() {
+            return runFetchScored();
         },
         filter(predicate) {
             stage.inMemoryFilters.push(predicate);

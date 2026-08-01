@@ -303,6 +303,14 @@ export interface SearchFilterBuilder<TDocument> {
  */
 export interface SearchReader<TDocument> {
     collect: () => Promise<TDocument[]>;
+
+    /**
+     * Like `.collect()`, but pairs each matched document with the relevance
+     * score the FTS engine already computed to produce the descending order —
+     * `.collect()` throws it away after sorting by it, this surfaces it
+     * instead. Ordered by `score` descending, same order as `.collect()`.
+     */
+    collectWithScores: () => Promise<{ document: TDocument; score: number }[]>;
     first: () => Promise<TDocument | null>;
     take: (limit: number) => Promise<TDocument[]>;
     unique: () => Promise<TDocument | null>;
@@ -337,6 +345,15 @@ export interface GeoFilterBuilder {
  */
 export interface GeoReader<TDocument> {
     collect: () => Promise<TDocument[]>;
+
+    /**
+     * Like `.collect()`, but pairs each matched document with the distance
+     * (in meters) from `.near()`'s point that the read already computed to
+     * produce the nearest-first order. `.within()` box matches have no
+     * point-distance metric, so `distanceMeters` is `null` for those rows
+     * rather than a misleading `0`.
+     */
+    collectWithScores: () => Promise<{ distanceMeters: null | number; document: TDocument }[]>;
     first: () => Promise<TDocument | null>;
     take: (limit: number) => Promise<TDocument[]>;
     unique: () => Promise<TDocument | null>;

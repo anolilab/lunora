@@ -2818,6 +2818,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
                         return runSearch(stage, undefined);
                     },
+                    // eslint-disable-next-line @typescript-eslint/require-await -- declared `() => Promise<...>` so every caller can uniformly `await`/`.rejects` it; `async` here (rather than a bare throw) is what turns this into a rejected promise instead of a synchronous throw
+                    async collectWithScores() {
+                        // The three search layouts (`search-layout.ts`) compute and
+                        // order by `__score__` in SQL exactly like the sharded FTS5
+                        // path does, but none of them selects it back out of the
+                        // final row set — the same discard `.global()`'s `collect()`
+                        // has always done. Surfacing it needs plumbing through all
+                        // three layouts, not just this reader, so — like
+                        // `withGeoIndex()` below — this fails closed with a clear
+                        // error instead of a confusing "not a function" for now.
+                        throw new LunoraError(
+                            "INTERNAL",
+                            `collectWithScores() is not supported on \`.global()\` tables (table "${tableName}") — relevance scores are not yet surfaced on this backend; use .collect() instead`,
+                        );
+                    },
                     filter(predicate) {
                         if (!stage) {
                             throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
