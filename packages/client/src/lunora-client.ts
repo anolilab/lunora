@@ -3582,7 +3582,7 @@ class LunoraClient {
                 // stuck displaying a stale value until this tab's own
                 // status happens to change (which may be a while, e.g. no
                 // active subscription ever opens a socket).
-                this.tabCoordinator?.broadcastConnectionStatus(this.computeStatus());
+                this.tabCoordinator?.broadcastConnectionStatus(this.computeStatus(), this.identityFingerprint());
             },
             onStopBeingLeader: () => {
                 // Close all WS connections now that another tab leads —
@@ -3601,7 +3601,18 @@ class LunoraClient {
                 this.leaderStatus = undefined;
                 this.leaderWasEverConnected = false;
             },
-            onConnectionStatus: (status) => {
+            onConnectionStatus: (status, identity) => {
+                // Belt-and-braces: the channel-name scoping is the primary
+                // defence (a different identity is normally on a different
+                // channel entirely), but a `setAuthToken` in this tab can move
+                // it to a new channel while a stale frame from the OLD leader
+                // is already queued in the message task queue. Drop it when a
+                // stamp is present and doesn't match; an absent stamp
+                // (mixed-version leader) is accepted, same as today.
+                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                    return;
+                }
+
                 // A follower has no `ShardConnection` of its own — this is
                 // its only truthful status signal. Mirror it and re-run
                 // the same notify path a real status change takes so this
@@ -3624,7 +3635,13 @@ class LunoraClient {
                     this.flushAllOfflineQueues();
                 }
             },
-            onSubscriptionData: (key, data, cursor, epoch) => {
+            onSubscriptionData: (key, data, cursor, epoch, identity) => {
+                // Belt-and-braces identity check — see `onConnectionStatus`'s
+                // comment for the full rationale (identical here).
+                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                    return;
+                }
+
                 // A follower tab received the authoritative server value from
                 // the leader. Update serverBase and re-fold any local optimistic
                 // layers so the displayed value reflects both the new base and
@@ -3671,7 +3688,13 @@ class LunoraClient {
                     fanSubscriptionError(state.errorCallbacks, error);
                 }
             },
-            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId) => {
+            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity) => {
+                // Belt-and-braces identity check — see `onConnectionStatus`'s
+                // comment for the full rationale (identical here).
+                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                    return;
+                }
+
                 // The leader's `settled` checkpoint advanced with no value
                 // change — reuse the exact same tail the leader itself runs
                 // (ack + advance cursor/epoch + drop confirmed layers +
@@ -4045,7 +4068,7 @@ class LunoraClient {
         // no-op on a follower or single-tab client — `broadcastConnectionStatus`
         // itself gates on `isLeader()`.
         if (this.tabCoordinator?.isLeader()) {
-            this.tabCoordinator.broadcastConnectionStatus(next);
+            this.tabCoordinator.broadcastConnectionStatus(next, this.identityFingerprint());
         }
     }
 
@@ -5309,7 +5332,7 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 
-            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch);
+            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint());
         }
     }
 
@@ -5369,7 +5392,14 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 
-            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch, state.lastMutationId, this.clientId);
+            this.tabCoordinator.broadcastSubscriptionSettled(
+                key,
+                state.serverCursor,
+                state.serverEpoch,
+                state.lastMutationId,
+                this.clientId,
+                this.identityFingerprint(),
+            );
         }
     }
 

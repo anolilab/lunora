@@ -10,9 +10,18 @@ type RawMessage = { tabId: string; ts: number; type: "claim-leadership" | "heart
 
 /** Wire shape of a leader's `subscription-data` / `subscription-settled` / `connection-status` broadcast, for raw test-side sends simulating a leader tab. */
 type RawLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
-    | { clientId?: string; cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
-    | { status: "connected" | "connecting" | "idle" | "offline"; tabId: string; type: "connection-status" };
+    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
+    | {
+          clientId?: string;
+          cursor?: number;
+          epoch?: string;
+          identity?: string | null;
+          key: string;
+          lastMutationId?: number;
+          tabId: string;
+          type: "subscription-settled";
+      }
+    | { identity?: string | null; status: "connected" | "connecting" | "idle" | "offline"; tabId: string; type: "connection-status" };
 
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -979,6 +988,90 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
 
             probeOnAnon.close();
             probeOnSignedIn.close();
+        } finally {
+            client.close();
+        }
+    });
+});
+
+describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)", () => {
+    it("drops a data frame whose identity stamp mismatches this follower's own fingerprint, even on its own channel", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        client.setAuthToken("token-me", "user-me");
+
+        try {
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, (value) => received.push(value));
+
+            const rogue = new BroadcastChannel(clientChannel(client));
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            // A stamp from a DIFFERENT identity than this follower's own — the
+            // race the belt-and-braces stamp exists for: a `setAuthToken` in
+            // this tab already moved it to a new (this) channel while a stale
+            // frame from the OLD identity's leader was already queued.
+            rogue.postMessage(
+                { data: "not-mine", identity: "subj:someone-else", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage,
+            );
+            await delay(30);
+
+            expect(received).toStrictEqual([]);
+
+            // An absent stamp (mixed-version / old leader) is still accepted
+            // — today's behavior, unchanged.
+            rogue.postMessage({ data: "old-leader-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(received).toStrictEqual(["old-leader-row"]);
+
+            rogue.close();
+        } finally {
+            client.close();
+        }
+    });
+
+    it("drops a settled frame and a connection-status frame with a mismatched identity stamp too", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        client.setAuthToken("token-me", "user-me");
+
+        try {
+            const checkpoints: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+            const rogue = new BroadcastChannel(clientChannel(client));
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            rogue.postMessage({
+                cursor: 10,
+                identity: "subj:someone-else",
+                key,
+                lastMutationId: 5,
+                tabId: "leader-tab",
+                type: "subscription-settled",
+            } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(checkpoints).toStrictEqual([]);
+
+            rogue.postMessage({ identity: "subj:someone-else", status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            // The mismatched connection-status frame must not have been
+            // mirrored either — the client stays "idle" (its default), not
+            // "connected" as the dropped frame claimed.
+            expect(client.connectionStatus()).toBe("idle");
+
+            rogue.close();
         } finally {
             client.close();
         }

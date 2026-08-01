@@ -46,8 +46,17 @@ interface TabCoordinatorOptions {
      * or the offline-queue gate. Sent on every leader-side status change and
      * once more right after a new leader takes over, so a follower already
      * mid-mirroring isn't stuck on a stale value from the PREVIOUS leader.
+     *
+     * `identity` is the leader's own `identityFingerprint()` (`null` = signed
+     * out) — the channel-name scoping (see `LunoraClient.createTabCoordinator`)
+     * is the primary defence against a stale frame from a since-changed
+     * identity, but `setAuthToken` in one tab can move it to a new channel
+     * while this frame is already queued in another tab's message task queue.
+     * A follower drops the frame when `identity` is present and doesn't match
+     * its own; an **absent** `identity` (mixed-version leader) is accepted —
+     * today's behavior, and the channel split already separates version groups.
      */
-    onConnectionStatus?: (status: ConnectionStatus) => void;
+    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
 
     /**
      * Called when this tab loses leadership (should close WS connections).
@@ -61,8 +70,12 @@ interface TabCoordinatorOptions {
      * value; both are absent on a mixed-version leader that hasn't shipped the
      * cursor yet (the follower falls back to its historical behavior — see
      * `lunora-client.ts`'s `onSubscriptionData` wiring).
+     *
+     * `identity` is the leader's `identityFingerprint()` (see
+     * `onConnectionStatus`'s docblock for the full rationale and the
+     * absent-field mixed-version rule — identical here).
      */
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
 
     /**
      * Called when the leader broadcasts a subscription error.
@@ -88,18 +101,30 @@ interface TabCoordinatorOptions {
      * bounded fallback. The checkpoint (cursor) half of this callback fires
      * unconditionally regardless of `clientId` — only the `mutationId` half
      * is scoped.
+     *
+     * `identity` is the leader's `identityFingerprint()` — see
+     * `onConnectionStatus`'s docblock for the drop rule (identical here).
      */
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
 }
 
 type WsFollowerMessage =
     { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
 
 type WsLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
+    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
     | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" }
-    | { clientId?: string; cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
-    | { status: ConnectionStatus; tabId: string; type: "connection-status" };
+    | {
+          clientId?: string;
+          cursor?: number;
+          epoch?: string;
+          identity?: string | null;
+          key: string;
+          lastMutationId?: number;
+          tabId: string;
+          type: "subscription-settled";
+      }
+    | { identity?: string | null; status: ConnectionStatus; tabId: string; type: "connection-status" };
 
 type TabCoordinatorMessage = WsFollowerMessage | WsLeaderMessage;
 
@@ -144,10 +169,12 @@ class TabCoordinator {
     /** Callbacks set via constructor options. */
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
-    private readonly onConnectionStatus: ((status: ConnectionStatus) => void) | undefined;
-    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string) => void) | undefined;
+    private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
-    private readonly onSubscriptionSettled: ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string) => void) | undefined;
+    private readonly onSubscriptionSettled:
+        | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void)
+        | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -288,9 +315,14 @@ class TabCoordinator {
      * call this. `cursor`/`epoch` are omitted from the wire frame when
      * `undefined` (e.g. a CDC-off shard) — a follower on ANY version treats a
      * missing `cursor` as "no confirmed-layer drop this frame", so omitting it
-     * here is equivalent to sending it as `undefined`.
+     * here is equivalent to sending it as `undefined`. `identity` is this
+     * (leader) tab's own `identityFingerprint()` (`null` = signed out) —
+     * stamped so a follower can drop a frame from a since-changed identity
+     * (see the `onSubscriptionData` docblock); spread-included whenever
+     * supplied, since a fixed leader always knows its own identity (never
+     * omits it) and `null` must round-trip distinctly from "field absent".
      */
-    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string): void {
+    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void {
         if (!this.leader) {
             return;
         }
@@ -302,6 +334,7 @@ class TabCoordinator {
             data,
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
+            ...(identity === undefined ? {} : { identity }),
         });
     }
 
@@ -323,9 +356,18 @@ class TabCoordinator {
      * `LunoraClient.handleSettledMessage`). `clientId` is this (leader) tab's
      * own client id, stamped so a follower can tell whether the echoed
      * `lastMutationId` watermark is genuinely its own (see the
-     * `onSubscriptionSettled` docblock). Only the leader should call this.
+     * `onSubscriptionSettled` docblock). `identity` is this tab's own
+     * `identityFingerprint()` — see `broadcastSubscriptionData`'s docblock for
+     * the same round-tripping rule. Only the leader should call this.
      */
-    public broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string): void {
+    public broadcastSubscriptionSettled(
+        key: string,
+        cursor?: number,
+        epoch?: string,
+        lastMutationId?: number,
+        clientId?: string,
+        identity?: string | null,
+    ): void {
         if (!this.leader) {
             return;
         }
@@ -338,21 +380,24 @@ class TabCoordinator {
             ...(epoch === undefined ? {} : { epoch }),
             ...(lastMutationId === undefined ? {} : { lastMutationId }),
             ...(clientId === undefined ? {} : { clientId }),
+            ...(identity === undefined ? {} : { identity }),
         });
     }
 
     /**
      * Broadcast this tab's aggregate `ConnectionStatus` to follower tabs, so
      * they can mirror a truthful status without a socket of their own (see
-     * `LunoraClient.computeStatus`/`emitConnectionStatus`). Only the leader
-     * should call this.
+     * `LunoraClient.computeStatus`/`emitConnectionStatus`). `identity` is this
+     * tab's own `identityFingerprint()` — see `broadcastSubscriptionData`'s
+     * docblock for the same round-tripping rule. Only the leader should call
+     * this.
      */
-    public broadcastConnectionStatus(status: ConnectionStatus): void {
+    public broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "connection-status", tabId: this.tabId, status });
+        this.broadcast({ type: "connection-status", tabId: this.tabId, status, ...(identity === undefined ? {} : { identity }) });
     }
 
     // -----------------------------------------------------------------------
@@ -377,7 +422,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onConnectionStatus?.(message.status);
+                this.onConnectionStatus?.(message.status, message.identity);
 
                 break;
             }
@@ -393,7 +438,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch);
+                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch, message.identity);
 
                 break;
             }
@@ -413,7 +458,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId);
+                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId, message.identity);
 
                 break;
             }
