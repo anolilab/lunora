@@ -132,6 +132,21 @@ describe("composites", () => {
         expect(() => v.object({ constructor: v.string() }).parse({})).toThrow(ValidationError);
     });
 
+    it("rejects a declared `__proto__` field at construction time instead of silently dropping it at parse time (VALUES-01)", () => {
+        expect.assertions(1);
+
+        // Bracket notation creates a REAL own property named "__proto__" on the
+        // shape map; the bare-literal form (`{ __proto__: v.string() }`) is a
+        // distinct object-literal special case that sets the object's own
+        // prototype instead, so it wouldn't exercise this at all. Before this
+        // fix, this shape type-checked and built, but a parsed `__proto__` value
+        // silently vanished — `out["__proto__"] = …` on a plain `{}` invokes the
+        // inherited `Object.prototype` accessor instead of creating a data
+        // property (a no-op for a non-object value). Rejecting it here, at
+        // construction, surfaces the same collision as a loud, immediate error.
+        expect(() => v.object({ ["__proto__"]: v.string(), value: v.number() })).toThrow(/"__proto__"/u);
+    });
+
     it("array parses element-wise and surfaces index in path", () => {
         expect.hasAssertions();
 

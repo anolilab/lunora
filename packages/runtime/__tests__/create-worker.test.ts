@@ -1019,6 +1019,35 @@ describe("createWorker — RPC batch cross-shard bookmark", () => {
     });
 });
 
+describe("createWorker — RPC batch body-shape guard (RUNTIME-04)", () => {
+    // `handleBatchRpc` used to run its own `typeof body !== "object" || …` check
+    // by hand after parsing; it now delegates to `readJsonBodyWithLimit`, which
+    // applies the same guard for every caller. These pin the batch endpoint's
+    // observable behavior (still 400, never forwarded) across that refactor.
+    const shard = createShardSpy();
+
+    it("rejects a literal `null` batch body with 400", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/_lunora/rpc-batch", { body: "null", method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("rejects a batch body that parses to an array with 400", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/_lunora/rpc-batch", { body: "[1,2]", method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+    });
+});
+
 describe("createWorker — x402 paid procedures", () => {
     let shard: ShardSpy;
 

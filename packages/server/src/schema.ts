@@ -136,7 +136,11 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      */
     global: (options?: { backend?: GlobalBackend }) => TableBuilder<Shape>;
     /** Add a secondary index. */
-    index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
+    index: (
+        name: string,
+        fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,
+        options?: { unique?: boolean },
+    ) => TableBuilder<Shape>;
 
     /**
      * Name the column holding the owning user's id, so "only the owner sees these
@@ -869,6 +873,64 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
     }
 };
 
+/**
+ * Columns every row carries implicitly (never part of a table's declared
+ * `shape`), so `.index()` may legitimately name them. The single source for
+ * both the compile-time allow-list (`TableBuilder["index"]`'s `fields` type,
+ * via `(typeof SYSTEM_INDEX_FIELDS)[number]`) and the runtime cross-check
+ * below (via `SYSTEM_INDEX_FIELDS_SET`) — declared once so the two can't
+ * drift apart.
+ */
+const SYSTEM_INDEX_FIELDS = ["_creationTime", "_id"] as const;
+
+/**
+ * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set&lt;string>`
+ * (rather than inferring the literal-union element type) because it is
+ * probed with an arbitrary user-declared `IndexDefinition["fields"]` entry,
+ * not one already narrowed to the system-field union.
+ */
+const SYSTEM_INDEX_FIELDS_SET = new Set<string>(SYSTEM_INDEX_FIELDS);
+
+/**
+ * Cross-check every `.index(name, fields)` declaration against the table's
+ * ASSEMBLED shape (run late — after `.softDelete()` has injected its marker
+ * column onto `shape`, so a soft-delete field indexed by name isn't a false
+ * positive). `.index()` is the one table-builder method whose `fields` were
+ * historically typed `ReadonlyArray&lt;string>` with no cross-check against
+ * `table.shape` — a typo'd column type-checked, passed `defineSchema`, and
+ * only failed at migration time as a SQLite "no such column" error. This also
+ * rejects a duplicate index name within a table, which SQLite would otherwise
+ * silently let collide.
+ *
+ * `searchIndex`'s `filterFields` is deliberately excluded — its dot-separated
+ * paths reach into nested JSON, so there is no flat column list to check it
+ * against.
+ */
+const validateIndexFields = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        const seenNames = new Set<string>();
+
+        for (const index of table.indexes) {
+            if (seenNames.has(index.name)) {
+                throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" declares index "${index.name}" more than once`);
+            }
+
+            seenNames.add(index.name);
+
+            for (const field of index.fields) {
+                if (SYSTEM_INDEX_FIELDS_SET.has(field) || field in table.shape) {
+                    continue;
+                }
+
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" index "${index.name}" names column "${field}" which is not in the table's shape`,
+                );
+            }
+        }
+    }
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -878,6 +940,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
+    validateIndexFields(tables);
 
     return withExtend({ tables, vectorIndexes });
 };

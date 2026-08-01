@@ -11,6 +11,7 @@ import { relayName } from "../../../shared/relay-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import type { AuthAuditReader } from "./auth-audit-rpc";
@@ -1837,8 +1838,10 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     // `args` flows untrusted to `JSON.stringify` + the shard RPC body; reject a
     // non-object (`args: "x"` / `args: 5`) at the edge rather than forwarding a
     // malformed envelope the shard then has to defend against. Absent → `{}`.
-    if (raw.args !== undefined && (typeof raw.args !== "object" || raw.args === null || Array.isArray(raw.args))) {
-        throw new LunoraError("RPC `args` must be an object", { code: "BAD_REQUEST", status: 400 });
+    // Same guard the public REST surface applies (`assertArgsObject`) — one
+    // check, so the two entry points can't drift.
+    if (raw.args !== undefined) {
+        assertArgsObject(raw.args, "RPC");
     }
 
     // `shardKey` flows to `resolveShard` → `idFromName(shardKey)`, which expects a
@@ -3737,19 +3740,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("RPC batch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const text = await readBodyTextWithLimit(request);
-        let body: unknown;
-
-        try {
-            body = JSON.parse(text);
-        } catch {
-            throw new LunoraError("RPC batch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        if (typeof body !== "object" || body === null || Array.isArray(body)) {
-            throw new LunoraError("RPC batch body must be an object", { code: "BAD_REQUEST", status: 400 });
-        }
-
+        // `readJsonBodyWithLimit` now rejects a non-object body (`null` / an array /
+        // a bare scalar) itself, matching what this handler used to check by hand.
+        const body = await readJsonBodyWithLimit(request);
         const { calls } = body as { calls?: unknown };
 
         if (!Array.isArray(calls)) {
@@ -4352,6 +4345,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the shard identically to typed RPC. The router is built from the registry, so
     // a non-exposed procedure has no route (default-closed).
     const invokeExposed: RestInvoke = async ({ args, env, functionPath, request, shardKey, waitUntil }) => {
+        // `invokeExposed` builds the envelope directly rather than routing through
+        // `parseEnvelope`, so it needs its own call to the shared guard — same
+        // check the RPC edge applies, so a REST-only bypass can't reappear.
+        assertArgsObject(args, "REST");
+
         const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
         const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
