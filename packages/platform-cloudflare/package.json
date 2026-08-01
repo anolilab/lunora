@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-cloudflare",
-    "version": "1.0.0-alpha.1",
+    "version": "1.0.0-alpha.2",
     "description": "Cloudflare implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore over Durable Objects",
     "keywords": [
         "cloudflare",
@@ -57,7 +57,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/platform": "1.0.0-alpha.1"
+        "@lunora/platform": "1.0.0-alpha.2"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
