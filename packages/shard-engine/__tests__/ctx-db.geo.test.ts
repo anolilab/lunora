@@ -356,4 +356,112 @@ describe("ctx-db geo", () => {
             expect(kept.map((entry) => entry.document["name"])).toStrictEqual(["brooklyn"]);
         });
     });
+
+    // Input validation: a malformed query is rejected up front (BAD_REQUEST)
+    // instead of silently paying for a scan that can only ever return [].
+    // The builder throws synchronously — the throw happens while `withGeoIndex`
+    // runs the `build` callback, before any query executes.
+    describe("input validation", () => {
+        it("rejects .within() with transposed lat corners", () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            expect(() =>
+                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 5, lng: -73 }, sw: { lat: 10, lng: -74 } })),
+            ).toThrow(/transposed/u);
+        });
+
+        it("rejects a .within() box crossing the antimeridian", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            // A row that would fall inside the intended (wrap-around) box, so a
+            // silent [] would be indistinguishable from "no data here".
+            await writer.insert("places", { location: { lat: 40, lng: 179 }, name: "near-dateline" });
+
+            expect(() =>
+                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 41, lng: -170 }, sw: { lat: 39, lng: 170 } })),
+            ).toThrow(/antimeridian/u);
+
+            // The row genuinely exists and is inside the intended box — proof
+            // the rejected shape was not simply "no data here".
+            const found = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.within({ ne: { lat: 41, lng: 180 }, sw: { lat: 39, lng: 170 } }))
+                .collect();
+
+            expect(found.map((document) => document["name"])).toStrictEqual(["near-dateline"]);
+        });
+
+        it.each([
+            ["negative", -5],
+            ["NaN", Number.NaN],
+            ["zero", 0],
+            ["Infinity", Number.POSITIVE_INFINITY],
+        ])("rejects .near() with a %s radius", (_label, radiusMeters) => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, radiusMeters))).toThrow(
+                /radiusMeters must be a finite number > 0/u,
+            );
+        });
+
+        it("rejects a .near() point with an out-of-range or non-finite lat/lng", () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: 91, lng: 0 }, 1000))).toThrow(
+                /finite lat in \[-90, 90\]/u,
+            );
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: 0, lng: 200 }, 1000))).toThrow(
+                /finite lat in \[-90, 90\]/u,
+            );
+            expect(() => writer.query("places").withGeoIndex("by_location", (q) => q.near({ lat: Number.NaN, lng: 0 }, 1000))).toThrow(
+                /finite lat in \[-90, 90\]/u,
+            );
+        });
+
+        it("rejects a .within() box with an out-of-range corner", () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            expect(() =>
+                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 91, lng: -73 }, sw: { lat: 40, lng: -74 } })),
+            ).toThrow(/finite lat in \[-90, 90\]/u);
+            expect(() =>
+                writer.query("places").withGeoIndex("by_location", (q) => q.within({ ne: { lat: 41, lng: 200 }, sw: { lat: 40, lng: -74 } })),
+            ).toThrow(/finite lat in \[-90, 90\]/u);
+        });
+
+        it("does not reject well-formed inputs (no regression)", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await writer.insert("places", { location: TIMES_SQUARE, name: "times-square" });
+
+            // A degenerate point box (sw === ne) over a row at exactly those
+            // coordinates still matches — inclusive edges are unaffected.
+            const pointBox = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.within({ ne: TIMES_SQUARE, sw: TIMES_SQUARE }))
+                .collect();
+
+            expect(pointBox.map((document) => document["name"])).toStrictEqual(["times-square"]);
+
+            // A box touching +180 exactly is accepted (not treated as crossing).
+            const touchingAntimeridian = await writer
+                .query("places")
+                .withGeoIndex("by_location", (q) => q.within({ ne: { lat: 41, lng: 180 }, sw: { lat: 40, lng: 170 } }))
+                .collect();
+
+            expect(touchingAntimeridian).toStrictEqual([]);
+        });
+    });
 });

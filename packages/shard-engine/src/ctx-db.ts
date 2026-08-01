@@ -632,6 +632,21 @@ const searchViaScan = (
     return scored.slice(0, limit).map((entry) => {return { document: entry.doc, score: entry.score }});
 };
 
+/**
+ * Assert `point` is a usable geo coordinate: finite lat in `[-90, 90]` and
+ * finite lng in `[-180, 180]`. `NaN`/out-of-range coordinates otherwise
+ * poison `encodeGeohash`/haversine silently and produce a misleading empty
+ * result instead of a clear rejection.
+ */
+const assertGeoPoint = (point: { lat: number; lng: number }, label: string, tableName: string, indexName: string): void => {
+    if (!Number.isFinite(point.lat) || point.lat < -90 || point.lat > 90 || !Number.isFinite(point.lng) || point.lng < -180 || point.lng > 180) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `geo index "${indexName}" on table "${tableName}": ${label} must have a finite lat in [-90, 90] and lng in [-180, 180]`,
+        );
+    }
+};
+
 /** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
 const createGeoBuilder = (geo: GeoStage, tableName: string): GeoFilterBuilderLike => {
     // Alias so the mutation is on a local binding, not the parameter (no-param-reassign) —
@@ -643,6 +658,15 @@ const createGeoBuilder = (geo: GeoStage, tableName: string): GeoFilterBuilderLik
                 throw new LunoraError("INTERNAL", `geo index "${staged.indexName}" on table "${tableName}": call .near() or .within(), not both`);
             }
 
+            assertGeoPoint(point, ".near() point", tableName, staged.indexName);
+
+            if (!Number.isFinite(radiusMeters) || radiusMeters <= 0) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `geo index "${staged.indexName}" on table "${tableName}": .near() radiusMeters must be a finite number > 0, got ${String(radiusMeters)}`,
+                );
+            }
+
             staged.near = { point: { lat: point.lat, lng: point.lng }, radiusMeters };
 
             return builder;
@@ -650,6 +674,23 @@ const createGeoBuilder = (geo: GeoStage, tableName: string): GeoFilterBuilderLik
         within: (box) => {
             if (staged.near) {
                 throw new LunoraError("INTERNAL", `geo index "${staged.indexName}" on table "${tableName}": call .near() or .within(), not both`);
+            }
+
+            assertGeoPoint(box.sw, ".within() sw corner", tableName, staged.indexName);
+            assertGeoPoint(box.ne, ".within() ne corner", tableName, staged.indexName);
+
+            if (box.sw.lat > box.ne.lat) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `geo index "${staged.indexName}" on table "${tableName}": .within() corners are transposed (sw.lat > ne.lat)`,
+                );
+            }
+
+            if (box.sw.lng > box.ne.lng) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `geo index "${staged.indexName}" on table "${tableName}": .within() box crosses the antimeridian (sw.lng > ne.lng), which is not supported — split it into two boxes at ±180 and union the results`,
+                );
             }
 
             staged.within = { ne: { lat: box.ne.lat, lng: box.ne.lng }, sw: { lat: box.sw.lat, lng: box.sw.lng } };
