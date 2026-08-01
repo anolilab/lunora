@@ -32,22 +32,35 @@
  * its returned page like `findMany`.
  *
  * **Residual read-position oracles (no column value, but ordinal/sort leaks the
- * hidden value) — three classes, closed to different degrees:**
+ * hidden value) — closed to different degrees:**
  * - A masked-column `where`/`baseWhere` filter on ANY read (including
  * `rank`/`rankBefore`/`rankPage` above) is closed.
  * - An index RANGE/SEARCH callback (`withIndex(name, q => …)`/
  * `withSearchIndex(...)`) referencing a masked column is closed
  * (`assertIndexFieldsAllowed`).
- * - **Still open:** a BARE `withIndex(name)` scan (no range callback) over an
- * index whose DECLARED fields include a masked column, and a
- * `rank`/`rankBefore` read over a rank index whose declared `sortBy` names a
- * masked column (`rankBefore`'s oracle is its `sortValues` argument, not
- * `where` — its real options carry no `where`/`baseWhere` at all). Both need
- * the index's declared fields, which requires threading schema/index
- * metadata into this middleware — a design change this module doesn't make
- * today. An index/rank read the caller cannot otherwise name a masked column
- * on is not closed by this middleware; do not rely on it for a table with a
- * masked-sorted index until this ships.
+ * - A BARE `withIndex(name)` scan (no range callback) over an index whose
+ * DECLARED fields include a masked column, a `rank`/`rankBefore`/`rankPage`
+ * read over a rank index whose declared `sortBy`/`partitionBy` names a masked
+ * column (`rankBefore`'s oracle is its `sortValues` argument, not `where` —
+ * its real options carry no `where`/`baseWhere` at all), and a `withGeoIndex`
+ * read over a geo index whose declared field is masked (its `near`/`within`
+ * builder exposes no column name to a callback recorder, but the returned
+ * rows are sorted by distance from the caller's own query point, which lets a
+ * point/radius sweep trilaterate the hidden coordinate — the same shape of
+ * oracle, over a `v.geoPoint()` column instead of a scalar), are all closed
+ * by `assertIndexDeclarationAllowed` **when the caller supplies
+ * `MaskOptions.indexFields`** (build it with the exported
+ * `indexFieldsFromSchema(schema)`: `mask(policies, { indexFields:
+ * indexFieldsFromSchema(schema) })`). This is OPT-IN and additive —
+ * `indexFields` is optional, so a caller that doesn't pass it gets exactly
+ * today's (un)protected behaviour; the oracle stays open until it does. Do
+ * not rely on this closing for a table with a masked-sorted or masked-geo
+ * index unless the mask actually supplies `indexFields`.
+ * - `vectorIndexes` and `aggregateIndexes` are deliberately NOT part of this:
+ * vector search isn't reachable through the masked reader (`TableReaderLike`
+ * has no vector-search method), and an aggregate reduction is already guarded
+ * column-by-column by `assertReductionAllowed` above. Neither is an ordinal
+ * oracle this guard needs to cover.
  *
  * 3. **Writes pass through untouched** — `insert` / `patch` / `replace` /
  * `delete` are never wrapped, so masking can't corrupt stored data. Masking is
@@ -72,6 +85,7 @@ import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
+import type { IndexFieldsByTable } from "../schema";
 import { tagMaskMiddleware } from "./policy-tag";
 import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies, Permission, Role } from "./types";
 
@@ -301,7 +315,9 @@ const maskPage = <Context>(page: QueryPage, columns: MaskColumns<Context>, base:
  * only push into a fresh per-call stage; see `@lunora/do`'s `createRangeBuilder`
  * / `createSearchBuilder`), so the dry pass is side-effect free. `withIndex`'s
  * `range` is optional (a bare index scan) — with no callback there is no field
- * to record and nothing to reject.
+ * to record and nothing to reject HERE; the sibling `assertIndexDeclarationAllowed`
+ * (in `wrapDatabase`, called before this one) closes that bare-scan case instead,
+ * from the index's DECLARED fields rather than a recorded callback reference.
  */
 const assertIndexFieldsAllowed = <Context>(
     builderCallback: ((q: unknown) => unknown) | undefined,
@@ -359,12 +375,61 @@ const isFacadeEntry = (value: unknown): boolean => {
  * Build a writer that masks row-returning reads against the underlying
  * `MaskDatabase`. Fresh closure per request so each `MaskFn` sees the live ctx.
  */
-const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskColumns<Context>>, context: MaskContext<Context>): MaskDatabase => {
+const wrapDatabase = <Context>(
+    base: MaskDatabase,
+    perTable: Map<string, MaskColumns<Context>>,
+    context: MaskContext<Context>,
+    indexFields: IndexFieldsByTable | undefined,
+): MaskDatabase => {
     // `rankBefore` is the one optional method (the D1 twin omits it) — captured
     // here (mirrors `../rls/middleware`'s `baseRankBefore`) so the conditional
     // override below can call it without re-narrowing `base.rankBefore` inside
     // the nested closure.
     const baseRankBefore = base.rankBefore;
+
+    /**
+     * SECURITY (position oracle on the index DECLARATION path): `assertIndexFieldsAllowed`
+     * (below) closes a range/search CALLBACK that references a masked field, but a
+     * BARE `withIndex(name)` (no callback) gives its recorder nothing to observe —
+     * it still returns every row ordered by the index's declared sort key. If that
+     * key is a masked column, the ordinal position of every returned row leaks the
+     * hidden value (one known plaintext neighbour bounds the rest). The same
+     * oracle applies directly to `rank`/`rankPage`/`rankBefore`, which return the
+     * row's ordinal, and to `withGeoIndex`, which returns rows sorted by distance
+     * from the caller's own query point — an attacker sweeping that point/radius
+     * trilaterates a masked `v.geoPoint()` column to geohash precision.
+     *
+     * Unlike `assertIndexFieldsAllowed`, this guards the index's DECLARED fields —
+     * it needs `indexFields`, the per-table index→fields map an app supplies via
+     * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
+     * ({@link MaskOptions.indexFields}). Fails OPEN (returns without throwing) for
+     * the un-hardenable cases: `indexFields` wasn't supplied, or the table/index
+     * name isn't declared in it (an unknown index name errors downstream anyway,
+     * so there is nothing left to protect by throwing here too). Only a KNOWN
+     * index whose declared fields intersect the masked column set throws.
+     */
+    const assertIndexDeclarationAllowed = (tableName: string, indexName: string, method: string): void => {
+        const columns = perTable.get(tableName);
+
+        if (!columns) {
+            return;
+        }
+
+        const declaredFields = indexFields?.[tableName]?.[indexName];
+
+        if (!declaredFields) {
+            return;
+        }
+
+        const offending = declaredFields.find((field) => field in columns);
+
+        if (offending !== undefined) {
+            throw new LunoraError(
+                "MASK_UNSUPPORTED",
+                `${method}() reading "${tableName}" via index "${indexName}" would order rows by masked column "${offending}" — use an index whose declared fields are all unmasked, or unmask the column`,
+            );
+        }
+    };
 
     /**
      * Wrap a `query()` reader so every terminal read (`collect` / `first` /
@@ -461,6 +526,10 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             // `where`, so it must fail closed (see `assertIndexFieldsAllowed`).
             // Reads over NON-masked columns pass through and still mask output.
             withIndex: (indexName, range) => {
+                // Declared-fields guard FIRST: it closes the BARE scan (no `range`),
+                // which the callback-recorder just below can't see — see the guard
+                // function's own docblock, above `wrapDatabase`.
+                assertIndexDeclarationAllowed(tableName, indexName, "withIndex");
                 assertIndexFieldsAllowed(range, columns, tableName, "withIndex");
 
                 return wrapReader(reader.withIndex(indexName, range), columns, tableName);
@@ -471,8 +540,19 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
                 return wrapReader(reader.withSearchIndex(indexName, search), columns, tableName);
             },
             // A geo query's builder (`.near`/`.within`) exposes no column name, so
-            // there's no masked-column value oracle to guard — just mask the output.
-            withGeoIndex: (indexName, build) => wrapReader(reader.withGeoIndex(indexName, build), columns, tableName),
+            // there's no masked-column VALUE oracle to guard here. But it IS a
+            // POSITION oracle: `withGeoIndex(name, q => q.near(point, radius))`
+            // returns rows sorted by distance from the caller's own point, and a
+            // geo index has no unmasked-prefix escape the way a multi-column
+            // index does — so the same `assertIndexDeclarationAllowed` guard that
+            // closes the bare-`withIndex`/rank position oracle applies here too,
+            // keyed off the geo index's declared field (see
+            // `indexFieldsFromSchema`).
+            withGeoIndex: (indexName, build) => {
+                assertIndexDeclarationAllowed(tableName, indexName, "withGeoIndex");
+
+                return wrapReader(reader.withGeoIndex(indexName, build), columns, tableName);
+            },
         };
     };
 
@@ -759,12 +839,14 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         async rank(tableName, indexName, options) {
             assertRankWhereAllowed(tableName, options, "rank");
+            assertIndexDeclarationAllowed(tableName, indexName, "rank");
 
             return base.rank(tableName, indexName, options);
         },
 
         async rankPage(tableName, indexName, options) {
             assertRankWhereAllowed(tableName, options, "rankPage");
+            assertIndexDeclarationAllowed(tableName, indexName, "rankPage");
 
             const page = await base.rankPage(tableName, indexName, options);
             const columns = perTable.get(tableName);
@@ -779,6 +861,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             ? {
                   rankBefore(tableName: string, indexName: string, options: unknown) {
                       assertRankWhereAllowed(tableName, options, "rankBefore");
+                      assertIndexDeclarationAllowed(tableName, indexName, "rankBefore");
 
                       return baseRankBefore(tableName, indexName, options);
                   },
@@ -851,7 +934,7 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
             return next();
         }
 
-        const wrapped = wrapDatabase<Context>(ctx.db, perTable, maskContext);
+        const wrapped = wrapDatabase<Context>(ctx.db, perTable, maskContext, options.indexFields);
         const extension: Record<string, unknown> = { db: wrapped };
         const { orm } = ctx as { orm?: unknown };
 

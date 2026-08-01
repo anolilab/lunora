@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index";
+import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema, v } from "../src/index";
 
 describe("defineTable", () => {
     it("returns a table definition with shape and default __root__ shard mode", () => {
@@ -323,6 +323,76 @@ describe("defineSchema", () => {
 
         expect(index).toMatchObject({ dimensions: 1024, kind: "vectorIndex", metric: "cosine", table: "docs" });
         expect(index?.select({ body: "B", title: "T" })).toBe("T\n\nB");
+    });
+});
+
+describe("indexFieldsFromSchema (plan 250 — mask() bare-index-scan / rank oracle)", () => {
+    it("maps a regular index's declared `fields` and a rank index's `sortBy` ∪ `partitionBy`", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            users: defineTable({ createdAt: v.number(), score: v.number(), ssn: v.string() })
+                .index("by_ssn", ["ssn"])
+                .rankIndex("by_score", { partitionBy: ["ssn"], sortBy: [{ field: "score" }] }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({
+            users: {
+                by_score: ["score", "ssn"],
+                by_ssn: ["ssn"],
+            },
+        });
+    });
+
+    it("omits a table with no declared indexes rather than mapping it to `{}`", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({ users: defineTable({ email: v.string() }) });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({});
+    });
+
+    it("folds a rank index with no `partitionBy` down to just its `sortBy` fields", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            messages: defineTable({ createdAt: v.number() }).rankIndex("byTime", { sortBy: [{ field: "createdAt" }] }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({ messages: { byTime: ["createdAt"] } });
+    });
+
+    it("maps a geo index's declared `field` (closes the withGeoIndex position oracle)", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            users: defineTable({ homeLocation: v.geoPoint(), name: v.string() }).geoIndex("by_location", { field: "homeLocation" }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({
+            users: {
+                by_location: ["homeLocation"],
+            },
+        });
+    });
+
+    it("does NOT include vectorIndexes or aggregateIndexes fields — neither is a reachable ordinal oracle through the masked reader", () => {
+        expect.assertions(1);
+
+        const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];
+        const schema = defineSchema(
+            { docs: defineTable({ body: v.string(), ssn: v.string() }).aggregateIndex("byCount") },
+            {
+                byEmbedding: defineVectorIndex({
+                    dimensions: 3,
+                    embed,
+                    metric: "cosine",
+                    source: { select: (row) => String(row.body), table: "docs" },
+                }),
+            },
+        );
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({});
     });
 });
 

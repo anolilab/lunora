@@ -301,6 +301,19 @@ const enableQueryReader = (
 
                 return makeReader(list);
             },
+            // Same shape as `withIndex`: run the builder against a chainable
+            // no-op (mirrors `@lunora/do`'s geo reader), so the reader still
+            // works end-to-end for a geo read the declaration guard lets through.
+            withGeoIndex: (_indexName, build) => {
+                const builder: FakeGeoBuilder = {
+                    near: () => builder,
+                    within: () => builder,
+                };
+
+                build(builder);
+
+                return makeReader(list);
+            },
         };
     };
 
@@ -1147,6 +1160,288 @@ describe("mask — value oracle via rank reads fails closed (plan 209)", () => {
         // so the wrapper — mirroring `../rls/middleware`'s own optional-method
         // handling — must not synthesize one either.
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe("undefined");
+    });
+});
+
+describe("mask — bare-index-scan / rank declaration oracle fails closed (plan 250)", () => {
+    it("bare withIndex(name) over an index whose DECLARED fields include a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", createdAt: 1, ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_ssn: ["ssn"] } } }))
+            // No range callback: this is the bare scan the range-recorder can't
+            // see — it still returns every row ORDERED by the masked `ssn`
+            // column, which is the position oracle `assertIndexDeclarationAllowed`
+            // closes.
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_ssn").collect());
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("bare withIndex(name) over an index whose DECLARED fields exclude the masked column still scans and masks output", async () => {
+        expect.assertions(2);
+
+        const seed = [{ _id: "u1", createdAt: 1, email: "a@x.com", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }, { indexFields: { users: { by_createdAt: ["createdAt"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_createdAt").collect());
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.["email"]).toBeNull();
+    });
+
+    it("withIndex(range) over a masked-column index throws even when the range callback references only an unmasked field (declared fields win over callback-referenced ones)", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", createdAt: 1, ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_ssn_time: ["createdAt", "ssn"] } } }))
+            // The callback only ever names `createdAt` — `assertIndexFieldsAllowed`'s
+            // recorder would let this through on its own — but `by_ssn_time`
+            // DECLARES `ssn` too, so the row order still leaks the hidden value.
+            // The declaration guard rejects it regardless of what the callback
+            // references.
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withIndex("by_ssn_time", (q) => q.gte("createdAt", 1))
+                    .collect(),
+            );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("withIndex over an index name absent from `indexFields` is not rejected by the declaration guard (fails open; an unknown index errors downstream anyway)", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", email: "a@x.com", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }, { indexFields: { users: { by_ssn: ["ssn"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_unknown").collect());
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows[0]?.["email"]).toBeNull();
+    });
+
+    it("regression: with `indexFields` omitted, a bare withIndex(name) behaves exactly as before this option existed (no throw)", async () => {
+        expect.assertions(2);
+
+        const seed = [{ _id: "u1", ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_ssn").collect());
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.["ssn"]).toBeNull();
+    });
+
+    it("rank() over a rank index whose declared `sortBy` names a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_ssn_rank: ["ssn"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("users", "by_ssn_rank", { row: "u1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("rank() over a rank index whose declared `partitionBy` names a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_score_per_ssn: ["score", "ssn"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("users", "by_score_per_ssn", { row: "u1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("rank() over an all-unmasked rank index passes through", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { leaderboard: ["score"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("users", "leaderboard", { row: "u1" }));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result).toStrictEqual({ position: 1, total: 1 });
+        expect(database.calls.some((call) => call.method === "rank")).toBe(true);
+    });
+
+    it("rankPage() over a rank index whose declared `sortBy` names a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_ssn_rank: ["ssn"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("users", "by_ssn_rank", {}));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "rankPage")).toBe(false);
+    });
+
+    it("rankPage() over an all-unmasked rank index still works and masks output", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { leaderboard: ["score"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("users", "leaderboard", {}));
+
+        const result = (await handler.handler(makeContext(database, "u1"), {})) as Page;
+
+        expect(database.calls.some((call) => call.method === "rankPage")).toBe(true);
+        expect(result.page[0]?.["ssn"]).toBeNull();
+    });
+
+    it("rankBefore() over a rank index whose declared `sortBy` names a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const rows = [{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankBefore(database, rows);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_ssn_rank: ["ssn"] } } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankBefore?.("users", "by_ssn_rank", { rowId: "u1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("rankBefore absent on the base writer (D1 twin) is not synthesized even when `indexFields` is supplied — no crash", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }, { indexFields: { users: { by_ssn_rank: ["ssn"] } } }))
+            .query(({ ctx }) => typeof (ctx as unknown as TestContext).db.rankBefore);
+
+        // No `enableRankBefore` call: the fake writer never carries the method.
+        // `wrapDatabase`'s conditional spread must not synthesize one even now
+        // that `assertIndexDeclarationAllowed` exists — no crash, no throw.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe("undefined");
+    });
+
+    it("regression: with `indexFields` omitted, rank() over a masked-sorted index behaves exactly as before this option existed (no throw from the declaration guard)", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", score: 10, ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("users", "by_ssn_rank", { row: "u1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ position: 1, total: 1 });
+    });
+});
+
+describe("mask — withGeoIndex position oracle fails closed (plan 250 follow-up)", () => {
+    it("withGeoIndex over a geo index whose declared field is masked throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", homeLocation: { lat: 40.7128, lng: -74.006 }, table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { homeLocation: "redact" } }, { indexFields: { users: { by_location: ["homeLocation"] } } }))
+            // A caller sweeping `point`/`radiusMeters` here gets rows sorted by
+            // distance from an arbitrary point of their own choosing — the same
+            // shape of ordinal leak as the bare-`withIndex` oracle, but over a
+            // `v.geoPoint()` column instead of a scalar. There is no unmasked
+            // range/prefix escape for a geo index (unlike a multi-column
+            // `withIndex`), so this must fail closed unconditionally.
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withGeoIndex("by_location", (q) => q.near({ lat: 40.7, lng: -74 }, 5000))
+                    .collect(),
+            );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("withGeoIndex over a geo index whose declared field is NOT masked still scans and masks other output (no over-fire)", async () => {
+        expect.assertions(2);
+
+        const seed = [{ _id: "u1", email: "a@x.com", homeLocation: { lat: 40.7128, lng: -74.006 }, table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }, { indexFields: { users: { by_location: ["homeLocation"] } } }))
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withGeoIndex("by_location", (q) => q.near({ lat: 40.7, lng: -74 }, 5000))
+                    .collect(),
+            );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
+        // The geo column itself isn't masked here, so the read must go through
+        // (proving the declaration guard doesn't over-fire on an unmasked geo
+        // index) while the actually-masked column is still redacted.
+        expect(rows[0]?.["email"]).toBeNull();
+    });
+
+    it("regression: with `indexFields` omitted, withGeoIndex over a masked-field geo index behaves exactly as before this option existed (no throw from the declaration guard)", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", homeLocation: { lat: 40.7128, lng: -74.006 }, table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { homeLocation: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db
+                .query("users")
+                .withGeoIndex("by_location", (q) => q.near({ lat: 40.7, lng: -74 }, 5000))
+                .collect(),
+        );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
     });
 });
 
