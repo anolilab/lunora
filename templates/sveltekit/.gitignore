@@ -6,3 +6,7 @@ dist
 .lunora/
 .lunora-cache
 lunora/_generated
+
+# local env files
+.env*.local
+.dev.vars
