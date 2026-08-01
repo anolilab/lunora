@@ -11,7 +11,7 @@ type RawMessage = { tabId: string; ts: number; type: "claim-leadership" | "heart
 /** Wire shape of a leader's `subscription-data` / `subscription-settled` / `connection-status` broadcast, for raw test-side sends simulating a leader tab. */
 type RawLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
-    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
+    | { clientId?: string; cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
     | { status: "connected" | "connecting" | "idle" | "offline"; tabId: string; type: "connection-status" };
 
 const fnRef = (ref: string): FunctionReference => {
@@ -501,7 +501,13 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
         }
     });
 
-    it("a follower's onCheckpoint fires with the leader-broadcast lastMutationId on a subscription-settled frame", async () => {
+    it("a follower's onCheckpoint fires with the leader-broadcast lastMutationId on a subscription-settled frame FROM ITS OWN clientId", async () => {
+        // Changed by plan 266 S3: the settled frame's `lastMutationId` is the
+        // leader's own per-client watermark, so it only applies when the
+        // frame's `clientId` matches this follower's — this test now stamps
+        // a matching `clientId` (`client.clientIdentifier()`) to keep
+        // exercising the "confirmed write reaches a follower" path; the
+        // mismatched/absent-clientId cases are covered separately below.
         expect.assertions(1);
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
@@ -520,6 +526,7 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
             // forwarding `lastMutationId`, a follower's `@lunora/db` `onCheckpoint`
             // gate would never see this confirmed write and would hang.
             rogue.postMessage({
+                clientId: client.clientIdentifier(),
                 cursor: 10,
                 epoch: "epoch-1",
                 key,
@@ -668,6 +675,116 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
             rogue.close();
             client.close();
             vi.useRealTimers();
+        }
+    });
+});
+
+describe("lunoraClient — cross-tab settled watermark scoped to the owning clientId (plan 266 S3)", () => {
+    it("a mismatched clientId skips the mutationId half — only the checkpoint half fires", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ clientId: "client-X", crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const checkpoints: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            // The leader's watermark is scoped to ITS OWN clientId — a
+            // different follower clientId must not resolve this follower's
+            // own pending `awaitMutationId(<=6)` gate.
+            rogue.postMessage({
+                clientId: "client-Y",
+                cursor: 10,
+                epoch: "epoch-1",
+                key,
+                lastMutationId: 6,
+                tabId: "leader-tab",
+                type: "subscription-settled",
+            } satisfies RawLeaderMessage);
+
+            await delay(30);
+
+            // The checkpoint (cursor) half still fires unconditionally — only
+            // `mutationId` stays at its prior (never-advanced) value.
+            expect(checkpoints).toStrictEqual([{ checkpoint: 10, mutationId: undefined }]);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a matching clientId applies the mutationId half, monotonically (never regresses)", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ clientId: "client-X", crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const checkpoints: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            rogue.postMessage({
+                clientId: "client-X",
+                cursor: 10,
+                key,
+                lastMutationId: 6,
+                tabId: "leader-tab",
+                type: "subscription-settled",
+            } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 10, mutationId: 6 });
+
+            // A later, LOWER watermark from the same (matching) clientId must
+            // never move `lastMutationId` backwards.
+            rogue.postMessage({
+                clientId: "client-X",
+                cursor: 11,
+                key,
+                lastMutationId: 4,
+                tabId: "leader-tab",
+                type: "subscription-settled",
+            } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 6 });
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("an absent clientId (mixed-version leader) skips the mutationId half but still delivers the checkpoint", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel("lunora-bridge");
+
+        try {
+            const checkpoints: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+            const key = SubscriptionRegistry.key("q:list", {});
+
+            // No `clientId` field at all — an old (pre-S3) leader.
+            rogue.postMessage({ cursor: 10, key, lastMutationId: 6, tabId: "leader-tab", type: "subscription-settled" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            expect(checkpoints).toStrictEqual([{ checkpoint: 10, mutationId: undefined }]);
+        } finally {
+            rogue.close();
+            client.close();
         }
     });
 });

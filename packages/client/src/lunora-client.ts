@@ -1076,7 +1076,7 @@ class LunoraClient {
                         fanSubscriptionError(state.errorCallbacks, error);
                     }
                 },
-                onSubscriptionSettled: (key, cursor, epoch, lastMutationId) => {
+                onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId) => {
                     // The leader's `settled` checkpoint advanced with no value
                     // change — reuse the exact same tail the leader itself runs
                     // (ack + advance cursor/epoch + drop confirmed layers +
@@ -1087,15 +1087,30 @@ class LunoraClient {
                     if (state) {
                         this.ackAndAdvanceCursor(state, cursor, epoch);
 
-                        if (lastMutationId !== undefined) {
-                            state.lastMutationId = lastMutationId;
+                        // The echoed `lastMutationId` is the LEADER's own
+                        // per-client watermark — scoped server-side to ITS
+                        // announced `clientId` — so it only belongs to this
+                        // follower when the two clientIds match (clientIds CAN
+                        // legitimately be shared across tabs, e.g. a `@lunora/db`
+                        // app persisting one stable id alongside its outbox; see
+                        // `this.clientId`'s docblock). An absent `clientId`
+                        // (mixed-version leader) also skips this half — the
+                        // follower's own RPC-ack watermark path and the
+                        // `CheckpointRegistry` bounded fallback still resolve it.
+                        // `Math.max` guards monotonicity: this must never move
+                        // `state.lastMutationId` backwards.
+                        if (lastMutationId !== undefined && clientId === this.clientId) {
+                            state.lastMutationId = Math.max(state.lastMutationId ?? 0, lastMutationId);
                         }
 
                         // Fan out to every registered checkpoint subscriber, same
                         // as the leader's own `handleSettledMessage` tail — a
                         // `@lunora/db` `onCheckpoint` gate on a follower tab must
                         // advance too, or it hangs on a confirmed write the leader
-                        // already acknowledged.
+                        // already acknowledged. The checkpoint (cursor) half
+                        // always fires; `state.lastMutationId` is whatever it was
+                        // above — unchanged (a no-op re-resolve) when the frame
+                        // didn't own this follower's watermark.
                         for (const onCheckpoint of state.checkpointCallbacks) {
                             onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
                         }
@@ -5296,7 +5311,7 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 
-            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch, state.lastMutationId);
+            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch, state.lastMutationId, this.clientId);
         }
     }
 

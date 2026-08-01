@@ -75,11 +75,21 @@ interface TabCoordinatorOptions {
      * too — otherwise a `setQuery`/per-call optimistic overlay that a
      * byte-identical write just confirmed stays masked on follower tabs until
      * the next VISIBLE data frame arrives, even though the leader already
-     * dropped it. `lastMutationId` rides along the same way so a follower's
-     * `@lunora/db` `onCheckpoint` gate advances too, instead of waiting on a
-     * confirmed write the leader already acknowledged.
+     * dropped it.
+     *
+     * `lastMutationId` is the LEADER's own per-client `__client_watermark` —
+     * scoped server-side to the socket's announced `clientId` — so it only
+     * means anything to a follower whose `clientId` matches the leader's
+     * (`clientId` rides along for exactly that comparison; see
+     * `LunoraClient`'s wiring). An **absent** `clientId` (a mixed-version
+     * leader that hasn't shipped this field yet) also skips the
+     * `mutationId` half — safe, because the follower's own gates still
+     * resolve via its own RPC-ack watermark path and the `CheckpointRegistry`
+     * bounded fallback. The checkpoint (cursor) half of this callback fires
+     * unconditionally regardless of `clientId` — only the `mutationId` half
+     * is scoped.
      */
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string) => void;
 }
 
 type WsFollowerMessage =
@@ -88,7 +98,7 @@ type WsFollowerMessage =
 type WsLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
     | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" }
-    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
+    | { clientId?: string; cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" }
     | { status: ConnectionStatus; tabId: string; type: "connection-status" };
 
 type TabCoordinatorMessage = WsFollowerMessage | WsLeaderMessage;
@@ -137,7 +147,7 @@ class TabCoordinator {
     private readonly onConnectionStatus: ((status: ConnectionStatus) => void) | undefined;
     private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string) => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
-    private readonly onSubscriptionSettled: ((key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void) | undefined;
+    private readonly onSubscriptionSettled: ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string) => void) | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -310,9 +320,12 @@ class TabCoordinator {
     /**
      * Broadcast a `settled` frame's checkpoint advance to all follower tabs
      * (no value change, but the resume cursor/epoch moved — see
-     * `LunoraClient.handleSettledMessage`). Only the leader should call this.
+     * `LunoraClient.handleSettledMessage`). `clientId` is this (leader) tab's
+     * own client id, stamped so a follower can tell whether the echoed
+     * `lastMutationId` watermark is genuinely its own (see the
+     * `onSubscriptionSettled` docblock). Only the leader should call this.
      */
-    public broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number): void {
+    public broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string): void {
         if (!this.leader) {
             return;
         }
@@ -324,6 +337,7 @@ class TabCoordinator {
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
             ...(lastMutationId === undefined ? {} : { lastMutationId }),
+            ...(clientId === undefined ? {} : { clientId }),
         });
     }
 
@@ -399,7 +413,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId);
+                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId);
 
                 break;
             }
