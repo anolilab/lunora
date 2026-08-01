@@ -988,7 +988,7 @@ class LunoraClient {
                         fanSubscriptionError(state.errorCallbacks, error);
                     }
                 },
-                onSubscriptionSettled: (key, cursor, epoch) => {
+                onSubscriptionSettled: (key, cursor, epoch, lastMutationId) => {
                     // The leader's `settled` checkpoint advanced with no value
                     // change — reuse the exact same tail the leader itself runs
                     // (ack + advance cursor/epoch + drop confirmed layers +
@@ -998,6 +998,19 @@ class LunoraClient {
 
                     if (state) {
                         this.ackAndAdvanceCursor(state, cursor, epoch);
+
+                        if (lastMutationId !== undefined) {
+                            state.lastMutationId = lastMutationId;
+                        }
+
+                        // Fan out to every registered checkpoint subscriber, same
+                        // as the leader's own `handleSettledMessage` tail — a
+                        // `@lunora/db` `onCheckpoint` gate on a follower tab must
+                        // advance too, or it hangs on a confirmed write the leader
+                        // already acknowledged.
+                        for (const onCheckpoint of state.checkpointCallbacks) {
+                            onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+                        }
                     }
                 },
             });
@@ -4423,6 +4436,15 @@ class LunoraClient {
         });
 
         socket.addEventListener("message", (event: MessageEvent): void => {
+            // Ignore a late message from a socket the connection already moved
+            // past (see `open`/`close`/`error` above) — `handleServerMessage`
+            // looks the connection up by shard key, not by socket identity, so
+            // without this guard a stale socket's frame would stamp the newer
+            // socket's `lastFrameAt` and defeat the heartbeat watchdog.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             this.handleServerMessage(event.data, shardKey);
         });
 
@@ -5009,7 +5031,7 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
 
-            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch);
+            this.tabCoordinator.broadcastSubscriptionSettled(key, state.serverCursor, state.serverEpoch, state.lastMutationId);
         }
     }
 
