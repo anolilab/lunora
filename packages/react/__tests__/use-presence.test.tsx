@@ -1,6 +1,7 @@
 import type { FunctionReference } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -119,6 +120,56 @@ describe("usePresence", () => {
             expect(id).toMatch(/^sess-/);
         } finally {
             Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+        }
+    });
+
+    it("mounts and still heartbeats on an interval when `document` is unavailable, e.g. React Native (RN-01)", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        // React Native has no `document` global at all — not even `undefined`,
+        // the identifier is simply never declared. A bare `document.visibilityState`
+        // read (or `document.addEventListener`) throws a ReferenceError on mount
+        // without the `typeof document !== "undefined"` guard. `react-dom`
+        // creates elements via the container's `ownerDocument`, not the bare
+        // global, so rendering into a container created BEFORE deleting the
+        // global still works here — letting this test isolate exactly the
+        // hook's own (formerly unguarded) `document` reads.
+        const container = globalThis.document.createElement("div");
+
+        globalThis.document.body.append(container);
+
+        const originalDocument = globalThis.document;
+
+        // @ts-expect-error -- intentionally deleting a required global to simulate React Native
+        delete globalThis.document;
+
+        const root = createRoot(container);
+
+        try {
+            expect(() => {
+                // eslint-disable-next-line testing-library/no-unnecessary-act -- this is raw `react-dom/client`'s `root.render`, not an RTL util call (the rule name-matches "render" regardless of origin); `act` here is load-bearing so the mount's effects (the heartbeat) flush synchronously before the assertion below.
+                act(() => {
+                    root.render(
+                        <LunoraProvider client={mock.asClient}>
+                            <Roster />
+                        </LunoraProvider>,
+                    );
+                });
+            }).not.toThrow();
+
+            // The interval heartbeat (not the visibility-driven one, which is
+            // itself guarded and simply skipped) fires synchronously as part of
+            // mount — asserted here, before `document` is restored, so this
+            // stays proof of the mount-time behavior specifically. (Skip RTL's
+            // `waitFor`: it resolves its own default container from `document`,
+            // which is exactly what this test has deleted.)
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        } finally {
+            Object.defineProperty(globalThis, "document", { configurable: true, value: originalDocument, writable: true });
+            root.unmount();
+            container.remove();
         }
     });
 
