@@ -62,6 +62,7 @@ import { LunoraError } from "@lunora/errors";
 
 import runMiddlewareChain from "./builder/run-middleware";
 import type { Middleware, MiddlewareNext } from "./builder/types";
+import { validateIndexFields } from "./schema";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -390,6 +391,16 @@ export type PrefixedTables<X extends Record<string, TableDefinition>, Key extend
  * collisions are impossible. The only remaining hard error is two extensions
  * sharing the same `key` and producing the same prefixed table (or vector
  * index) name — silent shadow would let one plugin hijack another's data.
+ *
+ * Re-runs {@link validateIndexFields} against the merged table set before
+ * returning: `defineSchema` only validates the tables it was called with, so
+ * without this an extension-contributed index with a typo'd/out-of-shape
+ * field (or a duplicate name within one kind) would never be checked at all.
+ * Re-validating the whole merged set (base + prefixed extension tables) is
+ * cheap and idempotent for the base tables, which already passed this same
+ * check when the base schema was built. Both callers of this function —
+ * `withExtend.extend()` (`./schema`) and `installPlugins` (below) — get the
+ * re-validation for free from this single call site (plan 258 §4/§9 Q3).
  */
 export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, X extends Record<string, TableDefinition>, Key extends string = string>(
     base: Schema<T>,
@@ -431,6 +442,8 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
             mergedVectorIndexes[prefixed] = { ...index, table: rewriteReference(index.table, key, bareNames) };
         }
     }
+
+    validateIndexFields(merged);
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's

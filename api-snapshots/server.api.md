@@ -673,7 +673,11 @@ interface IndexDefinition {
 ### `IndexFieldsByTable` (type)
 
 ```ts
-type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, ReadonlyArray<string>>>>>;
+type IndexFieldsByTable = Readonly<Record<string, {
+    readonly geo?: Readonly<Record<string, ReadonlyArray<string>>>;
+    readonly index?: Readonly<Record<string, ReadonlyArray<string>>>;
+    readonly rank?: Readonly<Record<string, ReadonlyArray<string>>>;
+}>>;
 ```
 
 ### `IndexRangeBuilder` (interface)
