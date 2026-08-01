@@ -151,6 +151,7 @@ Re-exported from `@lunora/mail` — signature tracked at its source.
 
 ```ts
 interface LunoraTestOptions {
+    enforceRls?: boolean;
     env?: Record<string, unknown>;
     fetch?: typeof globalThis.fetch;
     functions?: FunctionRegistry;

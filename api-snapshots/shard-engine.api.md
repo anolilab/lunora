@@ -931,6 +931,16 @@ interface GeoPoint {
 }
 ```
 
+### `GeoScoredDocument` (interface)
+
+```ts
+interface GeoScoredDocument {
+    distanceMeters: null | number;
+    document: Record<string, unknown>;
+    score?: never;
+}
+```
+
 ### `GroupByEntry` (interface)
 
 ```ts
@@ -2059,6 +2069,12 @@ interface SchemaLike {
 }
 ```
 
+### `ScoredDocument` (type)
+
+```ts
+type ScoredDocument = GeoScoredDocument | SearchScoredDocument;
+```
+
 ### `SearchFilterBuilderLike` (interface)
 
 ```ts
@@ -2078,6 +2094,16 @@ interface SearchIndexDefinitionLike {
     readonly name: string;
     readonly staged?: boolean;
     readonly strategy?: string;
+}
+```
+
+### `SearchScoredDocument` (interface)
+
+```ts
+interface SearchScoredDocument {
+    distanceMeters?: never;
+    document: Record<string, unknown>;
+    score: number;
 }
 ```
 
@@ -2602,6 +2628,7 @@ interface TablePage {
 interface TableReaderLike {
     [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
+    collectWithScores: () => Promise<ScoredDocument[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
     order: (direction: "asc" | "desc") => TableReaderLike;

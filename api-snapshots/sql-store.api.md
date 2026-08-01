@@ -38,6 +38,10 @@ interface SqlCtxDbOptions {
 ```ts
 interface SqlCtxExec {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{
+        params: ReadonlyArray<unknown>;
+        sql: string;
+    }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
 }
 ```
@@ -83,6 +87,10 @@ interface SqlDialect {
 ```ts
 interface SqlExec {
     all: (sql: string, params: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{
+        params: ReadonlyArray<unknown>;
+        sql: string;
+    }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
 }
 ```
@@ -240,6 +248,10 @@ interface SqlDialect {
 ```ts
 interface SqlExec {
     all: (sql: string, params: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{
+        params: ReadonlyArray<unknown>;
+        sql: string;
+    }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
 }
 ```

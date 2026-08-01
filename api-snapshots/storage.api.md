@@ -234,8 +234,16 @@ interface CreateUploadHandlerOptions {
     authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
     maxFileSize?: number;
     protocol?: UploadProtocol;
+    public?: boolean;
+    silent?: boolean;
     storage: UploadStorage;
 }
+```
+
+### `DEFAULT_MAX_UPLOAD_BYTES` (const)
+
+```ts
+const DEFAULT_MAX_UPLOAD_BYTES: number;
 ```
 
 ### `R2UploadStorageOptions` (interface)

@@ -9,6 +9,15 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/values`
 
+### `ArrayColumnValidator` (interface)
+
+```ts
+interface ArrayColumnValidator<TItem> extends ColumnValidator<TItem[], TItem[]> {
+    max: (max: number) => ArrayColumnValidator<TItem>;
+    min: (min: number) => ArrayColumnValidator<TItem>;
+}
+```
+
 ### `CheckOptions` (interface)
 
 ```ts
@@ -156,6 +165,17 @@ interface MetaOptions {
 }
 ```
 
+### `NumberColumnValidator` (interface)
+
+```ts
+interface NumberColumnValidator extends ColumnValidator<number, number> {
+    int: () => NumberColumnValidator;
+    max: (max: number) => NumberColumnValidator;
+    min: (min: number) => NumberColumnValidator;
+    positive: () => NumberColumnValidator;
+}
+```
+
 ### `SchemaNodeReader` (interface)
 
 ```ts
@@ -188,6 +208,19 @@ interface ServerDefaultContext {
         readonly identity: Record<string, unknown> | null;
         readonly userId: null | string;
     };
+}
+```
+
+### `StringColumnValidator` (interface)
+
+```ts
+interface StringColumnValidator extends ColumnValidator<string, string> {
+    email: () => StringColumnValidator;
+    length: (length: number) => StringColumnValidator;
+    max: (max: number) => StringColumnValidator;
+    min: (min: number) => StringColumnValidator;
+    pattern: (pattern: RegExp) => StringColumnValidator;
+    url: () => StringColumnValidator;
 }
 ```
 

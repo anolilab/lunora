@@ -241,6 +241,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `IndexFieldsByTable` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `IndexRangeBuilder` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -394,6 +398,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MaskPolicies` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MaskRegistry` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -933,6 +941,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `buildMaskRegistry` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `buildRlsReadRegistry` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1058,6 +1070,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `httpRouter` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `indexFieldsFromSchema` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1870,6 +1886,128 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `serializePreloaded` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+## `lunorash/client/upload`
+
+### `ChunkedRestAdapter` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `ChunkedRestAdapterOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateUploadOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `FingerprintFunction` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `HeadersResolver` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `LocalStorageUrlStorage` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `MemoryUrlStorage` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `MultipartAdapter` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `MultipartAdapterOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `OnBeforeRequest` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `RequestOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `RestrictionError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `TusAdapter` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `TusAdapterOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadAdapter` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `UploadControl` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadMethod` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadProtocol` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `UploadRestrictions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadResult` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `Uploader` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UrlStorage` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createChunkedRestAdapter` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createMultipartAdapter` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createTusAdapter` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createUpload` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `putFile` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `validateFile` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `validateFiles` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ## `lunorash/do`
 
@@ -5431,6 +5569,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `IndexFieldsByTable` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `IndexRangeBuilder` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5584,6 +5726,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MaskPolicies` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MaskRegistry` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6123,6 +6269,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `buildMaskRegistry` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `buildRlsReadRegistry` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6248,6 +6398,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `httpRouter` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `indexFieldsFromSchema` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7275,6 +7429,20 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+## `lunorash/server/otel`
+
+### `LunoraTraceContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `OtelTracerOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `createOtelTracer` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ## `lunorash/server/rls/testing`
 
 ### `BoundPolicyAssertion` (interface)
@@ -7753,6 +7921,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/values`
 
+### `ArrayColumnValidator` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `CheckOptions` (interface)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
@@ -7821,6 +7993,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `NumberColumnValidator` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `SchemaNodeReader` (interface)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
@@ -7830,6 +8006,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `ServerDefaultContext` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `StringColumnValidator` (interface)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

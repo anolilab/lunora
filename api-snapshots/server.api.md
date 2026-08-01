@@ -670,6 +670,12 @@ interface IndexDefinition {
 }
 ```
 
+### `IndexFieldsByTable` (type)
+
+```ts
+type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, ReadonlyArray<string>>>>>;
+```
+
 ### `IndexRangeBuilder` (interface)
 
 ```ts
@@ -1044,6 +1050,7 @@ type MaskFn<Context = unknown> = (value: unknown, context: MaskContext<Context>)
 ```ts
 interface MaskOptions<Context = unknown> {
     readonly bypass?: (context: MaskContext<Context>) => boolean;
+    readonly indexFields?: IndexFieldsByTable;
     readonly roles?: ReadonlyArray<Role>;
 }
 ```
@@ -1052,6 +1059,12 @@ interface MaskOptions<Context = unknown> {
 
 ```ts
 type MaskPolicies<Context = unknown> = Record<string, MaskColumns<Context>>;
+```
+
+### `MaskRegistry` (type)
+
+```ts
+type MaskRegistry = ReadonlyMap<string, ReadonlySet<string>>;
 ```
 
 ### `MaskStrategy` (type)
@@ -2498,6 +2511,12 @@ const bindOrm: (facade: Record<string, FacadeEntry>) => OrmLike;
 const bindTableFacade: (writer: FacadeWriterLike, tableName: string) => FacadeEntry;
 ```
 
+### `buildMaskRegistry` (const)
+
+```ts
+const buildMaskRegistry: (functions: Iterable<unknown>) => MaskRegistry;
+```
+
 ### `buildRlsReadRegistry` (const)
 
 ```ts
@@ -2695,6 +2714,12 @@ const httpRoute: HttpRoute;
 const httpRouter: () => LunoraHttpApp;
 ```
 
+### `indexFieldsFromSchema` (const)
+
+```ts
+const indexFieldsFromSchema: (schema: Schema) => IndexFieldsByTable;
+```
+
 ### `initLunora` (const)
 
 ```ts
@@ -2851,6 +2876,10 @@ interface GeoPointInput {
 ```ts
 interface GeoReader<TDocument> {
     collect: () => Promise<TDocument[]>;
+    collectWithScores: () => Promise<{
+        distanceMeters: null | number;
+        document: TDocument;
+    }[]>;
     first: () => Promise<TDocument | null>;
     take: (limit: number) => Promise<TDocument[]>;
     unique: () => Promise<TDocument | null>;
@@ -2992,6 +3021,10 @@ interface SearchFilterBuilder<TDocument> {
 ```ts
 interface SearchReader<TDocument> {
     collect: () => Promise<TDocument[]>;
+    collectWithScores: () => Promise<{
+        document: TDocument;
+        score: number;
+    }[]>;
     first: () => Promise<TDocument | null>;
     take: (limit: number) => Promise<TDocument[]>;
     unique: () => Promise<TDocument | null>;

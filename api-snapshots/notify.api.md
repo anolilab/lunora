@@ -39,6 +39,7 @@ Re-exported from `@visulima/notification` — signature tracked at its source.
 
 ```ts
 interface CreateNotifyOptions {
+    broadcastPageSize?: number;
     concurrency?: number;
     engine?: Notification;
     log?: NotifyLogger;
@@ -116,6 +117,7 @@ interface LunoraNotify {
 ```ts
 interface LunoraPush {
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
+    broadcastPage: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastPageResult>;
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
@@ -289,6 +291,7 @@ interface StoredSubscription {
 
 ```ts
 interface SubscriptionFilter {
+    after?: string;
     kind?: SubscriptionKind;
     limit?: number;
     userId?: string | null;
@@ -421,7 +424,7 @@ const routingPushProvider: (options: RoutingPushOptions) => Provider<unknown, Pu
 ### `runPushBroadcastJob` (const)
 
 ```ts
-const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<BroadcastResult>;
+const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<BroadcastPageResult>;
 ```
 
 ### `targetOf` (const)

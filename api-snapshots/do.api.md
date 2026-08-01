@@ -744,7 +744,7 @@ abstract class ShardDO {
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
     webSocketError(_ws: ShardSocketLike, _error: unknown): void;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
     protected lifecycleHookPaths(_event: "connect" | "disconnect"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown>;
@@ -782,7 +782,7 @@ abstract class ShardDO {
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
     protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult>;
-    protected deleteRowThroughWriter(_table: string, _id: string): Promise<void>;
+    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void>;
     protected runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;
@@ -838,10 +838,12 @@ abstract class ShardDO {
     };
     protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R>;
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void;
+    protected getCtxDbReadRangeHook(): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
+    protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor): void;

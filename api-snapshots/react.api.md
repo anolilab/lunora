@@ -9,6 +9,20 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/react`
 
+### `AdminAuthListResult` (interface)
+
+```ts
+interface AdminAuthListResult<T> {
+    readonly data: ReadonlyArray<T> | undefined;
+    readonly error: Error | undefined;
+    readonly hasMore: boolean;
+    readonly loading: boolean;
+    readonly loadMore: () => void;
+    readonly refetch: () => void;
+    readonly total: number | undefined;
+}
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
@@ -523,6 +537,27 @@ interface UseAuthResult {
 }
 ```
 
+### `UseAuthSessionsOptions` (interface)
+
+```ts
+interface UseAuthSessionsOptions extends AdminAuthQueryOptions {
+    userId?: string;
+}
+```
+
+### `UseAuthUsersOptions` (interface)
+
+```ts
+interface UseAuthUsersOptions extends AdminAuthQueryOptions {
+    filterField?: string;
+    filterValue?: string;
+    search?: string;
+    searchField?: string;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+}
+```
+
 ### `UseCheckoutResult` (interface)
 
 ```ts
@@ -556,6 +591,18 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `UseHttpStreamResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `UseImpersonateResult` (interface)
+
+```ts
+interface UseImpersonateResult {
+    readonly data: AuthImpersonation | undefined;
+    readonly error: Error | undefined;
+    readonly impersonate: (userId: string) => Promise<AuthImpersonation>;
+    readonly pending: boolean;
+    readonly reset: () => void;
+}
+```
 
 ### `UseInfiniteQueryOptions` (interface)
 
@@ -595,6 +642,12 @@ interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = u
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     shardKey?: string;
 }
+```
+
+### `UseOrganizationsOptions` (type)
+
+```ts
+type UseOrganizationsOptions = AdminAuthQueryOptions;
 ```
 
 ### `UsePaginatedQueryOptions` (interface)
@@ -859,10 +912,22 @@ const useAgentToolEvents: (options: UseAgentToolEventsOptions) => UseAgentToolEv
 const useAuth: () => UseAuthResult;
 ```
 
+### `useAuthSessions` (const)
+
+```ts
+const useAuthSessions: (options?: UseAuthSessionsOptions) => AdminAuthListResult<AuthSession>;
+```
+
 ### `useAuthState` (const)
 
 ```ts
 const useAuthState: () => AuthState;
+```
+
+### `useAuthUsers` (const)
+
+```ts
+const useAuthUsers: (options?: UseAuthUsersOptions) => AdminAuthListResult<AuthUser>;
 ```
 
 ### `useCheckout` (const)
@@ -910,6 +975,12 @@ const useFlags: <T extends Record<string, FlagValue>>(flags: T, context?: FlagCo
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `useImpersonate` (const)
+
+```ts
+const useImpersonate: () => UseImpersonateResult;
+```
+
 ### `useInfiniteQuery` (const)
 
 ```ts
@@ -936,6 +1007,12 @@ const useMutation: <F extends FunctionReference>(function_: F) => MutationHook<F
 
 ```ts
 const useMutator: <TArgs = Record<string, unknown>>(handle: MutatorHandle<TArgs>) => MutatorHook<TArgs>;
+```
+
+### `useOrganizations` (const)
+
+```ts
+const useOrganizations: (options?: UseOrganizationsOptions) => AdminAuthListResult<Record<string, unknown>>;
 ```
 
 ### `usePaginatedQuery` (const)

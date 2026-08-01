@@ -379,6 +379,7 @@ class SchedulerDO {
 interface SchedulerDOState {
     acceptWebSocket?: (ws: WebSocket) => void;
     getWebSockets?: () => WebSocket[];
+    setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;
     storage: {
         delete: (key: string | string[]) => Promise<number | boolean>;
         deleteAlarm: () => Promise<void> | void;

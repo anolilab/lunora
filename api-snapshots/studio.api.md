@@ -1229,7 +1229,7 @@ const useAutoRefresh: (onTick: () => void, enabled: boolean, intervalMs?: number
 ### `useDebounced` (const)
 
 ```ts
-const useDebounced: <T>(value: T, delayMs?: number) => T;
+const useDebounced: <T>(value: T, delayMs?: number, resetKey?: unknown) => T;
 ```
 
 ### `useT` (const)

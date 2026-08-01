@@ -247,6 +247,15 @@ interface AgentToolEventsOptions {
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AuthGateStore` (interface)
+
+```ts
+interface AuthGateStore {
+    isAuthenticated: Readable<boolean>;
+    isLoading: Readable<boolean>;
+}
+```
+
 ### `AuthStore` (interface)
 
 ```ts
@@ -604,6 +613,12 @@ function agentToolEvents(client: LunoraClient, options: AgentToolEventsOptions):
 
 ```ts
 const auth: (explicitClient?: ReturnType<typeof getLunoraClient>) => AuthStore;
+```
+
+### `authGate` (const)
+
+```ts
+const authGate: (explicitClient?: ReturnType<typeof getLunoraClient>) => AuthGateStore;
 ```
 
 ### `connectionStatus` (const)

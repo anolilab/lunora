@@ -220,6 +220,336 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Cloudflare Workflows REST API error";
     };
+    readonly ADMIN_FORBIDDEN: {
+        readonly status: 403;
+        readonly title: "Admin access forbidden";
+    };
+    readonly ADMIN_TOKEN_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Admin token not configured";
+    };
+    readonly AUTH_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Auth admin not configured";
+    };
+    readonly AUTH_OP_NOT_SUPPORTED: {
+        readonly status: 400;
+        readonly title: "Auth admin operation not supported";
+    };
+    readonly BACKUP_NOT_CONFIGURED: {
+        readonly status: 500;
+        readonly title: "Scheduled backup not configured";
+    };
+    readonly CRON_JOBS_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Cron jobs not configured";
+    };
+    readonly CRON_JOB_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Cron job not found";
+    };
+    readonly EXPORT_TAP_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Export tap not configured";
+    };
+    readonly FUNCTIONS_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Functions registry not configured";
+    };
+    readonly GLOBALS_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Global-table introspector not configured";
+    };
+    readonly KV_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "KV introspector not configured";
+    };
+    readonly MIGRATION_ID_REQUIRED: {
+        readonly status: 400;
+        readonly title: "Migration id required";
+    };
+    readonly PITR_UNAVAILABLE: {
+        readonly status: 409;
+        readonly title: "Point-in-time recovery unavailable";
+    };
+    readonly SCHEDULER_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Scheduler not configured";
+    };
+    readonly STORAGE_DELETE_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Storage delete not configured";
+    };
+    readonly STORAGE_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Storage not configured";
+    };
+    readonly STORAGE_UPLOAD_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Storage upload not configured";
+    };
+    readonly STORAGE_URL_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Storage signed URL not configured";
+    };
+    readonly VECTORS_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Vector index introspector not configured";
+    };
+    readonly VECTOR_QUERY_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Vector index querying not enabled";
+    };
+    readonly WORKFLOWS_NOT_CONFIGURED: {
+        readonly status: 501;
+        readonly title: "Workflows not configured";
+    };
+    readonly AUTH_AUDIT_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Auth audit reader not configured";
+    };
+    readonly AUTH_AUDIT_READ_FAILED: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Auth audit read failed";
+    };
+    readonly CRON_EXPR_INVALID: {
+        readonly status: 500;
+        readonly title: "Invalid cron expression";
+    };
+    readonly CRON_EXPR_NOT_STATIC: {
+        readonly status: 500;
+        readonly title: "Cron expression is not statically analyzable";
+    };
+    readonly CRON_JOB_FAILED: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Cron job failed";
+    };
+    readonly CRON_NAME_NOT_STATIC: {
+        readonly status: 500;
+        readonly title: "Cron job name is not statically analyzable";
+    };
+    readonly CRON_NON_STATIC_FN: {
+        readonly status: 500;
+        readonly title: "Cron function reference is not statically analyzable";
+    };
+    readonly CRON_NON_STATIC_VALUE: {
+        readonly status: 500;
+        readonly title: "Cron value is not statically analyzable";
+    };
+    readonly CRON_SCHEDULE_NOT_STATIC: {
+        readonly status: 500;
+        readonly title: "Cron schedule is not statically analyzable";
+    };
+    readonly DUPLICATE_CRON_NAME: {
+        readonly status: 500;
+        readonly title: "Duplicate cron job name";
+    };
+    readonly DUPLICATE_AGENT_BINDING: {
+        readonly status: 500;
+        readonly title: "Duplicate agent binding";
+    };
+    readonly DUPLICATE_AGENT_CLASS: {
+        readonly status: 500;
+        readonly title: "Duplicate agent generated class name";
+    };
+    readonly DUPLICATE_AGENT_NAME: {
+        readonly status: 500;
+        readonly title: "Duplicate agent name";
+    };
+    readonly DUPLICATE_MIGRATION_ID: {
+        readonly status: 500;
+        readonly title: "Duplicate migration id";
+    };
+    readonly DUPLICATE_QUEUE_BINDING: {
+        readonly status: 500;
+        readonly title: "Duplicate queue binding";
+    };
+    readonly DUPLICATE_QUEUE_NAME: {
+        readonly status: 500;
+        readonly title: "Duplicate queue name";
+    };
+    readonly DUPLICATE_WORKFLOW_CLASS: {
+        readonly status: 500;
+        readonly title: "Duplicate workflow generated class name";
+    };
+    readonly MIGRATION_ID_NOT_STATIC: {
+        readonly status: 500;
+        readonly title: "Migration id is not statically analyzable";
+    };
+    readonly NAMESPACE_COLLISION: {
+        readonly status: 500;
+        readonly title: "Function namespace collision";
+    };
+    readonly BAD_ROW: {
+        readonly status: 400;
+        readonly title: "Malformed import row";
+    };
+    readonly BAD_SUBSCRIPTION_ARGS: {
+        readonly status: 400;
+        readonly title: "Invalid subscription arguments";
+    };
+    readonly BATCH_LIMIT_EXCEEDED: {
+        readonly status: 400;
+        readonly title: "Batch limit exceeded";
+    };
+    readonly CROSS_SHARD_RANK_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Cross-shard rank() is unsupported";
+    };
+    readonly FORBIDDEN_FANOUT: {
+        readonly status: 403;
+        readonly title: "Fan-out forbidden";
+    };
+    readonly FORBIDDEN_ORIGIN: {
+        readonly status: 403;
+        readonly title: "Origin forbidden";
+    };
+    readonly FORBIDDEN_SHARD: {
+        readonly status: 403;
+        readonly title: "Shard access forbidden";
+    };
+    readonly GLOBAL_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Global table import not configured";
+    };
+    readonly INVALID_INPUT: {
+        readonly status: 400;
+        readonly title: "Invalid input";
+    };
+    readonly RATE_LIMITED: {
+        readonly status: 429;
+        readonly title: "Rate limited";
+    };
+    readonly SERVICE_UNAVAILABLE: {
+        readonly status: 503;
+        readonly title: "Service unavailable";
+    };
+    readonly SHAPE_CROSS_SHARD_JOIN: {
+        readonly status: 400;
+        readonly title: "Shape cross-shard join is unsupported";
+    };
+    readonly UNAUTHENTICATED: {
+        readonly status: 401;
+        readonly title: "Unauthenticated";
+    };
+    readonly UNKNOWN_COLUMN: {
+        readonly status: 404;
+        readonly title: "Unknown column";
+    };
+    readonly EXPIRED: {
+        readonly status: 404;
+        readonly title: "Session expired";
+    };
+    readonly NESTED_TRANSACTION: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Nested transaction";
+    };
+    readonly OUT_OF_ORDER: {
+        readonly status: 409;
+        readonly title: "Out-of-order mutation";
+    };
+    readonly SHAPE_GLOBAL_TOO_LARGE: {
+        readonly status: 413;
+        readonly title: "Global shape too large";
+    };
+    readonly SHAPE_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Shape not found";
+    };
+    readonly SQL_UNAVAILABLE: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "SQL storage unavailable";
+    };
+    readonly TOKEN_EXPIRED: {
+        readonly status: 401;
+        readonly title: "Authentication token expired";
+    };
+    readonly TOO_MANY_STREAMS: {
+        readonly status: 429;
+        readonly title: "Too many streams";
+    };
+    readonly UNKNOWN_ADMIN_OP: {
+        readonly status: 404;
+        readonly title: "Unknown admin operation";
+    };
+    readonly RELAY_CANNOT_SEED: {
+        readonly status: 500;
+        readonly title: "Relay cannot seed";
+    };
+    readonly RELAY_MISCONFIGURED: {
+        readonly status: 500;
+        readonly title: "Relay misconfigured";
+    };
+    readonly RELAY_SEED_FAILED: {
+        readonly status: 502;
+        readonly title: "Relay seed failed";
+    };
+    readonly MISCONFIGURED: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Worker misconfigured";
+    };
+    readonly LUNORA_RUNTIME_UNAVAILABLE: {
+        readonly status: 500;
+        readonly title: "Lunora runtime unavailable";
+    };
+    readonly INTERNAL_ERROR: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Internal error";
+    };
+    readonly BROWSER_TIMEOUT: {
+        readonly status: 504;
+        readonly title: "Browser operation timed out";
+    };
+    readonly CLIENT_CLOSED: {
+        readonly status: 400;
+        readonly title: "Client is closed";
+    };
+    readonly HTTP_STREAM_BAD_CHUNK: {
+        readonly status: 502;
+        readonly title: "Malformed HTTP stream chunk";
+    };
+    readonly HTTP_STREAM_INTERRUPTED: {
+        readonly status: 502;
+        readonly title: "HTTP stream interrupted";
+    };
+    readonly HTTP_STREAM_MISSING_PARAM: {
+        readonly status: 400;
+        readonly title: "HTTP stream missing path parameter";
+    };
+    readonly HTTP_STREAM_NO_BODY: {
+        readonly status: 502;
+        readonly title: "HTTP stream response has no body";
+    };
+    readonly HTTP_STREAM_STATUS: {
+        readonly status: 502;
+        readonly title: "HTTP stream request failed";
+    };
+    readonly HTTP_STREAM_TRANSPORT: {
+        readonly status: 502;
+        readonly title: "HTTP stream transport error";
+    };
+    readonly STREAM_BACKPRESSURE: {
+        readonly status: 429;
+        readonly title: "Stream backpressure";
+    };
+    readonly STREAM_DISCONNECTED: {
+        readonly status: 503;
+        readonly title: "Stream disconnected";
+    };
+    readonly STREAM_QUEUE_OVERFLOW: {
+        readonly status: 429;
+        readonly title: "Stream queue overflow";
+    };
+    readonly UNKNOWN_MUTATION_FN: {
+        readonly status: 404;
+        readonly title: "Unknown mutation function";
+    };
 };
 ```
 

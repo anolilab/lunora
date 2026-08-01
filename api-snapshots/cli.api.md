@@ -68,6 +68,7 @@ const COMMANDS: readonly [
     "import",
     "seed",
     "backup",
+    "eval",
     "verify",
     "info",
     "doctor",

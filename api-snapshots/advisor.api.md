@@ -494,8 +494,8 @@ interface AdvisorProcedureProtection {
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
-    runsAiGeneration?: boolean;
     reachesOutbound?: boolean;
+    runsAiGeneration?: boolean;
     throwsBareError?: boolean;
     unboundedAiGeneration?: boolean;
     usesCaptcha: boolean;
