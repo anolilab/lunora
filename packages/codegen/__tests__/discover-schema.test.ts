@@ -577,6 +577,65 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "query" is reserved/u);
     });
 
+    it("throws a diagnostic when a table name is not a valid JS identifier", () => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                "user-profiles": defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/user-profiles/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/identifier/u);
+    });
+
+    it("throws with a file:line:column suffix for a non-identifier table name", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                "user-profiles": defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/schema\.ts:\d+:\d+\)/u);
+    });
+
+    it("rejects a quoted string-literal table name that collides with a `ctx.db` member (reserved name)", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                "delete": defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "delete" is reserved/u);
+    });
+
+    it("accepts a valid camelCase table name without throwing", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                userProfiles: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).not.toThrow();
+    });
+
     it("captures an inline .vectorize() index hoisted into schema.vectorIndexes (Shape A)", () => {
         expect.assertions(2);
 

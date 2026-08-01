@@ -98,7 +98,12 @@ const baseSpecifiers = (useUmbrella = false): BaseSpecifiers =>
  * Matches the JS identifier subset we accept verbatim in emitted source.
  * Used to gate raw interpolation of table names, field names, etc. into
  * generated TS — anything outside the allowlist throws (E1) so we never
- * embed unescaped source from a `schema.ts`.
+ * embed unescaped source from a `schema.ts`. Table names are additionally
+ * gated earlier, at discovery, by `TABLE_NAME_IDENTIFIER_RE` in
+ * `discover-schema.ts` — that is the user-facing boundary (a pinpointed
+ * `file:line:column` diagnostic on the schema); this E1 throw is
+ * defense-in-depth behind it and should never fire for table names in
+ * practice. Must stay in sync with the discovery-side copy.
  */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
 
