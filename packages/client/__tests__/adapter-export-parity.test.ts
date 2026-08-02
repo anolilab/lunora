@@ -390,20 +390,25 @@ describe("adapter export-surface parity (react, vue, solid, svelte, angular)", (
     // exceeds vitest's default 5s per-test timeout. Paying that cost once
     // here, for every module the suite will touch, means every individual
     // `it` below hits the (already-parsed, cached) `Project` and stays fast.
-    // 60s (not the already-generous 30s): under the full monorepo's parallel
-    // `test:coverage` run — dozens of packages' vitest workers contending for
-    // CPU at once, vs. this file running alone — the same cold start has
-    // intermittently exceeded 30s in CI.
-    beforeAll(() => {
-        for (const modulePath of allModulePaths) {
-            try {
-                namedValueExportsOf(modulePath);
-            } catch {
-                // Doesn't exist yet (an angular `upload.ts`-shaped gap) — the
-                // per-cell checks below handle that; warming is best-effort.
+    // CI gets a much larger ceiling than local: under the full monorepo's
+    // parallel `test:coverage` run — dozens of packages' vitest workers
+    // contending for CPU at once, vs. this file running alone — the same cold
+    // start has measured over 60s in CI (the prior fixed 30s, then 60s,
+    // budgets both proved insufficient there), matching the CI-aware pattern
+    // `packages/codegen/vitest.config.ts`'s `hookTimeout` already uses.
+    beforeAll(
+        () => {
+            for (const modulePath of allModulePaths) {
+                try {
+                    namedValueExportsOf(modulePath);
+                } catch {
+                    // Doesn't exist yet (an angular `upload.ts`-shaped gap) — the
+                    // per-cell checks below handle that; warming is best-effort.
+                }
             }
-        }
-    }, 60_000);
+        },
+        process.env["CI"] ? 180_000 : 30_000,
+    );
 
     it("declares a non-trivial manifest", () => {
         expect.assertions(1);
