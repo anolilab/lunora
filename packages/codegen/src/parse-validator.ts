@@ -114,7 +114,17 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
     const out: Record<string, ValidatorIR> = {};
 
     for (const property of object.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
+        // A shorthand property (`{ status }`, where `status` is a validator held
+        // in a const) is its own initializer. Treating it as "not a property
+        // assignment" dropped the field from the shape with no error anywhere —
+        // the column vanished from `Doc_*`, and an index over it only surfaced
+        // as a confusing `index_references_unknown_field` advisory. Every caller
+        // of this parser (table shapes, `.input()` args, http routes, mutators)
+        // was affected, and `object-shorthand` autofixes plain assignments into
+        // this form, so the loss could arrive from a lint run.
+        const shorthand = Node.isShorthandPropertyAssignment(property);
+
+        if (!shorthand && !Node.isPropertyAssignment(property)) {
             continue;
         }
 
@@ -126,7 +136,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
             continue;
         }
 
-        const initializer = property.getInitializer();
+        const initializer = shorthand ? property.getNameNode() : property.getInitializer();
 
         if (!initializer) {
             continue;
