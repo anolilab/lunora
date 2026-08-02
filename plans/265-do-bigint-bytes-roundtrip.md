@@ -222,7 +222,7 @@ STOP condition (no backward-compatible encoding), option (ii) becomes the
 fallback plan — re-scope, do not improvise it in.
 
 **D2 — Reuse `shared/wire-codec.ts`'s `encodeWire`/`decodeWire` for the doc
-blob, wrapped in a storage-named pair.** Add `encodeDocJson(doc): string` /
+blob, wrapped in a storage-named pair.** <!-- secret-scanner:allow (kingfisher.azurestorage false positive on prose) --> Add `encodeDocJson(doc): string` /
 `decodeDocJson(raw): Record<string, unknown>` in `do-sql.ts` (implemented as
 `JSON.stringify(encodeWire(doc))` / `decodeWire(JSON.parse(raw))`). Rejected
 alternative: a bespoke storage replacer/reviver reusing `sqliteEncode`'s
