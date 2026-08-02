@@ -51,4 +51,11 @@ export default createConfig(
             "perfectionist/sort-objects": "off",
         },
     },
+    // Formatting rules that conflict with Prettier (which owns formatting):
+    // number-literal-case wants uppercase hex digits Prettier lowercases.
+    {
+        rules: {
+            "unicorn/number-literal-case": "off",
+        },
+    },
 );

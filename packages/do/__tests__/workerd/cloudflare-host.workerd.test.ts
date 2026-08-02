@@ -32,6 +32,7 @@ import type { ConformanceHost } from "@lunora/platform/conformance";
 import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
 import { createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
 import { env, runInDurableObject } from "cloudflare:test";
+import type { TestContext } from "vitest";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -89,19 +90,24 @@ const createCloudflareHost = (): ConformanceHost => {
 /**
  * `it`, but the body runs inside a fresh Durable Object. Each test gets its own
  * object so SQL tables, sockets, and alarms from one never bleed into the next.
+ *
+ * The real vitest `TestContext` is forwarded into `body` (plan 268, W2): the
+ * suite's dynamic-skip legs call `context.skip()`, which only works against
+ * the context the runner itself created for this test — a context this
+ * wrapper invented would not be wired to anything the runner recognizes.
  */
-const itInDurableObject = ((name: string, body: () => Promise<void> | void) => {
+const itInDurableObject = ((name: string, body: (context: TestContext) => Promise<void> | void) => {
     // The assertions live in the injected suite's bodies, not here — this
     // wrapper only supplies the Durable Object context they run in.
     // eslint-disable-next-line vitest/expect-expect, vitest/require-top-level-describe, vitest/prefer-expect-assertions, sonarjs/assertions-in-tests -- generic test-runner adapter; `defineHostContractSuite` owns the describe blocks and the assertions
-    it(name, async () => {
+    it(name, async (context) => {
         const stub = env.SHARD.get(env.SHARD.newUniqueId());
 
         await runInDurableObject(stub, async (_instance, state) => {
             currentState = state;
 
             try {
-                await body();
+                await body(context);
             } finally {
                 currentState = undefined;
                 liveSockets = [];

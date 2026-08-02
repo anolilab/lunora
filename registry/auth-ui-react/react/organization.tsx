@@ -107,7 +107,7 @@ const OrganizationsCard = (): ReactElement | null => {
     })();
 
     return (
-        <AuthCard title={t.organizations}>
+        <AuthCard headingLevel={2} title={t.organizations}>
             <FormBanner error={state.error} />
             {list}
             {cannotCreate ? <p className="lunora-auth-note">{createBlockedReason}</p> : null}
@@ -156,7 +156,7 @@ const MembersCard = (): ReactElement | null => {
     };
 
     return (
-        <AuthCard title={t.members}>
+        <AuthCard headingLevel={2} title={t.members}>
             <FormBanner error={state.error} />
 
             {state.loading ? (
@@ -275,7 +275,7 @@ const OrganizationSettingsCard = ({ organizationId }: OrganizationSettingsCardPr
     }
 
     return (
-        <AuthCard title={t.organizationSettings}>
+        <AuthCard headingLevel={2} title={t.organizationSettings}>
             {state.loading ? (
                 <p className="lunora-auth-card__description">…</p>
             ) : (

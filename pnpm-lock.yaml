@@ -2809,7 +2809,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3355,6 +3355,9 @@ importers:
 
   packages/platform-cloudflare:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform

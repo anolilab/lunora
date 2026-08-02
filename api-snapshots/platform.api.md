@@ -755,6 +755,7 @@ const resolveShard: (directory: ShardDirectory, name: string) => ShardStub;
 ```ts
 interface ConformanceHost {
     awaitAlarmFired?: (target: number) => Promise<void>;
+    awaitJobDispatched?: (id: string) => Promise<boolean>;
     cleanup?: () => void;
     createSocket?: () => unknown;
     directory: ShardDirectory;
@@ -813,6 +814,7 @@ const defineHostContractSuite: (name: string, factory: ConformanceHostFactory, v
 ```ts
 interface ConformanceHost {
     awaitAlarmFired?: (target: number) => Promise<void>;
+    awaitJobDispatched?: (id: string) => Promise<boolean>;
     cleanup?: () => void;
     createSocket?: () => unknown;
     directory: ShardDirectory;

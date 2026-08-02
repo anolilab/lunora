@@ -58,7 +58,7 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
     const lastUsed = readLastLoginMethod();
 
     return (
-        <AuthCard footer={<AuthLink href={props.signUpHref ?? "/sign-up"}>{t.noAccount}</AuthLink>} title={t.signIn}>
+        <AuthCard footer={context.signUp ? <AuthLink href={props.signUpHref ?? "/sign-up"}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
             <SocialButtons
                 lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
                 onSelect={(provider) => {
@@ -122,6 +122,14 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = createController(createSignUpController);
+
+    // The server can close self-serve sign-up (`emailAndPassword.disableSignUp`).
+    // Mirrors the plugin-gated cards above: mounted directly, this card renders
+    // nothing rather than a form that will fail on submit; `AuthView`'s route
+    // falls back to the sign-in card instead of landing on a blank page.
+    if (!context.signUp) {
+        return null;
+    }
 
     return (
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.haveAccount}</AuthLink>} title={t.signUp}>

@@ -26,6 +26,18 @@
  *    this guard then fails the next install so a maintainer widens the range
  *    floor instead of shipping a fresh time bomb.
  *
+ * A second, report-only mode covers exact sibling `dependencies` pins (as
+ * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
+ * repo's *deliberate* lockstep convention (see point 1 above) — "satisfy"
+ * bumps them in lockstep whenever the CONSUMER package itself releases. But a
+ * consumer with no triggering commits since its dependency's last release
+ * keeps its stale pin indefinitely — the terminal case is a `private: true`
+ * package that never releases at all. That drift is invisible today (nothing
+ * walks `dependencies`) and, for a published sibling, means two installers of
+ * two different `@lunora/*` packages can resolve two physical copies of a
+ * shared dependency. This mode never fails the install — it only reports —
+ * because mid-release-train drift between trains is normal and expected.
+ *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
 
@@ -42,23 +54,30 @@ const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
-let hasFailure = false;
+const packageDirs = readdirSync(packagesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
 
-for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-        continue;
-    }
+const manifests = [];
+const versions = {};
 
+for (const entry of packageDirs) {
     const manifestPath = join(packagesDir, entry.name, "package.json");
 
-    let manifest;
-
     try {
-        manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+        manifests.push({ dir: entry.name, manifest });
+
+        if (typeof manifest.name === "string" && typeof manifest.version === "string") {
+            versions[manifest.name] = manifest.version;
+        }
     } catch {
         continue;
     }
+}
 
+let hasFailure = false;
+
+for (const { dir, manifest } of manifests) {
     for (const [name, specifier] of Object.entries(manifest.peerDependencies ?? {})) {
         if (!isSibling(name) || typeof specifier !== "string" || !EXACT_VERSION_RE.test(specifier)) {
             continue;
@@ -66,10 +85,37 @@ for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
 
         hasFailure = true;
 
-        console.error(`❌ packages/${entry.name}'s peerDependency "${name}" is an exact pin (${specifier}).`);
+        console.error(`❌ packages/${dir}'s peerDependency "${name}" is an exact pin (${specifier}).`);
         console.error(`   Exact sibling peers break on the next release of ${name} (and on 1.0 promotion).`);
         console.error(`   Use a range instead, e.g. ">=${specifier} <2.0.0-0".`);
     }
+}
+
+// Report-only: exact sibling `dependencies` pins that have drifted behind the
+// dependency's current published version. Never fails the install — see the
+// doc comment above for why this is a report, not a gate.
+let dependencyWarnings = 0;
+
+for (const { dir, manifest } of manifests) {
+    for (const [name, specifier] of Object.entries(manifest.dependencies ?? {})) {
+        if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:")) {
+            continue;
+        }
+
+        const current = versions[name];
+
+        if (!current || specifier === current) {
+            continue;
+        }
+
+        dependencyWarnings += 1;
+
+        console.warn(`⚠️  packages/${dir} depends on "${name}": "${specifier}" — current is "${current}".`);
+    }
+}
+
+if (dependencyWarnings > 0) {
+    console.warn(`⚠️  ${dependencyWarnings} sibling dependency pin(s) are behind the current published version (report-only, does not fail install).`);
 }
 
 // The range fix only holds while multi-semantic-release runs with

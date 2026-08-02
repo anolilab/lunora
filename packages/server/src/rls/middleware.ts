@@ -46,6 +46,8 @@ import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
+import { optionalWriterOverride } from "../optional-writer-override";
+import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
@@ -224,6 +226,14 @@ interface DatabaseWriterLike {
      * Required for the same reason as `aggregate`.
      */
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
+
+    /**
+     * Cross-shard companion to `rankPage`: same ranked slice, but each row
+     * keeps its rank-key tuple for the query coordinator's k-way merge. Same
+     * count-of-partition RLS hazard as `rankPage` — failed closed under a read
+     * policy for the identical reason (see `rankPage` above).
+     */
+    rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
 
@@ -1037,10 +1047,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         return baseWhere;
     };
 
-    // `rankBefore` is the only analytical method that may be absent (the D1
-    // twin omits it); capture it so the truthy check narrows into the wrapper
-    // without a non-null assertion.
+    // `rankBefore`/`rankPageRows` are the two analytical methods that may be
+    // absent (the D1/sql-store twin omits both) — captured here so
+    // `optionalWriterOverride` below can narrow each without a non-null assertion.
     const baseRankBefore = base.rankBefore;
+    const baseRankPageRows = base.rankPageRows;
 
     const wrapped: RlsDatabase = {
         ...base,
@@ -1219,6 +1230,47 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
             // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @lunora/do
             return allowed?.["_id"] === id ? allowed : null;
+        },
+
+        // Same locate + readBase shape as `get` above, but returns the seam's
+        // `{ row, tableName }` pair rather than a bare row — this is the fast
+        // path `locateRow` itself probes via `raw.lookupById`, so the wrapped
+        // writer must apply the identical policy check before handing a row
+        // back, not just pass the raw seam through (the `...base` spread would
+        // otherwise expose `base.lookupById` unfiltered by any read policy).
+        async lookupById(id, expectedTable) {
+            const located = await locateRow(id, expectedTable);
+
+            if (!located.row) {
+                // eslint-disable-next-line unicorn/no-null -- mirrors get()'s absent-row null
+                return null;
+            }
+
+            // Row exists but isn't in any policy-gated table, or the owning
+            // table has no active read policy: defer to the GUARDED
+            // `base.lookupById` (secure-by-default for a protected table,
+            // pass-through for `.public()`), exactly like `get` defers to
+            // `base.get` in the same two cases.
+            if (located.tableName === undefined || !readBase(located.tableName).restricts) {
+                // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
+                return (await base.lookupById?.(id, expectedTable)) ?? null;
+            }
+
+            const { baseWhere } = readBase(located.tableName);
+
+            // Read policy grants unconditionally (`true` predicate, no baseWhere).
+            if (!baseWhere) {
+                return { row: located.row, tableName: located.tableName };
+            }
+
+            // Policy check: re-fetch WITH baseWhere on the owning table, through
+            // the UNGUARDED `raw` writer (a policy table — the guard would deny
+            // it). `null` here is the policy verdict ("denied"), not a fall
+            // through to the unguarded row.
+            const allowed = await raw.findFirst(located.tableName, { baseWhere, limit: 1, where: { _id: id } });
+
+            // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict, mirroring get()
+            return allowed?.["_id"] === id ? { row: allowed, tableName: located.tableName } : null;
         },
 
         async insert(tableName, document) {
@@ -1461,20 +1513,29 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             );
         },
 
-        // `rankBefore` is the one optional method (the D1 twin omits it).
-        ...(baseRankBefore
-            ? {
-                  rankBefore: (tableName: string, indexName: string, options: RankBeforeArgs) => {
-                      requireUnrestrictedReadBase(tableName, "rankBefore");
+        // `rankBefore`/`rankPageRows` are the two optional methods (the D1/sql-store
+        // twin omits both) — see `optionalWriterOverride`. `rankPageRows` fails
+        // closed for the same reason `rankPage` does: its rows carry partition
+        // rank keys that cannot be reduced under a row policy.
+        ...optionalWriterOverride("rankBefore", baseRankBefore, (rankBefore) => (tableName: string, indexName: string, options: RankBeforeArgs) => {
+            requireUnrestrictedReadBase(tableName, "rankBefore");
 
-                      // Route to the policy/non-policy writer; both carry
-                      // `rankBefore` when `base` does (the guard spreads `raw`).
-                      const target = route(tableName);
+            // Route to the policy/non-policy writer; both carry `rankBefore` when `base` does (the guard spreads `raw`).
+            const target = route(tableName);
 
-                      return (target.rankBefore ?? baseRankBefore)(tableName, indexName, options);
-                  },
-              }
-            : {}),
+            return (target.rankBefore ?? rankBefore)(tableName, indexName, options);
+        }),
+        ...optionalWriterOverride("rankPageRows", baseRankPageRows, (rankPageRows) => (tableName: string, indexName: string, options?: RankPageArgs) => {
+            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPageRows");
+
+            // Route to the policy/non-policy writer; both carry `rankPageRows` when `base` does (the guard spreads `raw`).
+            const target = route(tableName);
+
+            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, {
+                ...options,
+                baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere),
+            });
+        }),
     };
 
     // SECURITY: the generated runtime glues a per-table facade

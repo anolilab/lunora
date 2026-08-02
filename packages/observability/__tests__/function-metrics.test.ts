@@ -285,7 +285,7 @@ describe("recordFunctionMetric", () => {
         expect(readFunctionMetricIndexHits(sql)).toStrictEqual([]);
     });
 
-    it("drops a brand-new path once the accumulator is at its cap", () => {
+    it("refuses a brand-new path once the accumulator is at its cap, protecting incumbents", () => {
         expect.assertions(4);
 
         const harness = createSqliteExec();
@@ -293,24 +293,23 @@ describe("recordFunctionMetric", () => {
 
         ensureFunctionMetricsTables(sql);
 
-        // The cap exists because `path` is attacker-reachable: a FUNCTION_NOT_FOUND
-        // dispatch still records under the caller-supplied name. Seeding straight
-        // to the limit keeps this a test of the guard, not of 5000 upserts.
+        // Seeding straight to the limit keeps this a test of the guard, not of
+        // 5000 upserts.
         for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
             harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES (?)`, `seed:${String(index)}`);
         }
 
-        recordFunctionMetric(sql, dispatch({ path: "attacker:random" }));
+        recordFunctionMetric(sql, dispatch({ path: "flood:random" }));
 
         const [count] = harness.raw(`SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`);
 
         expect(count?.["n"]).toBe(FUNCTION_METRICS_MAX_PATHS);
-        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'attacker:random'`)).toStrictEqual([]);
+        expect(harness.raw(`SELECT path FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'flood:random'`)).toStrictEqual([]);
         // The satellites matter as much as the accumulator: a guard that only
         // protected the accumulator would leave the bucket, scan and index tables
         // growing without bound, which is the whole reason the cap exists.
-        expect(readFunctionMetricBuckets(sql, "attacker:random")).toStrictEqual({ buckets: [], truncated: false });
-        expect(readFunctionMetricScans(sql).get("attacker:random")).toBeUndefined();
+        expect(readFunctionMetricBuckets(sql, "flood:random")).toStrictEqual({ buckets: [], truncated: false });
+        expect(readFunctionMetricScans(sql).get("flood:random")).toBeUndefined();
     });
 
     it("keeps accumulating an already-tracked path past the cap", () => {
@@ -577,7 +576,7 @@ describe("reads on a never-called shard", () => {
         expect(readFunctionMetricBuckets(sql)).toStrictEqual({ buckets: [], truncated: false });
         expect(readFunctionMetricScans(sql).size).toBe(0);
         expect(readFunctionMetricIndexHits(sql)).toStrictEqual([]);
-        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ errors: 0, requests: 0 });
+        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ capped: false, errors: 0, requests: 0 });
     });
 });
 
@@ -635,7 +634,22 @@ describe("readFunctionMetricsTotals", () => {
         recordFunctionMetric(sql, dispatch({ errored: true, path: "b:fn" }));
         recordFunctionMetric(sql, dispatch({ path: "b:fn" }));
 
-        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ errors: 1, requests: 3 });
+        expect(readFunctionMetricsTotals(sql)).toStrictEqual({ capped: false, errors: 1, requests: 3 });
+    });
+
+    it("reports capped once the distinct-path cap is reached — the write-side signal a refused path leaves behind", () => {
+        expect.assertions(1);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        ensureFunctionMetricsTables(sql);
+
+        for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
+            harness.raw(`INSERT INTO "${FUNCTION_METRICS_TABLE}" (path) VALUES (?)`, `seed:${String(index)}`);
+        }
+
+        expect(readFunctionMetricsTotals(sql).capped).toBe(true);
     });
 });
 

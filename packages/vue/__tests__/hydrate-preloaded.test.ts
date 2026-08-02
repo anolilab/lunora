@@ -1,5 +1,5 @@
 import type { FunctionReference, Preloaded } from "@lunora/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, ref } from "vue";
 
 import { hydratePreloaded } from "../src/hydrate-preloaded";
@@ -19,6 +19,19 @@ const makePreloaded = <T>(value: T, overrides: Partial<Preloaded<T>> = {}): Prel
 };
 
 describe(hydratePreloaded, () => {
+    // `hydratePreloaded` is built on `subscribeToQuery`, which gates its live
+    // subscription on a browser `window` (SSR guard); the vitest env is
+    // `node` (no `window`), so define one for these client-path tests. The
+    // dedicated SSR test in the `subscribeToQuery` describe below removes it
+    // to exercise the guard, mirroring `@lunora/vue`'s `use-presence.test.ts`.
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("seeds the ref synchronously from preloaded.value on first read — no loading flash", () => {
         const fake = createFakeClient();
         const preloaded = makePreloaded(["hello", "world"]);
@@ -86,7 +99,16 @@ describe(hydratePreloaded, () => {
 });
 
 describe(subscribeToQuery, () => {
+    // `subscribeToQuery` gates its live subscription on a browser `window`
+    // (SSR guard); the vitest env is `node` (no `window`), so define one for
+    // these client-path tests. The dedicated SSR test below removes it to
+    // exercise the guard, mirroring `@lunora/vue`'s `use-presence.test.ts`.
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
     afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
         vi.restoreAllMocks();
     });
 
@@ -117,9 +139,39 @@ describe(subscribeToQuery, () => {
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
     });
+
+    it("does not subscribe during SSR (no window), but the seed still seeds the ref", () => {
+        const fake = createFakeClient();
+
+        // Simulate the server render: no browser `window`.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const data = scope.run(() => subscribeToQuery(fake.client, listMessages, { channelId: "c1" }, { seed: ["hello", "world"] }));
+
+        // No live subscription opened server-side …
+        expect(fake.subscribeCalls).toHaveLength(0);
+        // … but the seed still gives SSR HTML its value (the `hydratePreloaded`
+        // contract this primitive backs).
+        expect(data?.value).toStrictEqual(["hello", "world"]);
+
+        scope.stop();
+    });
 });
 
 describe(useQuery, () => {
+    // `useQuery` gates its subscription on a browser `window` (SSR guard);
+    // the vitest env is `node` (no `window`), so define one for these
+    // client-path tests. The dedicated SSR test below removes it to exercise
+    // the guard, mirroring `@lunora/vue`'s `use-presence.test.ts`.
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("opens a subscription that is undefined until the first push, then updates", () => {
         const fake = createFakeClient();
         const scope = effectScope();
@@ -244,6 +296,27 @@ describe(useQuery, () => {
         await nextTick();
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
+        expect(data?.value).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("does not subscribe during SSR (no window)", () => {
+        const fake = createFakeClient();
+
+        // Simulate the server render: no browser `window`.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        let data: ReturnType<typeof useQuery> | undefined;
+
+        scope.run(() => {
+            fake.provide(() => {
+                data = useQuery(listMessages, { channelId: "c1" });
+            });
+        });
+
+        expect(fake.subscribeCalls).toHaveLength(0);
         expect(data?.value).toBeUndefined();
 
         scope.stop();

@@ -69,8 +69,8 @@
     },
     "dependencies": {
         "@lunora/codegen": "1.0.0-alpha.82",
-        "@lunora/container": "1.0.0-alpha.18",
-        "@lunora/errors": "1.0.0-alpha.10",
+        "@lunora/container": "1.0.0-alpha.19",
+        "@lunora/errors": "1.0.0-alpha.11",
         "@lunora/seed": "1.0.0-alpha.56",
         "@visulima/colorize": "2.0.0",
         "@visulima/find-ai-runner": "1.0.0",

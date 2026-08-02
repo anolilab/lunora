@@ -11,8 +11,8 @@
 // only on the shard being the one true arbiter of whether it currently owns a key.
 
 import type { SqlExec } from "../../src/ctx-db";
-import { appendCdcChange, migrateCdcLog, readCdcChanges, readCdcCursor } from "../../src/ctx-db-cdc";
 import type { CdcChange } from "../../src/ctx-db-cdc";
+import { appendCdcChange, migrateCdcLog, readCdcChanges, readCdcCursor } from "../../src/ctx-db-cdc";
 import { vnodeForId } from "../../src/shard-ring";
 import createSqliteExec from "./node-sqlite";
 
@@ -146,11 +146,7 @@ const applyChangeToTarget = (target: ShardHarness, change: CdcChange): void => {
         return;
     }
 
-    target.raw(
-        "INSERT INTO messages (id, body) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body",
-        change.id,
-        (change.doc?.["body"] as string | undefined) ?? "",
-    );
+    target.raw("INSERT INTO messages (id, body) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body", change.id, change.doc?.["body"] ?? "");
     clearTombstone(target, change.id);
 };
 
@@ -167,8 +163,8 @@ const CATCH_UP_PAGE_LIMIT = 1000;
  * times is needed" claim rather than silently stopping at the first page.
  *
  * Returns the move state with `appliedWatermark` advanced to the highest
- * *consumed* `seq` (not the highest *applied* one — see the comment inline
- * below). That is the applied-watermark signal a target uses to tell a
+ * `seq` it has consumed (not the highest it has applied — see the comment
+ * inline below). That is the applied-watermark signal a target uses to tell a
  * coordinator "I have caught up to this point", and it must track the WAL
  * position walked past, or cutover's `appliedWatermark === quiesceSeq` gate
  * can never close under interleaved traffic (see `catchUpVnodes`'s test

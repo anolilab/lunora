@@ -19,13 +19,15 @@ import { useController } from "./use-controller";
  *
  * Errors that *do* belong to a card still render on that card's banner and never
  * reach here, so nothing is announced twice.
+ *
+ * The `aria-live` region mounts unconditionally — including with no toasts yet.
+ * A live region only announces changes made AFTER it exists in the accessibility
+ * tree; mounting it together with the first toast (as `{toasts.length === 0 ?
+ * null : …}` did) means that very first toast lands before assistive tech is
+ * watching the region, so it goes unannounced.
  */
-const ErrorToaster = (): ReactElement | null => {
+const ErrorToaster = (): ReactElement => {
     const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
-
-    if (toasts.length === 0) {
-        return null;
-    }
 
     return (
         // `polite`, not `assertive`: these are failures the user can retry, not

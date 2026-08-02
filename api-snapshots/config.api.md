@@ -1079,6 +1079,12 @@ const ensureDevVariables: (deps: EnsureDevVariablesDeps) => Promise<EnsureDevVar
 const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<string>) => string[];
 ```
 
+### `escapeRegExp` (const)
+
+```ts
+const escapeRegExp: (value: string) => string;
+```
+
 ### `fillDevSecrets` (const)
 
 ```ts
@@ -1327,6 +1333,12 @@ const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogS
 const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>) => DevServerState | undefined;
 ```
 
+### `upsertDevVariableLine` (const)
+
+```ts
+const upsertDevVariableLine: (content: string, key: string, value: string) => string;
+```
+
 ### `wireRlsIntoProcedure` (const)
 
 ```ts
@@ -1337,6 +1349,12 @@ const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit) => WireResult;
 
 ```ts
 const writeDevServerState: (projectRoot: string, state: DevServerState) => string | undefined;
+```
+
+### `writeDevVariablesFileAtomically` (const)
+
+```ts
+const writeDevVariablesFileAtomically: (path: string, content: string) => void;
 ```
 
 ### `writeLinkedProject` (const)
@@ -1883,6 +1901,12 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 
 ## `@lunora/config/studio-host`
 
+### `ALLOW_FORWARDED_ENV` (const)
+
+```ts
+const ALLOW_FORWARDED_ENV = "LUNORA_STUDIO_ALLOW_FORWARDED";
+```
+
 ### `LocalEndpointHandler` (type)
 
 ```ts
@@ -2068,6 +2092,18 @@ const handleSchemaEditRequest: (request: SchemaEditRequest) => SchemaEditRespons
 const handleSeedRequest: (request: SeedRequest) => SeedResponse;
 ```
 
+### `headerValue` (const)
+
+```ts
+const headerValue: (raw: string | string[] | undefined) => string | undefined;
+```
+
+### `isLoopbackAddress` (const)
+
+```ts
+const isLoopbackAddress: (remoteAddress: string | undefined) => boolean;
+```
+
 ### `isStandaloneModulePath` (const)
 
 ```ts
@@ -2120,4 +2156,10 @@ const serveJsonHandler: (request: IncomingMessage, response: ServerResponse, han
 
 ```ts
 const studioAssetsStamp: (resolveFrom?: string) => number | undefined;
+```
+
+### `transportRejectionReason` (const)
+
+```ts
+const transportRejectionReason: (request: IncomingMessage, logger?: WarnLogger) => string | undefined;
 ```

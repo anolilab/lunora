@@ -440,8 +440,23 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * construction, all greater than the cursor just used), so the "new since
      * cursor" window against a fixed-size store response shrinks every
      * iteration until it empties out.
+     *
+     * A non-positive `filter.limit` (zero or negative) short-circuits to an
+     * empty page — `{ nextCursor: undefined, result: &lt;all-zero> }` — without
+     * calling the store or `deliverPage`. This differs from the STORE layer's
+     * `limit` convention (non-positive means "no cap"): here `limit` is an
+     * audience cap, so its zero-floor is zero deliveries, not an unbounded page.
      */
     const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
+        // A non-positive `limit` means "deliver to nobody" at this (audience-cap)
+        // layer — NOT "no cap", which is the store layer's convention for the same
+        // sentinel (see SubscriptionFilter.limit's JSDoc). Short-circuit before
+        // touching the store or deliverPage: falling through to the `> 0` gate
+        // below would treat `limit: 0` as "no cap" and fan out a full page.
+        if (filter?.limit !== undefined && filter.limit <= 0) {
+            return { nextCursor: undefined, result: { failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 } };
+        }
+
         // `filter.limit`, when set, is an OVERALL cap (see its JSDoc) — never
         // let a single page exceed it even when the configured page size is larger.
         const cap = filter?.limit !== undefined && filter.limit > 0 ? Math.trunc(filter.limit) : undefined;
@@ -489,6 +504,16 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         const aggregate: BroadcastResult = { failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 };
         let cursor = filter?.after;
         const overallLimit = filter?.limit;
+
+        // A non-positive overall limit means "deliver to nobody" (see
+        // broadcastPage's matching guard above) — return the all-zero aggregate
+        // before the walk so page 1 never gets handed a `0` per-page budget (which
+        // broadcastPage's OWN `> 0` gate would otherwise read as "no cap" and fan
+        // out a full page before the cumulative `total >= overallLimit` break below
+        // ever fires).
+        if (overallLimit !== undefined && overallLimit <= 0) {
+            return aggregate;
+        }
 
         for (;;) {
             const pageFilter: SubscriptionFilter | undefined =

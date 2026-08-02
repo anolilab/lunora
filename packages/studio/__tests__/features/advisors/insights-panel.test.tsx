@@ -280,9 +280,7 @@ describe("insightsPanel", () => {
         expect(view.textContent).toContain('Index "byTitle" on table "posts" has recorded no reads');
 
         // One call covering both tables, not one per table.
-        const batchedCalls = mock.query.mock.calls.filter(
-            (call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes,
-        );
+        const batchedCalls = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes);
 
         expect(batchedCalls).toHaveLength(1);
     });

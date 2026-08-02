@@ -3,6 +3,7 @@ import { onDestroy } from "svelte";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
 
@@ -105,9 +106,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // handle (SVELTE-01). Skip the whole client wiring server-side, mirroring
     // `@lunora/vue`'s `use-presence.ts` guard; the returned store stays inert
     // until the component hydrates.
-    const isBrowser = (globalThis as { window?: unknown }).window !== undefined;
-
-    if (isBrowser) {
+    if (isBrowser()) {
         sendHeartbeat();
         intervalHandle = setInterval(sendHeartbeat, intervalMs);
 
@@ -128,7 +127,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // during `renderToString` WOULD trigger it — so guard it too rather than
     // open a live WS subscription server-side.
     const present = readable<ReturnOf<L> | undefined>(undefined, (set) => {
-        if (!isBrowser) {
+        if (!isBrowser()) {
             return undefined;
         }
 

@@ -1349,12 +1349,14 @@ class TabCoordinator {
     start(): void;
     stop(): void;
     isLeader(): boolean;
+    promoteImmediately(): void;
     get leaderTabId(): string | undefined;
     get id(): string;
     get isRunning(): boolean;
-    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string): void;
+    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
     broadcastSubscriptionError(key: string, error: SubscriptionError): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
+    broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
 }
 ```
 

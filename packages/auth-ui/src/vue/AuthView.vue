@@ -39,7 +39,7 @@ const context = useAuthUIContextRef();
  * gate for when they are mounted directly.
  */
 const card = computed<Component>(() => {
-    const { forgotPasswordMethod, plugins, viewPaths } = context.value;
+    const { forgotPasswordMethod, plugins, signUp, viewPaths } = context.value;
 
     switch (props.view) {
         case viewPaths.acceptInvitation: {
@@ -67,7 +67,7 @@ const card = computed<Component>(() => {
         }
 
         case viewPaths.signUp: {
-            return SignUpCard;
+            return signUp ? SignUpCard : SignInCard;
         }
 
         case viewPaths.twoFactor: {

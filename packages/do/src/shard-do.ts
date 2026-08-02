@@ -207,7 +207,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-import { decodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -3671,6 +3671,10 @@ abstract class ShardDO {
 
         return createTracer({
             anchor: resolvedAnchor,
+            // Raw span error messages/stacktraces in dev only — production
+            // defaults to the same redacted posture as the request log and
+            // function-metrics sinks (see `context-telemetry.ts`'s `captureRaw`).
+            captureRaw: isDevEnvironment(this.env),
             fuseHostSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
@@ -3719,6 +3723,9 @@ abstract class ShardDO {
 
         return instrumentDatabase(database, {
             anchor,
+            // Raw constraint-error messages in dev only — matches `makeTracer`'s
+            // `captureRaw` posture.
+            captureRaw: isDevEnvironment(this.env),
             functionPath,
             mode,
             record: (recorded) => {
@@ -3803,7 +3810,9 @@ abstract class ShardDO {
             const key = dispatchSpanKey(anchor);
             const entry = this.dispatchSpans.get(key) ?? { sink };
 
-            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId });
+            // Raw `recordException` stacktraces/messages in dev only — matches
+            // `makeTracer`'s `captureRaw` posture for the wide event's collector.
+            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId }, isDevEnvironment(this.env));
             this.dispatchSpans.set(key, entry);
 
             return entry.collector;
@@ -4739,6 +4748,9 @@ abstract class ShardDO {
             this.spans.push(
                 dispatchRootSpan({
                     anchor,
+                    // Raw failure messages in dev only — matches `makeTracer`'s
+                    // `captureRaw` posture for this synthetic root span.
+                    captureRaw: isDevEnvironment(this.env),
                     // The wide event, if the handler attached one through `ctx.span`.
                     ...(collected === undefined ? {} : { collected }),
                     durationMs,
@@ -7576,6 +7588,13 @@ abstract class ShardDO {
 
             const attachment = this.readAttachment(ws);
 
+            // Read once per socket per flush, not once per affected
+            // subscription below — the value depends only on this socket's
+            // announced `clientId`/`userId`, identical for every subscription
+            // on it, so re-reading it per subscription was a redundant
+            // `SELECT … FROM __client_watermark` per subscription per flush.
+            const clientWatermark = this.socketClientWatermark(ws);
+
             for (const [subId, query] of Object.entries(attachment.subs)) {
                 const { functionPath } = query;
 
@@ -7633,7 +7652,7 @@ abstract class ShardDO {
                     // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
                     await awaitWsDrain(ws);
 
-                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch);
+                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch, clientWatermark);
                 } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
@@ -7711,7 +7730,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch);
+        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketClientWatermark(ws));
     }
 
     /**
@@ -8612,8 +8631,23 @@ abstract class ShardDO {
      * persist its resume position and replay it as `sinceSeq` on reconnect
      * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
      * to the pre-cursor format.
+     *
+     * `clientWatermark` is this socket's `socketClientWatermark(ws)` — read
+     * ONCE by the caller and passed in, not recomputed here. A single
+     * write-flush can call this method many times for the same socket (once
+     * per affected subscription — see `refreshOne`), and the watermark
+     * depends only on `ws`, never on `subId`/`outcome`, so recomputing it per
+     * subscription was a redundant `SELECT … FROM __client_watermark` per
+     * subscription per socket per flush.
      */
-    private pushSubscriptionData(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, cursor?: number, epoch?: string): void {
+    private pushSubscriptionData(
+        ws: ShardSocketLike,
+        subId: string,
+        outcome: SubscriptionOutcome,
+        cursor: number | undefined,
+        epoch: string | undefined,
+        clientWatermark: number | undefined,
+    ): void {
         let memos = this.subMemos.get(ws);
 
         if (!memos) {
@@ -8647,8 +8681,7 @@ abstract class ShardDO {
             // So emit a lightweight `settled` frame (carrying the cursor/epoch)
             // unconditionally, with `lastMutationId` only when this socket has a
             // watermark. An old client ignores the unknown frame.
-            const settledWatermark = this.socketClientWatermark(ws);
-            const watermarkField = settledWatermark === undefined ? "" : `,"lastMutationId":${String(settledWatermark)}`;
+            const watermarkField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
 
             trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)}${watermarkField}${cursorSuffix}}`);
 
@@ -8666,6 +8699,21 @@ abstract class ShardDO {
                 ? undefined
                 : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
 
+        // Stamp this socket's per-mutator watermark on the plain `data` frame
+        // the same way the `settled` branch above does, so the client's
+        // checkpoint gate can trust what THIS frame's rows actually reflect
+        // instead of a provisional RPC-ack signal that can race ahead of it
+        // (plan 266 finding d: write A's data frame arriving after write B's
+        // ack has already landed, but before B's own rows synced, must not
+        // resolve B's overlay early). The delta branch below stamps the SAME
+        // watermark on every delta frame it sends (not a follow-up: a
+        // `@lunora/db` list collection is exactly the id-keyed shape the
+        // delta path targets, so after the first snapshot EVERY subsequent
+        // write for it goes out as deltas — leaving them unstamped would
+        // starve the checkpoint gate of a frame-carried watermark for the
+        // common case, not a rare one).
+        const lastMutationIdField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
+
         // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once
         // the frame(s) for this value actually leave the socket. `ws.send` throws
         // when the socket has closed or its outbound buffer is gone. Advancing the
@@ -8678,8 +8726,8 @@ abstract class ShardDO {
         // tracking stays accurate even when delivery failed.
         const delivered =
             deltas === undefined
-                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`)
-                : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix);
+                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${lastMutationIdField}${cursorSuffix}}`)
+                : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix, clientWatermark);
 
         memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), ranges: outcome.ranges, tables: outcome.tables });
     }
@@ -8889,10 +8937,7 @@ abstract class ShardDO {
         // request of its own.
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // Optional credential expiry (epoch ms) forwarded by the runtime. A
-        // malformed value is ignored (the socket simply never auto-expires).
-        const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
-        const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
+        const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
 
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
@@ -8935,27 +8980,24 @@ abstract class ShardDO {
         }
     }
 
-    /** Whether `ws` carries a credential whose expiry (stamped at upgrade) is now past. */
+    /**
+     * Whether `ws` carries a credential whose expiry (stamped at upgrade) is
+     * now past. Delegates to the shared boundary check `@lunora/agent`'s
+     * voice DO uses for the same decision, so the two DOs can never disagree
+     * about it.
+     */
     private isSocketExpired(ws: ShardSocketLike): boolean {
-        const { expiresAt } = this.readAttachment(ws);
-
-        return typeof expiresAt === "number" && Date.now() >= expiresAt;
+        return isIdentityExpired(this.readAttachment(ws).expiresAt);
     }
 
     /**
-     * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
-     * the client distinguishes an expired-credential drop from an ordinary one
-     * and refreshes before reconnecting. Best-effort: a throw (socket already
-     * gone) is swallowed — this must never escape the hibernation handlers.
+     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
+     * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
+     * client-facing wire shape from one place.
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
     private dropExpiredSocket(ws: ShardSocketLike): void {
-        try {
-            ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
-            ws.close?.(4001, "token_expired");
-        } catch {
-            /* socket already gone */
-        }
+        dropExpiredCredentialSocket(ws);
     }
 
     /**

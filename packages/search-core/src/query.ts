@@ -157,17 +157,35 @@ export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analy
  * Shared because both engines have to derive the *same* bound or their result
  * sets differ on the one term the user is still typing. The increment assumes
  * the last code point is not the maximum, which holds for the `[\p{L}\p{N}]+`
- * tokens the analyzer produces.
+ * tokens the analyzer produces — except at the two boundaries where a
+ * successor code point would not be a valid scalar value (see below), which
+ * degrade to an exact match instead.
  */
 export const searchTermRange = (token: string, isPrefix: boolean): { exact: boolean; lower: string; upper: string } => {
     if (!isPrefix) {
         return { exact: true, lower: token, upper: token };
     }
 
-    const lastCodePoint = token.codePointAt(token.length - 1) ?? 0;
-    const head = token.slice(0, Math.max(0, token.length - String.fromCodePoint(lastCodePoint).length));
+    // Spread iterates by code point (not UTF-16 code unit), so the last
+    // element is the whole trailing character even when it's a surrogate
+    // pair — exactly what a code-point-correct increment needs.
+    // eslint-disable-next-line @typescript-eslint/no-misused-spread -- intentional: code-point iteration is the fix, not the bug (see the docblock above)
+    const lastCharacter = [...token].at(-1) ?? "";
+    const lastCodePoint = lastCharacter.codePointAt(0) ?? 0;
+    const nextCodePoint = lastCodePoint + 1;
 
-    return { exact: false, lower: token, upper: head + String.fromCodePoint(lastCodePoint + 1) };
+    // The successor of U+D7FF is the surrogate block and the successor of
+    // U+10FFFF does not exist — a bound built from either is not a valid
+    // scalar-value string (a UTF-8 binding mangles it to U+FFFD). Degrade the
+    // term to an exact match instead: never wrong, merely narrower, and only
+    // reachable for tokens ending exactly at those two boundaries.
+    if ((nextCodePoint >= 0xd8_00 && nextCodePoint <= 0xdf_ff) || nextCodePoint > 0x10_ff_ff) {
+        return { exact: true, lower: token, upper: token };
+    }
+
+    const head = token.slice(0, token.length - lastCharacter.length);
+
+    return { exact: false, lower: token, upper: head + String.fromCodePoint(nextCodePoint) };
 };
 
 /**

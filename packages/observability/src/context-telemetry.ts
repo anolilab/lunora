@@ -20,6 +20,7 @@ import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { buildTraceparent, LUNORA_ATTR, otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent, SpanEventPoint, SpanHandle, SpanLink, SpanOptions } from "../../../shared/span-event";
+import { redactArgs } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -196,6 +197,16 @@ export interface TracerDeps {
     /** The trace this ctx's spans belong to. */
     anchor: TraceAnchor;
 
+    /**
+     * Whether to record a span body's error message (and a `recordException`
+     * stacktrace) verbatim rather than redacted. Mirrors the request log's
+     * `captureRaw`: `true` in dev (`isDevEnvironment`), `false` in production —
+     * the span pipeline is the one sink third-party collectors (Datadog/Axiom
+     * via `otlpSink`) receive, so it must not ship raw PII/internals by default
+     * the way the request log and function-metrics sinks already don't.
+     */
+    captureRaw?: boolean;
+
     /** Function path the spans are attributed to. */
     functionPath: string;
 
@@ -317,8 +328,14 @@ export interface SpanCollector {
  * attributes become the canonical one-event-per-request summary. Sharing the
  * implementation is what makes those two feel like the same API instead of two
  * that happen to resemble each other.
+ *
+ * `captureRaw` (default `false`) gates `recordException`'s `exception.message`/
+ * `exception.stacktrace` the same way {@link createTracer} gates a span's own
+ * error message — a stack is file paths and internals by definition, the exact
+ * class `isInternalCode` redaction exists for, so it rides the same dev-only
+ * escape hatch rather than shipping to a third-party collector by default.
  */
-export const createSpanCollector = (ids: { spanId: string; traceId: string }): SpanCollector => {
+export const createSpanCollector = (ids: { spanId: string; traceId: string }, captureRaw = false): SpanCollector => {
     const collected: SpanCollection = { attributes: {}, events: [], links: [] };
 
     const handle: SpanHandle = {
@@ -360,11 +377,15 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }): S
         },
         recordException: (error) => {
             // The OTel-conventional `exception` event. `exception.stacktrace` is
-            // included when present because a HANDLED exception has no other
-            // record — nothing re-throws it for a top-level handler to log.
+            // included when present AND `captureRaw` — a HANDLED exception has no
+            // other record (nothing re-throws it for a top-level handler to log),
+            // but a stack is exactly the kind of internal detail the production
+            // redaction posture exists to keep off third-party sinks.
+            const rawMessage = error instanceof Error ? error.message : String(error);
+
             handle.addEvent("exception", {
-                "exception.message": error instanceof Error ? error.message : String(error),
-                ...(error instanceof Error && typeof error.stack === "string" ? { "exception.stacktrace": error.stack } : {}),
+                "exception.message": redactArgs(rawMessage, captureRaw) as string,
+                ...(captureRaw && error instanceof Error && typeof error.stack === "string" ? { "exception.stacktrace": error.stack } : {}),
                 "exception.type": toErrorType(error),
             });
         },
@@ -436,7 +457,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }): S
  * waterfall is unaffected.
  */
 export const createTracer = (deps: TracerDeps): ContextTracer => {
-    const { anchor, fuseHostSpans, functionPath, record, resolveHostTracing, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, fuseHostSpans, functionPath, record, resolveHostTracing, shardKey, userId } = deps;
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
@@ -454,7 +475,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             // `SpanHandle`. Attributes merge over `normalized` at record time
             // (post-hoc wins on a key clash); each write is normalized through the
             // same field coercer as the start attributes, so the bag stays JSON-safe.
-            const { collected, handle: spanHandle } = createSpanCollector({ spanId, traceId: anchor.traceId });
+            const { collected, handle: spanHandle } = createSpanCollector({ spanId, traceId: anchor.traceId }, captureRaw);
 
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
@@ -473,8 +494,16 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // Record the failure, then re-throw untouched: `ctx.trace` is
                     // instrumentation, never flow control.
                     ok = false;
+
+                    const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+
                     error = {
-                        message: error_ instanceof Error ? error_.message : String(error_),
+                        // Redacted like the request log's error message by default
+                        // (`captureRaw` is the same dev-only escape hatch) — this
+                        // is the span pipeline, the one sink with third-party
+                        // fan-out (`otlpSink`/`webhookSink`), so it must not ship
+                        // a raw validation/constraint message in the clear.
+                        message: redactArgs(rawMessage, captureRaw) as string,
                         // Prefer a LunoraError's stable `code` over the class name
                         // so spans group by the same taxonomy the RPC spans use.
                         type: toErrorType(error_),
@@ -746,6 +775,15 @@ export const dispatchRootSpan = (input: {
     anchor: TraceAnchor;
 
     /**
+     * Whether to record the failure message verbatim rather than redacted —
+     * the same dev-only escape hatch as {@link TracerDeps.captureRaw}. This
+     * synthetic root span carries the SAME error message the request log and
+     * function-metrics sinks already redact by default, so it must not be the
+     * one durable copy that ships it raw to a third-party collector.
+     */
+    captureRaw?: boolean;
+
+    /**
      * What the handler attached to the dispatch through `ctx.span` — the **wide
      * event**. These are the attributes that would otherwise have been scattered
      * across a dozen `ctx.log` lines; carrying them on the one span that already
@@ -760,7 +798,7 @@ export const dispatchRootSpan = (input: {
     startTs: number;
     userId: string | undefined;
 }): SpanEvent => {
-    const { anchor, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
+    const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
     const attributes = collected?.attributes ?? {};
 
     return {
@@ -772,7 +810,7 @@ export const dispatchRootSpan = (input: {
             ? {}
             : {
                   error: {
-                      message: failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown),
+                      message: redactArgs(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown), captureRaw) as string,
                       type: toErrorType(failure.thrown),
                   },
               }),

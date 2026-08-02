@@ -13,6 +13,7 @@
  * working exactly as intended, so they only reach `onError`.
  */
 import type { ControllerContext } from "./config";
+import { resolveAfterSignIn } from "./redirect-to";
 
 /**
  * Show the One Tap prompt, if the browser and the user's Google session allow.
@@ -21,7 +22,7 @@ import type { ControllerContext } from "./config";
  */
 const promptOneTap = async (context: ControllerContext): Promise<void> => {
     try {
-        await context.authClient.oneTap({ callbackURL: context.redirects.afterSignIn });
+        await context.authClient.oneTap({ callbackURL: resolveAfterSignIn(context.redirects.afterSignIn) });
         context.onSessionChange?.();
     } catch (error) {
         context.onError?.(error);

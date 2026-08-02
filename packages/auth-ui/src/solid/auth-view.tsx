@@ -123,7 +123,7 @@ interface AuthViewProps {
 }
 
 const AuthView = (props: AuthViewProps = {}): JSX.Element => {
-    const { forgotPasswordMethod, plugins, viewPaths } = useAuthUI();
+    const { forgotPasswordMethod, plugins, signUp, viewPaths } = useAuthUI();
 
     /*
      * Plugin-gated views are checked here rather than left to the card's own
@@ -164,7 +164,9 @@ const AuthView = (props: AuthViewProps = {}): JSX.Element => {
                 </Show>
             </Match>
             <Match when={props.view === viewPaths.signUp}>
-                <SignUpCard />
+                <Show fallback={<SignInCard />} when={signUp}>
+                    <SignUpCard />
+                </Show>
             </Match>
             <Match when={props.view === viewPaths.twoFactor}>
                 <Show fallback={<SignInCard />} when={plugins.twoFactor}>

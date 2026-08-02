@@ -4,7 +4,7 @@ import { Match, Show, Switch } from "solid-js";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createPhoneSignInController } from "../core/phone-number";
 import { createUsernameSignInController } from "../core/username";
-import { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+import { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, ResetPasswordOtpCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
 import { DeviceAuthorizationCard } from "./plugin-cards";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
@@ -123,7 +123,7 @@ interface AuthViewProps {
 }
 
 const AuthView = (props: AuthViewProps = {}): JSX.Element => {
-    const { plugins, viewPaths } = useAuthUI();
+    const { forgotPasswordMethod, plugins, signUp, viewPaths } = useAuthUI();
 
     /*
      * Plugin-gated views are checked here rather than left to the card's own
@@ -159,10 +159,14 @@ const AuthView = (props: AuthViewProps = {}): JSX.Element => {
                 </Show>
             </Match>
             <Match when={props.view === viewPaths.resetPassword}>
-                <ResetPasswordCard />
+                <Show fallback={<ResetPasswordCard />} when={forgotPasswordMethod === "otp"}>
+                    <ResetPasswordOtpCard />
+                </Show>
             </Match>
             <Match when={props.view === viewPaths.signUp}>
-                <SignUpCard />
+                <Show fallback={<SignInCard />} when={signUp}>
+                    <SignUpCard />
+                </Show>
             </Match>
             <Match when={props.view === viewPaths.twoFactor}>
                 <Show fallback={<SignInCard />} when={plugins.twoFactor}>

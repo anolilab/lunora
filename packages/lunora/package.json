@@ -161,14 +161,14 @@
         "@lunora/cli": "1.0.0-alpha.131",
         "@lunora/client": "1.0.0-alpha.35",
         "@lunora/do": "1.0.0-alpha.61",
-        "@lunora/errors": "1.0.0-alpha.10",
-        "@lunora/flags": "1.0.0-alpha.18",
+        "@lunora/errors": "1.0.0-alpha.11",
+        "@lunora/flags": "1.0.0-alpha.19",
         "@lunora/observability": "1.0.0-alpha.4",
-        "@lunora/platform": "1.0.0-alpha.1",
+        "@lunora/platform": "1.0.0-alpha.2",
         "@lunora/ratelimit": "1.0.0-alpha.14",
         "@lunora/runtime": "1.0.0-alpha.49",
         "@lunora/server": "1.0.0-alpha.56",
-        "@lunora/values": "1.0.0-alpha.13"
+        "@lunora/values": "1.0.0-alpha.14"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

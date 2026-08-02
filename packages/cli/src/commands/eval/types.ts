@@ -31,5 +31,12 @@ interface EvalModule {
 const isEvalModule = (value: unknown): value is EvalModule =>
     typeof value === "object" && value !== null && typeof (value as { run?: unknown }).run === "function";
 
+/**
+ * True for a usable score gate: a finite number in `[0, 1]`. Shared by the
+ * global `--threshold` gate and the per-eval `threshold` export check so
+ * the two ranges can never drift.
+ */
+const isValidThreshold = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+
 export type { EvalModule };
-export { isEvalModule };
+export { isEvalModule, isValidThreshold };

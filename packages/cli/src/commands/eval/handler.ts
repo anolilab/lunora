@@ -11,7 +11,7 @@ import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "
 import { discoverEvalFiles, EVAL_FILE_SUFFIX } from "./discover-eval-files";
 import type { EvalOptions } from "./index";
 import type { EvalModule } from "./types";
-import { isEvalModule } from "./types";
+import { isEvalModule, isValidThreshold } from "./types";
 
 /** Default directory `lunora eval` discovers `*.eval.ts` files under, relative to `cwd`. */
 const DEFAULT_EVAL_DIR = "evals";
@@ -210,6 +210,20 @@ const runOneEval = async (filePath: string, globalThreshold: number | undefined)
     }
 
     const name = evalModule.name ?? nameFromPath(filePath);
+
+    // `evalModule` is typed `EvalModule` (`threshold?: number`), but it comes
+    // from a dynamic `import()` of an arbitrary file — the type is a
+    // compile-time promise the file can't actually keep, so a runtime check
+    // is the point here, not redundant with the type.
+    if (evalModule.threshold !== undefined && !isValidThreshold(evalModule.threshold)) {
+        return {
+            error: `invalid \`threshold\` export: must be a number in [0, 1] — received ${JSON.stringify(evalModule.threshold)}`,
+            name,
+            passed: false,
+            path: filePath,
+        };
+    }
+
     const effectiveThreshold = evalModule.threshold ?? globalThreshold;
 
     try {
@@ -311,7 +325,7 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
     // here, before it can gate the run: an unchecked NaN makes every eval's
     // `average >= NaN` comparison false, reporting every eval as FAIL with no
     // stated cause.
-    if (options.threshold !== undefined && !(Number.isFinite(options.threshold) && options.threshold >= 0 && options.threshold <= 1)) {
+    if (options.threshold !== undefined && !isValidThreshold(options.threshold)) {
         return abortWithTopLevelError(logger, options.format, `eval: --threshold must be a number in [0, 1] — received "${String(options.threshold)}"`);
     }
 

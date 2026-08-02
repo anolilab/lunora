@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { UMBRELLA_BASE_PACKAGES } from "../src/emit";
 import {
     createCodegenProject,
     emitApi,
@@ -253,6 +254,53 @@ export default defineSchema({
             );
 
             expect(() => runCodegen({ projectRoot: workdir })).toThrow(/mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u);
+        });
+
+        it("rejects a shape when a mask() policies object literal spreads a variable (fail closed on spread/computed mask keys, plan 257)", () => {
+            expect.assertions(1);
+
+            // `mask({ ...sharedPolicies })`'s argument IS an object literal, so the
+            // pre-plan-257 non-literal-policy guard (which only rejected a
+            // non-object-literal argument) let this through — `extractMaskColumns`
+            // still contributes ZERO pairs for the spread member, so a shape over
+            // "users" would have shipped raw. Pre-fix this build SUCCEEDS; post-fix
+            // it must throw MASK_UNSUPPORTED.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                const sharedPolicies = { users: { email: "redact" } };
+                export const listUsers = query.use(mask({ ...sharedPolicies })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const allUsers = defineShape({ table: "users", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/isn't a plain object literal.*spread.*computed key/su);
+        });
+
+        it("does not throw for a mask() policies object literal that spreads a variable when the project declares no shapes (scoping preserved)", () => {
+            expect.assertions(1);
+
+            // Same spread-bearing mask as above, but no `defineShape` anywhere —
+            // `assertNoMaskedShapeTable` only fires when `shapes.length > 0`, so a
+            // shape-free project stays buildable (degraded studio/advisor metadata,
+            // no leak path since nothing replicates raw rows).
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                const sharedPolicies = { users: { email: "redact" } };
+                export const listUsers = query.use(mask({ ...sharedPolicies })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
         });
 
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
@@ -2291,6 +2339,87 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(output).not.toContain("./dataModel.js");
         });
+
+        it("leaves a checker-rendered @lunora/flags qualifier untouched for a non-umbrella project", () => {
+            expect.assertions(1);
+
+            const output = emitApi({ functions: [makeFunction({ returnType: 'import("@lunora/flags").LunoraFlags' })] });
+
+            expect(output).toContain('import("@lunora/flags").LunoraFlags');
+        });
+
+        it("rewrites a checker-rendered qualifier for each of the five newly-covered umbrella packages (errors, flags, observability, platform, ratelimit)", () => {
+            expect.assertions(10);
+
+            for (const pkg of ["errors", "flags", "observability", "platform", "ratelimit"]) {
+                const output = emitApi({ functions: [makeFunction({ returnType: `import("@lunora/${pkg}").Placeholder` })], useUmbrella: true });
+
+                expect(output).toContain(`import("lunorash/${pkg}").Placeholder`);
+                expect(output).not.toContain(`import("@lunora/${pkg}")`);
+            }
+        });
+
+        it("forwards a mirrored deep subpath (flags/web) but leaves an unmirrored one (flags/providers/env) unrewritten under the umbrella", () => {
+            expect.assertions(2);
+
+            const mirrored = emitApi({ functions: [makeFunction({ returnType: 'import("@lunora/flags/web").WebProvider' })], useUmbrella: true });
+            const unmirrored = emitApi({
+                functions: [makeFunction({ exportName: "list2", returnType: 'import("@lunora/flags/providers/env").EnvProvider' })],
+                useUmbrella: true,
+            });
+
+            expect(mirrored).toContain('import("lunorash/flags/web").WebProvider');
+            // Not mirrored by the umbrella (`./flags/env`, not `./flags/providers/env`) — left as-is rather than rewritten into a dead specifier.
+            expect(unmirrored).toContain('import("@lunora/flags/providers/env").EnvProvider');
+        });
+
+        it("leaves a platform conformance subpath unrewritten (the umbrella exports only bare `./platform`) but still rewrites the bare import", () => {
+            expect.assertions(2);
+
+            const subpath = emitApi({ functions: [makeFunction({ returnType: 'import("@lunora/platform/conformance").Suite' })], useUmbrella: true });
+            const bare = emitApi({ functions: [makeFunction({ exportName: "list2", returnType: 'import("@lunora/platform").ShardHost' })], useUmbrella: true });
+
+            expect(subpath).toContain('import("@lunora/platform/conformance").Suite');
+            expect(bare).toContain('import("lunorash/platform").ShardHost');
+        });
+    });
+
+    describe("umbrella_base_packages parity (anti-drift lock for the umbrella qualifier rewrite)", () => {
+        // Read the umbrella's manifest directly rather than importing it, so this
+        // test exercises the same "static list vs. source of truth" comparison a
+        // reviewer would do by hand — and fails loudly (ENOENT) if the umbrella
+        // package ever moves, per plan 295 §8's accepted risk.
+        const umbrellaPackageJsonPath = join(here, "..", "..", "lunora", "package.json");
+        const umbrellaExports = JSON.parse(readFileSync(umbrellaPackageJsonPath, "utf8")) as { exports: Record<string, unknown> };
+
+        /** First path segment of a subpath export key, e.g. `"./server/types"` -> `"server"`. */
+        const topLevelExportNames: ReadonlyArray<string> = [
+            ...new Set(
+                Object.keys(umbrellaExports.exports)
+                    .filter((key) => key !== "." && key !== "./package.json")
+                    .map((key) => key.replace(/^\.\//u, "").split("/")[0] ?? ""),
+            ),
+        ];
+
+        it("every UMBRELLA_BASE_PACKAGES entry has a matching top-level export in packages/lunora/package.json", () => {
+            // One assertion per entry in the (10-entry) constant.
+            expect.assertions(10);
+
+            for (const pkg of UMBRELLA_BASE_PACKAGES) {
+                expect(topLevelExportNames).toContain(pkg);
+            }
+        });
+
+        it("every top-level export in packages/lunora/package.json (other than `.`/`./package.json`) is covered by UMBRELLA_BASE_PACKAGES", () => {
+            // One assertion per distinct top-level export segment — currently the
+            // same 10 as UMBRELLA_BASE_PACKAGES; a divergence changes this count
+            // and fails loudly rather than silently under- or over-asserting.
+            expect.assertions(10);
+
+            for (const name of topLevelExportNames) {
+                expect(UMBRELLA_BASE_PACKAGES as ReadonlyArray<string>).toContain(name);
+            }
+        });
     });
 
     describe("emitVectors", () => {
@@ -2752,7 +2881,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("emits the bare (namespace-less) createVectorSyncHook call for an unsharded (root) vectorized table", () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             const schema: SchemaIR = {
                 tables: [
@@ -2776,13 +2905,15 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // shard key to scope by — so the emit must stay byte-identical to
             // today: no `namespace`, no `ROOT_SHARD_NAME` import, no shard-key read.
             expect(output).toContain("onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });");
+            // The read side (`ctx.vectors`) must stay just as bare as the write side.
+            expect(output).toContain("vectors = createContextVectors(lunora);");
             expect(output).not.toContain("namespace:");
             expect(output).not.toContain("ROOT_SHARD_NAME");
             expect(output).not.toContain("currentShardKey");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is .shardBy()'d", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             const schema: SchemaIR = {
                 tables: [
@@ -2813,12 +2944,22 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
+            // The read side gets the same sentinel-mapped namespace default,
+            // PLUS the set of index names it's actually valid for — the
+            // cross-tenant leak this plan closes was on `ctx.vectors`, not
+            // just the auto-sync write hook above, and the read facade is a
+            // single flat surface over every index, so it must know exactly
+            // which ones are tenant-partitioned (a root-instance call against
+            // any other listed index stays namespace-less, unaffected).
+            expect(output).toContain(
+                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+            );
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite,");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is indexed via a standalone defineVectorIndex (Shape B), not inline .vectorize()", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             const schema: SchemaIR = {
                 tables: [
@@ -2851,8 +2992,56 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain(
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
+            expect(output).toContain(
+                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+            );
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite,");
+        });
+
+        it("lists only the sharded table's index in shardedIndexNames for a MIXED schema (one sharded, one root-scoped vectorized table)", () => {
+            expect.assertions(1);
+
+            // A root-scoped vectorized table's index must NOT be listed —
+            // `ctx.vectors` is a single flat facade over both, reachable from
+            // any DO instance, so `shardedIndexNames` is what keeps a
+            // root-instance call against "by_summary" (root-scoped, correctly
+            // namespace-less) from being confused with a call against
+            // "by_body" (sharded, namespace-scoped or throwing from root).
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "docs",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { body: { kind: "string" } },
+                        shardMode: { field: "tenantId", kind: "shardBy" },
+                        vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+                    },
+                    {
+                        indexes: [],
+                        name: "announcements",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { summary: { kind: "string" } },
+                        shardMode: "root",
+                        vectorIndexes: [{ field: "summary", name: "by_summary", table: "announcements" }],
+                    },
+                ],
+                vectorIndexes: [
+                    { field: "body", name: "by_body", table: "docs" },
+                    { field: "summary", name: "by_summary", table: "announcements" },
+                ],
+            };
+
+            const output = emitShard({ schema });
+
+            expect(output).toContain(
+                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+            );
         });
 
         it("omits @lunora/bindings/vectors entirely when the schema declares no vectors", () => {

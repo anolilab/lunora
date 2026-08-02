@@ -52,28 +52,28 @@ batch/live transport") and Studio's own code confirms it in three independent
 places:
 
 1. **The client-side split.** `packages/studio/src/hooks/use-admin-query.ts`
-   defines *two* primitives:
-   - `useClientQuery` (line 131) — "the base primitive for the studio's
-     **non-admin-RPC reads** (the bespoke `client.listAuthUsers()` /
-     `client.schedulerStatus()` / … methods that aren't routed as
-     `__lunora_admin__:*` paths) … **No live bridge — these backends are
-     HTTP-only and the panels poll via `useAutoRefresh`.**"
-   - `useAdminQuery` (line 182) — for **reserved admin RPC paths**
-     (`__lunora_admin__:listTables`, etc.) that the runtime intercepts
-     *inside the Durable Object* and that DO support an optional `live: true`
-     WS subscription (`client.subscribe`).
+   defines _two_ primitives:
+    - `useClientQuery` (line 131) — "the base primitive for the studio's
+      **non-admin-RPC reads** (the bespoke `client.listAuthUsers()` /
+      `client.schedulerStatus()` / … methods that aren't routed as
+      `__lunora_admin__:*` paths) … **No live bridge — these backends are
+      HTTP-only and the panels poll via `useAutoRefresh`.**"
+    - `useAdminQuery` (line 182) — for **reserved admin RPC paths**
+      (`__lunora_admin__:listTables`, etc.) that the runtime intercepts
+      _inside the Durable Object_ and that DO support an optional `live: true`
+      WS subscription (`client.subscribe`).
 
-   These are two different admin surfaces that happen to share the word
-   "admin": one is a reserved RPC namespace dispatched through the DO's normal
-   query/subscribe path; the other — the auth-admin methods this plan is
-   about — is a separate HTTP-only route tree (`/_lunora/admin/auth/*`) with
-   no subscribe counterpart at all. Every panel this plan's reference code
-   touches (`organizations-panel.tsx`, `users-panel.tsx`,
-   `auth-sessions-panel.tsx`) uses `useClientQuery`, never `useAdminQuery`.
+    These are two different admin surfaces that happen to share the word
+    "admin": one is a reserved RPC namespace dispatched through the DO's normal
+    query/subscribe path; the other — the auth-admin methods this plan is
+    about — is a separate HTTP-only route tree (`/_lunora/admin/auth/*`) with
+    no subscribe counterpart at all. Every panel this plan's reference code
+    touches (`organizations-panel.tsx`, `users-panel.tsx`,
+    `auth-sessions-panel.tsx`) uses `useClientQuery`, never `useAdminQuery`.
 
 2. **Explicit code comments at every call site.** `organizations-panel.tsx:39`:
-   *"The org/auth store is HTTP-only (no admin-RPC path), so this is a
-   `useClientQuery` read over the bespoke `client.listAuthOrganizations`."*
+   _"The org/auth store is HTTP-only (no admin-RPC path), so this is a
+   `useClientQuery` read over the bespoke `client.listAuthOrganizations`."_
    `users-panel.tsx:50` and `auth-sessions-panel.tsx:28` carry the identical
    comment verbatim.
 
@@ -108,13 +108,13 @@ explicit refetch, matching the plan's requested `data`/`loading`/`error`/
 
 ```ts
 interface AdminAuthListResult<T> {
-    data: T[] | undefined;      // rows so far; undefined before the first response
-    total: number | undefined;  // AuthPage.total — undefined before the first response
-    loading: boolean;           // true only before any data has resolved
+    data: T[] | undefined; // rows so far; undefined before the first response
+    total: number | undefined; // AuthPage.total — undefined before the first response
+    loading: boolean; // true only before any data has resolved
     error: Error | undefined;
-    hasMore: boolean;           // total !== undefined && data.length < total
-    loadMore: () => void;       // grow the requested window and refetch
-    refetch: () => void;        // re-run the read (e.g. after an external mutation)
+    hasMore: boolean; // total !== undefined && data.length < total
+    loadMore: () => void; // grow the requested window and refetch
+    refetch: () => void; // re-run the read (e.g. after an external mutation)
 }
 ```
 
@@ -171,14 +171,14 @@ not bundled here. Reasoning:
   by hand: manual loading/error/pagination, no reuse across adapters." A
   typed, tested `useAuthUsers`/`useOrganizations`/`useAuthSessions`/
   `useImpersonate` per adapter removes the "manual loading/error/pagination"
-  half of that pain immediately, and lets an app team build their *own*
+  half of that pain immediately, and lets an app team build their _own_
   admin UI on top (most SaaS admin panels are heavily branded/opinionated
   anyway — a generic copy-in console is a smaller fraction of the value than
   the hooks are).
 - **If/when a copy-in console is built**, the reference is lifting
   `packages/studio/src/features/auth/*` into an `@lunora/auth-ui`-style port
   (the existing `packages/auth-ui/src/{react,vue,solid,svelte,angular}`
-  copy-in pattern, which today covers *authentication* screens only — sign-in/
+  copy-in pattern, which today covers _authentication_ screens only — sign-in/
   up/OTP/magic-link, no admin/org management). That reuse is exactly why
   scoping it separately matters: it's an `auth-ui` expansion, not a
   `@lunora/react` hooks change, and should be planned against that package's
@@ -209,11 +209,11 @@ requires each adapter's own "async call → reactive value + loading/error
 state" idiom, applied to `client.listAuthUsers`/`listAuthOrganizations`/
 `listAuthSessions`/`impersonateAuthUser` instead of a `FunctionReference`:
 
-| Concept | React (this spike) | Vue | Solid | Svelte | Angular |
-| --- | --- | --- | --- | --- | --- |
-| List read | `useAuthUsers()` → `{ data, loading, error, hasMore, loadMore, refetch }` (`@tanstack/react-query`, already a dep) | `useAuthUsers()` composable → same shape via `ref`/`watch` (no new dep) | `createAuthUsers()` → same shape via `createResource`/signals (no new dep) | `authUsers()` store → same shape via a Svelte store (no new dep) | `injectAuthUsers()` → same shape via Angular signals (no new dep) |
-| Mutation | Plain `client.*` call + hook's `refetch()` | same | same | same | same |
-| Impersonate | `useImpersonate()` → `{ impersonate, pending, data, error, reset }` (`useMutation`) | `useImpersonate()` composable, same fields, hand-rolled pending/error state | `createImpersonate()`, signals | `impersonate()` store/action | `injectImpersonate()`, signals |
+| Concept     | React (this spike)                                                                                                 | Vue                                                                         | Solid                                                                      | Svelte                                                           | Angular                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
+| List read   | `useAuthUsers()` → `{ data, loading, error, hasMore, loadMore, refetch }` (`@tanstack/react-query`, already a dep) | `useAuthUsers()` composable → same shape via `ref`/`watch` (no new dep)     | `createAuthUsers()` → same shape via `createResource`/signals (no new dep) | `authUsers()` store → same shape via a Svelte store (no new dep) | `injectAuthUsers()` → same shape via Angular signals (no new dep) |
+| Mutation    | Plain `client.*` call + hook's `refetch()`                                                                         | same                                                                        | same                                                                       | same                                                             | same                                                              |
+| Impersonate | `useImpersonate()` → `{ impersonate, pending, data, error, reset }` (`useMutation`)                                | `useImpersonate()` composable, same fields, hand-rolled pending/error state | `createImpersonate()`, signals                                             | `impersonate()` store/action                                     | `injectImpersonate()`, signals                                    |
 
 What's genuinely shared and mechanical across the port is the **contract**
 settled in this doc (one-shot, `{data, total, loading, error, hasMore,
@@ -227,13 +227,13 @@ existing async-state idiom, none of them needs a new dependency to do it.
    (`onImpersonate`, line 145) mints the token via `client.impersonateAuthUser`
    and displays it in a **read-only text input** (`ud-token`) — it never calls
    `client.setAuthToken(token)` on the admin's own client instance. This is
-   deliberate: auto-swapping the *current* session would silently sign the
+   deliberate: auto-swapping the _current_ session would silently sign the
    admin out of their own admin session with no visible transition and no
    easy "return to admin" path. The prototype's `useImpersonate` preserves
    this: it resolves the `AuthImpersonation` (token + user + expiry) and lets
    the caller decide what to do with it (open a new tab/incognito window,
    store it for an explicit "Acting as X — Return to admin" banner flow,
-   etc.) rather than silently swapping. **Open**: what the *real* UX should
+   etc.) rather than silently swapping. **Open**: what the _real_ UX should
    be (a dedicated impersonation banner + explicit swap-back, vs. always
    requiring a second tab) is a product decision Studio itself ducks today —
    worth its own short design note before a copy-in console builds on it,
@@ -256,7 +256,7 @@ existing async-state idiom, none of them needs a new dependency to do it.
    blocker for this spike (confirmed `LunoraClient` is exported as the class
    itself, so `useLunora()`'s return type already carries every admin method
    with full inference — no gap here), but worth noting as a thing that
-   *could* have silently drifted the way `packages/client/src/types.ts`'s
+   _could_ have silently drifted the way `packages/client/src/types.ts`'s
    `LunoraClientOptions` is hand-maintained separately; it happened not to
    apply to the client's own instance type.
 

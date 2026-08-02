@@ -69,7 +69,7 @@
     },
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.35",
-        "@lunora/errors": "1.0.0-alpha.10",
+        "@lunora/errors": "1.0.0-alpha.11",
         "@lunora/ratelimit": "1.0.0-alpha.14",
         "@visulima/storage-client": "catalog:storage"
     },

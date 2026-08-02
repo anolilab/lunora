@@ -892,15 +892,67 @@ const SYSTEM_INDEX_FIELDS = ["_creationTime", "_id"] as const;
 const SYSTEM_INDEX_FIELDS_SET = new Set<string>(SYSTEM_INDEX_FIELDS);
 
 /**
- * Cross-check every `.index(name, fields)` declaration against the table's
- * ASSEMBLED shape (run late — after `.softDelete()` has injected its marker
- * column onto `shape`, so a soft-delete field indexed by name isn't a false
- * positive). `.index()` is the one table-builder method whose `fields` were
- * historically typed `ReadonlyArray&lt;string>` with no cross-check against
- * `table.shape` — a typo'd column type-checked, passed `defineSchema`, and
- * only failed at migration time as a SQLite "no such column" error. This also
- * rejects a duplicate index name within a table, which SQLite would otherwise
- * silently let collide.
+ * Cross-check a single field name against the table's ASSEMBLED shape (plus
+ * the implicit system columns), throwing the standard message shape used for
+ * every index kind. Shared by `.index()`, `.rankIndex()` (`sortBy` /
+ * `partitionBy`), and `.geoIndex()` (`field`) — all publish these exact
+ * strings to `indexFieldsFromSchema`'s map as authoritative "declared fields"
+ * for the mask guard, so all three need the same shape check.
+ */
+const assertFieldInShape = (tableName: string, indexName: string, field: string, table: TableDefinition): void => {
+    if (SYSTEM_INDEX_FIELDS_SET.has(field) || field in table.shape) {
+        return;
+    }
+
+    throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" index "${indexName}" names column "${field}" which is not in the table's shape`);
+};
+
+/**
+ * Validate one index KIND's entries on a table: reject a name reused WITHIN
+ * this kind (`seenNames` is local to this call, so it never sees another
+ * kind's names — the same name across kinds is a separate, legal namespace),
+ * then shape-check each entry's fields via `checkFields`. Factored out so
+ * {@link validateIndexFields} stays a flat dispatch (one call per kind)
+ * instead of three near-identical inline loops.
+ */
+const validateIndexKind = <Entry extends { name: string }>(
+    tableName: string,
+    kindLabel: string,
+    entries: ReadonlyArray<Entry>,
+    checkFields: (entry: Entry) => void,
+): void => {
+    const seenNames = new Set<string>();
+
+    for (const entry of entries) {
+        if (seenNames.has(entry.name)) {
+            throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" declares ${kindLabel} "${entry.name}" more than once`);
+        }
+
+        seenNames.add(entry.name);
+        checkFields(entry);
+    }
+};
+
+/**
+ * Cross-check every `.index(name, fields)` / `.rankIndex(name, ...)` /
+ * `.geoIndex(name, ...)` declaration against the table's ASSEMBLED shape (run
+ * late — after `.softDelete()` has injected its marker column onto `shape`,
+ * so a soft-delete field indexed by name isn't a false positive). `.index()`
+ * is the one table-builder method whose `fields` were historically typed
+ * `ReadonlyArray` of plain strings with no cross-check against `table.shape`
+ * — a typo'd column type-checked, passed `defineSchema`, and only failed at
+ * migration time as a SQLite "no such column" error. Rank (`sortBy[].field` /
+ * `partitionBy[]`) and geo (`field`) declarations get the same shape check,
+ * because `indexFieldsFromSchema` hands exactly those strings to the mask
+ * guard as authoritative declared fields — an unchecked typo there would be a
+ * silent gap in the guard, not just a late SQLite error.
+ *
+ * Duplicate-name detection is per KIND, not global — see
+ * {@link validateIndexKind}'s docblock. The SAME name reused ACROSS kinds is
+ * legal: the engine resolves `withIndex`/`withGeoIndex`/rank reads in three
+ * separate namespaces (see `@lunora/shard-engine`'s `ctx-db.ts`), and
+ * `indexFieldsFromSchema`'s per-kind map (below) is exactly what lets the
+ * mask guard tell those namespaces apart instead of one shadowing another.
  *
  * `searchIndex`'s `filterFields` is deliberately excluded — its dot-separated
  * paths reach into nested JSON, so there is no flat column list to check it
@@ -908,43 +960,63 @@ const SYSTEM_INDEX_FIELDS_SET = new Set<string>(SYSTEM_INDEX_FIELDS);
  */
 const validateIndexFields = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
-        const seenNames = new Set<string>();
-
-        for (const index of table.indexes) {
-            if (seenNames.has(index.name)) {
-                throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" declares index "${index.name}" more than once`);
-            }
-
-            seenNames.add(index.name);
-
+        validateIndexKind(tableName, "index", table.indexes, (index) => {
             for (const field of index.fields) {
-                if (SYSTEM_INDEX_FIELDS_SET.has(field) || field in table.shape) {
-                    continue;
-                }
-
-                throw new LunoraError(
-                    "INTERNAL",
-                    `defineSchema: table "${tableName}" index "${index.name}" names column "${field}" which is not in the table's shape`,
-                );
+                assertFieldInShape(tableName, index.name, field, table);
             }
-        }
+        });
+
+        validateIndexKind(tableName, "rank index", table.rankIndexes, (rankIndex) => {
+            for (const sortKey of rankIndex.sortBy) {
+                assertFieldInShape(tableName, rankIndex.name, sortKey.field, table);
+            }
+
+            for (const field of rankIndex.partitionBy ?? []) {
+                assertFieldInShape(tableName, rankIndex.name, field, table);
+            }
+        });
+
+        validateIndexKind(tableName, "geo index", table.geoIndexes, (geoIndex) => {
+            assertFieldInShape(tableName, geoIndex.name, geoIndex.field, table);
+        });
     }
 };
 
 /**
- * Per-table index→declared-fields map: for each table, each declared index
- * NAME maps to the column names it declares. Distilled by
+ * Per-table, per-KIND index→declared-fields map: for each table, each index
+ * KIND (`index` | `rank` | `geo`) that has at least one declared index maps
+ * to a name→fields record for that kind only. Distilled by
  * {@link indexFieldsFromSchema}; this is the shape `mask()`'s
  * `MaskOptions.indexFields` expects (see `./mask/types`), so a table not
- * present here (no declared indexes) is simply absent from the map rather than
- * mapped to `{}`.
+ * present here (no declared indexes of any kind) is simply absent from the
+ * map rather than mapped to `{}`, and a kind with no declared indexes on a
+ * table that HAS other kinds is simply absent from that table's entry.
+ *
+ * Kept per kind (rather than one flat name→fields record) because the engine
+ * resolves `withIndex`/`withGeoIndex`/rank reads in THREE separate
+ * namespaces (`tableDefinition.indexes` / `.geoIndexes` / `.rankIndexes` —
+ * see `@lunora/shard-engine`'s `ctx-db.ts`), so the same name can legally and
+ * unambiguously denote a different index per kind. A flat map would let one
+ * kind's fields silently shadow another's for a colliding name, producing a
+ * wrong-namespace answer from the mask guard (checking the wrong index's
+ * fields) instead of the documented fail-open (missing lookup) — see plan 258.
  */
-type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, ReadonlyArray<string>>>>>;
+type IndexFieldsByTable = Readonly<
+    Record<
+        string,
+        {
+            readonly geo?: Readonly<Record<string, ReadonlyArray<string>>>;
+            readonly index?: Readonly<Record<string, ReadonlyArray<string>>>;
+            readonly rank?: Readonly<Record<string, ReadonlyArray<string>>>;
+        }
+    >
+>;
 
 /**
  * Distill a schema's declared index fields into an {@link IndexFieldsByTable}
- * map — regular index `fields`; rank index `sortBy[].field` ∪ `partitionBy`;
- * geo index `field` (its single geospatial column). Built to close the
+ * map, keyed per table and then per KIND — regular index `fields` under
+ * `index`; rank index `sortBy[].field` ∪ `partitionBy` under `rank`; geo index
+ * `field` (its single geospatial column) under `geo`. Built to close the
  * `mask()` bare-index-scan / rank / geo position oracle: pass the result as
  * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })` so the
  * middleware can reject a bare `withIndex`/`rank`/`withGeoIndex` read over an
@@ -956,6 +1028,11 @@ type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, Readon
  * nothing to observe, so the guard needs the index's *declaration* instead
  * (see `./mask/middleware`).
  *
+ * Kinds are kept separate — never merged into one flat name→fields map — so a
+ * name reused across kinds (legal at the engine level; each entry point
+ * resolves its own namespace) can't have one kind's fields silently shadow
+ * another's. The guard looks up its own kind explicitly instead.
+ *
  * Deliberately does NOT emit `vectorIndexes` or `aggregateIndexes`: vector
  * search isn't reachable through `TableReaderLike` (the masked reader), and
  * aggregate reads are already guarded column-by-column by
@@ -966,32 +1043,72 @@ type IndexFieldsByTable = Readonly<Record<string, Readonly<Record<string, Readon
  * `ExtendableSchema`, or a plugin-merged schema), so it works whether called
  * before or after `.extend(...)`.
  */
+
+/**
+ * Fold one index kind's entries into a name→fields record, or `undefined`
+ * when the table declares none of this kind (so the caller can omit the key
+ * entirely rather than publish an empty `{}`). Factored out so
+ * {@link indexFieldsFromSchema} stays a flat per-kind dispatch instead of
+ * three near-identical inline loops.
+ */
+const buildKindFieldMap = <Entry>(
+    entries: ReadonlyArray<Entry>,
+    nameOf: (entry: Entry) => string,
+    fieldsOf: (entry: Entry) => ReadonlyArray<string>,
+): Record<string, ReadonlyArray<string>> | undefined => {
+    if (entries.length === 0) {
+        return undefined;
+    }
+
+    const byName: Record<string, ReadonlyArray<string>> = {};
+
+    for (const entry of entries) {
+        byName[nameOf(entry)] = fieldsOf(entry);
+    }
+
+    return byName;
+};
+
+/** `rankIndex.sortBy[].field` ∪ `partitionBy` as a deduplicated array — the declared-fields set for one rank index. */
+const rankIndexFields = (rankIndex: RankIndexDefinition): ReadonlyArray<string> => {
+    const fields = new Set<string>(rankIndex.sortBy.map((key) => key.field));
+
+    for (const field of rankIndex.partitionBy ?? []) {
+        fields.add(field);
+    }
+
+    return [...fields];
+};
+
 const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
-    const result: Record<string, Record<string, ReadonlyArray<string>>> = {};
+    const result: Record<
+        string,
+        {
+            geo?: Record<string, ReadonlyArray<string>>;
+            index?: Record<string, ReadonlyArray<string>>;
+            rank?: Record<string, ReadonlyArray<string>>;
+        }
+    > = {};
 
     for (const [tableName, table] of Object.entries(schema.tables)) {
-        const perIndex: Record<string, ReadonlyArray<string>> = {};
+        const geo = buildKindFieldMap(
+            table.geoIndexes,
+            (geoIndex) => geoIndex.name,
+            (geoIndex) => [geoIndex.field],
+        );
+        const index = buildKindFieldMap(
+            table.indexes,
+            (regularIndex) => regularIndex.name,
+            (regularIndex) => regularIndex.fields,
+        );
+        const rank = buildKindFieldMap(table.rankIndexes, (rankIndex) => rankIndex.name, rankIndexFields);
 
-        for (const index of table.indexes) {
-            perIndex[index.name] = index.fields;
-        }
-
-        for (const rankIndex of table.rankIndexes) {
-            const fields = new Set<string>(rankIndex.sortBy.map((key) => key.field));
-
-            for (const field of rankIndex.partitionBy ?? []) {
-                fields.add(field);
-            }
-
-            perIndex[rankIndex.name] = [...fields];
-        }
-
-        for (const geoIndex of table.geoIndexes) {
-            perIndex[geoIndex.name] = [geoIndex.field];
-        }
-
-        if (Object.keys(perIndex).length > 0) {
-            result[tableName] = perIndex;
+        if (geo || index || rank) {
+            result[tableName] = {
+                ...(geo ? { geo } : {}),
+                ...(index ? { index } : {}),
+                ...(rank ? { rank } : {}),
+            };
         }
     }
 
@@ -1012,7 +1129,13 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     return withExtend({ tables, vectorIndexes });
 };
 
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema };
+// `validateIndexFields` is exported package-internally (not re-exported from
+// `./index`, so it stays outside the public API surface) so `./plugin`'s
+// `mergeSchemaExtension` can re-run it against the merged table set — the
+// seam that closes the "extension-contributed bad index never validated" gap
+// (plan 258 §1). Both `mergeSchemaExtension` callers (`withExtend.extend()`
+// here and `installPlugins` in `./plugin`) get the re-validation for free.
+export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema, validateIndexFields };
 
 export type {
     AggregateIndexOptions,

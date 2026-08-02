@@ -145,8 +145,6 @@ describe("avatarCard", () => {
     });
 
     it("uploads a picked file and stores the returned URL", async () => {
-        expect.assertions(2);
-
         const upload = vi.fn(() => Promise.resolve("https://cdn.example.com/a.png"));
         const client = stubClient();
 
@@ -156,11 +154,16 @@ describe("avatarCard", () => {
 
         fireEvent.change(screen.getByLabelText("Upload photo"), { target: { files: [file] } });
 
+        // Both assertions live inside the one `waitFor`: the accept-list check
+        // is async now (it shares `isAcceptedImage` with the organization-logo
+        // controller), so `upload` and the follow-up `updateUser` land a
+        // microtask apart from the `fireEvent.change` that triggered them —
+        // asserting `updateUser` outside `waitFor` raced its own retry count
+        // against `expect.assertions`, which this avoids entirely.
         await waitFor(() => {
             expect(upload).toHaveBeenCalledWith(file);
+            expect(client.updateUser).toHaveBeenCalledWith({ image: "https://cdn.example.com/a.png" });
         });
-
-        expect(client.updateUser).toHaveBeenCalledWith({ image: "https://cdn.example.com/a.png" });
     });
 
     it("rejects an oversized file before spending the upload", async () => {

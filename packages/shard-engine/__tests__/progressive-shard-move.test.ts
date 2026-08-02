@@ -135,7 +135,7 @@ describe("progressive shard move (plan 235 spike)", () => {
     describe("exactly-once resolution", () => {
         it("resolves every key to source before the move starts", () => {
             // One `resolveAuthoritativeShard` check per seeded document.
-            expect.assertions(SEED_COUNT);
+            expect.assertions(200);
 
             for (const id of groundTruth.keys()) {
                 expect(resolveAuthoritativeShard(coordinator, id)).toBe("source");
@@ -144,7 +144,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
         it("keeps resolving to source through snapshot and catch-up — cutover has not committed yet", () => {
             // 1 watermark check + one resolve check and one content check per seeded document.
-            expect.assertions(2 * SEED_COUNT + 1);
+            expect.assertions(401);
 
             const move = runToQuiesced();
 
@@ -164,7 +164,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
         it("flips moved keys to target and leaves staying keys on source after cutover — each with the correct content", () => {
             // One resolve check per seeded document + one content check per seeded document.
-            expect.assertions(2 * SEED_COUNT);
+            expect.assertions(400);
 
             const move = runToQuiesced();
 
@@ -255,7 +255,9 @@ describe("progressive shard move (plan 235 spike)", () => {
             move = catchUpVnodes(source, target, RING_SIZE, MOVING_VNODES, move, quiesceSeq);
 
             expect(move.appliedWatermark).toBe(quiesceSeq);
-            expect(() => cutover({ ...move, quiesceSeq })).not.toThrow();
+            expect(() => {
+                cutover({ ...move, quiesceSeq });
+            }).not.toThrow();
             expect(readMessage(target, pagedId)?.body).toBe(finalBody);
         });
     });
@@ -305,7 +307,7 @@ describe("progressive shard move (plan 235 spike)", () => {
 
         it("never drops or duplicates a row across a larger mixed batch", () => {
             // 1 size check + one content check per seeded document.
-            expect.assertions(SEED_COUNT + 1);
+            expect.assertions(201);
 
             const move = runToQuiesced();
 

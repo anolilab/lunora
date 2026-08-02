@@ -2,7 +2,7 @@ import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { createTwoFactorSetupController } from "../core/two-factor-setup";
+import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
@@ -48,8 +48,16 @@ const TwoFactorSetupCard = (): JSX.Element => {
                 >
                     <AuthCard description={t.twoFactorScan} title={t.twoFactorSetup}>
                         <FormBanner error={state.error} />
-                        <Show when={state.totpUri !== undefined}>
-                            <code class="lunora-auth-code">{state.totpUri}</code>
+                        {/*
+                         * The setup key, not the raw `otpauth://…` URI: this
+                         * package ships no QR encoder, so there is nothing to
+                         * scan, and most authenticators reject a pasted
+                         * `otpauth://…` string anyway — the key is the only
+                         * path that reliably works.
+                         */}
+                        <Show when={totpSecret(state.totpUri) !== undefined}>
+                            <p class="lunora-auth-note">{t.twoFactorSecret}</p>
+                            <code class="lunora-auth-code">{totpSecret(state.totpUri)}</code>
                         </Show>
                         <Show when={state.backupCodes.length > 0}>
                             <p class="lunora-auth-card__description">{t.backupCodes}</p>

@@ -110,7 +110,6 @@ export const useFacets = (): UseFacets => {
 
     const clearFacets = (): void => {
         setFacets({});
-        facetsRef.current = {};
     };
 
     return { clearFacets, facets, facetsRef, refetchFacets, toggleFacet };

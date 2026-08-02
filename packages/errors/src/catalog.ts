@@ -232,6 +232,7 @@ export const ERROR_CATALOG = {
     CRON_NAME_NOT_STATIC: { status: 500, title: "Cron job name is not statically analyzable" },
     CRON_NON_STATIC_FN: { status: 500, title: "Cron function reference is not statically analyzable" },
     CRON_NON_STATIC_VALUE: { status: 500, title: "Cron value is not statically analyzable" },
+    CRON_SCHEDULE_INVALID: { status: 500, title: "Invalid cron schedule" },
     CRON_SCHEDULE_NOT_STATIC: { status: 500, title: "Cron schedule is not statically analyzable" },
     DUPLICATE_CRON_NAME: { status: 500, title: "Duplicate cron job name" },
 
@@ -282,6 +283,15 @@ export const ERROR_CATALOG = {
     TOKEN_EXPIRED: { status: 401, title: "Authentication token expired" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
     UNKNOWN_ADMIN_OP: { status: 404, title: "Unknown admin operation" },
+
+    /**
+     * `@lunora/platform-cloudflare`'s `SocketHost.accept` guard — a caller
+     * supplied more accept-time tags (or a longer tag) than Cloudflare's
+     * `acceptWebSocket` budget allows once the host's own identity tag is
+     * reserved. Caller-actionable and safe (names counts, not internals) —
+     * not `internal`.
+     */
+    SOCKET_TAG_BUDGET_EXCEEDED: { status: 400, title: "Socket tag budget exceeded" },
 
     /**
      * `@lunora/shard-engine`'s relay hub (cross-shard shape relay coordination).

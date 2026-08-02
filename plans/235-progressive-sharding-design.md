@@ -19,7 +19,7 @@ coverage — see §2.4 (watermark) and §3 (dual-read/delete). Neither reached
    forever and `cutover()` would throw its precondition error even though the
    moving vnodes were fully replicated. Fixed by advancing the watermark for
    every entry consumed, moving or not; the moving-vnode filter now gates only
-   which entries get *applied* to target, not which advance the cursor.
+   which entries get _applied_ to target, not which advance the cursor.
 2. **Dual-read's "target-wins-if-present" rule resurrected deletes.** A
    target miss during the dual-read window is ambiguous between "target
    hasn't replicated this id yet" (fall through to `source`, correct) and
@@ -113,7 +113,7 @@ Protocol, in order:
    see §7) — it would make `catchUpVnodes` wait forever for a WAL tail that
    the snapshot, not the WAL, already accounts for.
 4. **Catch-up.** Target repeatedly calls `readCdcChanges(source, {
-   sinceSeq: appliedWatermark, tables })`, pages through as many calls as the
+sinceSeq: appliedWatermark, tables })`, pages through as many calls as the
    WAL tail requires (the prototype's `catchUpVnodes` loops until a page
    comes back short of `readCdcChanges`'s page limit), applies each entry
    belonging to a moving vnode (upsert on insert/update, delete on delete),
@@ -140,7 +140,7 @@ Protocol, in order:
 7. **Atomic directory flip.** The coordinator commits one new
    `VnodeDirectory` value with the moving vnode(s) reassigned. A logically
    single write (e.g. one KV put or one D1 row update) — there is no window
-   in the *source of truth* where a vnode has zero or two owners.
+   in the _source of truth_ where a vnode has zero or two owners.
 8. **Un-quiesce with forwarding.** `source` resumes accepting requests for
    the ceded vnode's keys but never re-originates a write for them — it
    forwards to `target` and returns target's result. `source` does **not**
@@ -206,7 +206,7 @@ The prototype's own dual-read test caught a real bug in an earlier draft: an
 assertion that only checked `merged.size === batch.length` (no duplicates,
 nothing dropped) passed even when the merge preferred **source's stale
 value**, because the mutated version still produced one entry per id — it
-just had the wrong content. Fixed by asserting the merged row's *content*
+just had the wrong content. Fixed by asserting the merged row's _content_
 equals target's post-forward value for a deliberately-diverged id (source
 still holding the pre-move body, target holding a forwarded update). A
 mutation check (swap the merge's preference order, confirm the test fails,
@@ -256,7 +256,7 @@ range") to a second shard, and asserts across five `describe` blocks:
   for all 200 ids.
 - **`applied-watermark protocol under interleaved traffic`** (1 test): the
   regression test for errata bug #1 — the log's last entry before quiesce is
-  an ordinary write to a *staying* vnode, not a moving one, and cutover's
+  an ordinary write to a _staying_ vnode, not a moving one, and cutover's
   `appliedWatermark === quiesceSeq` gate must still close.
 - **`catch-up paging`** (1 test): a WAL tail of 1,200 entries (past
   `readCdcChanges`'s 1,000-row page limit) is fully replayed by a single

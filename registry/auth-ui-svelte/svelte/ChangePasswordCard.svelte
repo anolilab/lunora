@@ -11,7 +11,7 @@
     const { actions, state: form } = controllerStore(createChangePasswordController);
 </script>
 
-<AuthCard title={t.changePassword}>
+<AuthCard headingLevel={2} title={t.changePassword}>
     <form
         class="lunora-auth-form"
         novalidate

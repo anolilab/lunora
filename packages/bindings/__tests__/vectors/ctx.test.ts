@@ -95,6 +95,312 @@ describe("createContextVectors", () => {
     });
 });
 
+describe("createContextVectors — namespace default (tenant isolation, plan 255)", () => {
+    it("the 1-arg form forwards `undefined` (no behaviour change)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.query("docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("query defaults to the constructor namespace when the input has none, for an index listed in shardedIndexNames", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-a" }));
+    });
+
+    it("query stays namespace-less for an index NOT in shardedIndexNames, even with a constructor namespace set", async () => {
+        expect.assertions(1);
+
+        // A namespace default applies only to indexes `shardedIndexNames`
+        // lists — `ctx.vectors` is one flat facade over every index, so a
+        // per-tenant instance's own shard key must not leak onto a query
+        // against a root-scoped index (that index's vectors were never
+        // written under any tenant namespace, so a scoped query there would
+        // silently find nothing).
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { global_docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("global_docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("an explicit input.namespace wins over the constructor default", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("docs", { namespace: "tenant-b", vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-b" }));
+    });
+
+    it("an explicit input.namespace works even for an index NOT in shardedIndexNames (override is unconditional)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { global_docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("global_docs", { namespace: "tenant-b", vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-b" }));
+    });
+
+    it("query throws when the root instance (no constructor namespace) targets a sharded index with no explicit namespace", async () => {
+        expect.assertions(2);
+
+        // No `namespace` in the constructor options = this DO instance is the
+        // root/default DO (no shard key). "docs" IS in `shardedIndexNames`, so
+        // there is no safe default and no override — a namespace-less query
+        // here would search every tenant's vectors (Vectorize indexes are
+        // account-global). This is the root-shard fail-open this plan closes.
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await expect(context.query("docs", { vector: [0.1] })).rejects.toThrow(/no shard key/);
+        expect(index.query).not.toHaveBeenCalled();
+    });
+
+    it("query from the root instance stays namespace-less for an index NOT in shardedIndexNames (no throw)", async () => {
+        expect.assertions(1);
+
+        // The root instance legitimately owns root-scoped (non-sharded)
+        // indexes — only a call against a SHARDED index is ambiguous enough
+        // to throw.
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { global_docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await context.query("global_docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("upsert/upsertNow default to the constructor namespace when the input has none, for a sharded index", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: undefined, namespace: "tenant-a", values: [5] }]);
+        expect(index.upsert).toHaveBeenNthCalledWith(2, [{ id: "b", metadata: undefined, namespace: "tenant-a", values: [2] }]);
+    });
+
+    it("upsert honors an explicit input.namespace over the constructor default", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsert("docs", { embed, id: "a", input: "hello", namespace: "tenant-b" });
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: "tenant-b", values: [5] }]);
+    });
+
+    it("upsert throws from the root instance against a sharded index with no explicit namespace", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello" })).rejects.toThrow(/no shard key/);
+    });
+
+    it("getByIds under a default namespace returns only the matching records for a sharded index (fails pre-fix: returns all)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        const records = await context.getByIds("docs", ["a", "b"]);
+
+        expect(records).toEqual([{ id: "a", metadata: undefined, namespace: "tenant-a", values: [1, 2] }]);
+    });
+
+    it("getByIds fails closed on a record with no namespace at all", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        const records = await context.getByIds("docs", ["a"]);
+
+        expect(records).toEqual([]);
+    });
+
+    it("getByIds with no default namespace passes every record through unfiltered", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        const records = await context.getByIds("docs", ["a", "b"]);
+
+        expect(records).toEqual([
+            { id: "a", metadata: undefined, namespace: "tenant-a", values: [1, 2] },
+            { id: "b", metadata: undefined, namespace: "tenant-b", values: [1, 2] },
+        ]);
+    });
+
+    it("getByIds accepts an explicit trailing namespace argument that wins over the constructor default (the @lunora/ai/rag facade path)", async () => {
+        expect.assertions(1);
+
+        // `@lunora/ai/rag`'s `RagVectors.getByIds` calls with a THIRD
+        // positional `namespace` argument — this must not be silently
+        // dropped, or RAG's own explicit namespace (its `effectiveNamespace`)
+        // never reaches Vectorize and its head-read always misses.
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        const records = await context.getByIds("docs", ["a"], "tenant-b");
+
+        expect(records).toEqual([{ id: "a", metadata: undefined, namespace: "tenant-b", values: [1, 2] }]);
+    });
+
+    it("getByIds throws from the root instance against a sharded index with no explicit namespace", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await expect(context.getByIds("docs", ["a"])).rejects.toThrow(/no shard key/);
+    });
+
+    it("deleteByIds under a default namespace only deletes the matching subset for a sharded index (fails pre-fix: deletes all)", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.deleteByIds("docs", ["a", "b"]);
+
+        expect(index.getByIds).toHaveBeenCalledWith(["a", "b"]);
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a"]);
+    });
+
+    it("deleteByIds under a default namespace is a no-op (skips the underlying delete) when nothing matches", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.deleteByIds("docs", ["a"]);
+
+        expect(index.deleteByIds).not.toHaveBeenCalled();
+    });
+
+    it("deleteByIds with no default namespace passes every id through unfiltered (no getByIds pre-read)", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.deleteByIds("docs", ["a", "b"]);
+
+        expect(index.getByIds).not.toHaveBeenCalled();
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a", "b"]);
+    });
+
+    it("deleteByIds accepts an explicit trailing namespace argument that wins over the constructor default (the @lunora/ai/rag facade path)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.deleteByIds("docs", ["a"], "tenant-b");
+
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a"]);
+    });
+
+    it("deleteByIds throws from the root instance against a sharded index with no explicit namespace", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await expect(context.deleteByIds("docs", ["a"])).rejects.toThrow(/no shard key/);
+        expect(index.getByIds).not.toHaveBeenCalled();
+    });
+});
+
 const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArray<string>][]; upserts: [string, unknown][] } => {
     const upserts: [string, unknown][] = [];
     const deletes: [string, ReadonlyArray<string>][] = [];

@@ -2,6 +2,7 @@ import type { FunctionReference, LunoraClient } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 import { mutation } from "./mutation";
 
@@ -115,11 +116,19 @@ const createAgentHandle = (client: LunoraClient, options: AgentOptions): AgentHa
     const threadStore = writable<AgentThreadRecord | undefined>();
     const statusStore = writable<AgentThreadStatus | undefined>();
 
-    const unsubscribe = client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
-        latestThread = value as AgentThreadRecord | undefined;
-        threadStore.set(latestThread);
-        statusStore.set(latestThread?.status);
-    });
+    // Client-only: a component's init can run server-side (this package pairs
+    // with `@lunora/nuxt`'s server rendering) with no `window`, and opening a
+    // live WS subscription there would fire during `renderToString` with no
+    // corresponding `onDestroy` to close it (SVELTE-01, mirrors the
+    // `presence.ts`/`agent-chat.ts` guard). Skip it server-side; `thread`/
+    // `status` stay at their inert initial values until the component hydrates.
+    const unsubscribe = isBrowser()
+        ? client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
+              latestThread = value as AgentThreadRecord | undefined;
+              threadStore.set(latestThread);
+              statusStore.set(latestThread?.status);
+          })
+        : (): void => undefined;
 
     const run = async (input: string, arguments_?: Record<string, unknown>): Promise<void> => {
         await runMutation.mutate({ input, threadKey, ...runArgs, ...arguments_ });

@@ -126,6 +126,60 @@ const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string
     return { queryCalls, store, vectors };
 };
 
+/**
+ * A stricter `RagVectors` double than {@link memoryVectors}, modeling
+ * `@lunora/bindings/vectors`'s real `createContextVectors` facade:
+ * `getByIds`/`deleteByIds` only return/delete a record when the caller's
+ * THIRD positional `namespace` argument matches the value the record was
+ * originally `upsert`ed under (id lookup alone is not enough — mirrors the
+ * real facade's client-side namespace filter, which does not trust the id).
+ * `memoryVectors()` ignores that third argument entirely, so it can't catch
+ * the bug this models: `createContextVectors` accepted `namespace` on
+ * `query`/`upsert` but silently dropped a third argument on
+ * `getByIds`/`deleteByIds` (plan 255) — since `@lunora/ai` doesn't depend on
+ * `@lunora/bindings`, this is the regression guard for `defineRag`'s OWN
+ * side of that contract: if `readHead`/`deleteChunkRange`/`hydrateFromStore`
+ * ever stopped passing their `effectiveNamespace` as that third argument,
+ * every assertion in the tests below would see an empty/no-op result instead
+ * of the expected hit.
+ */
+const namespaceStrictVectors = (): { store: Map<string, StoredVector>; vectors: RagVectors } => {
+    const store = new Map<string, StoredVector>();
+    const matches = (record: StoredVector, namespace: string | undefined): boolean => record.namespace === namespace;
+
+    const vectors: RagVectors = {
+        deleteByIds: async (_indexName, ids, namespace) => {
+            for (const id of ids) {
+                const record = store.get(id);
+
+                if (record && matches(record, namespace)) {
+                    store.delete(id);
+                }
+            }
+        },
+        getByIds: async (_indexName, ids, namespace) =>
+            ids.flatMap((id) => {
+                const record = store.get(id);
+
+                return record && matches(record, namespace) ? [{ id: record.id, metadata: record.metadata }] : [];
+            }),
+        query: () => {
+            throw new Error("namespaceStrictVectors: query is not used by these tests");
+        },
+        upsert: async (_indexName, input) => {
+            if (!input.embed) {
+                throw new TypeError("namespaceStrictVectors: upsert requires `embed`");
+            }
+
+            const values = await input.embed(input.input);
+
+            store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values });
+        },
+    };
+
+    return { store, vectors };
+};
+
 /** Wrap a real {@link bm25LexicalStore} to record its `index`/`remove`/`search` calls for assertions. */
 const recordingLexicalStore = (): {
     indexed: number[];
@@ -359,6 +413,59 @@ describe(defineRag, () => {
         await rag.remove({ id: "doc-1", namespace: "tenant-a" });
 
         expect([...store.keys()]).toStrictEqual(["tenant-b#doc-1#0"]);
+    });
+
+    // Regression tests for a real cross-package integration bug (plan 255):
+    // `@lunora/bindings/vectors`'s `createContextVectors` accepted `namespace`
+    // on `query`/`upsert` but silently dropped a third `namespace` argument on
+    // `getByIds`/`deleteByIds` — the exact shape `RagVectors.getByIds`/
+    // `deleteByIds` declare and `defineRag`'s `readHead`/`deleteChunkRange`
+    // call with. `memoryVectors()` above can't catch this: its own
+    // `getByIds`/`deleteByIds` ignore that third argument too, and its store
+    // is keyed by an already-namespace-prefixed id, so an id-only lookup still
+    // "works" there. `namespaceStrictVectors()` instead requires the third
+    // argument to match the record's stored namespace — modeling the real
+    // facade's client-side filter — so these tests fail loudly if `defineRag`
+    // ever stopped threading its `effectiveNamespace` through.
+    it("threads the namespace through readHead's getByIds so re-indexing unchanged content short-circuits", async () => {
+        expect.assertions(2);
+
+        const { vectors } = namespaceStrictVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ chunk: pipeChunker, index: "docs" });
+        const rag = docs(ctx);
+
+        await rag.index({ id: "doc-1", namespace: "tenant-a", text: "alpha | beta" });
+
+        const embedCallsAfterFirst = vi.mocked(embed).mock.calls.length;
+        const second = await rag.index({ id: "doc-1", namespace: "tenant-a", text: "alpha | beta" });
+
+        // If `readHead` didn't pass `namespace` as `getByIds`' third argument,
+        // the strict double would find no matching head record, `defineRag`
+        // would treat this as a brand-new document, and both `unchanged` and
+        // the (lack of) new embed calls below would fail.
+        expect(second).toStrictEqual({ chunks: 2, ids: ["tenant-a#doc-1#0", "tenant-a#doc-1#1"], unchanged: true });
+        expect(vi.mocked(embed)).toHaveBeenCalledTimes(embedCallsAfterFirst);
+    });
+
+    it("threads the namespace through deleteChunkRange's deleteByIds so remove() actually deletes", async () => {
+        expect.assertions(2);
+
+        const { store, vectors } = namespaceStrictVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ chunk: pipeChunker, index: "docs" });
+        const rag = docs(ctx);
+
+        await rag.index({ id: "doc-1", namespace: "tenant-a", text: "one | two | three" });
+
+        expect(store.size).toBe(3);
+
+        await rag.remove({ id: "doc-1", namespace: "tenant-a" });
+
+        // If `deleteChunkRange` didn't pass `namespace` as `deleteByIds`' third
+        // argument, the strict double would refuse every delete (namespace
+        // mismatch against the stored record) and this would still be 3.
+        expect(store.size).toBe(0);
     });
 
     it("short-circuits re-indexing unchanged content via the stored hash", async () => {

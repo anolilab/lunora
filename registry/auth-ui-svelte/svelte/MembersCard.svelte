@@ -34,7 +34,7 @@
 </script>
 
 {#if enabled}
-    <AuthCard title={t.members}>
+    <AuthCard headingLevel={2} title={t.members}>
         <FormBanner error={$res.error} />
 
         {#if $res.loading}

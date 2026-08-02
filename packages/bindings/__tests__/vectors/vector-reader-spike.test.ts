@@ -339,13 +339,15 @@ describe("plan 238 spike: .withVectorIndex() prototype over the real createVecto
         // own filter predicate filters — it exercises no prototype code at
         // all, and specifically not stage 3.)
         const leakyVectors = {
-            query: async () => ({
-                count: 2,
-                matches: [
-                    { id: "a-1", metadata: undefined, namespace: "tenant-a", score: 1 },
-                    { id: "b-1", metadata: undefined, namespace: "tenant-b", score: 1 },
-                ],
-            }),
+            query: async () => {
+                return {
+                    count: 2,
+                    matches: [
+                        { id: "a-1", metadata: undefined, namespace: "tenant-a", score: 1 },
+                        { id: "b-1", metadata: undefined, namespace: "tenant-b", score: 1 },
+                    ],
+                };
+            },
         } as unknown as ReturnType<typeof createVectors>;
 
         const store = createPolicyAwareStore([

@@ -45,7 +45,7 @@ const OrganizationsCard = (): JSX.Element => {
     };
 
     return (
-        <AuthCard title={t.organizations}>
+        <AuthCard headingLevel={2} title={t.organizations}>
             <FormBanner error={state.error} />
             <Show
                 fallback={
@@ -153,7 +153,7 @@ const MembersCard = (): JSX.Element => {
     };
 
     return (
-        <AuthCard title={t.members}>
+        <AuthCard headingLevel={2} title={t.members}>
             <FormBanner error={state.error} />
 
             <Show
@@ -275,7 +275,7 @@ const OrganizationSettingsCard = (props: OrganizationSettingsCardProps = {}): JS
     }
 
     return (
-        <AuthCard title={t.organizationSettings}>
+        <AuthCard headingLevel={2} title={t.organizationSettings}>
             <Show fallback={<p class="lunora-auth-card__description">…</p>} when={!state.loading}>
                 <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                     <FormBanner error={state.formError} success={state.successMessage} />

@@ -135,6 +135,27 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
             expect(results.map((document) => document["title"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["a", "b"]);
         });
 
+        it("prefix-matches a final token ending in an astral (surrogate-pair) character (plan 272)", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            // U+10437 (𐐷, DESERET SMALL LETTER YEE) is a surrogate pair in
+            // UTF-16 — the exact shape `searchTermRange` must derive a
+            // code-point-correct upper bound for, not a code-unit one.
+            const astral = String.fromCodePoint(0x1_04_37);
+
+            await writer.insert("docs", { body: `${astral}ord some other text`, channel: "x", title: "a" });
+            await writer.insert("docs", { body: "unrelated document", channel: "x", title: "b" });
+
+            const results = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", astral))
+                .collect();
+
+            expect(results.map((document) => document["title"])).toStrictEqual(["a"]);
+        });
+
         it("narrows by an .eq() filter field", async () => {
             expect.assertions(1);
 

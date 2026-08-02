@@ -70,3 +70,96 @@ describe("defineSchema validates .index() fields", () => {
         ).not.toThrow();
     });
 });
+
+/**
+ * Plan 258 §4/§5 S3 — rank/geo declarations feed the exact same
+ * `indexFieldsFromSchema` map the mask guard trusts, so a typo'd `sortBy`/
+ * `partitionBy`/`field` column must be caught here rather than surfacing as a
+ * silent gap in that guard (or a late SQLite error). Duplicate-name detection
+ * is per KIND — a name reused ACROSS kinds (regular vs. rank vs. geo) is
+ * legal (the engine resolves each in its own namespace), but a duplicate
+ * WITHIN one kind is rejected exactly like a duplicate regular index name.
+ */
+describe("defineSchema validates .rankIndex() and .geoIndex() fields", () => {
+    it("throws for a rankIndex sortBy field absent from the table's shape", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                posts: defineTable({ title: v.string() }).rankIndex("by_score", { sortBy: [{ field: "score" as never }] }),
+            }),
+        ).toThrow(/table "posts" index "by_score" names column "score" which is not in the table's shape/);
+    });
+
+    it("throws for a rankIndex partitionBy field absent from the table's shape", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                posts: defineTable({ score: v.number(), title: v.string() }).rankIndex("by_score", {
+                    partitionBy: ["author" as never],
+                    sortBy: [{ field: "score" }],
+                }),
+            }),
+        ).toThrow(/table "posts" index "by_score" names column "author" which is not in the table's shape/);
+    });
+
+    it("throws for a geoIndex field absent from the table's shape", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                places: defineTable({ title: v.string() }).geoIndex("by_loc", { field: "coords" as never }),
+            }),
+        ).toThrow(/table "places" index "by_loc" names column "coords" which is not in the table's shape/);
+    });
+
+    it("accepts rankIndex/geoIndex fields that ARE in the table's shape", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                places: defineTable({ coords: v.geoPoint(), score: v.number() })
+                    .rankIndex("by_score", { sortBy: [{ field: "score" }] })
+                    .geoIndex("by_loc", { field: "coords" }),
+            }),
+        ).not.toThrow();
+    });
+
+    it("throws for a duplicate rank index name within a table", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                posts: defineTable({ score: v.number(), views: v.number() })
+                    .rankIndex("by_score", { sortBy: [{ field: "score" }] })
+                    .rankIndex("by_score", { sortBy: [{ field: "views" }] }),
+            }),
+        ).toThrow(/table "posts" declares rank index "by_score" more than once/);
+    });
+
+    it("throws for a duplicate geo index name within a table", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                places: defineTable({ coordsA: v.geoPoint(), coordsB: v.geoPoint() })
+                    .geoIndex("by_loc", { field: "coordsA" })
+                    .geoIndex("by_loc", { field: "coordsB" }),
+            }),
+        ).toThrow(/table "places" declares geo index "by_loc" more than once/);
+    });
+
+    it("does NOT reject the SAME name reused across kinds — regular, rank, and geo namespaces are independent", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                places: defineTable({ coords: v.geoPoint(), homeAddress: v.string(), score: v.number() })
+                    .index("byLoc", ["homeAddress"])
+                    .rankIndex("byLoc", { sortBy: [{ field: "score" }] })
+                    .geoIndex("byLoc", { field: "coords" }),
+            }),
+        ).not.toThrow();
+    });
+});

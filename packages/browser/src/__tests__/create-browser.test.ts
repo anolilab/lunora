@@ -574,14 +574,10 @@ describe("createBrowser", () => {
         });
     });
 
-    // Real `env.BROWSER` / workerd-backed coverage. workerd + the Browser
-    // Rendering binding can't run in this sandbox (see MEMORY: workerd-sandbox-limit),
-    // so this block only runs in CI where an integration harness can provide them.
-    describe.skipIf(!process.env.CI)("live playwright (CI-only)", () => {
-        it("is a placeholder for an integration harness against a real env.BROWSER", () => {
-            expect.assertions(1);
-
-            expect(process.env.CI).toBeDefined();
-        });
-    });
+    // Real `env.BROWSER` coverage is deliberately absent: workerd + the Browser
+    // Rendering binding require Cloudflare's edge (see vitest.config.ts), and a
+    // local harness would only re-mock what the fake-double suite above already
+    // covers. Tracked as a todo so the gap is visible in the run summary
+    // instead of reading as a green "live playwright" block.
+    it.todo("integration harness against a real env.BROWSER (needs a deployed Worker; model on packages/hyperdrive/__tests__/create-hyperdrive.test.ts)");
 });

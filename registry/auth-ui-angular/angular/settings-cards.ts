@@ -32,7 +32,7 @@ import { injectAuthUIContext } from "./provider";
     selector: "lunora-profile-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.profile">
+        <lunora-auth-card [title]="t.profile" [headingLevel]="2">
             <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                 <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
                 <lunora-auth-field
@@ -75,7 +75,7 @@ class ProfileCardComponent implements OnInit {
     selector: "lunora-change-email-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.changeEmail">
+        <lunora-auth-card [title]="t.changeEmail" [headingLevel]="2">
             <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                 <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
                 <lunora-auth-field
@@ -106,7 +106,7 @@ class ChangeEmailCardComponent {
     selector: "lunora-change-password-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.changePassword">
+        <lunora-auth-card [title]="t.changePassword" [headingLevel]="2">
             <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                 <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
                 <lunora-auth-field
@@ -155,7 +155,7 @@ class ChangePasswordCardComponent {
     selector: "lunora-delete-account-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.deleteAccount" [description]="t.deleteAccountWarning">
+        <lunora-auth-card [title]="t.deleteAccount" [description]="t.deleteAccountWarning" [headingLevel]="2">
             <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                 <lunora-auth-banner [error]="state().formError" />
                 <lunora-auth-field
@@ -186,7 +186,7 @@ class DeleteAccountCardComponent {
     selector: "lunora-sessions-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.sessions">
+        <lunora-auth-card [title]="t.sessions" [headingLevel]="2">
             <lunora-auth-banner [error]="state().error" />
             @if (state().loading) {
                 <p class="lunora-auth-card__description">…</p>
@@ -235,7 +235,7 @@ class SessionsCardComponent {
     standalone: true,
     template: `
         @if (enabled()) {
-            <lunora-auth-card [title]="t.passkeys">
+            <lunora-auth-card [title]="t.passkeys" [headingLevel]="2">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
                     <p class="lunora-auth-card__description">…</p>

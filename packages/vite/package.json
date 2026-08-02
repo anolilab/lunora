@@ -62,7 +62,7 @@
         "@cloudflare/vite-plugin": "catalog:vite",
         "@lunora/codegen": "1.0.0-alpha.82",
         "@lunora/config": "1.0.0-alpha.107",
-        "@lunora/errors": "1.0.0-alpha.10",
+        "@lunora/errors": "1.0.0-alpha.11",
         "@visulima/vite-overlay": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"

@@ -15,6 +15,7 @@ import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
 import { assertOk, mapAuthError } from "./map-error";
+import { mergeQuery } from "./redirect-to";
 import { createStore } from "./store";
 import type { AuthInvitationDetail, Controller, FlowStatus } from "./types";
 
@@ -94,13 +95,17 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
                  * somewhere else entirely.
                  */
                 const invited = store.get().invitation?.email;
-                const target = new URLSearchParams({ redirectTo: currentPath() });
+                const parameters: Record<string, string> = { redirectTo: currentPath() };
 
                 if (invited !== undefined && invited !== "") {
-                    target.set("email", invited);
+                    parameters.email = invited;
                 }
 
-                context.nav.replace(`${context.redirects.signIn}?${target.toString()}`);
+                // Merged rather than appended: an app whose `redirects.signIn`
+                // already carries a query (e.g. `/auth?tab=sign-in`, common when
+                // hosting every screen on one `AuthView` route) would otherwise
+                // get a mangled second `?` and lose the invitation on sign-in.
+                context.nav.replace(mergeQuery(context.redirects.signIn, parameters));
 
                 return;
             }

@@ -2842,10 +2842,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         );
                     },
                     filter(predicate) {
-                        if (!stage) {
-                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
-                        }
-
+                        // Chainable on the bare reader (like `order()` below): RLS
+                        // installs a predicate at query() time, BEFORE the caller
+                        // can stage `.withSearchIndex()`. `searchFilters` is
+                        // scoped to the whole query() call, so a pre-stage
+                        // predicate carries into the search stage; a non-search
+                        // chain still surfaces LEGACY_READER_ERROR at its
+                        // terminal.
                         searchFilters.push(predicate);
 
                         return reader;

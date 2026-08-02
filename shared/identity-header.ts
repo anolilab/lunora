@@ -142,4 +142,64 @@ const decodeUserIdHeader = (raw: null | string | undefined): string | undefined 
     }
 };
 
-export { decodeIdentityHeader, decodeUserIdHeader, encodeIdentityHeader, encodeUserIdHeader, isByteStringSafe };
+/**
+ * Structural view of a socket that can receive an expired-credential drop —
+ * satisfied by both a hibernatable `WebSocket` (cast structurally, as
+ * `@lunora/agent`'s voice DO does) and `@lunora/do`'s `ShardSocketLike`
+ * (which carries the same two members plus more). `send` takes a string
+ * because the drop only ever sends a JSON error frame, never binary.
+ */
+interface ExpirableSocket {
+    close?: (code?: number, reason?: string) => void;
+    send: (data: string) => void;
+}
+
+/**
+ * Parse the `x-lunora-identity-exp` header (epoch ms) the runtime forwards on
+ * a WebSocket upgrade alongside `x-lunora-identity`/`x-lunora-userid`. A
+ * malformed value — absent, non-numeric, zero, or negative — is ignored (the
+ * socket simply never auto-expires); `Number(null)` is `0`, so an absent
+ * header takes the same "ignored" path as a garbled one without a separate
+ * null check.
+ */
+const decodeIdentityExpiryHeader = (raw: null | string): number | undefined => {
+    const parsed = Number(raw);
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+/**
+ * Whether an `expiresAt` (epoch ms, from {@link decodeIdentityExpiryHeader})
+ * is now past. `undefined` — no expiry was stamped on the socket — is never
+ * expired, so a socket whose identity declared no expiry keeps flowing.
+ */
+const isIdentityExpired = (expiresAt: number | undefined): boolean => typeof expiresAt === "number" && Date.now() >= expiresAt;
+
+/**
+ * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
+ * the client distinguishes an expired-credential drop from an ordinary one
+ * and refreshes before reconnecting, instead of treating it as a generic
+ * error or a silent disconnect. Best-effort: a throw (the socket is already
+ * gone) is swallowed — this must never escape a hibernation message handler,
+ * where a thrown handler is fatal to the socket.
+ */
+const dropExpiredCredentialSocket = (ws: ExpirableSocket): void => {
+    try {
+        ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
+        ws.close?.(4001, "token_expired");
+    } catch {
+        /* socket already gone */
+    }
+};
+
+export {
+    decodeIdentityExpiryHeader,
+    decodeIdentityHeader,
+    decodeUserIdHeader,
+    dropExpiredCredentialSocket,
+    encodeIdentityHeader,
+    encodeUserIdHeader,
+    isByteStringSafe,
+    isIdentityExpired,
+};
+export type { ExpirableSocket };

@@ -18,6 +18,7 @@ import { CellDetailDialog } from "./grid-features";
 import { useBackRelations } from "./hooks/use-back-relations";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { useDataViewPreferences } from "./hooks/use-data-view-preferences";
+import type { InsertBatchOutcome } from "./hooks/use-generate-rows";
 import { useGenerateRows } from "./hooks/use-generate-rows";
 import { useRowInspection } from "./hooks/use-row-inspection";
 import { RowDetailDrawer } from "./row-detail";
@@ -336,7 +337,7 @@ export const DataBrowser = ({
         }
     };
 
-    const onInsertGeneratedRows = (rows: ReadonlyArray<Record<string, unknown>>): Promise<string | undefined> => insertBatch(rows, closeGenerateDialog);
+    const onInsertGeneratedRows = (rows: ReadonlyArray<Record<string, unknown>>): Promise<InsertBatchOutcome> => insertBatch(rows, closeGenerateDialog);
 
     // Follow a `v.id` ref cell. Targets in another storage tier (a `.global()` D1
     // table) can't be read from this shard, so route those to the global tier via

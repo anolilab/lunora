@@ -43,6 +43,7 @@ interface AppendAuthAuditEntry {
     event: string;
     ip?: string;
     outcome: AuthAuditOutcome;
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }
@@ -283,6 +284,7 @@ interface AuthAuditEntry {
     ip?: string;
     outcome: AuthAuditOutcome;
     seq: number;
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }
@@ -291,7 +293,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
 ```
 
 ### `AuthAuditHookConfig` (interface)
@@ -1039,6 +1041,7 @@ interface AppendAuthAuditEntry {
     event: string;
     ip?: string;
     outcome: AuthAuditOutcome;
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }
@@ -1064,6 +1067,7 @@ interface AuthAuditEntry {
     ip?: string;
     outcome: AuthAuditOutcome;
     seq: number;
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }
@@ -1072,7 +1076,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
 ```
 
 ### `AuthAuditOutcome` (type)

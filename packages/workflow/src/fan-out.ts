@@ -24,6 +24,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { NonRetryableError } from "./errors";
 import type {
     BranchCompensationParams,
@@ -37,9 +38,6 @@ import type {
 
 /** Hard cap on branches per `ctx.parallel` call — auto-scale, never silently spawn unbounded DOs. */
 const MAX_BRANCHES = 100;
-
-/** The params key the parent injects so a child knows to signal completion back. Stripped before the user handler sees `ctx.params`. */
-const BRANCH_MARKER_KEY = "__lunoraBranch";
 
 /** Durable-step name prefix for a branch/spawn create. */
 const SPAWN_STEP_PREFIX = "lunora:spawn:";
@@ -314,8 +312,8 @@ const createSpawn =
     async (workflow: string, params?: Record<string, unknown>, options?: { id?: string }): Promise<WorkflowInstanceLike> => {
         // Reject a caller-supplied reserved branch marker at the trust boundary —
         // only `createParallel`'s internal injection may set `__lunoraBranch`.
-        if (params !== undefined && Object.hasOwn(params, BRANCH_MARKER_KEY)) {
-            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
+        if (hasBranchMarker(params)) {
+            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`);
         }
 
         const childId = deps.nextChildId(options?.id);
@@ -434,7 +432,6 @@ const signalBranchParentSafe = async (
 export type { BranchMarker, BranchOutcome, FanOutDeps, WorkflowBindingResolver };
 export {
     branch,
-    BRANCH_MARKER_KEY,
     createParallel,
     createSpawn,
     errorOutcome,

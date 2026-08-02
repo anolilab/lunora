@@ -269,6 +269,8 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
     }
 };
 
+/* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional nested bullet list; the `discoverMaskHasNonLiteralPolicy` back-tick reference isn't a credential */
+
 /**
  * Fail closed (plan 208, Phase 1) when a `defineShape` replicates a table any
  * `.use(mask(...))` chain masks a column on. A shape runs no procedure, so
@@ -304,13 +306,14 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  *   fires unconditionally whenever the project declares both such a call and
  *   at least one shape.
  */
+/* eslint-enable jsdoc/check-indentation, no-secrets/no-secrets */
 const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: MaskMetadataIR, hasNonLiteralMaskPolicy: boolean): void => {
     if (hasNonLiteralMaskPolicy && shapes.length > 0) {
         const shapeList = shapes.map((shape) => `"${shape.exportName}"`).join(", ");
 
         throw new LunoraError(
             "MASK_UNSUPPORTED",
-            `This project declares a \`mask(...)\` policy whose argument isn't a plain object literal (e.g. \`mask(sharedPolicies)\` referencing a hoisted variable), so codegen can't enumerate which columns it masks. Because the project also declares replication shape(s) (${shapeList}), codegen can't verify none of them replicate a table that policy masks — inline the mask(...) policies object literal so codegen can verify it, or remove the affected shape(s).`,
+            `This project declares a \`mask(...)\` policy whose argument isn't a plain object literal (e.g. \`mask(sharedPolicies)\` referencing a hoisted variable), or contains a spread (\`...shared\`) or computed key (\`[name]:\`) codegen can't enumerate, so codegen can't tell which columns it masks. Because the project also declares replication shape(s) (${shapeList}), codegen can't verify none of them replicate a table that policy masks — inline every table and column as literal keys so codegen can verify it, or remove the affected shape(s).`,
             { status: 422 },
         );
     }
@@ -628,9 +631,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // before it ships rather than replicate a masked column raw. Unconditional
     // (not gated behind `lint`), unlike the advisories below. Also covers the
     // two cases codegen can't prove safe rather than prove unsafe — a shape's
-    // non-literal `table` and a mask() call's non-literal `policies` — via
-    // `discoverMaskHasNonLiteralPolicy`; see `assertNoMaskedShapeTable`'s
-    // docblock.
+    // non-literal `table` and a mask() call's non-literal `policies` — see
+    // eslint-disable-next-line no-secrets/no-secrets -- false positive: this is a function name referenced in a comment, not a secret.
+    // `discoverMaskHasNonLiteralPolicy` and `assertNoMaskedShapeTable`'s docblock.
     assertNoMaskedShapeTable(shapes, maskMetadata, discoverMaskHasNonLiteralPolicy(project, lunoraDirectory));
 
     // Read-only storage access-rule metadata (the studio's access-rules view),

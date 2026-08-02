@@ -15,7 +15,9 @@
  * iterated via `.toArray()` / `.one()`). `rows_written` is always 0 in this
  * module; callers that know a DML statement affected rows can pass the count
  * explicitly. The tracked set is capped at {@link QUERY_METRICS_MAX_STATEMENTS}
- * entries — new statements beyond the cap are silently dropped.
+ * entries — new statements beyond the cap are refused (see `admitStatement`),
+ * protecting the already-tracked leaderboard from a flood of one-off shapes;
+ * `readQueryInsights`'s `capped` is the read-side signal for this.
  */
 
 import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
@@ -69,10 +71,11 @@ const LATENCY_BUCKET_EDGES = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 5000] as
 const QUERY_METRICS_MAX_SQL_LEN = 512;
 
 /**
- * Maximum distinct normalised statements tracked.  Entries beyond this cap
- * are silently dropped to prevent unbounded table growth when ad-hoc SQL
- * (e.g. DDL migrations, dynamic query builders) generates many distinct
- * statement shapes.
+ * Maximum distinct normalised statements tracked. Entries beyond this cap
+ * are refused (not evicted — see `admitStatement`) to prevent unbounded table
+ * growth when ad-hoc SQL (e.g. DDL migrations, dynamic query builders)
+ * generates many distinct statement shapes; already-tracked statements keep
+ * accumulating past the cap.
  */
 const QUERY_METRICS_MAX_STATEMENTS = 500;
 
@@ -264,7 +267,15 @@ const pruneQueryBuckets = (sql: SqlExec, now: number): void => {
  * a failure here must never break the lifetime counters, which are the older
  * and more load-bearing of the two.
  */
-const recordQueryBucket = (sql: SqlExec, normalized: string, durationMs: number, rowsRead: number, rowsWritten: number, now: number, execCount: number = 1): void => {
+const recordQueryBucket = (
+    sql: SqlExec,
+    normalized: string,
+    durationMs: number,
+    rowsRead: number,
+    rowsWritten: number,
+    now: number,
+    execCount: number = 1,
+): void => {
     try {
         ensureQueryBucketsTable(sql);
 
@@ -473,6 +484,13 @@ const knownStatementsFor = (sql: SqlExec): Set<string> => {
  * first-sight one pays one indexed PK lookup to tell "already tracked" from
  * "genuinely new", and only a genuinely new statement reaches the actual
  * `COUNT(*)` gate — the rare case once the leaderboard has warmed up.
+ *
+ * At the cap, a brand-new statement is refused rather than evicting an
+ * existing one — protecting the incumbent leaderboard from a flood of
+ * one-off statement shapes (ad-hoc SQL, a dynamic query builder) is the
+ * reason this cap exists, so a flood must not be able to trade away the
+ * app's own tracked statements. `readQueryInsights`'s `capped` is the
+ * read-side signal for this.
  */
 const admitStatement = (sql: SqlExec, normalized: string): boolean => {
     const known = knownStatementsFor(sql);
@@ -481,7 +499,8 @@ const admitStatement = (sql: SqlExec, normalized: string): boolean => {
         return true;
     }
 
-    const alreadyTracked = runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${QUERY_METRICS_TABLE}" WHERE normalized_sql = ? LIMIT 1`, normalized).toArray().length > 0;
+    const alreadyTracked =
+        runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${QUERY_METRICS_TABLE}" WHERE normalized_sql = ? LIMIT 1`, normalized).toArray().length > 0;
 
     if (alreadyTracked) {
         known.add(normalized);

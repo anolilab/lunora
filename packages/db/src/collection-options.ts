@@ -521,6 +521,36 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     // starts (while `emit` is undefined) is applied once sync begins.
     let scopedArgs: Record<string, unknown> | undefined;
 
+    // The watermark from the MOST RECENT `onCheckpoint` call, for the `list`
+    // path — consumed (read, then cleared) by the very next `onRows` call,
+    // never accumulated or left sticky. Two failure modes a sticky/`Math.max`
+    // design hits, both closed by "consume once, per frame":
+    //
+    //  1. A frame-carried watermark of exactly `0` (every socket announces a
+    //     `clientId` unconditionally, and a fresh `__client_watermark` row
+    //     reads back `0`, not "no row" — see `readClientWatermark`/
+    //     `socketClientWatermark`) is a legitimately DEFINED number. `0 ?? X`
+    //     never evaluates `X` — a sticky `frameWatermark` pinned at `0` by the
+    //     very first frame would disable the compensator fallback FOREVER,
+    //     for every later write, because `0` reads as "already have an
+    //     authoritative answer" instead of "nothing confirmed yet".
+    //  2. A demoted leader's follower-mirror `onRows` (fed by the leader's
+    //     `subscription-data` cross-tab broadcast, which deliberately omits
+    //     `lastMutationId` — plan 266 S3's clientId-scoping) would otherwise
+    //     keep resolving against a STALE value left over from before
+    //     demotion, silently wrong, instead of falling back to this
+    //     follower's own `confirmedMutationWatermark` for its own
+    //     HTTP-RPC-issued writes.
+    //
+    // Both are fixed by scoping the watermark to the ONE `onRows` call it was
+    // reported for: `onCheckpoint` sets it, the matching `onRows` reads
+    // (falling back only when nothing arrived for THIS frame) and clears it,
+    // so a frame with no watermark of its own (an unstamped delta from an
+    // un-upgraded server, or a follower's data broadcast) always sees
+    // `undefined` and defers to the compensator — never a leftover value from
+    // an unrelated earlier frame.
+    let pendingFrameWatermark: number | undefined;
+
     // Open the underlying sync source — a full-table `list` query subscription or
     // a replication-`shape` poke subscription — with one uniform callback shape.
     // `onReady` is invoked on the first rowset so the collection leaves `loading`.
@@ -531,16 +561,24 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             emit?.(toMap(data as TRow[], getKey));
             onReady?.();
 
-            // The shape path resolves the registry from the poke `checkpoint`,
-            // and the list path resolves it from the `onCheckpoint` watermark a
-            // `settled` frame forwards (both wired below). A `list` *data* frame
-            // carries no per-frame watermark, so advance from the client's
-            // server-confirmed custom-mutator watermark (the push-ack stream) as
-            // synced rows land — a `bindMutators` optimistic overlay then drops
-            // exactly when the server rows arrive instead of `awaitMutationId`
-            // hanging forever after the write is accepted.
+            // The shape path resolves the registry from the poke `checkpoint`
+            // (wired below). The list path prefers `pendingFrameWatermark` —
+            // set by the `onCheckpoint` call THIS SAME frame fired
+            // immediately beforehand (a `settled` frame, or a `data`/`delta`
+            // frame's own `lastMutationId`; `onCheckpoint` always fires
+            // before `onRows` for a frame that carries both — see
+            // `handleDataMessage`) — reflecting what THIS frame's rows
+            // actually are. Only when nothing arrived for THIS frame (an
+            // un-upgraded server's unstamped frame, or a follower's
+            // cross-tab data broadcast, which never carries one) does it
+            // fall back to the client's provisional server-confirmed
+            // custom-mutator watermark (the push-ack stream) — a
+            // `bindMutators` optimistic overlay then drops once its
+            // threshold is reached instead of `awaitMutationId` hanging
+            // forever after the write is accepted.
             if (options.shape === undefined) {
-                checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark(options.shardKey) });
+                checkpoints.resolve({ mutationId: pendingFrameWatermark ?? options.client.confirmedMutationWatermark(options.shardKey) });
+                pendingFrameWatermark = undefined;
             }
         };
         const onError = (error: SubscriptionError): void => onErrorHandler?.(error);
@@ -548,8 +586,13 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         // Advance the registry as the source syncs, so a mutator runtime can drop
         // optimistic overlays once the server's rows (or a `settled` no-change
         // acknowledgement) have landed. Both paths forward the same watermark
-        // shape, so the handler is identical.
+        // shape, so the handler is identical. Also records the watermark
+        // `onRows`'s list-path compensator above consumes.
         const onCheckpoint = (watermark: { checkpoint?: number; mutationId?: number }): void => {
+            if (watermark.mutationId !== undefined) {
+                pendingFrameWatermark = watermark.mutationId;
+            }
+
             checkpoints.resolve(watermark);
         };
 

@@ -1,14 +1,18 @@
 "use client";
 
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { signInAnonymously } from "../core/anonymous";
+import { createBackupCodeSignInController } from "../core/backup-codes";
+import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
 import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
+import { createResetPasswordOtpController } from "../core/reset-password-otp";
 import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
@@ -57,7 +61,7 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
     const lastUsed = readLastLoginMethod();
 
     return (
-        <AuthCard footer={<AuthLink href={signUpHref}>{t.noAccount}</AuthLink>} title={t.signIn}>
+        <AuthCard footer={context.signUp ? <AuthLink href={signUpHref}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
             <SocialButtons
                 lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
                 onSelect={(provider) => {
@@ -119,10 +123,18 @@ interface SignUpCardProps {
     signInHref?: string;
 }
 
-const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactElement => {
+const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactElement | null => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = useController(createSignUpController);
+
+    // The server can close self-serve sign-up (`emailAndPassword.disableSignUp`).
+    // Mirrors the plugin-gated cards below: mounted directly, this card renders
+    // nothing rather than a form that will fail on submit; `AuthView`'s route
+    // falls back to the sign-in card instead of landing on a blank page.
+    if (!context.signUp) {
+        return null;
+    }
 
     return (
         <AuthCard footer={<AuthLink href={signInHref}>{t.haveAccount}</AuthLink>} title={t.signUp}>
@@ -219,18 +231,90 @@ const ForgotPasswordCard = ({ resetPath, signInHref = "/sign-in" }: ForgotPasswo
 };
 
 interface ResetPasswordCardProps {
-    /** The reset token from the URL (`?token=...`). */
+    /** Defaults to `?token=` from the URL. */
     token?: string;
 }
 
 const ResetPasswordCard = ({ token }: ResetPasswordCardProps = {}): ReactElement => {
     const { localization: t } = useAuthUI();
-    const [state, actions] = useController((context) => createResetPasswordController(context, { token }), [token]);
+    const resolved = token ?? queryParameter("token");
+    const [state, actions] = useController((context) => createResetPasswordController(context, { token: resolved }), [resolved]);
 
     return (
         <AuthCard title={t.resetPassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
+                <Field
+                    autoComplete="new-password"
+                    field={state.fields.password}
+                    label={t.passwordLabel}
+                    name="password"
+                    onBlur={() => {
+                        actions.blur("password");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("password", value);
+                    }}
+                    type="password"
+                />
+                <Field
+                    autoComplete="new-password"
+                    field={state.fields.confirmPassword}
+                    label={t.confirmPasswordLabel}
+                    name="confirmPassword"
+                    onBlur={() => {
+                        actions.blur("confirmPassword");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("confirmPassword", value);
+                    }}
+                    type="password"
+                />
+                <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
+            </form>
+        </AuthCard>
+    );
+};
+
+/**
+ * Redeems an emailed one-time code instead of a link — for apps that set
+ * `forgotPassword: { method: "otp" }`. Unlike {@link ResetPasswordCard}, the
+ * email address is a field rather than something carried from the previous
+ * screen: a code can legitimately be redeemed from a fresh tab.
+ */
+const ResetPasswordOtpCard = (): ReactElement => {
+    const { localization: t } = useAuthUI();
+    const [state, actions] = useController(createResetPasswordOtpController);
+
+    return (
+        <AuthCard description={t.resetPasswordOtpDescription} title={t.resetPassword}>
+            <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                <FormBanner error={state.formError} success={state.successMessage} />
+                <Field
+                    autoComplete="email"
+                    field={state.fields.email}
+                    label={t.emailLabel}
+                    name="email"
+                    onBlur={() => {
+                        actions.blur("email");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("email", value);
+                    }}
+                    type="email"
+                />
+                <Field
+                    autoComplete="one-time-code"
+                    field={state.fields.otp}
+                    label={t.codeLabel}
+                    name="otp"
+                    onBlur={() => {
+                        actions.blur("otp");
+                    }}
+                    onChange={(value) => {
+                        actions.setField("otp", value);
+                    }}
+                />
                 <Field
                     autoComplete="new-password"
                     field={state.fields.password}
@@ -368,13 +452,66 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController((context_) => createTwoFactorVerifyController(context_, { method, trustDevice }), [method, trustDevice]);
+    const [backupState, backupActions] = useController((context_) => createBackupCodeSignInController(context_, { trustDevice }), [trustDevice]);
+    // Both controllers are always live — a form's live session-mutating submit
+    // must not depend on which mode happened to be showing when it was called.
+    const [useBackupCode, setUseBackupCode] = useState(false);
 
     if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
         return null;
     }
 
+    if (useBackupCode) {
+        return (
+            <AuthCard
+                footer={
+                    <button
+                        className="lunora-auth-link"
+                        onClick={() => {
+                            setUseBackupCode(false);
+                        }}
+                        type="button"
+                    >
+                        {t.twoFactorUseAuthenticator}
+                    </button>
+                }
+                title={t.twoFactor}
+            >
+                <form className="lunora-auth-form" noValidate onSubmit={onSubmit(backupActions.submit)}>
+                    <FormBanner error={backupState.formError} />
+                    <Field
+                        autoComplete="one-time-code"
+                        field={backupState.fields.code}
+                        label={t.backupCodeLabel}
+                        name="code"
+                        onBlur={() => {
+                            backupActions.blur("code");
+                        }}
+                        onChange={(value) => {
+                            backupActions.setField("code", value);
+                        }}
+                    />
+                    <SubmitButton pending={backupState.status === "submitting"}>{t.twoFactor}</SubmitButton>
+                </form>
+            </AuthCard>
+        );
+    }
+
     return (
-        <AuthCard title={t.twoFactor}>
+        <AuthCard
+            footer={
+                <button
+                    className="lunora-auth-link"
+                    onClick={() => {
+                        setUseBackupCode(true);
+                    }}
+                    type="button"
+                >
+                    {t.backupCodeSignIn}
+                </button>
+            }
+            title={t.twoFactor}
+        >
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
                 <Field
@@ -396,4 +533,4 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
 };
 
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps };
-export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard };
+export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, ResetPasswordOtpCard, SignInCard, SignUpCard, TwoFactorCard };

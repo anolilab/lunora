@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import createAgentContext from "../src/create-agent-context";
-import type { AgentFunctionReference } from "../src/types";
+import type { AgentFunctionReference, AgentRunInput } from "../src/types";
 
 const MISSING_BINDING_PATTERN = /AGENT_SUPPORT/u;
+const BRANCH_MARKER_PATTERN = /reserved workflow branch-marker key/u;
 
 const fakeBinding = (): {
     binding: {
@@ -72,6 +73,22 @@ describe(createAgentContext, () => {
         const agents = createAgentContext({}, [{ binding: "AGENT_SUPPORT", exportName: "support" }]);
 
         await expect(agents["support"]!.run({ input: "hi", threadKey: "t-1" })).rejects.toThrow(MISSING_BINDING_PATTERN);
+    });
+
+    it("rejects run() input carrying the reserved branch-marker key, and never calls create()", async () => {
+        const { binding, createCalls } = fakeBinding();
+        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }]);
+
+        // Reachable from the public `agents:agentRun` mutation when `publicRun:
+        // true` — a forged marker must be rejected before it ever reaches create().
+        const forgedInput = {
+            __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" },
+            input: "hi",
+            threadKey: "t-1",
+        } as unknown as AgentRunInput;
+
+        await expect(agents["support"]!.run(forgedInput)).rejects.toThrow(BRANCH_MARKER_PATTERN);
+        expect(createCalls).toHaveLength(0);
     });
 
     it("cancels a run: terminates the instance and marks its thread cancelled", async () => {

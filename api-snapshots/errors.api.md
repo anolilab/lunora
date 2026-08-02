@@ -338,6 +338,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Cron value is not statically analyzable";
     };
+    readonly CRON_SCHEDULE_INVALID: {
+        readonly status: 500;
+        readonly title: "Invalid cron schedule";
+    };
     readonly CRON_SCHEDULE_NOT_STATIC: {
         readonly status: 500;
         readonly title: "Cron schedule is not statically analyzable";
@@ -475,6 +479,10 @@ const ERROR_CATALOG: {
     readonly UNKNOWN_ADMIN_OP: {
         readonly status: 404;
         readonly title: "Unknown admin operation";
+    };
+    readonly SOCKET_TAG_BUDGET_EXCEEDED: {
+        readonly status: 400;
+        readonly title: "Socket tag budget exceeded";
     };
     readonly RELAY_CANNOT_SEED: {
         readonly status: 500;

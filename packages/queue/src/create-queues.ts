@@ -5,6 +5,16 @@
  */
 import type { LunoraQueuesOptions, MessageSendRequestLike, QueueBindingLike, QueueProducer, Queues, QueueSendBatchOptions, QueueSendOptions } from "./types";
 
+/**
+ * Cloudflare Queues hard ceiling on a single `sendBatch` call: 100 messages
+ * (also capped at 1 MB total / 256 KB per message — see the Cloudflare Queues
+ * limits documentation). Mirrors `@lunora/scheduler`'s `queue-workpool.ts`
+ * guard of the same name and value; duplicated rather than shared because the
+ * two packages have no dependency edge and a `shared/` file for one integer is
+ * overkill.
+ */
+const MAX_QUEUE_BATCH = 100;
+
 /** Wrap a single Cloudflare `Queue` binding in the {@link QueueProducer} surface. */
 const producerFor = (binding: QueueBindingLike): QueueProducer => {
     return {
@@ -12,7 +22,20 @@ const producerFor = (binding: QueueBindingLike): QueueProducer => {
             await binding.send(body, options);
         },
         sendBatch: async (messages: Iterable<MessageSendRequestLike>, options?: QueueSendBatchOptions): Promise<void> => {
-            await binding.sendBatch(messages, options);
+            // Materialize so the array can both be counted against the cap and
+            // forwarded unchanged to the binding (an Iterable can only be
+            // consumed once).
+            const batch = [...messages];
+
+            if (batch.length > MAX_QUEUE_BATCH) {
+                // A `throw` inside this `async` function still surfaces to the
+                // caller as an async rejection (never a synchronous throw) —
+                // matching the `missing` producer's convention below and a real
+                // producer's async surface.
+                throw new Error(`@lunora/queue: sendBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(batch.length)}) — split across calls`);
+            }
+
+            await binding.sendBatch(batch, options);
         },
     };
 };

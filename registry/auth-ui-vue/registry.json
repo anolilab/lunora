@@ -107,6 +107,7 @@
         { "from": "vue/ProfileCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/ProfileCard.vue" },
         { "from": "vue/ResendVerificationCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/ResendVerificationCard.vue" },
         { "from": "vue/ResetPasswordCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/ResetPasswordCard.vue" },
+        { "from": "vue/ResetPasswordOtpCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/ResetPasswordOtpCard.vue" },
         { "from": "vue/SessionsCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/SessionsCard.vue" },
         { "from": "vue/SetUsernameCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/SetUsernameCard.vue" },
         { "from": "vue/SignInCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/SignInCard.vue" },
