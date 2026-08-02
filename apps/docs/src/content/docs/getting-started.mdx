@@ -39,8 +39,8 @@ all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
 ## Requirements
 
-- **Node** `^22.14.0 || >=24.10.0`
-- **pnpm** `>=10.32.1`
+- **Node** `^22.15.0 || >=24.11.0` — the range every published Lunora package declares in `engines`.
+- **A package manager** — pnpm `>=10.32.1`, or npm, yarn, or bun. The scaffolded app pins none of them; the tabs below cover all four.
 - A Cloudflare account — only needed to keep a deployment. Local dev needs none,
   and `lunora deploy --temporary` publishes a live URL without one (the Free plan
   works once you're ready to claim it).
@@ -75,11 +75,33 @@ bunx lunorash@alpha init my-app
 
 Then install and start the dev loop:
 
-```bash
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+
+```bash tab="pnpm"
 cd my-app
 pnpm install
 pnpm dev
 ```
+
+```bash tab="npm"
+cd my-app
+npm install
+npm run dev
+```
+
+```bash tab="yarn"
+cd my-app
+yarn install
+yarn dev
+```
+
+```bash tab="bun"
+cd my-app
+bun install
+bun run dev
+```
+
+</Tabs>
 
 The CLI lays down the standard layout:
 
@@ -115,9 +137,25 @@ trigger codegen and a typed-API hot reload within ~200 ms.
 
 ### Deploy
 
-```bash
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+
+```bash tab="pnpm"
 pnpm lunora deploy
 ```
+
+```bash tab="npm"
+npx lunora deploy
+```
+
+```bash tab="yarn"
+yarn lunora deploy
+```
+
+```bash tab="bun"
+bun run lunora deploy
+```
+
+</Tabs>
 
 This calls `wrangler deploy`, runs pending D1 migrations, and publishes the
 Worker. Everything lives on your account, reachable through your own

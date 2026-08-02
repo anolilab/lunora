@@ -1,7 +1,7 @@
 {
     "name": "@lunora/cli",
     "version": "1.0.0-alpha.131",
-    "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
+    "description": "The Lunora CLI: init, dev, deploy, codegen, migrate, seed, doctor, insights, logs, registry, and the rest of the project commands",
     "keywords": [
         "agent-skills",
         "cli",

@@ -7,6 +7,7 @@ import { useState } from "react";
 
 import { Pill } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
+import posthog from "@/lib/posthog";
 
 /**
  * Lunora Cloud landing — the managed tier (still in progress), behind an
@@ -56,6 +57,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             });
 
             if (response.ok) {
+                posthog.capture("waitlist_joined", { source });
                 setStatus("success");
             } else {
                 fail("Something went wrong. Please try again.");

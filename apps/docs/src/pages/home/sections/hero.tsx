@@ -7,6 +7,7 @@ import { useState } from "react";
 import AgentPanel from "@/components/sections/agent-panel";
 import { Pill } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
+import posthog from "@/lib/posthog";
 
 /**
  * Hero: a centered headline + CTAs over a faint scenic backdrop, then the
@@ -18,11 +19,23 @@ const InstallCommand: FC = () => {
     const [copied, setCopied] = useState(false);
 
     const copy = () => {
-        void navigator.clipboard.writeText("npx lunorash@alpha init my-app");
-        setCopied(true);
-        setTimeout(() => {
-            setCopied(false);
-        }, 1500);
+        const run = async () => {
+            try {
+                await navigator.clipboard.writeText("npx lunorash@alpha init my-app");
+            } catch {
+                // Permission denied, or no secure context. Nothing was copied,
+                // so neither the check mark nor the event should claim it was.
+                return;
+            }
+
+            posthog.capture("install_command_copied", { location: "home_hero" });
+            setCopied(true);
+            setTimeout(() => {
+                setCopied(false);
+            }, 1500);
+        };
+
+        void run();
     };
 
     return (
