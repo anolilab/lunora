@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { Command } from "./CommandPalette.js";
@@ -95,12 +95,10 @@ export const App = (): ReactElement => {
         return () => globalThis.removeEventListener("keydown", onKeyDown);
     }, []);
 
-    const grouped = useMemo(() => {
-        const needle = search.trim().toLowerCase();
-        const visible = needle ? (tasks ?? []).filter((task) => task.title.toLowerCase().includes(needle)) : (tasks ?? []);
-
-        return groupByStatus(visible);
-    }, [tasks, search]);
+    // No `useMemo`: the React Compiler memoizes this already.
+    const needle = search.trim().toLowerCase();
+    const visible = needle ? (tasks ?? []).filter((task) => task.title.toLowerCase().includes(needle)) : (tasks ?? []);
+    const grouped = groupByStatus(visible);
 
     const commands: Command[] = [
         {

@@ -160,22 +160,19 @@ button {
     color: var(--muted);
 }
 
-.palette-backdrop {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    justify-content: center;
-    padding-top: 15vh;
-    background: rgb(0 0 0 / 40%);
-}
-
 .palette {
     width: min(480px, 90vw);
-    height: fit-content;
+    margin-top: 15vh;
+    padding: 0;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--surface);
+    color: var(--text);
     overflow: hidden;
+}
+
+.palette::backdrop {
+    background: rgb(0 0 0 / 40%);
 }
 
 .palette-input {

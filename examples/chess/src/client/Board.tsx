@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ChessMove, ChessState, PieceColor, PieceType, Square } from "../../lunora/chess.js";
 import { getValidMoves, squareToName } from "../../lunora/chess.js";
@@ -29,6 +29,15 @@ interface BoardProperties {
 export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElement => {
     const [selected, setSelected] = useState<Square | null>(null);
     const [pendingPromotion, setPendingPromotion] = useState<ChessMove | null>(null);
+    const promotionRef = useRef<HTMLDialogElement>(null);
+
+    useEffect(() => {
+        // A native dialog is modal only once `showModal()` runs — and the choice
+        // really is modal: the move is not legal until a piece is named.
+        if (pendingPromotion) {
+            promotionRef.current?.showModal();
+        }
+    }, [pendingPromotion]);
 
     const myTurn = myColor !== null && position.currentTurn === myColor;
     const legal = selected ? getValidMoves(position, selected.row, selected.col) : [];
@@ -88,7 +97,7 @@ export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElem
             </div>
 
             {pendingPromotion && (
-                <div className="promotion" role="dialog" aria-label="Choose a promotion piece">
+                <dialog ref={promotionRef} aria-label="Choose a promotion piece" className="promotion">
                     {PROMOTIONS.map((choice) => (
                         <button
                             key={choice}
@@ -102,7 +111,7 @@ export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElem
                             {GLYPHS[position.currentTurn][choice]}
                         </button>
                     ))}
-                </div>
+                </dialog>
             )}
         </div>
     );

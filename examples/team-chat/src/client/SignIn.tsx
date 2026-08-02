@@ -17,15 +17,34 @@ export const SignIn = (): ReactElement => {
         const password = String(form.get("password") ?? "");
         const name = String(form.get("name") ?? "").trim() || email.split("@")[0];
 
-        try {
+        /**
+         * Everything conditional lives in here rather than in the `try` below.
+         * The React Compiler cannot lower a value block — a ternary, a `??`, an
+         * optional chain — inside a try/catch, and one such expression makes it
+         * skip optimizing the whole component. Resolves to a message to show, or
+         * `null` when the sign-in succeeded.
+         */
+        const submit = async (): Promise<string | null> => {
             const result = mode === "up" ? await authClient.signUp.email({ email, name, password }) : await authClient.signIn.email({ email, password });
 
-            if (result?.error) {
-                setError(String(result.error.message ?? "could not sign in"));
+            return result?.error ? String(result.error.message ?? "could not sign in") : null;
+        };
+
+        try {
+            const message = await submit();
+
+            if (message) {
+                setError(message);
             }
-        } finally {
-            setBusy(false);
+        } catch (cause: unknown) {
+            // better-auth resolves most failures into `result.error`, but a
+            // network fault rejects — without this the form just went quiet.
+            setError(cause instanceof Error ? cause.message : "could not reach the server");
         }
+
+        // After the catch, not in a `finally`: the React Compiler cannot lower a
+        // finalizer, and the catch above cannot throw.
+        setBusy(false);
     };
 
     return (

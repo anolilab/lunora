@@ -33,12 +33,14 @@ function Home(): ReactElement {
                 <p className="muted">Server-rendered from the route loader, then live over a socket.</p>
             </header>
 
+            {/*
+             * A React 19 form `action` rather than `onSubmit` + `preventDefault`:
+             * React owns the submission, so the form resets itself on success and
+             * still works before hydration finishes — which matters here, where
+             * the first paint comes from the server.
+             */}
             <form
-                onSubmit={(event) => {
-                    event.preventDefault();
-
-                    const form = event.currentTarget;
-                    const data = new FormData(form);
+                action={(data: FormData) => {
                     const body = String(data.get("body") ?? "").trim();
 
                     if (!body) {
@@ -46,7 +48,6 @@ function Home(): ReactElement {
                     }
 
                     void send({ author: String(data.get("author") ?? "").trim() || "anon", body });
-                    form.reset();
                 }}
             >
                 <input aria-label="Your name" name="author" placeholder="Your name" />
@@ -70,8 +71,23 @@ function Home(): ReactElement {
                     </ul>
 
                     <p className="muted">
-                        {board.total} message(s){board.newestAt > 0 && `, newest ${new Date(board.newestAt).toLocaleTimeString()}`}. View source on the first
-                        paint — the list is already in the HTML.
+                        {board.total} message(s)
+                        {board.newestAt > 0 && (
+                            <>
+                                , newest{" "}
+                                {/*
+                                 * UTC, not `toLocaleTimeString()`. Locale and time
+                                 * zone differ between the server render and the
+                                 * browser that hydrates it, so a localised string
+                                 * is a hydration mismatch — in the one example
+                                 * whose whole point is server rendering. `<time>`
+                                 * carries the machine-readable value; localise in
+                                 * an effect if you want the reader's zone.
+                                 */}
+                                <time dateTime={new Date(board.newestAt).toISOString()}>{new Date(board.newestAt).toISOString().slice(11, 19)} UTC</time>
+                            </>
+                        )}
+                        . View source on the first paint — the list is already in the HTML.
                     </p>
                 </>
             )}

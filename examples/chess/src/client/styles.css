@@ -196,7 +196,14 @@ h2 {
 .promotion {
     display: flex;
     gap: 6px;
-    margin-top: 8px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.promotion::backdrop {
+    background: rgb(0 0 0 / 45%);
 }
 
 .promotion button {

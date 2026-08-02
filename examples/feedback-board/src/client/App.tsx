@@ -20,12 +20,17 @@ export const App = (): ReactElement => {
     const [selected, setSelected] = useState<Id<"feedback"> | null>(null);
     const [composing, setComposing] = useState(false);
     const [summarising, setSummarising] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const posts = useQuery(api.feedback.list, filter ? { sortBy, status: filter } : { sortBy });
     const myVotes = useQuery(api.feedback.myVotes, { voterEmail: VOTER_EMAIL });
     const summaries = useQuery(api.summaries.list, {});
 
     const { mutate: create } = useMutation(api.feedback.create);
+
+    // A Set, not `myVotes.includes(...)` inside the row loop: that is a linear
+    // scan per row, so rendering the board is quadratic in the number of votes.
+    const votedIds = new Set(myVotes ?? []);
 
     /**
      * Flip the vote in the cache before the round trip. The count and the
@@ -54,13 +59,20 @@ export const App = (): ReactElement => {
 
     const onSummarise = async (): Promise<void> => {
         setSummarising(true);
+        setError(null);
 
         try {
             // Actions are not subscriptions — call them straight on the client.
             await client.action(api.summaries.generate, {});
-        } finally {
-            setSummarising(false);
+        } catch (cause: unknown) {
+            // Inference is the one call here that leaves the shard, so it is the
+            // one that fails for reasons the board cannot fix — say so.
+            setError(cause instanceof Error ? cause.message : "could not generate a summary");
         }
+
+        // After the catch, not in a `finally`: the React Compiler cannot lower a
+        // finalizer, and the catch above cannot throw.
+        setSummarising(false);
     };
 
     if (selected) {
@@ -84,6 +96,8 @@ export const App = (): ReactElement => {
                     </button>
                 </div>
             </header>
+
+            {error && <p className="error">{error}</p>}
 
             {composing && (
                 <form
@@ -150,7 +164,7 @@ export const App = (): ReactElement => {
             ) : (
                 <ul className="list">
                     {posts.map((post) => {
-                        const voted = myVotes?.includes(post._id) ?? false;
+                        const voted = votedIds.has(post._id);
 
                         return (
                             <li key={post._id} className="card post">

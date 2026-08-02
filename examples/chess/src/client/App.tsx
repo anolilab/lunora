@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
@@ -54,11 +54,10 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
         void claim({ displayName });
     }, [me, claim, displayName]);
 
-    const nameOf = useMemo(() => {
-        const byUser = new Map((players ?? []).map((player) => [player.userId, player.displayName]));
-
-        return (id: string): string => byUser.get(id) ?? "Unknown";
-    }, [players]);
+    // No `useMemo`: the React Compiler memoizes this derivation already, and a
+    // hand-written one just adds a dependency array to keep correct.
+    const byUser = new Map((players ?? []).map((player) => [player.userId, player.displayName]));
+    const nameOf = (id: string): string => byUser.get(id) ?? "Unknown";
 
     // The host writes `gameId` onto the lobby when they start, and every seat at
     // that lobby is subscribed to it — so the guest lands in the game without

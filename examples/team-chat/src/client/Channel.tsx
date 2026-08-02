@@ -1,6 +1,6 @@
 import { useLunora, useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { Doc } from "../../lunora/_generated/dataModel.js";
@@ -29,6 +29,11 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     const [search, setSearch] = useState("");
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Reading the clock during render is impure — it makes the same props
+    // produce different output, which the React Compiler refuses to optimize
+    // and which would disagree between a server render and its hydration. The
+    // heartbeat below advances this instead, so the roster still ages out.
+    const [now, setNow] = useState(() => Date.now());
 
     // Every read and write below pins `shardKey: channelId`, so it resolves to
     // this channel's Durable Object. Drop the shard key and the runtime has to
@@ -43,7 +48,10 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     const { mutate: leave } = useMutation(api.presence.leave);
 
     useEffect(() => {
-        const beat = (): void => void heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId });
+        const beat = (): void => {
+            setNow(Date.now());
+            void heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId });
+        };
 
         beat();
 
@@ -55,11 +63,9 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
         };
     }, [channelId, displayName, heartbeat, leave, sessionId]);
 
-    const nameOf = useMemo(() => {
-        const byUser = new Map(profiles.map((profile) => [profile.userId, profile.name]));
-
-        return (id: string): string => byUser.get(id) ?? "Unknown";
-    }, [profiles]);
+    // No `useMemo`: the React Compiler memoizes this derivation already.
+    const byUser = new Map(profiles.map((profile) => [profile.userId, profile.name]));
+    const nameOf = (id: string): string => byUser.get(id) ?? "Unknown";
 
     /**
      * Upload straight to R2: the action mints a signed PUT, the browser sends
@@ -79,24 +85,28 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
         }
     };
 
-    const upload = async (file: File): Promise<{ key: string; name: string } | null> => {
-        setUploading(true);
+    /**
+     * No `try` here on purpose: the submit handler below owns both the spinner
+     * and the error, and the React Compiler cannot lower a `finally` (or a
+     * `throw` inside a `try`) — a component containing one silently opts out of
+     * optimization entirely.
+     */
+    const upload = async (file: File): Promise<{ key: string; name: string }> => {
+        const { key, url } = await client.action(api.messages.requestAttachmentUpload, { channelId, contentType: file.type });
+        const response = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
 
-        try {
-            const { key, url } = await client.action(api.messages.requestAttachmentUpload, { channelId, contentType: file.type });
-            const response = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
-
-            if (!response.ok) {
-                throw new Error(`upload failed with ${response.status}`);
-            }
-
-            return { key, name: file.name };
-        } finally {
-            setUploading(false);
+        if (!response.ok) {
+            throw new Error(`upload failed with ${String(response.status)}`);
         }
+
+        return { key, name: file.name };
     };
 
     const shown = search.trim() ? (hits ?? []) : (messages ?? []);
+    // The TTL is applied here rather than in the query: a live query re-runs on
+    // a poke, not on a clock, so a `Date.now()` filter server-side would sit
+    // stale until somebody else wrote.
+    const online = (here ?? []).filter((row) => row.lastSeen >= now - PRESENCE_TTL_MS);
 
     return (
         <main className="channel">
@@ -106,14 +116,11 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
                 <input aria-label="Search this channel" onChange={(event) => setSearch(event.target.value)} placeholder="Search" type="search" value={search} />
 
                 <ul className="presence" aria-label="Online now">
-                    {/* The TTL is applied here rather than in the query: a live query re-runs on a poke, not on a clock. */}
-                    {(here ?? [])
-                        .filter((row) => row.lastSeen >= Date.now() - PRESENCE_TTL_MS)
-                        .map((row) => (
-                            <li key={row._id} title={row.name}>
-                                {row.name.slice(0, 2).toUpperCase()}
-                            </li>
-                        ))}
+                    {online.map((row) => (
+                        <li key={row._id} title={row.name}>
+                            {row.name.slice(0, 2).toUpperCase()}
+                        </li>
+                    ))}
                 </ul>
             </header>
 
@@ -157,19 +164,31 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
                     }
 
                     setError(null);
+                    setUploading(true);
+
+                    // Same reason as the `upload` note above: the conditional and
+                    // the optional chains live in their own function so the `try`
+                    // body is a single call the compiler can lower.
+                    const deliver = async (): Promise<void> => {
+                        const attachment = file ? await upload(file) : null;
+
+                        await send({ attachmentKey: attachment?.key, attachmentName: attachment?.name, channelId, content }, { shardKey: channelId });
+                        form.reset();
+                    };
 
                     void (async () => {
                         try {
-                            const attachment = file ? await upload(file) : null;
-
-                            await send({ attachmentKey: attachment?.key, attachmentName: attachment?.name, channelId, content }, { shardKey: channelId });
-                            form.reset();
+                            await deliver();
                         } catch (cause: unknown) {
                             // An upload can fail (size cap, rejected type) and a
                             // send can be refused. Without this the promise
                             // rejects unhandled and the composer just sits there.
                             setError(cause instanceof Error ? cause.message : "could not send that message");
                         }
+
+                        // Deliberately after the catch rather than in a `finally`:
+                        // the catch cannot throw, so both paths reach here.
+                        setUploading(false);
                     })();
                 }}
             >
