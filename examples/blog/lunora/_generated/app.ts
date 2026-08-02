@@ -4,12 +4,12 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
-import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import schema from "../schema.js";
@@ -396,6 +396,15 @@ class AppBuilder<Env extends object> {
             if (database) {
                 options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
+                // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
+                // endpoint: without the former, EVERY row (including a `.global()`
+                // table's) routes to the default shard, so a global table is never
+                // recognised as global and the latter is never reached — the
+                // endpoint answers 200 with `inserted: {}` for a write that never
+                // happened. Both are mechanical over the schema this file already
+                // imports, so there is nothing project-specific to configure.
+                options.resolveTableSharding = buildTableShardingResolver();
+                options.importGlobals = buildGlobalImporter(database);
             }
         }
 
