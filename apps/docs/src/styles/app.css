@@ -1,12 +1,10 @@
 @import "tailwindcss";
-
-@plugin 'tailwindcss-animate';
-
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
-
 /* Prebuilt consent component styles — c15t v2 no longer injects these automatically. */
 @import "@c15t/react/styles.css";
+
+@plugin 'tailwindcss-animate';
 
 /* Canonical Lunora "Luna + Aurora" tokens — neutrals, aurora ramp, shadcn
    semantic set, fonts, radius (:root + .dark + @theme). Single source of truth;

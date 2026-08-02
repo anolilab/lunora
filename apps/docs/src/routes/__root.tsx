@@ -63,7 +63,6 @@ const RootDocument: FC<PropsWithChildren> = ({ children }) => {
                         legalLinks: { privacyPolicy: { href: "/privacy", target: "_self" } },
                         mode: "offline",
                         overrides,
-                        store: { overrides },
                     }}
                 >
                     <ConsentBanner hideBranding />
@@ -135,4 +134,6 @@ export const Route = createRootRoute({
         };
     },
     notFoundComponent: (props) => <NotFound {...props} />,
+    // Geo headers don't change within a session — never re-fetch on navigation.
+    staleTime: Number.POSITIVE_INFINITY,
 });

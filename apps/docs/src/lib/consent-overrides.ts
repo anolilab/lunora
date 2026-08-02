@@ -11,6 +11,12 @@ const COUNTRY_HEADERS = ["x-country", "cf-ipcountry", "x-vercel-ip-country", "x-
 
 const REGION_HEADERS = ["x-vercel-ip-country-region", "x-region-code"] as const;
 
+const ISO_COUNTRY = /^[A-Z]{2}$/;
+
+// CDN placeholders for "unknown" (XX) and Tor exit nodes (T1) — c15t would
+// treat them as a real non-GDPR country and suppress the banner.
+const PLACEHOLDER_COUNTRIES = new Set(["T1", "XX"]);
+
 const firstHeader = (headers: Headers, names: ReadonlyArray<string>): string | undefined => {
     for (const name of names) {
         const value = headers.get(name);
@@ -34,7 +40,8 @@ export const getConsentOverrides = createServerFn({ method: "GET" }).handler(():
     const headers: Headers = getRequestHeaders();
     const overrides: Overrides = {};
 
-    const country = firstHeader(headers, COUNTRY_HEADERS)?.toUpperCase();
+    const rawCountry = firstHeader(headers, COUNTRY_HEADERS)?.trim().toUpperCase();
+    const country = rawCountry && ISO_COUNTRY.test(rawCountry) && !PLACEHOLDER_COUNTRIES.has(rawCountry) ? rawCountry : undefined;
     const region = firstHeader(headers, REGION_HEADERS);
 
     if (country) {

@@ -52,6 +52,12 @@ const AnalyticsProvider: FC<PropsWithChildren> = ({ children }) => {
         if (measurementConsent) {
             posthog.opt_in_capturing();
         } else {
+            // Withdrawal must also erase what the accept path persisted
+            // (distinct_id, device_id) — opt-out alone only stops capture.
+            if (posthog.has_opted_in_capturing()) {
+                posthog.reset(true);
+            }
+
             posthog.opt_out_capturing();
         }
     }, [measurementConsent]);
