@@ -111,6 +111,28 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
+            it("rejects with the value the closure threw, and stays usable", async () => {
+                expect.assertions(3);
+
+                await withHost(async (host) => {
+                    // A sentinel with own properties: engine errors carry `code`
+                    // and `status` that the RPC edge renders the response from,
+                    // and a platform that reconstructs the error (rather than
+                    // re-raising it) drops them — turning every coded failure
+                    // into an internal one. `toBe` pins identity, which is the
+                    // only check a reconstructed copy cannot pass.
+                    const sentinel = Object.assign(new Error("closure failed"), { code: "NOT_FOUND", status: 404 });
+
+                    await expect(host.shard.transaction(() => Promise.reject(sentinel))).rejects.toBe(sentinel);
+                    await expect(host.shard.runSerialized(() => Promise.reject(sentinel))).rejects.toBe(sentinel);
+
+                    // A throw is an ordinary outcome, not a fatal one: the host
+                    // must still serve the next caller. On a host that tears
+                    // itself down on a rejected closure this is what fails.
+                    await expect(host.shard.runSerialized(async () => host.shard.transaction(async () => "still here"))).resolves.toBe("still here");
+                });
+            });
+
             it("observes its own writes inside a transaction", async () => {
                 expect.assertions(1);
 
