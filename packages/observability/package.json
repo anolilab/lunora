@@ -1,6 +1,6 @@
 {
     "name": "@lunora/observability",
-    "version": "1.0.0-alpha.4",
+    "version": "1.0.0-alpha.5",
     "description": "Host-neutral telemetry storage and read models for Lunora, backing the Studio's Logs, Traces, Metrics and Issues views",
     "keywords": [
         "lunora",
@@ -58,9 +58,9 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.11",
+        "@lunora/errors": "1.0.0-alpha.12",
         "@lunora/fingerprint": "1.0.0-alpha.4",
-        "@lunora/shard-engine": "1.0.0-alpha.5",
+        "@lunora/shard-engine": "1.0.0-alpha.6",
         "@visulima/redact": "catalog:redact"
     },
     "devDependencies": {
