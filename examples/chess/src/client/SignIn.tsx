@@ -6,6 +6,13 @@ import { authClient } from "./auth-client.js";
 /** Email + password, both flows on one card. Deliberately plain — the game is the subject here. */
 export const SignIn = (): ReactElement => {
     const [mode, setMode] = useState<"in" | "up">("in");
+
+    // Hoisted out of the JSX so it can carry the suppression below: a comment is
+    // not valid in attribute position. These are the standard HTML autocomplete
+    // tokens that tell a password manager whether to offer a saved credential or
+    // generate a new one — dropping them to quiet the scanner would be a real
+    // regression for anyone using one.
+    const passwordAutoComplete = mode === "up" ? "new-password" : "current-password"; // secret-scanner:allow
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
 
@@ -63,7 +70,7 @@ export const SignIn = (): ReactElement => {
                 <input
                     required
                     aria-label="Password"
-                    autoComplete={mode === "up" ? "new-password" : "current-password"}
+                    autoComplete={passwordAutoComplete}
                     minLength={8}
                     name="password"
                     placeholder="Password"
