@@ -465,6 +465,9 @@ catalogs:
     '@babel/core':
       specifier: 8.0.1
       version: 8.0.1
+    '@c15t/react':
+      specifier: 2.1.0
+      version: 2.1.0
     '@eslint-react/eslint-plugin':
       specifier: 5.18.0
       version: 5.18.0
@@ -952,6 +955,9 @@ importers:
       '@babel/core':
         specifier: catalog:web
         version: 8.0.1
+      '@c15t/react':
+        specifier: catalog:web
+        version: 2.1.0(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8))
       '@fuma-comment/react':
         specifier: catalog:web
         version: 1.5.0(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(highlight.js@11.11.1)(lucide-react@1.26.0(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)
@@ -5852,6 +5858,21 @@ packages:
     resolution: {integrity: sha512-5Kw9ZAtTGS8WHizyn+CJhjjfIQrw+7jcZodpmpXJjefnO15M8UexIi6JR2E5thyvsmHyhL6ZDDMUNR4bKJPd4g==}
     cpu: [x64]
     os: [win32]
+
+  '@c15t/react@2.1.0':
+    resolution: {integrity: sha512-tlHPjLN8R/M2xXkjoVfoiFxAy/NALVfO+DtDVUO/KL+/fqV9j1ycL489lG7s1p2jAgYeurHEnNmeb8lgjvoIDg==}
+    peerDependencies:
+      react: 19.2.8
+      react-dom: 19.2.8
+
+  '@c15t/schema@2.1.0':
+    resolution: {integrity: sha512-/Kxe4qv6E5cR6wgzxx1CTZuhMFfJQHi3GGFzcRCx4smqN8IrgsVtXv800O7Nz9RqoDu/8DFiHGpJ25aupwMsRQ==}
+
+  '@c15t/translations@2.1.0':
+    resolution: {integrity: sha512-pB6A5nMKHaAwFOUetcIkyIscMBr5iVm/lxBqzoSk3MU0KMGn4F/OTpcLZOT7k5P87RMkuuKkXN+gyf6jCuvBAw==}
+
+  '@c15t/ui@2.1.0':
+    resolution: {integrity: sha512-tl9mQnQdPbtWQQpXNFRzqrQDk4crjRUX+lIJmd7Le+uZVIuEiNbDeEIjQLj0XH0Cp3Xv3NJn0C7XF5H9CRVHKA==}
 
   '@capsizecss/unpack@4.0.0':
     resolution: {integrity: sha512-VERIM64vtTP1C4mxQ5thVT9fK0apjPFobqybMtA1UdUujWka24ERHbRHFGmpbbhp73MhV+KSsHQH9C6uOTdEQA==}
@@ -15494,6 +15515,9 @@ packages:
       magicast:
         optional: true
 
+  c15t@2.1.0:
+    resolution: {integrity: sha512-ukWy6y/yNGPrJv4bAr2DeMNkxtcsdehe++AeqzEC6ITDCVVaqCGeePIKo/3qMZzhyyCPtcKsQJKNIfqszyzpvQ==}
+
   cac@6.7.14:
     resolution: {integrity: sha512-b6Ilus+c3RrdDk+JhLKUAQfzzgLEPy6wcXqS7f/xe1EETvsDP6GORG7SFuOs6cID5YkqchW/LXZbX5bc8j7ZcQ==}
     engines: {node: '>=8'}
@@ -23343,6 +23367,14 @@ packages:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
+  valibot@1.3.1:
+    resolution: {integrity: sha512-sfdRir/QFM0JaF22hqTroPc5xy4DimuGQVKFrzF1YfGwaS1nJot3Y8VqMdLO2Lg27fMzat2yD3pY5PbAYO39Gg==}
+    peerDependencies:
+      typescript: 6.0.3
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   validate-html-nesting@1.2.4:
     resolution: {integrity: sha512-doQi7e8EJ2OWneSG1aZpJluS6A49aZM0+EICXWKm1i6WvqTLmq0tpUcImc4KTWG50mORO0C4YDBtOCSYvElftw==}
 
@@ -24141,6 +24173,24 @@ packages:
       immer:
         optional: true
       react:
+        optional: true
+
+  zustand@5.0.12:
+    resolution: {integrity: sha512-i77ae3aZq4dhMlRhJVCYgMLKuSiZAaUPAct2AksxQ+gOtimhGMdXljRT21P5BNpeT4kXlLIckvkPM029OljD7g==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      immer: '>=9.0.6'
+      react: 19.2.8
+      use-sync-external-store: '>=1.2.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+      use-sync-external-store:
         optional: true
 
   zustand@5.0.14:
@@ -25643,6 +25693,37 @@ snapshots:
 
   '@bruits/satteri-win32-x64-msvc@0.9.5':
     optional: true
+
+  '@c15t/react@2.1.0(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8))':
+    dependencies:
+      '@c15t/ui': 2.1.0(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8))
+      c15t: 2.1.0(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8))
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+    transitivePeerDependencies:
+      - '@types/react'
+      - immer
+      - typescript
+      - use-sync-external-store
+
+  '@c15t/schema@2.1.0(typescript@6.0.3)':
+    dependencies:
+      valibot: 1.3.1(typescript@6.0.3)
+    transitivePeerDependencies:
+      - typescript
+
+  '@c15t/translations@2.1.0': {}
+
+  '@c15t/ui@2.1.0(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8))':
+    dependencies:
+      '@c15t/translations': 2.1.0
+      c15t: 2.1.0(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8))
+    transitivePeerDependencies:
+      - '@types/react'
+      - immer
+      - react
+      - typescript
+      - use-sync-external-store
 
   '@capsizecss/unpack@4.0.0':
     dependencies:
@@ -36203,6 +36284,18 @@ snapshots:
     optionalDependencies:
       magicast: 0.5.3
 
+  c15t@2.1.0(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.8)):
+    dependencies:
+      '@c15t/schema': 2.1.0(typescript@6.0.3)
+      '@c15t/translations': 2.1.0
+      zustand: 5.0.12(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
+    transitivePeerDependencies:
+      - '@types/react'
+      - immer
+      - react
+      - typescript
+      - use-sync-external-store
+
   cac@6.7.14: {}
 
   cac@7.0.0: {}
@@ -45735,6 +45828,10 @@ snapshots:
 
   uuid@11.1.1: {}
 
+  valibot@1.3.1(typescript@6.0.3):
+    optionalDependencies:
+      typescript: 6.0.3
+
   validate-html-nesting@1.2.4: {}
 
   validate-npm-package-license@3.0.4:
@@ -46679,6 +46776,13 @@ snapshots:
       '@types/react': 19.2.17
       immer: 11.1.8
       react: 19.2.8
+
+  zustand@5.0.12(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8)):
+    optionalDependencies:
+      '@types/react': 19.2.17
+      immer: 11.1.8
+      react: 19.2.8
+      use-sync-external-store: 1.6.0(react@19.2.8)
 
   zustand@5.0.14(@types/react@19.2.17)(immer@11.1.8)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8)):
     optionalDependencies:

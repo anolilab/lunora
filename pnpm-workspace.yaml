@@ -366,6 +366,7 @@ catalogs:
     "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.2
     "@babel/core": 8.0.1
+    "@c15t/react": 2.1.0
     "@eslint-react/eslint-plugin": 5.18.0
     "@eslint/css": 1.4.0
     "@fuma-comment/react": 1.5.0

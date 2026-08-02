@@ -27,6 +27,7 @@
     },
     "dependencies": {
         "@babel/core": "catalog:web",
+        "@c15t/react": "catalog:web",
         "@fuma-comment/react": "catalog:web",
         "@fumadocs/mdx-remote": "catalog:web",
         "@icons-pack/react-simple-icons": "catalog:web",
