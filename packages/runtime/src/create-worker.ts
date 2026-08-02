@@ -2568,7 +2568,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const instanceName = typeof candidate.instanceName === "string" && candidate.instanceName.length > 0 ? candidate.instanceName : "default";
 
         try {
-            await schedulerDO.get(schedulerDO.idFromName(instanceName)).fetch(
+            await resolveShard(schedulerDO, instanceName).fetch(
                 new Request("https://scheduler.internal/complete", {
                     body: JSON.stringify({ id: candidate.id, pool }),
                     headers: { "content-type": "application/json" },
@@ -3003,7 +3003,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      */
     const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
         const instanceName = options.schedulerInstanceName ?? "default";
-        const stub = (): ReturnType<ShardNamespaceLike["get"]> => namespace.get(namespace.idFromName(instanceName));
+        const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
         const call = async <R>(path: string, init: RequestInit): Promise<R> => {
             const response = await stub().fetch(new Request(`https://scheduler.internal${path}`, init));

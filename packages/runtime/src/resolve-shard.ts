@@ -23,6 +23,24 @@ import { resolveShard as resolveShardStub } from "@lunora/platform";
  */
 const directoryCache = new WeakMap<ShardNamespaceLike, ShardDirectory>();
 
+/**
+ * Read whichever id-derivation spelling the namespace supplies.
+ *
+ * Throws rather than returning the name unchanged when neither exists: a
+ * namespace with no `getByName` and no way to derive an id cannot resolve a
+ * shard at all, and silently substituting the raw name would route every key to
+ * whatever object that string happens to address.
+ */
+const derivedIdForName = (namespace: ShardNamespaceLike, name: string): unknown => {
+    const derive = namespace.idFromName ?? namespace.idForName;
+
+    if (typeof derive !== "function") {
+        throw new TypeError("@lunora/runtime: shard namespace exposes neither idFromName nor idForName, so a shard key cannot be resolved");
+    }
+
+    return derive.call(namespace, name);
+};
+
 const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
     const cached = directoryCache.get(namespace);
 
@@ -39,7 +57,9 @@ const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
     const directory: ShardDirectory =
         typeof namespace.getByName === "function"
             ? {
-                  get: (id) => namespace.get(id),
+                  // Mirrors the namespace: a name-only registry has no `get` to
+                  // offer, and the direct branch never needs one.
+                  get: namespace.get === undefined ? undefined : (id) => (namespace.get as NonNullable<ShardNamespaceLike["get"]>)(id),
                   // Wrapped, NOT passed by reference: `DurableObjectNamespace`'s
                   // methods are native and require their own receiver, so handing
                   // the bare function to the contract calls it with the directory
@@ -47,12 +67,22 @@ const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
                   // Plain-object test doubles tolerate the detached reference,
                   // which is why only the workerd suites caught this.
                   getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceLike["getByName"]>)(name),
-                  idForName: (name) => namespace.idFromName(name),
+                  idForName: (name) => derivedIdForName(namespace, name),
                   jurisdiction,
               }
             : {
-                  get: (id) => namespace.get(id),
-                  idForName: (name) => namespace.idFromName(name),
+                  // The two-step branch is the only path with no name lookup to
+                  // fall back on, so a namespace reaching here without `get`
+                  // cannot resolve anything — fail loudly rather than at the
+                  // first `undefined is not a function` inside a fan-out leg.
+                  get: (id) => {
+                      if (namespace.get === undefined) {
+                          throw new TypeError("@lunora/runtime: shard namespace exposes neither getByName nor get, so a shard key cannot be resolved");
+                      }
+
+                      return namespace.get(id);
+                  },
+                  idForName: (name) => derivedIdForName(namespace, name),
                   jurisdiction,
               };
 
@@ -76,7 +106,15 @@ export type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
  * unit-test doubles without coupling to `@cloudflare/workers-types`.
  */
 export interface ShardNamespaceLike {
-    get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
+    /**
+     * Materialize a stub from an opaque id.
+     *
+     * Optional for the same reason it is optional on `DirectShardDirectory`: a
+     * provider whose registry only understands names has no id to materialize
+     * from, and implements `getByName` alone. Required in practice only on the
+     * two-step branch below, which is the one that has no other way in.
+     */
+    get?: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
 
     /**
      * `getByName` is the friendlier API but isn't on every workers-types
@@ -84,7 +122,22 @@ export interface ShardNamespaceLike {
      * `idFromName` + `get` for compatibility.
      */
     getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
-    idFromName: (name: string) => unknown;
+
+    /**
+     * The `@lunora/platform` spelling of {@link ShardNamespaceLike.idFromName}.
+     *
+     * Present so a non-Cloudflare host can hand its own `ShardDirectory`
+     * straight to the runtime. Before this, the only difference between the two
+     * shapes was the method name, and that one letter made every fan-out entry
+     * point (`QueryCoordinator.fanOut`, the `orchestrate*` family) reject a
+     * conforming directory — a porting blocker discovered by construction when
+     * `@lunora/platform-node` tried to fan out. Exactly one of the two must be
+     * present; `idFromName` wins when both are.
+     */
+    idForName?: (name: string) => unknown;
+
+    /** Cloudflare's `DurableObjectNamespace` spelling. See {@link ShardNamespaceLike.idForName}. */
+    idFromName?: (name: string) => unknown;
 
     /**
      * Derive a jurisdiction-restricted subnamespace. Every ID and stub created

@@ -1860,13 +1860,14 @@ interface ShardMigrationOutcome {
 
 ```ts
 interface ShardNamespaceLike {
-    get: (id: unknown) => {
+    get?: (id: unknown) => {
         fetch: (request: Request) => Promise<Response>;
     };
     getByName?: (name: string) => {
         fetch: (request: Request) => Promise<Response>;
     };
-    idFromName: (name: string) => unknown;
+    idForName?: (name: string) => unknown;
+    idFromName?: (name: string) => unknown;
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 }
 ```
