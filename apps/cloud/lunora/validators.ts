@@ -1,3 +1,5 @@
+import type { Validator } from "@lunora/values";
+
 import { v } from "./_generated/server.js";
 
 /*
@@ -17,8 +19,16 @@ import { v } from "./_generated/server.js";
  * `v.string()` anywhere still flags, as it should.
  */
 
+/*
+ * `.check()` widens away the string-specific builder methods (`.max`, `.email`,
+ * …), so the annotation is `Validator<string>` rather than `ReturnType<typeof
+ * v.string>`. `v.string().max(max)` is now first-class sugar for this exact
+ * predicate + `maxLength` fragment; it is kept spelled out here only for the
+ * message, which reads for an API consumer rather than "expected string length
+ * <= 2048".
+ */
 /** A string argument capped at `max` characters, enforced and described consistently. */
-export const boundedString = (max: number): ReturnType<typeof v.string> =>
+export const boundedString = (max: number): Validator<string> =>
     v.string().check((value) => value.length <= max, { message: `must be at most ${String(max)} characters`, schema: { maxLength: max } });
 
 /**
