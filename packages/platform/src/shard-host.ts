@@ -117,6 +117,13 @@ export interface ShardHost {
      * Run `fn` with exclusive ownership of the shard. Concurrent calls are
      * queued; no two closures run at once for the same shard key. On
      * Cloudflare this maps to `state.blockConcurrencyWhile`.
+     *
+     * A closure that throws must reject with **the value it threw**, and must
+     * leave the host usable for the next call. Engine errors carry a `code` and
+     * `status` the RPC edge renders from, so a host that lets its platform
+     * substitute a copy silently downgrades every coded error to an internal
+     * fault — and a host that tears itself down on a throw makes an ordinary
+     * application error cost every other caller on that shard.
      */
     runSerialized: <T>(function_: () => Promise<T>) => Promise<T>;
 
@@ -139,8 +146,10 @@ export interface ShardHost {
 
     /**
      * Run `fn` inside a durable transaction. If `fn` throws, all writes roll
-     * back. Raw `BEGIN`/`COMMIT`/`ROLLBACK` are forbidden inside the closure;
-     * the host manages the transaction boundary.
+     * back and the call rejects with **the value `fn` threw** — see
+     * {@link ShardHost.runSerialized} for why the identity matters. Raw
+     * `BEGIN`/`COMMIT`/`ROLLBACK` are forbidden inside the closure; the host
+     * manages the transaction boundary.
      */
     transaction: <T>(function_: () => Promise<T>) => Promise<T>;
 
