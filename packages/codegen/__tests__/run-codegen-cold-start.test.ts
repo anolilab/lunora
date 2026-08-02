@@ -19,8 +19,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// eslint-disable-next-line import/no-namespace -- vi.spyOn needs the module namespace object to intercept run-codegen's call to emitServer
+import * as emitModule from "../src/emit";
 import { runCodegen } from "../src/index";
 
 let workdir: string;
@@ -80,5 +82,47 @@ describe("runCodegen — cold-start reproducibility (#283)", () => {
 
         expect(second.generated.functions).toBe(first.generated.functions);
         expect(second.generated.api).toBe(first.generated.api);
+    });
+
+    it("does not rewrite server.ts a second time on a warm run for a project using a feature flag", () => {
+        expect.assertions(1);
+
+        // `ctx.kv` usage sets `hasKv`, so the bootstrap's schema-only render
+        // (no feature flags) genuinely differs from the final render — the
+        // exact precondition the double-write bug needed to reproduce.
+        writeFileSync(
+            join(workdir, "lunora", "cache.ts"),
+            `import { query } from "@lunora/server";
+
+export const read = query({
+    args: {},
+    handler: async ({ ctx }) => ctx.kv.get("k"),
+});
+`,
+            "utf8",
+        );
+
+        // First (cold) run creates the full \`_generated/\` output on disk,
+        // including the \`hasKv\`-narrowed \`server.ts\`.
+        runCodegen({ lint: false, projectRoot: workdir });
+
+        // Spies on the module's own \`emitServer\` export: the bootstrap phase
+        // calls it with only \`{ schema, useUmbrella }\` (no feature flags), the
+        // final phase with the full narrowed option set. Counting TOTAL calls
+        // across the second run is enough to prove the bootstrap one didn't
+        // fire — the final phase always calls it exactly once.
+        const emitServerSpy = vi.spyOn(emitModule, "emitServer");
+
+        // Second (warm) run: nothing changed, so the final full \`server.ts\`
+        // this run computes is byte-identical to what's already on disk. The
+        // bootstrap gate under test should skip its schema-only render
+        // entirely — without it, the bootstrap phase would overwrite the full
+        // content with a reduced one, and the final phase would immediately
+        // write it back, touching disk twice for no observable change.
+        runCodegen({ lint: false, projectRoot: workdir });
+
+        expect(emitServerSpy).toHaveBeenCalledTimes(1);
+
+        emitServerSpy.mockRestore();
     });
 });

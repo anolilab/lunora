@@ -495,29 +495,43 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `discoverFunctions` runs, lets pass 1 see the same declarations pass 2
     // would have. The full `server.ts` (with that later detail) overwrites
     // this provisional one before `runCodegen` returns, via the normal write
-    // phase below — `writeIfChanged` no-ops there if content is unchanged, so a
-    // warm run pays nothing extra beyond two cheap string renders.
+    // phase below.
     if (!options.dryRun) {
-        const declaredDependenciesForBootstrap = readPackageDependencies(options.projectRoot);
-        const useUmbrellaForBootstrap = (declaredDependenciesForBootstrap ?? new Set<string>()).has("lunorash");
         const bootstrapDirectory = join(lunoraDirectory, "_generated");
         const bootstrapDataModelPath = join(bootstrapDirectory, "dataModel.ts");
         const bootstrapServerPath = join(bootstrapDirectory, "server.ts");
-        const bootstrapDataModelContent = emitDataModel(schema, useUmbrellaForBootstrap);
-        const bootstrapServerContent = emitServer({ schema, useUmbrella: useUmbrellaForBootstrap });
 
-        if (!existsSync(bootstrapDirectory)) {
-            mkdirSync(bootstrapDirectory, { recursive: true });
+        // Only bootstrap on a genuine cold start (either target missing). On a
+        // warm run `project` already has the FULL previous-run declarations —
+        // `createCodegenProject` loads every tsconfig-included file, `_generated/**`
+        // among them, from disk at construction time — so there is nothing to
+        // synthesize. Gating on existence, not just writing, matters: the schema-only
+        // bootstrap content omits every feature flag `emitServer` takes below
+        // (identity/env/hasAi/hasKv/…), so for any project using at least one of them
+        // it differs from the on-disk full content — `writeIfChanged` would overwrite
+        // the full `server.ts` with the reduced one here, then the write phase below
+        // would immediately overwrite it back, forcing two disk writes (and two
+        // `_generated/**` watcher triggers) on every single warm run, not only a cold
+        // start.
+        if (!existsSync(bootstrapDataModelPath) || !existsSync(bootstrapServerPath)) {
+            const declaredDependenciesForBootstrap = readPackageDependencies(options.projectRoot);
+            const useUmbrellaForBootstrap = (declaredDependenciesForBootstrap ?? new Set<string>()).has("lunorash");
+            const bootstrapDataModelContent = emitDataModel(schema, useUmbrellaForBootstrap);
+            const bootstrapServerContent = emitServer({ schema, useUmbrella: useUmbrellaForBootstrap });
+
+            if (!existsSync(bootstrapDirectory)) {
+                mkdirSync(bootstrapDirectory, { recursive: true });
+            }
+
+            writeIfChanged(bootstrapDataModelPath, bootstrapDataModelContent);
+            writeIfChanged(bootstrapServerPath, bootstrapServerContent);
+
+            // Make sure `project` sees this content even if its module resolution
+            // would otherwise cache the pre-write (missing/stale) state — belt and
+            // suspenders alongside the disk write above.
+            project.createSourceFile(bootstrapDataModelPath, bootstrapDataModelContent, { overwrite: true });
+            project.createSourceFile(bootstrapServerPath, bootstrapServerContent, { overwrite: true });
         }
-
-        writeIfChanged(bootstrapDataModelPath, bootstrapDataModelContent);
-        writeIfChanged(bootstrapServerPath, bootstrapServerContent);
-
-        // Make sure `project` sees this content even if its module resolution
-        // would otherwise cache the pre-write (missing/stale) state — belt and
-        // suspenders alongside the disk write above.
-        project.createSourceFile(bootstrapDataModelPath, bootstrapDataModelContent, { overwrite: true });
-        project.createSourceFile(bootstrapServerPath, bootstrapServerContent, { overwrite: true });
     }
 
     const functions = discoverFunctions(project, lunoraDirectory);
