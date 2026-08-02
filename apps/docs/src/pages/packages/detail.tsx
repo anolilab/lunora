@@ -12,6 +12,7 @@ import Reveal from "@/components/sections/reveal";
 import JsonLd from "@/components/seo/json-ld";
 import AnimatedNumber from "@/components/ui/animated/animated-number";
 import type { AccentColor } from "@/data/packages";
+import posthog from "@/lib/posthog";
 import { cn, formatNumber } from "@/lib/utils";
 import type { DownloadStats, MonthlyDataPoint } from "@/server/stats";
 import { getStats } from "@/server/stats";
@@ -32,11 +33,23 @@ const CopyButton: FC<{ text: string }> = ({ text }) => {
     const [copied, setCopied] = useState(false);
 
     const handleCopy = useCallback(() => {
-        void navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => {
-            setCopied(false);
-        }, 2000);
+        const run = async () => {
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch {
+                // Permission denied, or no secure context. Nothing was copied,
+                // so neither the check mark nor the event should claim it was.
+                return;
+            }
+
+            posthog.capture("install_command_copied", { location: "package_detail" });
+            setCopied(true);
+            setTimeout(() => {
+                setCopied(false);
+            }, 2000);
+        };
+
+        void run();
     }, [text]);
 
     return (

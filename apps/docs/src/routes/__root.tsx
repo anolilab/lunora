@@ -1,3 +1,4 @@
+import "@/lib/posthog";
 import "unfonts.css";
 
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";

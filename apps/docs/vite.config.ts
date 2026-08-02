@@ -137,6 +137,17 @@ export default defineConfig(async ({ mode }) => {
         ],
         server: {
             proxy: {
+                // Dev-side mirror of the `/pr/posthog` rules in `public/_redirects`.
+                // These two must stay in step: this block only exists in the dev
+                // server, so production ingestion rides entirely on the Netlify
+                // rules. Assets host first — Vite matches proxy keys by longest
+                // prefix, but keeping the order explicit mirrors _redirects, where
+                // order is what decides.
+                "/pr/posthog/static": {
+                    changeOrigin: true,
+                    rewrite: (path) => path.replace(/^\/pr\/posthog/, ""),
+                    target: "https://eu-assets.i.posthog.com",
+                },
                 "/pr/posthog": {
                     changeOrigin: true,
                     rewrite: (path) => path.replace(/^\/pr\/posthog/, ""),
