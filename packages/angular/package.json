@@ -1,6 +1,6 @@
 {
     "name": "@lunora/angular",
-    "version": "1.0.0-alpha.20",
+    "version": "1.0.0-alpha.21",
     "description": "Angular reactive adapter for Lunora — signal-based live queries and mutations",
     "keywords": [
         "angular",
@@ -60,8 +60,8 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.35",
-        "@lunora/ratelimit": "1.0.0-alpha.14",
+        "@lunora/client": "1.0.0-alpha.36",
+        "@lunora/ratelimit": "1.0.0-alpha.15",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
