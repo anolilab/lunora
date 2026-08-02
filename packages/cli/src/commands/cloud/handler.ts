@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { findWranglerFile, readWranglerJsonc } from "@lunora/config";
+import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -61,11 +61,7 @@ const defaultDeps = (): CloudCommandDeps => ({
 });
 
 /** Resolve the API URL (flag → env) and the deploy key (env only — it is a secret). */
-const resolveAuth = (
-    options: CloudCommandOptions,
-    deps: CloudCommandDeps,
-    logger: Logger,
-): { apiUrl: string; deployKey: string } | null => {
+const resolveAuth = (options: CloudCommandOptions, deps: CloudCommandDeps, logger: Logger): { apiUrl: string; deployKey: string } | null => {
     const apiUrl = options.url ?? deps.env["LUNORA_CLOUD_URL"];
 
     if (!apiUrl) {
@@ -167,11 +163,7 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
     return { code: 1, outcome: result.status };
 };
 
-const runRollback = async (
-    options: CloudCommandOptions,
-    deps: CloudCommandDeps,
-    auth: { apiUrl: string; deployKey: string },
-): Promise<CloudCommandResult> => {
+const runRollback = async (options: CloudCommandOptions, deps: CloudCommandDeps, auth: { apiUrl: string; deployKey: string }): Promise<CloudCommandResult> => {
     const { logger } = options;
     const deploymentId = options.argument[1];
 
