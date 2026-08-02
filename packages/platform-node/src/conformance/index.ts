@@ -28,7 +28,7 @@ export const createNodeConformanceHost = (): ConformanceHost => {
     const kv = createNodeShardKvStore(database);
     const directory = createNodeShardDirectory();
     const { readFrames, restoreSocket, simulateRecycle, socket } = createNodeSocketHost();
-    const { dispose: disposeScheduler, scheduler, simulateDeadLetter } = createNodeSchedulerHost();
+    const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost();
 
     return {
         awaitAlarmFired: async (target) => {
@@ -57,7 +57,6 @@ export const createNodeConformanceHost = (): ConformanceHost => {
         restoreSocket,
         scheduler,
         shard,
-        simulateDeadLetter,
         simulateRecycle,
         socket,
     };

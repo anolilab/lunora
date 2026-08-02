@@ -477,7 +477,7 @@ const hasEnclosingTry = (call: TsNode): boolean => {
 const isCatchGuarded = (call: CallExpression): boolean => {
     let node: TsNode = call;
 
-    while (true) {
+    for (;;) {
         const parent = node.getParent();
 
         if (!Node.isPropertyAccessExpression(parent) || parent.getExpression() !== node) {
@@ -512,7 +512,7 @@ const isCatchGuarded = (call: CallExpression): boolean => {
 const outboundCallSite = (access: TsNode): CallExpression | undefined => {
     let node: TsNode = access;
 
-    while (true) {
+    for (;;) {
         const parent = node.getParent();
 
         if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {

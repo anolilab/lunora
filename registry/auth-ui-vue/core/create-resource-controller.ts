@@ -83,20 +83,41 @@ const createResourceController = <T, TExtra extends object = Record<never, never
         status: "idle",
     });
 
+    /*
+     * Which `refetch` is current. A search box firing a query per keystroke can
+     * have a slow answer for an early prefix land after a fast answer for the
+     * full query — without a ticket, the stale prefix result would overwrite
+     * the correct one an admin is already looking at. Mirrors
+     * `createFormController.load`'s `generation`.
+     */
+    let generation = 0;
+
     const refetch = async (): Promise<void> => {
+        generation += 1;
+
+        const ticket = generation;
+
         store.update({ error: undefined, loading: true, status: "submitting" });
 
         try {
             const result = await load(context, store.get().extra);
-            // A loader that needs no extra state just returns the array.
-            const { extra: patched, items } = Array.isArray(result) ? { extra: undefined, items: result } : result;
+
+            if (ticket !== generation) {
+                return;
+            }
+
+            const { extra: patched, items } = result;
 
             store.update({ items, loading: false, status: "success" });
 
             if (patched !== undefined) {
-                store.update(patched);
+                store.update({ extra: { ...store.get().extra, ...patched } });
             }
         } catch (error) {
+            if (ticket !== generation) {
+                return;
+            }
+
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), loading: false, status: "error" });
         }

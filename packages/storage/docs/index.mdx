@@ -108,9 +108,12 @@ do {
 ## Signed URLs
 
 A worker-signed URL resolves back through your Worker, so the request still
-passes your auth/policy/rate-limit gates before the body is served. The Worker
-route handling `GET /storage/:key` calls `verifySignedUrl` to check the
-signature and expiry:
+passes your auth/policy/rate-limit gates before the body is served. `baseUrl`
+(and `.storage()`'s `publicBaseUrl`) must be a bare origin — `getSignedUrl`
+rejects a URL that carries a path, since the signature binds only host + key
+and verification reconstructs the key from the full URL pathname. The Worker
+route handling the signed download/upload (mounted at that origin, e.g.
+`GET /:key`) calls `verifySignedUrl` to check the signature and expiry:
 
 ```ts
 import { verifySignedUrl } from "@lunora/storage";

@@ -17,17 +17,26 @@ const createFakeWriter = () => {
         aggregate: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`aggregate:${tableName}`)),
         count: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`count:${tableName}`)),
         delete: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`delete:${id}`)),
+        deleteMany: vi.fn<(ids: ReadonlyArray<string>) => Promise<string>>((ids: ReadonlyArray<string>) => Promise.resolve(`deleteMany:${ids.join(",")}`)),
         findFirst: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`findFirst:${tableName}`)),
         findFirstOrThrow: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`findFirstOrThrow:${tableName}`)),
         findMany: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`findMany:${tableName}`)),
         get: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`get:${id}`)),
         groupBy: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`groupBy:${tableName}`)),
         insert: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`insert:${tableName}`)),
+        lookupById: vi.fn<(id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>>((id: string) =>
+            Promise.resolve({ row: { _id: id }, tableName: "sentinel" }),
+        ),
         patch: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`patch:${id}`)),
+        patchMany: vi.fn<(patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>) => Promise<string>>(
+            (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>) =>
+                Promise.resolve(`patchMany:${patches.map((entry) => entry.id).join(",")}`),
+        ),
         query: vi.fn<(tableName: string) => string>((tableName: string) => `query:${tableName}`),
         rank: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rank:${tableName}`)),
         rankBefore: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rankBefore:${tableName}`)),
         rankPage: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rankPage:${tableName}`)),
+        rankPageRows: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`rankPageRows:${tableName}`)),
         replace: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`replace:${id}`)),
     };
 };
@@ -84,6 +93,7 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
         "rank",
         "rankBefore",
         "rankPage",
+        "rankPageRows",
     ] as const;
 
     it.each(tableMethods)("denies %s against the protected table", (method) => {
@@ -118,12 +128,43 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
     });
 });
 
+describe("guardWriter — optional analytical methods omitted on the underlying writer (D1/sql-store twin) (plan 254)", () => {
+    // `rankBefore` and `rankPageRows` are both optional on the real writer type
+    // (only the shard-local engine implements them; the D1/sql-store backend
+    // omits both) — the `...raw` spread must not leave an unguarded copy
+    // behind, and the guard must not synthesize a call that reaches into a
+    // method the raw writer never had (a TypeError, not a denial).
+    const optionalMethods = ["rankBefore", "rankPageRows"] as const;
+
+    it.each(optionalMethods)("does not synthesize %s when the raw writer omits it, and does not throw", (method) => {
+        expect.assertions(2);
+
+        const full = createFakeWriter();
+        // Omit `method` up front (rather than deleting it after the fact) so
+        // the fake writer never has the key at all, matching the D1/sql-store
+        // twin's actual shape rather than a shard-local writer with a key
+        // deleted off it.
+        const raw = Object.fromEntries(Object.entries(full).filter(([key]) => key !== method)) as Partial<FakeWriter>;
+
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as Record<string, unknown>;
+
+        expect(guarded[method]).toBeUndefined();
+        // Calling through the `...raw` spread's own copy (if any leaked) would
+        // either throw RlsRequiredError (still gated, acceptable) or a
+        // TypeError (the regression this test guards against) — assert the
+        // property itself is gone rather than calling it, since `undefined`
+        // is the only correct shape for "this writer doesn't support it".
+        expect(method in guarded).toBe(false);
+    });
+});
+
 describe("guardWriter — id-based methods with a pinned table (by-id facade)", () => {
     // `delete`/`get` pin the table at arg[1]; `patch`/`replace` carry a
     // body at arg[1] and pin at arg[2]. Each entry calls with the correct shape.
     const idMethods: ReadonlyArray<{ call: (m: Record<string, (...a: unknown[]) => unknown>, table: string) => unknown; name: string }> = [
         { call: (m, table) => m["delete"]!("any-id", table), name: "delete" },
         { call: (m, table) => m["get"]!("any-id", table), name: "get" },
+        { call: (m, table) => m["lookupById"]!("any-id", table), name: "lookupById" },
         { call: (m, table) => m["patch"]!("any-id", {}, table), name: "patch" },
         { call: (m, table) => m["replace"]!("any-id", {}, table), name: "replace" },
     ];
@@ -181,6 +222,146 @@ describe("guardWriter — generic id-based access resolves the owning table", ()
         await guarded.patch("orphan_id", { x: 1 });
 
         expect(raw.patch).toHaveBeenCalledTimes(1);
+    });
+
+    it("denies lookupById(id) for a bare id that resolves to a protected table (plan 254)", async () => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await expect(guarded.lookupById("post_42")).rejects.toThrow(RlsRequiredError);
+        expect(raw.lookupById).not.toHaveBeenCalled();
+    });
+
+    it("allows lookupById(id) for a bare id that resolves to a .public() table (plan 254)", async () => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await guarded.lookupById("stat_7");
+
+        expect(raw.lookupById).toHaveBeenCalledWith("stat_7", undefined);
+    });
+
+    it("passes an unresolvable bare id through lookupById without throwing (nothing to leak) (plan 254)", async () => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await expect(guarded.lookupById("orphan_id")).resolves.not.toBeNull();
+
+        expect(raw.lookupById).toHaveBeenCalledTimes(1);
+    });
+
+    it("lookupById(id) resolves null (does not throw) when the underlying writer has no match, mirroring the seam's own contract (plan 254)", async () => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+
+        // Override the fake's default sentinel-object return to mirror the
+        // real seam's "absent row" contract (`ctx-db.ts`'s `lookupById`
+        // returns `null`, never throws, when the id/table can't be resolved —
+        // e.g. a `.global()` row this shard-local seam can't see).
+        raw.lookupById.mockResolvedValueOnce(null);
+
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { lookupById: (id: string) => Promise<unknown> };
+
+        await expect(guarded.lookupById("orphan_id")).resolves.toBeNull();
+    });
+});
+
+describe("guardWriter — batch id-based methods (deleteMany/patchMany)", () => {
+    /** Invoke `deleteMany`/`patchMany` with a uniform (ids, expectedTable) shape. */
+    const batchMethods: ReadonlyArray<{
+        call: (m: Record<string, (...a: unknown[]) => unknown>, ids: ReadonlyArray<string>, table?: string) => unknown;
+        name: string;
+    }> = [
+        { call: (m, ids, table) => m["deleteMany"]!(ids, undefined, table), name: "deleteMany" },
+        {
+            call: (m, ids, table) =>
+                m["patchMany"]!(
+                    ids.map((id) => {
+                        return { id, patch: {} };
+                    }),
+                    undefined,
+                    table,
+                ),
+            name: "patchMany",
+        },
+    ];
+
+    it.each(batchMethods)("$name denies a bare-id batch when one id resolves to a protected, policy-less table", async ({ call, name }) => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as Record<string, (...a: unknown[]) => unknown>;
+
+        // "stat_1" resolves to the public table (allowed); "post_2" resolves to
+        // the protected table and must deny the WHOLE batch before it reaches base.
+        await expect(call(guarded, ["stat_1", "post_2"])).rejects.toThrow(RlsRequiredError);
+        expect((raw as unknown as Record<string, FakeWriter[keyof FakeWriter]>)[name]).not.toHaveBeenCalled();
+    });
+
+    it.each(batchMethods)("$name denies with expectedTable pinned to a protected table, with NO probe at all", async ({ call, name }) => {
+        expect.assertions(3);
+
+        const raw = createFakeWriter();
+        const tablesOfIds = vi.fn<(ids: ReadonlyArray<string>, expectedTable?: string) => ReadonlyMap<string, string>>();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId, tablesOfIds) as unknown as Record<string, (...a: unknown[]) => unknown>;
+
+        await expect(call(guarded, ["any-id-1", "any-id-2"], "posts")).rejects.toThrow(RlsRequiredError);
+        expect((raw as unknown as Record<string, FakeWriter[keyof FakeWriter]>)[name]).not.toHaveBeenCalled();
+        // Pinned-table gating never needs to resolve anything — no probe issued.
+        expect(tablesOfIds).not.toHaveBeenCalled();
+    });
+
+    it.each(batchMethods)("$name passes a batch of only unresolved ids through to base", async ({ call, name }) => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as Record<string, (...a: unknown[]) => unknown>;
+
+        await call(guarded, ["orphan_1", "orphan_2"]);
+
+        expect((raw as unknown as Record<string, FakeWriter[keyof FakeWriter]>)[name]).toHaveBeenCalledTimes(1);
+    });
+
+    it("consults the batch resolver exactly once with the deduped id set, and never the per-id tableOfId", async () => {
+        expect.assertions(3);
+
+        const raw = createFakeWriter();
+        const tableOfIdSpy = vi.fn<typeof tableOfId>(tableOfId);
+        const tablesOfIds = vi.fn<(ids: ReadonlyArray<string>) => ReadonlyMap<string, string>>(
+            (ids: ReadonlyArray<string>) => new Map(ids.map((id) => [id, "stats"])),
+        );
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfIdSpy, tablesOfIds) as unknown as {
+            deleteMany: (ids: ReadonlyArray<string>) => Promise<unknown>;
+        };
+
+        // A duplicated id ("stat_1" twice) — the resolver sees the DEDUPED set.
+        await guarded.deleteMany(["stat_1", "stat_2", "stat_1"]);
+
+        expect(tablesOfIds).toHaveBeenCalledTimes(1);
+        expect(tablesOfIds.mock.calls[0]?.[0]).toStrictEqual(["stat_1", "stat_2"]);
+        expect(tableOfIdSpy).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the per-id loop when no batch resolver is supplied (D1-twin fallback, pinned)", async () => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+        const tableOfIdSpy = vi.fn<typeof tableOfId>(tableOfId);
+        // No 4th argument: guardWriter's D1-twin call shape, unchanged.
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfIdSpy) as unknown as {
+            deleteMany: (ids: ReadonlyArray<string>) => Promise<unknown>;
+        };
+
+        await guarded.deleteMany(["stat_1", "stat_2"]);
+
+        expect(tableOfIdSpy).toHaveBeenCalledTimes(2);
     });
 });
 

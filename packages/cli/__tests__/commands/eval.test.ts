@@ -125,6 +125,38 @@ describe("lunora eval", () => {
         expect(result.evals[0]?.threshold).toBe(0.4);
     });
 
+    it("a NaN per-eval `threshold` export fails that eval only, without ever running it", async () => {
+        expect.assertions(4);
+
+        const { logger } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-bad-threshold-sample");
+
+        const result = await runEvalCommand({ cwd, logger });
+        const outcome = result.evals.find((entry) => entry.name === "nan-threshold");
+
+        expect(result.code).toBe(1);
+        expect(outcome?.passed).toBe(false);
+        expect(outcome?.error).toContain("threshold");
+        expect(outcome?.error).toContain("[0, 1]");
+    });
+
+    it("an out-of-range per-eval `threshold` export fails that eval only, without ever running it", async () => {
+        expect.assertions(5);
+
+        const { logger } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-bad-threshold-sample");
+
+        const result = await runEvalCommand({ cwd, logger });
+        const outcome = result.evals.find((entry) => entry.name === "out-of-range");
+
+        expect(result.code).toBe(1);
+        expect(outcome?.passed).toBe(false);
+        expect(outcome?.error).toContain("threshold");
+        expect(outcome?.error).toContain("[0, 1]");
+        // `run` was never invoked to produce a judged result for either bad-threshold eval.
+        expect(result.evals.every((entry) => entry.result === undefined)).toBe(true);
+    });
+
     it("a crashed eval always fails the run, independent of --threshold", async () => {
         expect.assertions(3);
 

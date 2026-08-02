@@ -1,8 +1,12 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // Intentionally no `outDir`/`rootDir` (unlike sibling packages, and unlike
+        // this package's own prior config): `lint:types` is `tsc --noEmit` and the
+        // real build is packem (driven by package.json exports), so neither is
+        // load-bearing here. A set `rootDir` would raise TS6059 for the inlined
+        // `../../../shared/branch-marker` import (a file outside this package,
+        // bundled in at build time). See shared/branch-marker.ts.
         "moduleResolution": "bundler",
         "types": ["@cloudflare/workers-types/experimental", "@cloudflare/vitest-pool-workers/types", "node"]
     },

@@ -153,6 +153,15 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * app-level add-on with no platform-portability meaning (feature flags, the
  * Cloudflare-Access identity facade, Cloudflare Images, R2 SQL, payments,
  * x402) — never gated, always emitted, on every target.
+ *
+ * `shardAlarms` is deliberately unmapped here, and not because it was
+ * forgotten: `CapabilityKey` is derived from `CAPABILITY_ROWS`, which
+ * enumerates app-imported `ctx.*` add-on modules, and there is no such usage
+ * key for alarms because they are an engine-internal contract member, never
+ * something an app imports. There is nothing for this map to gate on. Its
+ * `PlatformCapabilities` rating still matters for Studio parity reporting and
+ * any future target-level check — see its `shardAlarms` entry in the Node
+ * capability matrix (`NODE_CAPABILITIES` in `@lunora/platform`, plan 267).
  */
 const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> = {
     ai: "ai",

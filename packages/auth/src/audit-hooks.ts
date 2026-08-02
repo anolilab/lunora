@@ -33,8 +33,16 @@ interface AuthAuditHookConfig extends AppendAuthAuditOptions {
     onRecord?: (entry: AppendAuthAuditEntry) => Promise<void> | void;
 }
 
-/** Structural view of the fields we read off better-auth's after-hook context — kept loose to avoid coupling to internal types. */
+/**
+ * Structural view of the fields we read off better-auth's after-hook context —
+ * kept loose to avoid coupling to internal types.
+ *
+ * `body` is the parsed request body better-auth's middleware context exposes
+ * as `ctx.body` — pinned present and populated (e.g. `.email`) in the after-hook
+ * by `__tests__/audit-hooks.behaviour.test.ts` (plan 280 S0).
+ */
 interface AuditHookContext {
+    body?: Record<string, unknown>;
     context?: {
         newSession?: { session?: { userId?: string }; user?: { email?: string; id?: string } } | null;
         returned?: unknown;
@@ -49,6 +57,27 @@ interface AuditHookContext {
  * Map a better-auth endpoint path to the security event it represents, or
  * `undefined` for endpoints not worth auditing (session reads, config, …). Match
  * is by suffix so a caller `basePath` prefix (`/api/auth`) never affects it.
+ *
+ * Sign-in is split by what the endpoint actually DOES (plan 280 §4):
+ *
+ * - `/sign-in/social`, `/sign-in/magic-link` only DISPATCH — the first mints a
+ * provider redirect URL, the second sends an email. Nobody is authenticated
+ * yet, so these are `sign-in-initiated`, not `sign-in`.
+ * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`, and every
+ * `/two-factor/verify-*` (`verify-totp` / `verify-otp` / `verify-backup-code`
+ * — all three complete a challenged sign-in the same way) are where a
+ * session actually gets issued, so they join credential sign-ins
+ * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
+ * plain `sign-in`. They were NOT recorded at all before this change.
+ *
+ * `/oauth2/callback/*` is deliberately NOT matched here: it does not exist as
+ * an endpoint in the pinned `1.7.0-rc.2` (checked against the installed
+ * `better-auth` and `@better-auth/*` dist — generic-oauth reuses the core
+ * `/callback/:id` endpoint, it does not register its own path). `@better-auth/sso`
+ * does expose its own `/sso/callback/:providerId`, but `@lunora/auth`'s
+ * `plugins.ts` does not currently re-export `sso` — recorded as a gap for a
+ * follow-up (plan 280 §9 Q1), not matched here since it is unreachable through
+ * this package today.
  */
 const eventForPath = (path: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
@@ -58,7 +87,11 @@ const eventForPath = (path: string): AuthAuditEvent | undefined => {
         return "sign-up";
     }
 
-    if (normalized.includes("/sign-in/")) {
+    if (ends("/sign-in/social") || ends("/sign-in/magic-link")) {
+        return "sign-in-initiated";
+    }
+
+    if (normalized.includes("/sign-in/") || normalized.includes("/callback/") || ends("/magic-link/verify") || normalized.includes("/two-factor/verify-")) {
         return "sign-in";
     }
 
@@ -154,9 +187,52 @@ const resolveOutcome = (context: AuditHookContext): AuthAuditOutcome => {
 };
 
 /**
+ * RFC 5321's address-length ceiling — caps how much attacker-controlled request
+ * body text can land in the forensic `targetEmail` column (§8 risk: a hostile
+ * body's `email`/`username` is bound as a plain SQL parameter, never
+ * interpreted, but is still worth bounding).
+ */
+const MAX_TARGET_EMAIL_LENGTH = 320;
+
+/**
+ * The attempted identifier for a sign-in-family event (`sign-in` or
+ * `sign-in-initiated`) — `ctx.body.email`, falling back to `ctx.body.username`
+ * (credential sign-in also accepts a username in some configurations). `undefined`
+ * for every other event, and for a non-string/empty value. Deliberately a
+ * TOP-LEVEL entry field (see {@link AppendAuthAuditEntry.targetEmail}), never a
+ * `detail` key: `AUDIT_REDACT_RULES` (`./audit.ts`) scrubs email-shaped values
+ * inside `detail` regardless of key name, which would erase exactly this datum.
+ */
+const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
+    if (event !== "sign-in" && event !== "sign-in-initiated") {
+        return undefined;
+    }
+
+    const candidate = context.body?.["email"] ?? context.body?.["username"];
+
+    if (typeof candidate !== "string" || candidate.length === 0) {
+        return undefined;
+    }
+
+    return candidate.length > MAX_TARGET_EMAIL_LENGTH ? candidate.slice(0, MAX_TARGET_EMAIL_LENGTH) : candidate;
+};
+
+/**
  * Build the entry a given after-hook context should record, or `undefined` when
  * the path is not an audited security event. Exported for direct unit testing of
  * the classification/extraction without spinning up better-auth.
+ *
+ * Does NOT attempt to distinguish a 2FA-challenged credential sign-in from a
+ * fully successful one (a `sign-in-challenged` event, as an earlier design for
+ * this change proposed) — pinned in `__tests__/audit-hooks.behaviour.test.ts`
+ * (plan 280 S0): better-auth runs the APP's own `hooks.after` BEFORE the
+ * `twoFactor` plugin's own after-hook that rewrites the response to
+ * `{ twoFactorRedirect: true }` and nulls `ctx.context.newSession`. By the time
+ * THIS hook runs, `context.returned`/`context.newSession` still reflect the
+ * pre-interception, fully-successful sign-in — there is nothing here to detect
+ * the challenge from. Distinguishing it would need a different seam (e.g. a
+ * plugin-ordered-after-`twoFactor` hook, or reading `twoFactor`'s own
+ * database state) and is left to a follow-up.
  */
 const buildAuditEntry = (context: AuditHookContext, now: number = Date.now()): AppendAuthAuditEntry | undefined => {
     const event = context.path === undefined ? undefined : eventForPath(context.path);
@@ -167,6 +243,7 @@ const buildAuditEntry = (context: AuditHookContext, now: number = Date.now()): A
 
     const ip = resolveIp(context);
     const userAgent = header(context, "user-agent");
+    const targetEmail = resolveTargetEmail(context, event);
 
     return {
         ...resolveActor(context),
@@ -174,6 +251,7 @@ const buildAuditEntry = (context: AuditHookContext, now: number = Date.now()): A
         outcome: resolveOutcome(context),
         ts: now,
         ...(ip === undefined ? {} : { ip }),
+        ...(targetEmail === undefined ? {} : { targetEmail }),
         ...(userAgent === undefined ? {} : { userAgent }),
         detail: { path: context.path },
     };
@@ -190,6 +268,33 @@ const buildAuditEntry = (context: AuditHookContext, now: number = Date.now()): A
  *     hooks: { after: authAuditHook({ executor: d1Executor(env.DB), retention: 100_000 }) },
  * });
  * ```
+ *
+ * ## Behaviour change (plan 280) — `onRecord`/SIEM consumers keyed on `event` strings, read this
+ *
+ * | Endpoint                                          | Before              | After                 |
+ * | -------------------------------------------------- | ------------------- | --------------------- |
+ * | `/sign-in/email` (and other credential sign-ins)  | `sign-in`           | `sign-in` (unchanged) |
+ * | `/sign-in/social`                                  | `sign-in`           | `sign-in-initiated`   |
+ * | `/sign-in/magic-link`                              | `sign-in`           | `sign-in-initiated`   |
+ * | `/callback/:id` (social + generic-oauth)          | _(not recorded)_    | `sign-in`             |
+ * | `/magic-link/verify`                               | _(not recorded)_    | `sign-in`             |
+ * | `/two-factor/verify-totp` / `-otp` / `-backup-code`| _(not recorded)_    | `sign-in`             |
+ *
+ * A caller matching on `event === "sign-in"` now sees FEWER events for
+ * `/sign-in/social` and `/sign-in/magic-link` (they never actually authenticated
+ * anyone) and MORE events for the four previously-unrecorded completion
+ * endpoints — the net effect is a more truthful count, not a strictly larger or
+ * smaller one. `sign-in-initiated` is a new event name (open `AuthAuditEvent`
+ * union, so no wire/type break, but SIEM rules enumerating event names should
+ * add it). A failed sign-in now also carries `targetEmail` (the attempted
+ * address/username) when the request body supplied one — see
+ * {@link AppendAuthAuditEntry.targetEmail} — so credential-stuffing attempts can
+ * be grouped by target even though they never produce an `actorEmail`.
+ *
+ * NOT changed: `/sign-in/email` under an active 2FA challenge still records
+ * plain `sign-in` / `success` (not a distinct `sign-in-challenged` event) — see
+ * {@link buildAuditEntry}'s docblock for why that distinction turned out not to
+ * be buildable from this hook.
  */
 const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAuthMiddleware> =>
     createAuthMiddleware(async (context) => {
@@ -212,9 +317,18 @@ const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAut
             console.error("@lunora/auth: audit hook failed to record event", error);
         }
 
-        // Must return an object: better-auth's after-hook runner reads `.headers`
-        // / `.response` off the result, so returning `undefined` would throw.
-        return {};
+        // CRITICAL: return `undefined`, NEVER a bare object. better-auth's after-hook
+        // runner (`dispatch.mjs`'s `runAfterHooks`) treats ANY non-undefined value a
+        // hook resolves to as the endpoint's NEW response and overwrites
+        // `context.context.returned` with it — so a hook that ends `return {};` (this
+        // function's shape until this fix) silently REPLACES every hooked endpoint's
+        // real response body with `{}` on the wire: sign-up, sign-in, everything.
+        // `undefined` does not throw (the opposite of what the old comment here
+        // claimed) and is the true no-op — pinned empirically in
+        // `__tests__/audit-hooks.behaviour.test.ts`'s "hooks.after return value"
+        // suite (plan 280 S0), which reproduces the `{}` clobber and proves
+        // `undefined` leaves the response byte-for-byte equivalent to no hook at all.
+        return undefined;
     });
 
 /**

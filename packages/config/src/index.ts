@@ -56,7 +56,14 @@ export {
     updateDevServerState,
     writeDevServerState,
 } from "./dev-server-state";
-export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
+export {
+    DEV_VARS_EXAMPLE_FILE,
+    DEV_VARS_FILE,
+    DEV_VARS_KEY_PATTERN,
+    escapeRegExp,
+    parseDevVariableEntries,
+    upsertDevVariableLine,
+} from "./dev-variables-format";
 export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
@@ -99,6 +106,7 @@ export {
     planDevVariablesAugment,
     planDevVariablesScaffold,
     requiredSecrets,
+    writeDevVariablesFileAtomically,
 } from "./scaffold-dev-variables";
 export type {
     AddIndexEdit,

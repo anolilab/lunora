@@ -6,6 +6,7 @@ import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import { collectSkippedFkColumns, MAX_GENERATE_ROWS, requestSeedRows } from "../../lib/seed-data";
+import type { InsertBatchOutcome } from "./hooks/use-generate-rows";
 
 /** Shared control-button class for dialog actions. */
 const BTN =
@@ -26,10 +27,12 @@ interface GenerateRowsDialogProps {
 
     /**
      * Called with the generated row documents. The caller (data browser) routes
-     * them through the schema-aware `writeRow` insert path one by one. Returns
-     * `undefined` on success or an error message string on failure.
+     * them through the bulk `importShard` admin RPC in one call. The returned
+     * {@link InsertBatchOutcome} carries the REAL inserted/conflict counts —
+     * `error === undefined` does not mean every requested row landed (a
+     * conflict-only batch also has no `error`).
      */
-    readonly onInsertRows: (rows: ReadonlyArray<Record<string, unknown>>) => Promise<string | undefined>;
+    readonly onInsertRows: (rows: ReadonlyArray<Record<string, unknown>>) => Promise<InsertBatchOutcome>;
     /** The name of the table being seeded — for display only. */
     readonly table: string;
 }
@@ -51,6 +54,8 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
     const [inserting, setInserting] = useState<boolean>(false);
     const [error, setError] = useState<string | undefined>(undefined);
     const [inserted, setInserted] = useState<number | undefined>(undefined);
+    /** Rows skipped as id conflicts on the last successful (`error === undefined`) insert — surfaced alongside `inserted` so "0 inserted, 200 conflicts" never reads as "200 inserted". */
+    const [conflicts, setConflicts] = useState<number>(0);
 
     const onCountChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         const next = Number(event.target.value);
@@ -63,6 +68,7 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
     const handleGenerate = async (): Promise<void> => {
         setError(undefined);
         setInserted(undefined);
+        setConflicts(0);
         setInserting(true);
 
         // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
@@ -85,20 +91,25 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
                 return;
             }
 
-            const result = await onInsertRows(rows);
+            const outcome = await onInsertRows(rows);
 
-            if (result !== undefined) {
-                setError(result);
+            if (outcome.error !== undefined) {
+                setError(outcome.error);
 
                 return;
             }
 
-            setInserted(rows.length);
+            // `outcome.inserted` is the count that ACTUALLY landed — never
+            // `rows.length` (the requested count), which a conflict-only batch
+            // (every planned `_id` already existed) would overstate as if
+            // nothing had been skipped.
+            setInserted(outcome.inserted);
+            setConflicts(outcome.conflicts);
 
             const skippedFkColumns = collectSkippedFkColumns(columns, fkPools);
 
             if (skippedFkColumns.length > 0) {
-                setError(t("Inserted {count} rows. Skipped FK columns: {cols}", { cols: skippedFkColumns.join(", "), count: rows.length.toString() }));
+                setError(t("Inserted {count} rows. Skipped FK columns: {cols}", { cols: skippedFkColumns.join(", "), count: outcome.inserted.toString() }));
             }
         } finally {
             setInserting(false);
@@ -183,7 +194,13 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
 
             {inserted !== undefined && error === undefined && (
                 <p className="text-xs text-success" data-testid="gen-rows-success">
-                    {t("Inserted {count} rows successfully.", { count: inserted.toString() })}
+                    {conflicts > 0
+                        ? t("Inserted {inserted} of {total} rows — {conflicts} skipped as id conflicts.", {
+                              conflicts: conflicts.toString(),
+                              inserted: inserted.toString(),
+                              total: (inserted + conflicts).toString(),
+                          })
+                        : t("Inserted {count} rows successfully.", { count: inserted.toString() })}
                 </p>
             )}
 

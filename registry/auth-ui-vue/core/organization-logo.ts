@@ -11,7 +11,7 @@
  * `updateUser` — and folding both into one would mean a controller that takes a
  * discriminator and branches on it in three places.
  */
-import { ACCEPTED_TYPES } from "./avatar";
+import { isAcceptedImage } from "./avatar";
 import type { ControllerContext } from "./config";
 import { assertOk, mapAuthError } from "./map-error";
 import { createStore } from "./store";
@@ -85,7 +85,11 @@ const createOrganizationLogoController = (context: ControllerContext, options: L
                     return;
                 }
 
-                if (file.type !== "" && !ACCEPTED_TYPES.has(file.type)) {
+                // An empty `type` isn't a green light — it's the browser saying it
+                // doesn't know, which happens for real image files often enough
+                // (some file managers' drag-and-drop, camera-roll exports) that
+                // sniffing the bytes beats either trusting or rejecting blindly.
+                if (!(await isAcceptedImage(file))) {
                     store.update({ error: context.localization.avatarWrongType, status: "error" });
 
                     return;

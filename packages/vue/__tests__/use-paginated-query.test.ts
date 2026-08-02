@@ -1,5 +1,5 @@
 import type { PaginationResult } from "@lunora/client/pagination";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, ref } from "vue";
 
 import { useInfiniteQuery, usePaginatedQuery } from "../src/use-paginated-query";
@@ -26,6 +26,19 @@ const firstPageItems = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id
 const secondPageItems = [{ id: "f" }, { id: "g" }, { id: "h" }, { id: "i" }, { id: "j" }];
 
 describe("usePaginatedQuery (Vue)", () => {
+    // `usePaginatedQuery` is built on the paginated core, which gates opening
+    // page subscriptions on a browser `window` (SSR guard); the vitest env is
+    // `node` (no `window`), so define one for these client-path tests. The
+    // dedicated SSR test below removes it to exercise the guard, mirroring
+    // `@lunora/vue`'s `use-presence.test.ts`.
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("first page loads and results flatten", async () => {
         const fake = createFakeClient();
 
@@ -206,9 +219,37 @@ describe("usePaginatedQuery (Vue)", () => {
 
         scope.stop();
     });
+
+    it("does not open page subscriptions during SSR (no window)", async () => {
+        const fake = createFakeClient();
+
+        // Simulate the server render: no browser `window`.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        await flushAsync();
+
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(result.status.value).toBe("LoadingFirstPage");
+        expect(result.results.value).toStrictEqual([]);
+
+        scope.stop();
+    });
 });
 
 describe("useInfiniteQuery (Vue)", () => {
+    // `useInfiniteQuery` shares the same paginated core as `usePaginatedQuery`
+    // (see that describe block above for the SSR-guard rationale).
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("first page loads as first page array", async () => {
         const fake = createFakeClient();
 

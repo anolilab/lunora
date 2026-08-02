@@ -63,6 +63,18 @@ interface GuardableSchema {
 type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
 
 /**
+ * Batched sibling of {@link TableOfId} for `deleteMany`/`patchMany`: resolve
+ * the owning table of MANY ids in one call instead of one {@link TableOfId}
+ * call per id. Optional — a caller (e.g. the D1/`.global()` twin) that has no
+ * batch-probe primitive simply omits it, and {@link guardWriter}'s batch
+ * methods fall back to the existing per-id loop unchanged. The returned map
+ * carries only RESOLVED ids; an id absent from it is treated exactly like a
+ * {@link TableOfId} `undefined` — unresolved, so it leaks nothing and passes
+ * through.
+ */
+type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
+
+/**
  * Structural surface the guard wraps — method syntax (bivariant params) so the
  * concrete `DatabaseWriterLike` of either dialect satisfies it. The guard reads
  * only the table-targeting methods; everything else is copied through verbatim.
@@ -86,6 +98,7 @@ interface GuardableWriter {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => unknown;
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: unknown, expectedTable?: string) => unknown;
     patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => unknown;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => unknown;
@@ -93,6 +106,7 @@ interface GuardableWriter {
     rank: (tableName: string, indexName: string, options: unknown) => unknown;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
+    rankPageRows?: (tableName: string, indexName: string, options?: unknown) => unknown;
     replace: (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => unknown;
     restore?: (id: string, expectedTable?: string) => unknown;
     wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => unknown;
@@ -183,7 +197,7 @@ const guardEraseMethods = (base: GuardableWriter, schema: GuardableSchema, guard
 // would reject the real writer and erase its extra members (`normalizeId`, …)
 // from the return type. Instead we keep `W` opaque — preserving the caller's
 // concrete type through the return — and reach the guardable surface via a cast.
-const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): W => {
+const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds): W => {
     if (schema.rlsMode !== "required") {
         return raw;
     }
@@ -226,7 +240,50 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
         }
     };
 
+    /**
+     * The `deleteMany`/`patchMany` gate: same decision as {@link guardById}
+     * applied to every id in the batch, but fetching table ownership in as
+     * few round-trips as possible instead of one probe per id.
+     *
+     * - `expectedTable` pinned (the by-id facade's bound table) → one
+     * `guardTable` call, no probe at all — identical to the single-id path.
+     * - No {@link tablesOfIds} resolver supplied (the D1/`.global()` twin
+     * hasn't implemented the batch form) → fall back to the per-id loop,
+     * verbatim.
+     * - Otherwise: dedupe, resolve the owning table of every id in ONE call,
+     * then judge each id (in its original, possibly-duplicated input order)
+     * through the same {@link guardTable} — an unresolved id passes through
+     * exactly like {@link guardById}'s bare-id case.
+     */
+    const guardByIds = async (ids: ReadonlyArray<string>, expectedTable?: string): Promise<void> => {
+        if (expectedTable !== undefined) {
+            guardTable(expectedTable);
+
+            return;
+        }
+
+        if (!tablesOfIds) {
+            for (const id of ids) {
+                // eslint-disable-next-line no-await-in-loop -- no batch resolver supplied (D1-twin fallback): mirrors the pre-batch per-id loop verbatim
+                await guardById(id, expectedTable);
+            }
+
+            return;
+        }
+
+        const resolved = await tablesOfIds([...new Set(ids)], expectedTable);
+
+        for (const id of ids) {
+            const tableName = resolved.get(id);
+
+            if (tableName !== undefined) {
+                guardTable(tableName);
+            }
+        }
+    };
+
     const baseRankBefore = base.rankBefore;
+    const baseRankPageRows = base.rankPageRows;
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
@@ -253,10 +310,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
             // can't be reached by bare id), then delegate the batch — which
             // enforces the payload cap downstream. `expectedTable` (the facade's
             // bound table) scopes each id, mirroring the single delete gate.
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- per-id table resolution mirrors the single delete gate
-                await guardById(id, expectedTable);
-            }
+            await guardByIds(ids, expectedTable);
 
             return base.deleteMany(ids, options, expectedTable);
         },
@@ -314,6 +368,14 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.insertManyUnsafe(tableName, documents, options);
         },
+        lookupById: async (id: string, expectedTable?: string) => {
+            // The spread would otherwise expose the raw lookup, letting a bare id
+            // read any row in any table past the table-level secure-by-default check.
+            await guardById(id, expectedTable);
+
+            // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
+            return base.lookupById?.(id, expectedTable) ?? null;
+        },
         patch: async (id: string, patch: unknown, expectedTable?: string) => {
             await guardById(id, expectedTable);
 
@@ -321,10 +383,10 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
         },
         patchMany: async (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => {
             // `expectedTable` (the facade's bound table) scopes each id, mirroring the single patch gate.
-            for (const entry of patches) {
-                // eslint-disable-next-line no-await-in-loop -- per-id table resolution mirrors the single patch gate
-                await guardById(entry.id, expectedTable);
-            }
+            await guardByIds(
+                patches.map((entry) => entry.id),
+                expectedTable,
+            );
 
             return base.patchMany(patches, options, expectedTable);
         },
@@ -372,6 +434,14 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
             guardTable(tableName);
 
             return baseRankBefore(tableName, indexName, options);
+        };
+    }
+
+    if (baseRankPageRows) {
+        guarded["rankPageRows"] = (tableName: string, indexName: string, options?: unknown) => {
+            guardTable(tableName);
+
+            return baseRankPageRows(tableName, indexName, options);
         };
     }
 

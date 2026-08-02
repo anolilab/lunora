@@ -7,6 +7,7 @@ const encoder = new TextEncoder();
 
 const NO_BINDING_PATTERN = /no Workflow binding/u;
 const TRANSIENT_FAILURE_PATTERN = /temporarily unavailable/u;
+const BRANCH_MARKER_PATTERN = /reserved workflow branch-marker key/u;
 
 const bytesToHex = (bytes: Uint8Array): string => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -389,5 +390,31 @@ describe(dispatchAgentChannel, () => {
 
         // Verified + claimed, but AGENT_MISSING is absent from env.
         await expect(handler(await slackRequest(secret, '{"event":{}}'), { SLACK_SECRET: secret })).rejects.toThrow(NO_BINDING_PATTERN);
+    });
+
+    it("rejects (throws, does not ack) a claimed run whose mapper injects the reserved branch-marker key", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return {
+                        input: "x",
+                        threadKey: "t",
+                        __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" },
+                    };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+
+        // Verified + claimed, but the mapper's run carries a forged marker — must
+        // throw (surfacing as non-2xx so the provider redelivers), never be acked
+        // as handled, and never reach `create()`.
+        await expect(handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret })).rejects.toThrow(
+            BRANCH_MARKER_PATTERN,
+        );
+        expect(created).toStrictEqual([]);
     });
 });

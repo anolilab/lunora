@@ -10,6 +10,7 @@
  * React Native, Node.js).
  */
 
+import type { ConnectionStatus } from "./lunora-client";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,25 @@ interface TabCoordinatorOptions {
     onBecomeLeader?: () => void;
 
     /**
+     * Called when the leader broadcasts its aggregate `ConnectionStatus`
+     * (see `LunoraClient.emitConnectionStatus`) — a follower owns no socket
+     * of its own, so this is its only truthful signal for a status indicator
+     * or the offline-queue gate. Sent on every leader-side status change and
+     * once more right after a new leader takes over, so a follower already
+     * mid-mirroring isn't stuck on a stale value from the PREVIOUS leader.
+     *
+     * `identity` is the leader's own `identityFingerprint()` (`null` = signed
+     * out) — the channel-name scoping (see `LunoraClient.createTabCoordinator`)
+     * is the primary defence against a stale frame from a since-changed
+     * identity, but `setAuthToken` in one tab can move it to a new channel
+     * while this frame is already queued in another tab's message task queue.
+     * A follower drops the frame when `identity` is present and doesn't match
+     * its own; an **absent** `identity` (mixed-version leader) is accepted —
+     * today's behavior, and the channel split already separates version groups.
+     */
+    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
+
+    /**
      * Called when this tab loses leadership (should close WS connections).
      */
     onStopBeingLeader?: () => void;
@@ -50,8 +70,12 @@ interface TabCoordinatorOptions {
      * value; both are absent on a mixed-version leader that hasn't shipped the
      * cursor yet (the follower falls back to its historical behavior — see
      * `lunora-client.ts`'s `onSubscriptionData` wiring).
+     *
+     * `identity` is the leader's `identityFingerprint()` (see
+     * `onConnectionStatus`'s docblock for the full rationale and the
+     * absent-field mixed-version rule — identical here).
      */
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
 
     /**
      * Called when the leader broadcasts a subscription error.
@@ -64,20 +88,43 @@ interface TabCoordinatorOptions {
      * too — otherwise a `setQuery`/per-call optimistic overlay that a
      * byte-identical write just confirmed stays masked on follower tabs until
      * the next VISIBLE data frame arrives, even though the leader already
-     * dropped it. `lastMutationId` rides along the same way so a follower's
-     * `@lunora/db` `onCheckpoint` gate advances too, instead of waiting on a
-     * confirmed write the leader already acknowledged.
+     * dropped it.
+     *
+     * `lastMutationId` is the LEADER's own per-client `__client_watermark` —
+     * scoped server-side to the socket's announced `clientId` — so it only
+     * means anything to a follower whose `clientId` matches the leader's
+     * (`clientId` rides along for exactly that comparison; see
+     * `LunoraClient`'s wiring). An **absent** `clientId` (a mixed-version
+     * leader that hasn't shipped this field yet) also skips the
+     * `mutationId` half — safe, because the follower's own gates still
+     * resolve via its own RPC-ack watermark path and the `CheckpointRegistry`
+     * bounded fallback. The checkpoint (cursor) half of this callback fires
+     * unconditionally regardless of `clientId` — only the `mutationId` half
+     * is scoped.
+     *
+     * `identity` is the leader's `identityFingerprint()` — see
+     * `onConnectionStatus`'s docblock for the drop rule (identical here).
      */
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
 }
 
 type WsFollowerMessage =
     { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
 
 type WsLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; key: string; tabId: string; type: "subscription-data" }
+    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
     | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" }
-    | { cursor?: number; epoch?: string; key: string; lastMutationId?: number; tabId: string; type: "subscription-settled" };
+    | {
+          clientId?: string;
+          cursor?: number;
+          epoch?: string;
+          identity?: string | null;
+          key: string;
+          lastMutationId?: number;
+          tabId: string;
+          type: "subscription-settled";
+      }
+    | { identity?: string | null; status: ConnectionStatus; tabId: string; type: "connection-status" };
 
 type TabCoordinatorMessage = WsFollowerMessage | WsLeaderMessage;
 
@@ -106,6 +153,13 @@ class TabCoordinator {
     /** `true` once `start()` has been called. */
     private running: boolean = false;
 
+    /**
+     * `true` while a `claimAndPromote()` claim window is open. Guards the yield
+     * handler and `checkLeaderHealth`'s belt-and-braces else-branch so the two
+     * promotion paths can't both arm a `becomeLeader` timeout for the same gap.
+     */
+    private promotionPending: boolean = false;
+
     /** Timestamp of the most recent leader heartbeat. */
     private lastHeartbeat: number = 0;
 
@@ -115,9 +169,11 @@ class TabCoordinator {
     /** Callbacks set via constructor options. */
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
-    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string) => void) | undefined;
+    private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
-    private readonly onSubscriptionSettled: ((key: string, cursor?: number, epoch?: string, lastMutationId?: number) => void) | undefined;
+    private readonly onSubscriptionSettled:
+        ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -131,6 +187,7 @@ class TabCoordinator {
         this.leaderTimeout = options.leaderTimeout ?? DEFAULT_LEADER_TIMEOUT_MS;
         this.onBecomeLeader = options.onBecomeLeader;
         this.onStopBeingLeader = options.onStopBeingLeader;
+        this.onConnectionStatus = options.onConnectionStatus;
         this.onSubscriptionData = options.onSubscriptionData;
         this.onSubscriptionError = options.onSubscriptionError;
         this.onSubscriptionSettled = options.onSubscriptionSettled;
@@ -233,6 +290,30 @@ class TabCoordinator {
         return this.leader;
     }
 
+    /**
+     * Force this (freshly `start()`-ed) tab to become leader immediately,
+     * skipping the normal claim-then-`leaderTimeout` dance. Safe to call
+     * right after `start()` when the caller already knows this tab was the
+     * SOLE leader of the group it's replacing (e.g. `LunoraClient`'s
+     * identity-change coordinator restart — waiting out the full
+     * `leaderTimeout` there would freeze every live query for no reason,
+     * since this tab is overwhelmingly likely to be alone on the freshly
+     * derived channel). A sibling tab going through the normal `start()`
+     * dance for the SAME transition observes this tab's `becomeLeader`
+     * heartbeat and defers before its own claim-timeout fires; if another
+     * tab ALSO force-promotes at the same moment (e.g. two tabs both
+     * transitioning to the same new identity), the existing
+     * `resolveLeaderVsLeaderTieBreak` resolves the rare double-promotion
+     * the same way it resolves any other split-brain.
+     */
+    public promoteImmediately(): void {
+        if (!this.running) {
+            return;
+        }
+
+        this.becomeLeader();
+    }
+
     /** The tab id of the current leader, or `undefined` if unknown / no leader. */
     public get leaderTabId(): string | undefined {
         return this.knownLeader;
@@ -257,9 +338,14 @@ class TabCoordinator {
      * call this. `cursor`/`epoch` are omitted from the wire frame when
      * `undefined` (e.g. a CDC-off shard) — a follower on ANY version treats a
      * missing `cursor` as "no confirmed-layer drop this frame", so omitting it
-     * here is equivalent to sending it as `undefined`.
+     * here is equivalent to sending it as `undefined`. `identity` is this
+     * (leader) tab's own `identityFingerprint()` (`null` = signed out) —
+     * stamped so a follower can drop a frame from a since-changed identity
+     * (see the `onSubscriptionData` docblock); spread-included whenever
+     * supplied, since a fixed leader always knows its own identity (never
+     * omits it) and `null` must round-trip distinctly from "field absent".
      */
-    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string): void {
+    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void {
         if (!this.leader) {
             return;
         }
@@ -271,6 +357,7 @@ class TabCoordinator {
             data,
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
+            ...(identity === undefined ? {} : { identity }),
         });
     }
 
@@ -289,9 +376,21 @@ class TabCoordinator {
     /**
      * Broadcast a `settled` frame's checkpoint advance to all follower tabs
      * (no value change, but the resume cursor/epoch moved — see
-     * `LunoraClient.handleSettledMessage`). Only the leader should call this.
+     * `LunoraClient.handleSettledMessage`). `clientId` is this (leader) tab's
+     * own client id, stamped so a follower can tell whether the echoed
+     * `lastMutationId` watermark is genuinely its own (see the
+     * `onSubscriptionSettled` docblock). `identity` is this tab's own
+     * `identityFingerprint()` — see `broadcastSubscriptionData`'s docblock for
+     * the same round-tripping rule. Only the leader should call this.
      */
-    public broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number): void {
+    public broadcastSubscriptionSettled(
+        key: string,
+        cursor?: number,
+        epoch?: string,
+        lastMutationId?: number,
+        clientId?: string,
+        identity?: string | null,
+    ): void {
         if (!this.leader) {
             return;
         }
@@ -303,7 +402,25 @@ class TabCoordinator {
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
             ...(lastMutationId === undefined ? {} : { lastMutationId }),
+            ...(clientId === undefined ? {} : { clientId }),
+            ...(identity === undefined ? {} : { identity }),
         });
+    }
+
+    /**
+     * Broadcast this tab's aggregate `ConnectionStatus` to follower tabs, so
+     * they can mirror a truthful status without a socket of their own (see
+     * `LunoraClient.computeStatus`/`emitConnectionStatus`). `identity` is this
+     * tab's own `identityFingerprint()` — see `broadcastSubscriptionData`'s
+     * docblock for the same round-tripping rule. Only the leader should call
+     * this.
+     */
+    public broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void {
+        if (!this.leader) {
+            return;
+        }
+
+        this.broadcast({ type: "connection-status", tabId: this.tabId, status, ...(identity === undefined ? {} : { identity }) });
     }
 
     // -----------------------------------------------------------------------
@@ -323,6 +440,16 @@ class TabCoordinator {
                 break;
             }
 
+            case "connection-status": {
+                if (this.leader || message.tabId === this.tabId) {
+                    break;
+                }
+
+                this.onConnectionStatus?.(message.status, message.identity);
+
+                break;
+            }
+
             case "heartbeat": {
                 this.handleHeartbeat(message);
 
@@ -334,7 +461,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch);
+                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch, message.identity);
 
                 break;
             }
@@ -354,15 +481,23 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId);
+                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId, message.identity);
 
                 break;
             }
 
             case "yield-leadership": {
-                // The leader is stepping down. If it's the one we know, clear.
+                // The leader is stepping down. If it's the one we know, clear
+                // and immediately attempt to claim leadership ourselves —
+                // waiting for the next health-check tick (up to
+                // `leaderTimeout`) before even starting the claim window would
+                // double the freeze every remaining tab experiences.
                 if (this.knownLeader === message.tabId) {
                     this.knownLeader = undefined;
+
+                    if (this.running && !this.leader) {
+                        this.claimAndPromote();
+                    }
                 }
 
                 break;
@@ -480,23 +615,50 @@ class TabCoordinator {
             return;
         }
 
-        // If we have a known leader but haven't heard from them...
-        if (this.knownLeader !== undefined) {
-            const elapsed = Date.now() - this.lastHeartbeat;
+        // No known leader at all — belt-and-braces recovery for any path
+        // (besides `yield-leadership`, which already claims immediately) that
+        // strands `knownLeader`. `claimAndPromote` no-ops while a claim
+        // window is already open, so this can't stack a second `becomeLeader`
+        // timeout on top of one already in flight.
+        if (this.knownLeader === undefined) {
+            this.claimAndPromote();
 
-            if (elapsed > this.leaderTimeout) {
-                // Leader is gone — attempt to claim.
-                this.knownLeader = undefined;
-                this.broadcast({ type: "claim-leadership", tabId: this.tabId, ts: Date.now() });
-
-                // Become leader if no one responds within a short window.
-                setTimeout(() => {
-                    if (this.running && this.knownLeader === undefined) {
-                        this.becomeLeader();
-                    }
-                }, this.leaderTimeout);
-            }
+            return;
         }
+
+        // We have a known leader but haven't heard from them...
+        const elapsed = Date.now() - this.lastHeartbeat;
+
+        if (elapsed > this.leaderTimeout) {
+            // Leader is gone — attempt to claim.
+            this.knownLeader = undefined;
+            this.claimAndPromote();
+        }
+    }
+
+    /**
+     * Broadcast a leadership claim and arm a `becomeLeader` fallback: if no
+     * other tab has asserted itself as leader by the time the window elapses,
+     * self-promote. Shared by `checkLeaderHealth`'s stale-leader path and the
+     * `yield-leadership` handler so both promotion triggers use one claim
+     * window instead of each arming its own timeout.
+     */
+    private claimAndPromote(): void {
+        if (this.promotionPending) {
+            return;
+        }
+
+        this.promotionPending = true;
+        this.broadcast({ type: "claim-leadership", tabId: this.tabId, ts: Date.now() });
+
+        // Become leader if no one responds within a short window.
+        setTimeout(() => {
+            this.promotionPending = false;
+
+            if (this.running && this.knownLeader === undefined) {
+                this.becomeLeader();
+            }
+        }, this.leaderTimeout);
     }
 }
 

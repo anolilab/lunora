@@ -28,7 +28,7 @@ interface SchedulerDOState {
         deleteAlarm: () => Promise<void> | void;
         get: <T = unknown>(key: string) => Promise<T | undefined>;
         getAlarm: () => Promise<number | null>;
-        list: <T = unknown>(options?: { end?: string; limit?: number; prefix?: string }) => Promise<Map<string, T>>;
+        list: <T = unknown>(options?: { end?: string; limit?: number; prefix?: string; startAfter?: string }) => Promise<Map<string, T>>;
         put: <T = unknown>(entries: Record<string, T> | string, value?: T) => Promise<void>;
         setAlarm: (scheduledTime: number | Date) => Promise<void> | void;
     };
@@ -81,6 +81,11 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
+// Default page size for listRecords() (the `/list` + WS `jobs` view) and the
+// page size used internally by the exact-count cursor loop (countHeaders()).
+// Mirrors the alarm path's existing `limit: 100` bound (:417-420 below) so the
+// whole file has one bounded-page convention.
+const DEFAULT_LIST_LIMIT = 100;
 const MAX_RETRY_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 30_000;
 // When a pooled job can't run because its pool is at `maxConcurrency`, it is
@@ -755,18 +760,22 @@ class SchedulerDO {
         const server = pair[1];
 
         this.state.acceptWebSocket(server);
-        // Seed the new subscriber with the current list so its first value
-        // arrives over the same channel as later changes.
-        server.send(JSON.stringify({ records: await this.listRecords(), type: "jobs" }));
+        // Seed the new subscriber with the current (bounded) list so its first
+        // value arrives over the same channel as later changes, in the same
+        // `{ records, truncated }` shape `broadcastChange()` and `/list` use.
+        const seed = await this.listRecords();
+
+        server.send(JSON.stringify({ records: seed.records, truncated: seed.truncated, type: "jobs" }));
 
         // eslint-disable-next-line unicorn/no-null -- a 101 WebSocket-upgrade Response must have a null body
         return new Response(null, { status: 101, webSocket: client });
     }
 
     /**
-     * Re-list the jobs and push them to every connected subscriber. Called after
-     * any change (schedule / cancel / alarm-fire) so live studios reflect it
-     * immediately. A no-op when the runtime doesn't support hibernated sockets.
+     * Re-list the jobs (bounded — see {@link listRecords}) and push them to
+     * every connected subscriber. Called after any change (schedule / cancel /
+     * alarm-fire) so live studios reflect it immediately. A no-op when the
+     * runtime doesn't support hibernated sockets.
      */
     private async broadcastChange(): Promise<void> {
         const sockets = this.state.getWebSockets?.();
@@ -775,7 +784,8 @@ class SchedulerDO {
             return;
         }
 
-        const message = JSON.stringify({ records: await this.listRecords(), type: "jobs" });
+        const { records, truncated } = await this.listRecords();
+        const message = JSON.stringify({ records, truncated, type: "jobs" });
 
         for (const socket of sockets) {
             try {
@@ -786,11 +796,53 @@ class SchedulerDO {
         }
     }
 
-    /** The current pending job records (shared by `/list` and the live channel). */
-    private async listRecords(): Promise<ScheduleRecord[]> {
-        const entries = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
+    /**
+     * The current pending job records (shared by `/list` and the live channel),
+     * bounded to `limit` (default {@link DEFAULT_LIST_LIMIT}) so a large backlog
+     * can't be JSON-serialized and fanned out to every socket in one shot. Lists
+     * `limit + 1` and slices back down so `truncated` reflects whether there was
+     * a next row, without a second round-trip.
+     */
+    private async listRecords(limit: number = DEFAULT_LIST_LIMIT): Promise<{ records: ScheduleRecord[]; truncated: boolean }> {
+        const entries = await this.state.storage.list<ScheduleRecord>({ limit: limit + 1, prefix: HEADER_PREFIX });
+        const records = [...entries.values()];
+        const truncated = records.length > limit;
 
-        return [...entries.values()];
+        return { records: truncated ? records.slice(0, limit) : records, truncated };
+    }
+
+    /**
+     * Page through every `id:` header exactly once with bounded per-page memory
+     * (a `limit`+`startAfter` cursor loop), invoking `visit` for each record.
+     * Unlike {@link listRecords}, which intentionally truncates for the studio's
+     * live view, `/status` and `/pool` need EXACT counts — this walks the full
+     * set, but never materializes more than one page at a time.
+     */
+    private async countHeaders(visit: (record: ScheduleRecord) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
+        let startAfter: string | undefined;
+
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- each page's cursor (startAfter) depends on the previous page's last key, so the pages are inherently sequential
+            const page = await this.state.storage.list<ScheduleRecord>(
+                startAfter === undefined ? { limit: pageSize, prefix: HEADER_PREFIX } : { limit: pageSize, prefix: HEADER_PREFIX, startAfter },
+            );
+
+            if (page.size === 0) {
+                break;
+            }
+
+            for (const record of page.values()) {
+                visit(record);
+            }
+
+            const keys = [...page.keys()];
+
+            startAfter = keys.at(-1);
+
+            if (page.size < pageSize) {
+                break;
+            }
+        }
     }
 
     /**
@@ -938,14 +990,15 @@ class SchedulerDO {
         }
 
         const pool = await this.loadPool(name);
-        const headers = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
         let queued = 0;
 
-        for (const record of headers.values()) {
+        // Exact count via a bounded cursor loop — never materializes the whole
+        // header set at once (see countHeaders()).
+        await this.countHeaders((record) => {
             if (record.pool === name) {
                 queued += 1;
             }
-        }
+        });
 
         return SchedulerDO.json({ inFlight: pool.inFlight, maxConcurrency: pool.maxConcurrency, queued });
     }
@@ -962,24 +1015,24 @@ class SchedulerDO {
      * a saturated-but-idle pool stays visible; a pool that only ever existed as
      * queued jobs without a persisted row is unreachable here (the schedule path
      * always writes a `pool:&lt;name>` row before the job's header), so a single
-     * scan over `pool:`/`id:` is sufficient.
+     * scan over `pool:` plus a cursor loop over `id:` is sufficient.
      */
     private async handleStatus(): Promise<Response> {
-        // One scan for the durable pool rows (concurrency state) and one for the
-        // pending headers (queued counts). Both are bounded prefix lists, mirroring
-        // the existing `/pool` read path rather than re-deriving pool state.
+        // One scan for the durable pool rows (concurrency state, one row per
+        // pool name — inherently small and bounded) and a bounded cursor loop
+        // over the pending headers (queued counts, which scale with backlog
+        // size and so must NOT be materialized in one unlimited list).
         const poolRows = await this.state.storage.list<PoolState>({ prefix: POOL_PREFIX });
-        const headers = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
 
         // Count pending jobs per pool name in a single pass over the headers,
         // exactly as handlePoolStatus() counts for one pool.
         const queuedByPool = new Map<string, number>();
 
-        for (const record of headers.values()) {
+        await this.countHeaders((record) => {
             if (record.pool !== undefined) {
                 queuedByPool.set(record.pool, (queuedByPool.get(record.pool) ?? 0) + 1);
             }
-        }
+        });
 
         const pools: SchedulerPoolStatus[] = [];
         let backlog = 0;
@@ -1113,7 +1166,9 @@ class SchedulerDO {
     }
 
     private async handleList(): Promise<Response> {
-        return SchedulerDO.json({ records: await this.listRecords() });
+        const { records, truncated } = await this.listRecords();
+
+        return SchedulerDO.json({ records, truncated });
     }
 
     /**

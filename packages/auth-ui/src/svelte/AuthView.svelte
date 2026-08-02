@@ -28,7 +28,7 @@
         view?: string;
     } = $props();
 
-    const { forgotPasswordMethod, plugins, viewPaths } = useAuthUI();
+    const { forgotPasswordMethod, plugins, signUp, viewPaths } = useAuthUI();
 </script>
 
 <!--
@@ -53,7 +53,7 @@
     {:else}
         <ResetPasswordCard />
     {/if}
-{:else if view === viewPaths.signUp}
+{:else if view === viewPaths.signUp && signUp}
     <SignUpCard />
 {:else if view === viewPaths.twoFactor && plugins.twoFactor}
     <TwoFactorCard />

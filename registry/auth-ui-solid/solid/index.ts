@@ -17,7 +17,17 @@ export * from "../core";
  */
 export { AppearanceCard, AvatarCard, LinkedAccountsCard, SetUsernameCard } from "./account-cards";
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps } from "./auth-cards";
-export { AnonymousButton, EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+export {
+    AnonymousButton,
+    EmailOtpCard,
+    ForgotPasswordCard,
+    MagicLinkCard,
+    ResetPasswordCard,
+    ResetPasswordOtpCard,
+    SignInCard,
+    SignUpCard,
+    TwoFactorCard,
+} from "./auth-cards";
 export type { AuthViewProps } from "./auth-view";
 export { AuthView, PhoneSignInCard, UsernameSignInCard } from "./auth-view";
 export type { CaptchaProps, OrganizationLogoCardProps } from "./extras";

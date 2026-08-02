@@ -98,7 +98,12 @@ const baseSpecifiers = (useUmbrella = false): BaseSpecifiers =>
  * Matches the JS identifier subset we accept verbatim in emitted source.
  * Used to gate raw interpolation of table names, field names, etc. into
  * generated TS — anything outside the allowlist throws (E1) so we never
- * embed unescaped source from a `schema.ts`.
+ * embed unescaped source from a `schema.ts`. Table names are additionally
+ * gated earlier, at discovery, by `TABLE_NAME_IDENTIFIER_RE` in
+ * `discover-schema.ts` — that is the user-facing boundary (a pinpointed
+ * `file:line:column` diagnostic on the schema); this E1 throw is
+ * defense-in-depth behind it and should never fire for table names in
+ * practice. Must stay in sync with the discovery-side copy.
  */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
 
@@ -674,27 +679,75 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
     });
 
 /**
+ * Every base package the `lunorash` umbrella re-exports (its top-level,
+ * non-`.`/non-`./package.json` export segments — see
+ * `packages/lunora/package.json`). Drives both {@link UMBRELLA_QUALIFIER_RE}
+ * below and the codegen test asserting this list stays in sync with the
+ * umbrella's manifest (`run-codegen.test.ts`) — the anti-drift lock that
+ * catches the next omission before it ships, the way `flags` was omitted
+ * here once already.
+ */
+const UMBRELLA_BASE_PACKAGES = ["client", "do", "errors", "flags", "observability", "platform", "ratelimit", "runtime", "server", "values"] as const;
+
+/**
  * An `import("@lunora/&lt;base>")` qualifier the type checker rendered into a
  * function's args/return type — e.g. a mutator whose `server` impl returns
  * `ctx.db.insert(...)`'s `Id&lt;"messages">` from a file that never imports `Id`, so
  * ts-morph fully qualifies it as `import("@lunora/values").Id&lt;"messages">`.
  *
- * Only the BASE packages the `lunorash` umbrella re-exports are listed. An
- * umbrella-only app has no `@lunora/values` in its `package.json`, so the
- * verbatim qualifier is a TS2307 in the generated file; rewriting it to
- * `import("lunorash/values")` resolves through the dependency it actually
- * declares. Add-ons (`@lunora/agent`, `@lunora/notify`, …) are installed
- * separately either way and are deliberately left alone.
+ * Only the BASE packages the `lunorash` umbrella re-exports are listed
+ * (derived from {@link UMBRELLA_BASE_PACKAGES}, not hand-maintained — this
+ * regex used to list only five of the ten and silently missed `errors`,
+ * `flags`, `observability`, `platform`, `ratelimit`). An umbrella-only app
+ * has no `@lunora/values` in its `package.json`, so the verbatim qualifier is
+ * a TS2307 in the generated file; rewriting it to `import("lunorash/values")`
+ * resolves through the dependency it actually declares. Add-ons
+ * (`@lunora/agent`, `@lunora/notify`, …) are installed separately either way
+ * and are deliberately left alone.
  */
-const UMBRELLA_QUALIFIER_RE = /import\("@lunora\/(?<pkg>client|do|runtime|server|values)(?<subpath>\/[^"]*)?"\)/gu;
+const UMBRELLA_QUALIFIER_RE = new RegExp(String.raw`import\("@lunora/(?<pkg>${UMBRELLA_BASE_PACKAGES.join("|")})(?<subpath>/[^"]*)?"\)`, "gu");
+
+/**
+ * Deep-subpath forwarding is only safe for a package whose umbrella subpaths
+ * mirror its own subpath exports 1:1 (the umbrella re-exports `&lt;pkg>/&lt;sub>`
+ * for every `&lt;sub>` the package itself exports) — true for every one of the
+ * five ORIGINAL base packages (`client`'s `/query|/auth|/pagination|/ssr|/upload`,
+ * `server`'s `/types|/drizzle|/data-model|/rls/testing|/otel`; `do`, `runtime`,
+ * `values` have no subpaths at all). Two of the five newly-covered packages
+ * break that assumption, checked against `packages/lunora/package.json`
+ * versus each package's own manifest:
+ *
+ * - `flags`: the package exports `/providers/env`, `/providers/flagship`, `/providers/memory`, `/web`; the umbrella flattens/renames three of them to `/env`, `/flagship`, `/memory` and mirrors only `/web` verbatim. Forwarding `/providers/env` verbatim would rewrite into `lunorash/flags/providers/env`, which the umbrella does not export.
+ * - `platform`: the package exports `/conformance` and `/conformance/suite`; the umbrella re-exports only bare `./platform`, no subpaths at all.
+ *
+ * For these two, only a subpath present in the allowlist (or no subpath) is
+ * rewritten; anything else is left untouched rather than rewritten into a
+ * `lunorash/*` specifier that would not resolve. Packages absent from this
+ * map either have no subpaths (`errors`, `observability`, `ratelimit`) or
+ * mirror every subpath 1:1 (`client`, `do`, `runtime`, `server`, `values`) —
+ * forwarding is unconditionally safe for them.
+ */
+const UMBRELLA_MIRRORED_SUBPATHS: Partial<Record<string, ReadonlySet<string>>> = {
+    flags: new Set(["/web"]),
+    platform: new Set(),
+};
 
 /** Rewrite base-package type qualifiers in a rendered generated file to the project's import form. */
 const relocateBaseQualifiers = (rendered: string, useUmbrella: boolean): string =>
     useUmbrella
-        ? rendered.replaceAll(
-              UMBRELLA_QUALIFIER_RE,
-              (_match, packageName: string, subpath: string | undefined) => `import("lunorash/${packageName}${subpath ?? ""}")`,
-          )
+        ? rendered.replaceAll(UMBRELLA_QUALIFIER_RE, (match: string, packageName: string, subpath: string | undefined) => {
+              const mirroredSubpaths = UMBRELLA_MIRRORED_SUBPATHS[packageName];
+
+              // A subpath outside the mirrored set (only reachable for `flags`/
+              // `platform` today) has no matching umbrella export — leave the
+              // qualifier as-is rather than rewrite it into a specifier that
+              // would not resolve.
+              if (subpath && mirroredSubpaths && !mirroredSubpaths.has(subpath)) {
+                  return match;
+              }
+
+              return `import("lunorash/${packageName}${subpath ?? ""}")`;
+          })
         : rendered;
 
 /**
@@ -4451,6 +4504,38 @@ const vectorsStub: VectorSearchLike = {
 `
         : "";
     const vectorNamespaceOption = hasShardedVectors ? "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, " : "";
+    // Read-side counterpart to `vectorNamespaceOption`: threaded into
+    // `createContextVectors` so `ctx.vectors` (query/getByIds/deleteByIds/
+    // upsert/upsertNow) defaults to this DO's own namespace too — otherwise
+    // `ctx.vectors.query` searches every tenant's vectors (namespace-less
+    // Vectorize queries match the whole index) even though the auto-sync
+    // write hook above is already scoped.
+    //
+    // This does NOT simply mirror `vectorNamespaceOption`'s sentinel mapping,
+    // for a reason specific to the read side: `ctx.vectors` is a single flat
+    // facade over EVERY declared vector index (root-scoped and sharded tables
+    // alike — `config.vectors(env)` registers them all in one map), reachable
+    // from ANY DO instance. The write hook is safe to map `ROOT_SHARD_NAME` to
+    // `undefined` unconditionally because a write event only ever fires for a
+    // table THIS instance owns (a sharded table's rows never reach the root
+    // instance) — but a read/explicit-write call takes an arbitrary index name
+    // from application code, so the SAME mapping on `ctx.vectors` would let a
+    // namespace-less call from the root instance reach a SHARDED index and
+    // search/mutate every tenant's vectors, in a mixed schema (some vectorized
+    // tables `.shardBy()`'d, others root-scoped). `shardedIndexNames` tells the
+    // adapter exactly which indexes `namespace` is a valid default for, so a
+    // root-instance call against a genuinely root-scoped index stays
+    // namespace-less (correct — unchanged), while the same call against a
+    // sharded index throws (see `createContextVectors`'s docblock) rather than
+    // silently defaulting to "every tenant". Gated on `hasShardedVectors` so an
+    // unsharded (or no-vectors) schema keeps emitting the bare
+    // `createContextVectors(lunora)` call, byte-identical.
+    const vectorsContextNamespaceOption = hasShardedVectors
+        ? `, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: [${schema.vectorIndexes
+              .filter((index) => shardedTableNames.has(index.table))
+              .map((index) => JSON.stringify(index.name))
+              .join(", ")}] }`
+        : "";
     const vectorsBuild = hasVectors
         ? `
             let vectors: VectorSearchLike;
@@ -4459,7 +4544,7 @@ const vectorsStub: VectorSearchLike = {
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 ${vectorNamespaceField}
-                vectors = createContextVectors(lunora);
+                vectors = createContextVectors(lunora${vectorsContextNamespaceOption});
                 onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;
@@ -5922,4 +6007,5 @@ export {
     emitWorkflows,
     emitWranglerCronTriggers,
     GENERATED_HEADER,
+    UMBRELLA_BASE_PACKAGES,
 };

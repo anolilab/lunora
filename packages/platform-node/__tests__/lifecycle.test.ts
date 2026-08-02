@@ -197,5 +197,60 @@ describe("lifecycle disposers", () => {
 
             expect(readdirSync(workdir)).toContain("platform.sqlite3");
         });
+
+        it("makes schedule() throw instead of arming a fresh, never-cleared timer", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            try {
+                const platform = createNodePlatform();
+
+                platform.close();
+
+                await expect(platform.scheduler.schedule("some/fn", {}, { delayMs: 5000 })).rejects.toThrow("platform closed");
+                expect(vi.getTimerCount()).toBe(0);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("reports no pending jobs and refuses to cancel a pre-close job once closed", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            try {
+                const platform = createNodePlatform();
+
+                const { id } = await platform.scheduler.schedule("some/fn", {}, { delayMs: 5000 });
+
+                platform.close();
+
+                // `list` is optional on the contract (a host may omit it); this
+                // host always implements it — see `createNodeSchedulerHost`.
+                await expect(platform.scheduler.list?.()).resolves.toStrictEqual([]);
+                await expect(platform.scheduler.cancel(id)).resolves.toBe(false);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("makes alarms.set() throw before mutating state, leaving get() reporting no alarm", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            try {
+                const platform = createNodePlatform();
+
+                platform.close();
+
+                expect(() => platform.shard.alarms.set(Date.now() + 1000)).toThrow("platform closed");
+                expect(platform.shard.alarms.get()).toBeNull();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
     });
 });

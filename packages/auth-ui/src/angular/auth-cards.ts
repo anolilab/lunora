@@ -72,7 +72,7 @@ class AnonymousButtonComponent {
     selector: "lunora-sign-in-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.signIn" [footer]="true">
+        <lunora-auth-card [title]="t.signIn" [footer]="signUp()">
             <lunora-auth-social-buttons [providers]="social()" [lastUsed]="lastUsed()" (select)="signInSocial($event)" />
             @if (anonymous()) {
                 <lunora-anonymous-button />
@@ -110,7 +110,9 @@ class AnonymousButtonComponent {
                     <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signIn }}</lunora-auth-submit-button>
                 </form>
             }
-            <lunora-auth-link lunoraAuthCardFooter [href]="signUpHref()">{{ t.noAccount }}</lunora-auth-link>
+            @if (signUp()) {
+                <lunora-auth-link lunoraAuthCardFooter [href]="signUpHref()">{{ t.noAccount }}</lunora-auth-link>
+            }
         </lunora-auth-card>
     `,
 })
@@ -136,6 +138,7 @@ class SignInCardComponent {
     protected readonly anonymous = computed(() => this.context().plugins.anonymous);
     protected readonly credentials = computed(() => this.context().credentials);
     protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod : undefined));
+    protected readonly signUp = computed(() => this.context().signUp);
     protected readonly social = computed(() => this.context().social);
 
     protected signInSocial(provider: string): void {
@@ -158,49 +161,58 @@ class SignInCardComponent {
     selector: "lunora-sign-up-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.signUp" [footer]="true">
-            <!--
-              Social buttons belong on sign-up too — OAuth is a sign-up path, not
-              just a sign-in one, and omitting them here sends new users through
-              a password form they never needed.
-            -->
-            <lunora-auth-social-buttons [providers]="social()" (select)="signInSocial($event)" />
-            @if (social().length > 0) {
-                <lunora-auth-divider />
-            }
-            <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
-                <lunora-auth-banner [error]="state().formError" />
-                <lunora-auth-field
-                    [field]="state().fields.name"
-                    [label]="t.nameLabel"
-                    name="name"
-                    autoComplete="name"
-                    (changed)="actions.setField('name', $event)"
-                    (blurred)="actions.blur('name')"
-                />
-                <lunora-auth-field
-                    [field]="state().fields.email"
-                    [label]="t.emailLabel"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    (changed)="actions.setField('email', $event)"
-                    (blurred)="actions.blur('email')"
-                />
-                <lunora-auth-field
-                    [field]="state().fields.password"
-                    [label]="t.passwordLabel"
-                    name="password"
-                    type="password"
-                    autoComplete="new-password"
-                    (changed)="actions.setField('password', $event)"
-                    (blurred)="actions.blur('password')"
-                />
-                <lunora-auth-password-strength [value]="state().fields.password.value" />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signUp }}</lunora-auth-submit-button>
-            </form>
-            <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.haveAccount }}</lunora-auth-link>
-        </lunora-auth-card>
+        <!--
+          The server can close self-serve sign-up
+          (emailAndPassword.disableSignUp). Mirrors the plugin-gated cards:
+          mounted directly, this card renders nothing rather than a form that
+          will fail on submit; AuthView's route falls back to the sign-in
+          card instead of landing on a blank page.
+        -->
+        @if (enabled()) {
+            <lunora-auth-card [title]="t.signUp" [footer]="true">
+                <!--
+                  Social buttons belong on sign-up too — OAuth is a sign-up path, not
+                  just a sign-in one, and omitting them here sends new users through
+                  a password form they never needed.
+                -->
+                <lunora-auth-social-buttons [providers]="social()" (select)="signInSocial($event)" />
+                @if (social().length > 0) {
+                    <lunora-auth-divider />
+                }
+                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
+                    <lunora-auth-banner [error]="state().formError" />
+                    <lunora-auth-field
+                        [field]="state().fields.name"
+                        [label]="t.nameLabel"
+                        name="name"
+                        autoComplete="name"
+                        (changed)="actions.setField('name', $event)"
+                        (blurred)="actions.blur('name')"
+                    />
+                    <lunora-auth-field
+                        [field]="state().fields.email"
+                        [label]="t.emailLabel"
+                        name="email"
+                        type="email"
+                        autoComplete="email"
+                        (changed)="actions.setField('email', $event)"
+                        (blurred)="actions.blur('email')"
+                    />
+                    <lunora-auth-field
+                        [field]="state().fields.password"
+                        [label]="t.passwordLabel"
+                        name="password"
+                        type="password"
+                        autoComplete="new-password"
+                        (changed)="actions.setField('password', $event)"
+                        (blurred)="actions.blur('password')"
+                    />
+                    <lunora-auth-password-strength [value]="state().fields.password.value" />
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signUp }}</lunora-auth-submit-button>
+                </form>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.haveAccount }}</lunora-auth-link>
+            </lunora-auth-card>
+        }
     `,
 })
 class SignUpCardComponent {
@@ -212,6 +224,8 @@ class SignUpCardComponent {
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
 
+    /** Derived, so a discovery answer that closes self-serve sign-up takes effect. */
+    protected readonly enabled = computed(() => this.context().signUp);
     /** Derived, so the provider list follows server discovery. */
     protected readonly social = computed(() => this.context().social);
 

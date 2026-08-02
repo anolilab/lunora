@@ -18,6 +18,12 @@ interface ModuleOptions {
 }
 ```
 
+### `checkWorkerEntry` (const)
+
+```ts
+const checkWorkerEntry: (rootDirectory: string, warn: (message: string) => void) => void;
+```
+
 ### `default` (const)
 
 ```ts

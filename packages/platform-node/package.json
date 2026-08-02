@@ -60,7 +60,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/platform": "1.0.0-alpha.1",
+        "@lunora/platform": "1.0.0-alpha.2",
         "better-sqlite3": "^12.11.1"
     },
     "devDependencies": {

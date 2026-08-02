@@ -12,7 +12,7 @@
 ## Current state (verified)
 
 - `packages/agent/src/types.ts:579-592` documents `onConcurrentRun: "queue" |
-  "reject" | "replace"` and says `"queue"` is "reserved for a future durable
+"reject" | "replace"` and says `"queue"` is "reserved for a future durable
   queue; currently degrades to `reject`."
 - `packages/agent/src/component.ts:184-250` (`agentEnsureThread`) is the actual
   guard: it detects a genuine second run (different, live `instanceId` on a
@@ -28,10 +28,10 @@
   `awaitApproval`) is the existing precedent for "durably park a workflow
   instance and wake it selectively": it persists a marker, patches the thread
   to `"awaiting_input"`, then calls `step.waitForEvent<ApprovalDecision>(
-  `approval:${call.id}`, { type: `agent-approval:${call.id}` })`. Resolution
+`approval:${call.id}`, { type: `agent-approval:${call.id}` })`. Resolution
   (`component.ts:512-557`, `agentResolveApproval`) calls
   `ctx.agents[agent].sendEvent(instanceId, { type: `agent-approval:${toolCallId}`,
-  payload })` — the SAME `AgentHandle.sendEvent` producer
+payload })` — the SAME `AgentHandle.sendEvent` producer
   (`types.ts:1161-1187`) a queue resume would use.
 - `packages/scheduler/src/create-workpool.ts:24-34` is explicit about its own
   boundary: "Why not Cloudflare Queues? ... do NOT grow multi-step
@@ -55,7 +55,7 @@ both load-bearing:
    `create-workpool.ts` says belongs in Workflows — i.e. reimplementing
    `step.waitForEvent` on top of a tool whose doc comment says not to.
 2. **Wrong ownership boundary.** The seq-claim correctness (below) depends on
-   the dequeue-and-handoff happening in the *same* DO mutation that frees the
+   the dequeue-and-handoff happening in the _same_ DO mutation that frees the
    thread, so no third party can observe a briefly-ownerless thread. That
    mutation already lives on the agent's own `agent_threads` table inside the
    shard DO. Routing through a second DO (`SchedulerDO`) would split that
@@ -91,14 +91,14 @@ defineTable({
 
 ## Ordering + seq claim — the correctness core
 
-The STOP condition this plan was written under is: *"the per-thread seq
+The STOP condition this plan was written under is: _"the per-thread seq
 counter can't be claimed by a resuming run without racing the in-flight
-run."* Working through it: **it doesn't race**, provided both halves of the
+run."_ Working through it: **it doesn't race**, provided both halves of the
 handoff stay inside the DO's existing single-threaded mutation serialization
 — the same property that already makes today's `"reject"`/`"replace"` branches
 race-free.
 
-**Enqueue (on conflict, policy `"queue"`).** Inside the *same* mutation that
+**Enqueue (on conflict, policy `"queue"`).** Inside the _same_ mutation that
 today throws `CONFLICT` (`component.ts:230-235`), instead:
 
 - Look up an existing queue row for `(threadKey, instanceId)` (the
@@ -110,7 +110,7 @@ today throws `CONFLICT` (`component.ts:230-235`), instead:
 - Otherwise, if the queue is at its depth bound, throw `CONFLICT` (the same
   message shape as `"reject"` today) — see "Bound + overflow" below.
 - Otherwise, insert `{ threadKey, instanceId, agent, enqueuedAt: now,
-  position: nextPosition }`, where `nextPosition` is a per-thread counter
+position: nextPosition }`, where `nextPosition` is a per-thread counter
   (stored on the thread row, incremented like `messageCount` already is) —
   **not** `Date.now()`. Two runs parking in the same millisecond must still
   get a strict, unambiguous order; a counter allocated inside the same
@@ -118,7 +118,7 @@ today throws `CONFLICT` (`component.ts:230-235`), instead:
   gives `seq` its ordering.
 - Return `{ created: false, queued: true, position }` instead of throwing.
 
-**Resume (on completion).** Inside the *same* mutation that today patches the
+**Resume (on completion).** Inside the _same_ mutation that today patches the
 finishing thread to `"idle"`/`"error"`/`"cancelled"` (there is no such
 mutation yet — today's `patchThreadByKey` in `agent-loop.ts` just sets
 `status`; the prototype adds the "check the queue" step to that call site):
@@ -126,18 +126,18 @@ mutation yet — today's `patchThreadByKey` in `agent-loop.ts` just sets
 - Guard on `thread.instanceId === callerInstanceId` first — the same
   ownership check `agentResolveApproval` already applies
   (`component.ts:533-537`). This makes the dequeue step idempotent under a
-  replay of the *finishing* run's own completion: a second execution sees the
+  replay of the _finishing_ run's own completion: a second execution sees the
   thread's `instanceId` has already moved to the dequeued run and no-ops
-  rather than dequeuing the *next* entry too.
+  rather than dequeuing the _next_ entry too.
 - Query `byThread` ordered by `position` ascending, take the first row (FIFO).
 - If none: patch the thread to the terminal status as today.
 - If found: **in the same mutation**, delete the queue row and patch the
   thread to `{ instanceId: head.instanceId, status: "running", updatedAt:
-  now }` — i.e. skip the terminal-status write entirely; ownership transfers
+now }` — i.e. skip the terminal-status write entirely; ownership transfers
   directly from the finishing instance to the head of the queue. Return
   `{ dequeued: head.instanceId }` to the caller (the finishing run's
   workflow), which then calls `ctx.agents[agent].sendEvent(head.instanceId,
-  { type: `agent-dequeue:${threadKey}:${head.instanceId}`, payload: {} })`.
+{ type: `agent-dequeue:${threadKey}:${head.instanceId}`, payload: {} })`.
 
 Because both enqueue and dequeue-and-handoff are single mutations on a
 single-threaded DO, there is no window where the thread is observably
@@ -172,7 +172,7 @@ told to wake up.
 - **A REPLAY re-entering under the same instance id is never treated as a new
   parked run** — inherited unchanged from the existing guard: `isConcurrentRun`
   in `component.ts:220-223` already excludes `args.instanceId === priorInstanceId`,
-  and that check runs *before* the queue branch, so it never fires for a
+  and that check runs _before_ the queue branch, so it never fires for a
   replay of the run that currently owns the thread.
 - **A finishing run's own replay never double-dequeues** — the
   `thread.instanceId === callerInstanceId` guard on the completion mutation
@@ -240,14 +240,14 @@ durable rows or a run that silently never gets its turn.
    `"awaiting_input" | "cancelled" | "error" | "idle" | "running"` — none of
    these mean "your run is queued behind another." While B is parked, the
    thread it would attach to still shows A's status (`"running"`), since
-   ownership hasn't transferred. Does the *caller* of the queued run (which
+   ownership hasn't transferred. Does the _caller_ of the queued run (which
    dispatched a workflow that's now parked, not the thread's live subscriber)
    need a way to observe `{ queued: true, position }`? The prototype's queue
    table could back a query, but adding a public query is a real feature
    decision, not a spike deliverable.
 4. **Interaction with `"replace"`.** If a thread has A running and B, C parked
    behind it (`"queue"`), and a fourth run D calls with `onConcurrentRun:
-   "replace"`, does D take over from A only (leaving B, C to resume after D
+"replace"`, does D take over from A only (leaving B, C to resume after D
    finishes — B/C queued behind a run they never knew about), or does replace
    flush the queue (terminate B and C too, since they were waiting for A
    specifically)? Both are defensible; this spike takes no position.

@@ -50,6 +50,54 @@ describe("createQueues", () => {
 
         await expect(queues.smsQueue!.send({})).rejects.toThrow(/no queue named "smsQueue".*known queues: emailQueue/s);
     });
+
+    it("rejects a sendBatch over the 100-message cap naming the limit and the actual count", async () => {
+        expect.assertions(2);
+
+        const email = fakeBinding();
+        const queues = createQueues({ bindings: { emailQueue: email } });
+        const messages = Array.from({ length: 101 }, (_unused, index) => {
+            return { body: index };
+        });
+
+        await expect(queues.emailQueue!.sendBatch(messages)).rejects.toThrow(/exceeds 100 \(got 101\)/u);
+        expect(email.batches).toHaveLength(0);
+    });
+
+    it("the sendBatch cap rejection is async (a rejected promise), not a synchronous throw", async () => {
+        expect.assertions(1);
+
+        const email = fakeBinding();
+        const queues = createQueues({ bindings: { emailQueue: email } });
+        const messages = Array.from({ length: 101 }, (_unused, index) => {
+            return { body: index };
+        });
+        let result: Promise<void> | undefined;
+
+        // Calling sendBatch itself must not throw — the failure only surfaces
+        // once the returned promise is awaited/rejected.
+        expect(() => {
+            result = queues.emailQueue!.sendBatch(messages);
+        }).not.toThrow();
+
+        // Consume the (expected) rejection so vitest doesn't flag it as an
+        // unhandled rejection once this test completes.
+        await result?.catch(() => undefined);
+    });
+
+    it("forwards a sendBatch of exactly 100 messages unchanged", async () => {
+        expect.assertions(1);
+
+        const email = fakeBinding();
+        const queues = createQueues({ bindings: { emailQueue: email } });
+        const messages = Array.from({ length: 100 }, (_unused, index) => {
+            return { body: index };
+        });
+
+        await queues.emailQueue!.sendBatch(messages);
+
+        expect((email.batches[0] as { messages: unknown[] }).messages).toHaveLength(100);
+    });
 });
 
 describe("createQueueContext", () => {

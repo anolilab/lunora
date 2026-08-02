@@ -271,13 +271,25 @@ const trySendFrame = (ws: FrameSink, frame: string): boolean => {
  * last fully-delivered value so the next flush re-diffs the whole change. Keyed
  * list deltas are idempotent on replay, so re-sending an already-applied row is
  * harmless.
+ *
+ * `lastMutationId` (when supplied) is stamped on EVERY delta frame in this
+ * batch, not just the last — a client's checkpoint gate reads whichever frame
+ * it happens to observe, and re-stamping the same value on each is a no-op
+ * for a client that already saw an earlier one (idempotent, monotonic
+ * `Math.max` on the read side). Without this, a `@lunora/db` list collection
+ * — the exact id-keyed shape this delta path exists for — never sees a
+ * per-frame watermark past its first snapshot, permanently starving the
+ * checkpoint gate of the frame-carried signal `pushSubscriptionData`'s
+ * snapshot branch provides (plan 266 finding d's fix was incomplete without
+ * this — the delta path is this feature's common case, not a rare fallback).
  */
-const sendDeltaFrames = (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string): boolean => {
+const sendDeltaFrames = (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string, lastMutationId?: number): boolean => {
     const idJson = JSON.stringify(subId);
+    const watermarkSuffix = lastMutationId === undefined ? "" : `,"lastMutationId":${String(lastMutationId)}`;
     let delivered = true;
 
     for (const deltaBody of deltaFrames) {
-        if (!trySendFrame(ws, `{"type":"delta","id":${idJson},"delta":${deltaBody}${cursorSuffix}}`)) {
+        if (!trySendFrame(ws, `{"type":"delta","id":${idJson},"delta":${deltaBody}${watermarkSuffix}${cursorSuffix}}`)) {
             delivered = false;
         }
     }

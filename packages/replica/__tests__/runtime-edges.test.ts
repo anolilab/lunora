@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventLogDOClient } from "../src/event-log-do-client";
 import { EventSource } from "../src/event-source";
@@ -169,6 +169,119 @@ describe("eventSource edge paths", () => {
         source.applyEvent("inc", null);
 
         expect(source.state).toStrictEqual({ count: 2 });
+    });
+
+    it("plan 284: abort while idle settles the pending next() promise", async () => {
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
+
+        source.applyEvent("inc", null);
+
+        const controller = new AbortController();
+        const iterator = source.events(controller.signal);
+
+        // Drain the one past entry so the generator parks in the phase-2 idle wait.
+        const first = await iterator.next();
+
+        expect(first).toStrictEqual({ done: false, value: expect.objectContaining({ type: "inc" }) });
+
+        const pending = iterator.next();
+
+        controller.abort();
+
+        // Race against a real-timer sentinel: pre-fix, `pending` never settles
+        // (the idle park is resolved only by the state-changed listener, which
+        // an abort never fires), so the sentinel wins and this assertion fails
+        // by mismatch rather than the test wedging vitest.
+        const TIMEOUT = Symbol("timeout");
+        const sentinel = new Promise((resolve) => {
+            setTimeout(resolve, 200, TIMEOUT);
+        });
+
+        const settled = await Promise.race([pending, sentinel]);
+
+        expect(settled).toStrictEqual({ done: true, value: undefined });
+    });
+
+    it("plan 284: abort tears down the state-changed listener (no leaked listener/buffer)", async () => {
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
+        const offSpy = vi.spyOn(source.emitter, "off");
+
+        const controller = new AbortController();
+        const iterator = source.events(controller.signal);
+
+        // No past entries: the generator parks immediately in phase 2.
+        const pending = iterator.next();
+
+        controller.abort();
+
+        await expect(pending).resolves.toStrictEqual({ done: true, value: undefined });
+
+        // The generator's `finally` must have unsubscribed the state-changed
+        // listener it registered in `events()` — pre-fix, `unsub()` never runs
+        // because the generator never reaches its `finally` (the pending
+        // `next()` above would hang, which the previous test already pins).
+        expect(offSpy).toHaveBeenCalledWith("state-changed", expect.any(Function));
+
+        // Indirect corroboration: applying another event afterward is picked
+        // up by a fresh, independent events() generator exactly once — the
+        // aborted generator's (leaked, pre-fix) listener would otherwise still
+        // be registered alongside it, but that isn't observable here except
+        // via the direct off() assertion above.
+        source.applyEvent("inc", null);
+
+        const second = source.events();
+        const next = await second.next();
+
+        expect(next).toStrictEqual({ done: false, value: expect.objectContaining({ type: "inc" }) });
+
+        await second.return(undefined);
+    });
+
+    it("plan 284: no duplicate seq is yielded across the phase-1/phase-2 boundary when an event is applied mid-replay", async () => {
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
+
+        // Two past entries so the generator suspends at a `yield` mid-way
+        // through phase 1's replay, with more of the snapshotted batch still
+        // to come.
+        source.applyEvent("inc", null);
+        source.applyEvent("inc", null);
+
+        const iterator = source.events();
+        const seqs: number[] = [];
+
+        // First past entry.
+        const firstResult = await iterator.next();
+
+        if (!firstResult.done) {
+            seqs.push(firstResult.value.seq);
+        }
+
+        // Suspended between the two past entries' yields — apply a THIRD event
+        // now, before resuming. If phase 1's own `getSince` snapshot were
+        // re-read after this point, this entry could be yielded twice (once
+        // from the snapshot, once from the listener's buffer); if the
+        // snapshot is fixed at fetch time, it can only ever be yielded once,
+        // via the buffer, in phase 2.
+        source.applyEvent("inc", null);
+
+        // Second past entry (from the original 2-entry snapshot).
+        const secondResult = await iterator.next();
+
+        if (!secondResult.done) {
+            seqs.push(secondResult.value.seq);
+        }
+
+        // The third (mid-replay) event, via phase 2's buffer.
+        const thirdResult = await iterator.next();
+
+        if (!thirdResult.done) {
+            seqs.push(thirdResult.value.seq);
+        }
+
+        expect(seqs).toStrictEqual([...new Set(seqs)]);
+        expect(seqs).toHaveLength(3);
+
+        await iterator.return(undefined);
     });
 });
 

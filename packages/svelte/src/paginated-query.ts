@@ -4,6 +4,7 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
 
+import { stableWireKey } from "../../../shared/wire-key";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
 
@@ -56,7 +57,12 @@ const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<st
     };
 };
 
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${JSON.stringify(pageArgs)}`;
+// Key pages with the repo's canonical `stableWireKey` (keys sorted at every
+// depth, wire-typed args tokenized) rather than raw `JSON.stringify`, so two
+// structurally-equal arg records built with a different key order collapse to
+// one key instead of opening a duplicate subscription — matching the client's
+// own `SubscriptionRegistry.key`.
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableWireKey(pageArgs)}`;
 
 /**
  * Internal pagination engine. Manages page boundaries, subscriptions, results,

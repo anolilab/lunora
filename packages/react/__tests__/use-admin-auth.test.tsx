@@ -1,4 +1,5 @@
 import type { AuthImpersonation, AuthPage, AuthSession, AuthUser, LunoraClient } from "@lunora/client";
+import { QueryClient } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { PropsWithChildren, ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations } from 
  */
 interface AdminAuthFakeClient {
     asClient: LunoraClient;
+    currentIdentity: ReturnType<typeof vi.fn<() => string | null>>;
     deleteAuthOrganization: ReturnType<typeof vi.fn<(input: { organizationId: string }) => Promise<void>>>;
     getAuthToken: ReturnType<typeof vi.fn<() => null | string>>;
     impersonateAuthUser: ReturnType<typeof vi.fn<(input: { userId: string }) => Promise<AuthImpersonation>>>;
@@ -54,6 +56,27 @@ const createAdminAuthFakeClient = (): AdminAuthFakeClient => {
             listener(token);
         }
     });
+    // A deterministic, non-reversible stand-in for the real client's
+    // `identityFingerprint()`: distinct tokens map to distinct `fp-<n>` labels
+    // (never embedding the token value itself, matching the real hash's
+    // non-reversibility), and `null` when signed out.
+    const tokenFingerprints = new Map<string, string>();
+    let nextFingerprintIndex = 0;
+    const currentIdentity = vi.fn<() => string | null>(() => {
+        if (currentToken === null) {
+            return null;
+        }
+
+        let fingerprint = tokenFingerprints.get(currentToken);
+
+        if (fingerprint === undefined) {
+            fingerprint = `fp-${String(nextFingerprintIndex)}`;
+            nextFingerprintIndex += 1;
+            tokenFingerprints.set(currentToken, fingerprint);
+        }
+
+        return fingerprint;
+    });
     // Never called by these hooks — asserted against directly in a few tests
     // to prove the admin-gated HTTP path is used instead of the live/batch one.
     const query = vi.fn<() => Promise<unknown>>();
@@ -61,6 +84,7 @@ const createAdminAuthFakeClient = (): AdminAuthFakeClient => {
     const subscribe = vi.fn<() => () => void>();
 
     const asClient = {
+        currentIdentity,
         deleteAuthOrganization,
         getAuthToken,
         impersonateAuthUser,
@@ -76,6 +100,7 @@ const createAdminAuthFakeClient = (): AdminAuthFakeClient => {
 
     return {
         asClient,
+        currentIdentity,
         deleteAuthOrganization,
         getAuthToken,
         impersonateAuthUser,
@@ -93,6 +118,15 @@ const createAdminAuthFakeClient = (): AdminAuthFakeClient => {
 const wrapper =
     (client: LunoraClient) =>
     ({ children }: PropsWithChildren): ReactElement => <LunoraProvider client={client}>{children}</LunoraProvider>;
+
+/** Like {@link wrapper}, but with an explicit (BYO) `QueryClient` so a test can walk its cache directly. */
+const wrapperWithQueryClient =
+    (client: LunoraClient, queryClient: QueryClient) =>
+    ({ children }: PropsWithChildren): ReactElement => (
+        <LunoraProvider client={client} queryClient={queryClient}>
+            {children}
+        </LunoraProvider>
+    );
 
 const user = (id: string): AuthUser => {
     return { email: `${id}@example.com`, id, name: id };
@@ -409,5 +443,102 @@ describe("cross-admin cache separation", () => {
 
         expect(result.current.data?.[0]?.id).toBe("admin-b-u1");
         expect(fake.listAuthUsers).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("admin auth query-key hygiene (plan 264)", () => {
+    it("never embeds the raw bearer token in a query key", async () => {
+        expect.hasAssertions();
+
+        const fake = createAdminAuthFakeClient();
+        const queryClient = new QueryClient();
+
+        fake.listAuthUsers.mockResolvedValue({ rows: [user("u1")], total: 1 });
+
+        // A distinctive fake token — never a real one — so a substring match
+        // against every cached key's JSON proves the token isn't in there.
+        fake.setAuthToken("test-admin-bearer-DO-NOT-MATCH");
+
+        const { result } = renderHook(() => useAuthUsers(), { wrapper: wrapperWithQueryClient(fake.asClient, queryClient) });
+
+        await waitFor(() => {
+            expect(result.current.data).toHaveLength(1);
+        });
+
+        const keys = queryClient
+            .getQueryCache()
+            .getAll()
+            .map((query) => JSON.stringify(query.queryKey));
+
+        expect(keys.length).toBeGreaterThan(0);
+
+        for (const key of keys) {
+            expect(key).not.toContain("test-admin-bearer-DO-NOT-MATCH");
+        }
+
+        // The identity fingerprint (not the token) is what actually partitions
+        // the cache — confirm it's present instead.
+        expect(keys.some((key) => key.includes("fp-0"))).toBe(true);
+    });
+
+    it("partitioning is preserved: distinct identities still get distinct cache entries", async () => {
+        expect.hasAssertions();
+
+        const fake = createAdminAuthFakeClient();
+        const queryClient = new QueryClient();
+
+        fake.listAuthUsers
+            .mockResolvedValueOnce({ rows: [user("admin-a-u1")], total: 1 })
+            .mockResolvedValueOnce({ rows: [user("admin-b-u1"), user("admin-b-u2")], total: 2 });
+
+        fake.setAuthToken("test-token-a");
+
+        const { result } = renderHook(() => useAuthUsers(), { wrapper: wrapperWithQueryClient(fake.asClient, queryClient) });
+
+        await waitFor(() => {
+            expect(result.current.data).toHaveLength(1);
+        });
+
+        fake.setAuthToken("test-token-b");
+
+        await waitFor(() => {
+            expect(result.current.data).toHaveLength(2);
+        });
+
+        expect(fake.listAuthUsers).toHaveBeenCalledTimes(2);
+
+        const keys = queryClient
+            .getQueryCache()
+            .getAll()
+            .map((query) => query.queryKey);
+
+        // Two distinct tokens ⇒ two distinct fingerprints ⇒ two distinct cache entries.
+        expect(keys).toHaveLength(2);
+        expect(keys[0]).not.toStrictEqual(keys[1]);
+    });
+
+    it("signed out maps to the `anon` key segment", async () => {
+        expect.hasAssertions();
+
+        const fake = createAdminAuthFakeClient();
+        const queryClient = new QueryClient();
+
+        fake.listAuthUsers.mockResolvedValue({ rows: [user("u1")], total: 1 });
+
+        const { result } = renderHook(() => useAuthUsers(), { wrapper: wrapperWithQueryClient(fake.asClient, queryClient) });
+
+        await waitFor(() => {
+            expect(result.current.data).toHaveLength(1);
+        });
+
+        const keys = queryClient
+            .getQueryCache()
+            .getAll()
+            .map((query) => query.queryKey);
+
+        expect(keys).toHaveLength(1);
+        // `["lunora-react-admin-auth", "anon", "users", {...}, limit]` — the
+        // identity segment is index 1.
+        expect(keys[0]?.[1]).toBe("anon");
     });
 });

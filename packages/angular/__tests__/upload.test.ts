@@ -162,6 +162,11 @@ describe(upload, () => {
 
         const handle = upload({ destroyRef: destroy.asDestroyRef, endpoint: "https://test.local/upload" });
 
+        // `pause()` is a no-op unless an upload is in flight — drive the
+        // adapter's start callback first so `status() === "uploading"` before
+        // pausing (see the `pause()`/`resume()` in-flight guard added below).
+        fakeAdapter.onStart?.();
+
         handle.pause();
 
         expect(fakeAdapter.pause).toHaveBeenCalledTimes(1);
@@ -185,5 +190,103 @@ describe(upload, () => {
         destroy.destroy();
 
         expect(fakeAdapter.abort).toHaveBeenCalledTimes(1);
+    });
+
+    it("retry after error clears the previous attempt's terminal signals", () => {
+        expect.assertions(5);
+
+        fakeAdapter = createFakeAdapter();
+        const destroy = createFakeDestroyRef();
+
+        const handle = upload({ destroyRef: destroy.asDestroyRef, endpoint: "https://test.local/upload" });
+        const file1 = new File(["one"], "one.txt");
+        const file2 = new File(["two"], "two.txt");
+
+        handle.start(file1).catch(() => undefined);
+        fakeAdapter.onStart?.();
+        fakeAdapter.onProgress?.(50, 5000);
+        fakeAdapter.onError?.(new Error("network drop"));
+
+        expect(handle.status()).toBe("error");
+        expect(handle.error()?.message).toBe("network drop");
+
+        // A fresh `start()` is a new attempt — it must clear the stale error,
+        // result, and progress from the failed attempt immediately, not wait
+        // for the adapter's own `onStart` tick.
+        handle.start(file2).catch(() => undefined);
+
+        expect(handle.error()).toBeUndefined();
+        expect(handle.result()).toBeUndefined();
+        expect(handle.progress()).toBe(0);
+    });
+
+    it("success after retry carries no stale error", () => {
+        expect.assertions(3);
+
+        fakeAdapter = createFakeAdapter();
+        const destroy = createFakeDestroyRef();
+
+        const handle = upload({ destroyRef: destroy.asDestroyRef, endpoint: "https://test.local/upload" });
+        const file1 = new File(["one"], "one.txt");
+        const file2 = new File(["two"], "two.txt");
+
+        handle.start(file1).catch(() => undefined);
+        fakeAdapter.onError?.(new Error("network drop"));
+
+        handle.start(file2).catch(() => undefined);
+        fakeAdapter.onFinish?.({ key: "uploads/two" });
+
+        expect(handle.status()).toBe("success");
+        expect(handle.result()).toStrictEqual({ key: "uploads/two" });
+        expect(handle.error()).toBeUndefined();
+    });
+
+    it("restart after success clears the previous result and progress", () => {
+        expect.assertions(2);
+
+        fakeAdapter = createFakeAdapter();
+        const destroy = createFakeDestroyRef();
+
+        const handle = upload({ destroyRef: destroy.asDestroyRef, endpoint: "https://test.local/upload" });
+        const file1 = new File(["one"], "one.txt");
+        const file2 = new File(["two"], "two.txt");
+
+        handle.start(file1).catch(() => undefined);
+        fakeAdapter.onProgress?.(100, 10_000);
+        fakeAdapter.onFinish?.({ key: "uploads/one" });
+
+        handle.start(file2).catch(() => undefined);
+
+        expect(handle.result()).toBeUndefined();
+        expect(handle.progress()).toBe(0);
+    });
+
+    it("pause()/resume() are no-ops outside an in-flight upload", () => {
+        expect.assertions(6);
+
+        fakeAdapter = createFakeAdapter();
+        const destroy = createFakeDestroyRef();
+
+        const handle = upload({ destroyRef: destroy.asDestroyRef, endpoint: "https://test.local/upload" });
+
+        // Fresh handle: idle. Neither action has anything to act on.
+        handle.pause();
+
+        expect(fakeAdapter.pause).not.toHaveBeenCalled();
+        expect(handle.status()).toBe("idle");
+        expect(handle.isPaused()).toBe(false);
+
+        handle.resume();
+
+        expect(fakeAdapter.resume).not.toHaveBeenCalled();
+
+        // Terminal (success) state: pause() must not stamp "paused" over it.
+        handle.start(new File(["one"], "one.txt")).catch(() => undefined);
+        fakeAdapter.onFinish?.({ key: "uploads/one" });
+
+        handle.pause();
+
+        expect(fakeAdapter.pause).not.toHaveBeenCalled();
+        expect(handle.status()).toBe("success");
     });
 });

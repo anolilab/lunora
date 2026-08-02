@@ -19,8 +19,8 @@
 import { env, introspectWorkflowInstance } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { BRANCH_MARKER_KEY } from "../../../../shared/branch-marker";
 import createWorkflows from "../../src/create-workflows";
-import { BRANCH_MARKER_KEY } from "../../src/fan-out";
 import type { WorkflowBindingLike } from "../../src/types";
 import type { SmokeParams } from "./test-worker";
 
@@ -78,7 +78,9 @@ describe("@lunora/workflow (workerd)", () => {
 
         const handle = workflows.get("smokeWorkflow");
 
-        await expect(handle.create({ params: { [BRANCH_MARKER_KEY]: { forged: true } } })).rejects.toThrow(/may not contain the reserved key/);
+        await expect(handle.create({ params: { [BRANCH_MARKER_KEY]: { forged: true } } })).rejects.toThrow(
+            /may not contain the reserved workflow branch-marker key/,
+        );
     });
 
     it("throws a directed error for an undeclared workflow name", () => {

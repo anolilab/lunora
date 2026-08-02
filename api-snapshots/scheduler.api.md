@@ -389,6 +389,7 @@ interface SchedulerDOState {
             end?: string;
             limit?: number;
             prefix?: string;
+            startAfter?: string;
         }) => Promise<Map<string, T>>;
         put: <T = unknown>(entries: Record<string, T> | string, value?: T) => Promise<void>;
         setAlarm: (scheduledTime: number | Date) => Promise<void> | void;

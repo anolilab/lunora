@@ -466,7 +466,7 @@ class AppBuilder<Env extends object> {
 
 /** Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec` (reads via `all`, writes via `run`, and — when the binding exposes it — several writes in one round trip via `batch`). */
 const buildExec = (database: D1DatabaseLike): D1Exec => {
-    const hasBatch = typeof database.batch === "function";
+    const batchFn = database.batch;
 
     return {
         all: async (sql, parameters) => {
@@ -481,13 +481,20 @@ const buildExec = (database: D1DatabaseLike): D1Exec => {
         // transaction. Guarded because `D1DatabaseLike.batch` is optional in
         // the structural type (test doubles may omit it) — real D1 always has
         // it; a double without it still works through the store's sequential
-        // fallback. Called as `database.batch(...)`, not through a detached
-        // reference — the real workerd `D1Database` dereferences `this` inside
-        // `batch`, so a standalone capture throws `TypeError: Illegal
-        // invocation` the first time it runs.
-        batch: hasBatch
+        // fallback. Invoked via `.call(database, ...)` rather than
+        // `database.batch(...)` directly so TS can narrow the captured
+        // `batchFn` across the closure boundary (a property-access narrowing
+        // like `hasBatch = typeof database.batch === "function"` does not
+        // survive into a nested arrow function); `.call` still binds `this`
+        // to `database`, so the real workerd `D1Database` doesn't throw
+        // `TypeError: Illegal invocation` the way a detached
+        // `const fn = database.batch; fn(...)` capture would.
+        batch: batchFn
             ? async (statements) => {
-                  await database.batch(statements.map(({ params, sql }) => database.prepare(sql).bind(...params)));
+                  await batchFn.call(
+                      database,
+                      statements.map(({ params, sql }) => database.prepare(sql).bind(...params)),
+                  );
               }
             : undefined,
         run: async (sql, parameters) => {

@@ -291,6 +291,83 @@ describe("ctx.push.broadcast pagination (plan 222 / NOTIFY-01)", () => {
     });
 });
 
+describe("ctx.push.broadcast zero/negative limit (plan 279)", () => {
+    it("broadcast({ limit: 0 }) delivers to nobody and returns the all-zero aggregate", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+
+        await push.register({ subscription: okSub });
+        await push.register({ subscription: { endpoint: "https://push.example/ok2", keys: { auth: "a", p256dh: "p" } } });
+
+        const result = await push.broadcast({ body: "zero", title: "t" }, { limit: 0 });
+
+        expect(sends).toHaveLength(0);
+        expect(result).toStrictEqual({ failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 });
+    });
+
+    it("broadcast({ limit: -5 }) behaves the same as limit: 0 (negative limits deliver to nobody)", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+
+        await push.register({ subscription: okSub });
+
+        const result = await push.broadcast({ body: "negative", title: "t" }, { limit: -5 });
+
+        expect(sends).toHaveLength(0);
+        expect(result).toStrictEqual({ failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 });
+    });
+
+    it("broadcastPage({ limit: 0 }) delivers nothing and returns no nextCursor", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+
+        await push.register({ subscription: okSub });
+
+        const page = await push.broadcastPage({ body: "zero-page", title: "t" }, { limit: 0 });
+
+        expect(sends).toHaveLength(0);
+        expect(page.nextCursor).toBeUndefined();
+        expect(page.result).toStrictEqual({ failed: 0, outcomes: [], pruned: 0, sent: 0, total: 0 });
+    });
+
+    it("a zero-limit broadcast does NOT emit the no-subscriptions-matched skip metric", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const pushProvider = mockPushProvider();
+        const engine = mockEngine({ push: pushProvider.provider });
+        const metrics = { count: vi.fn() };
+        const { push } = createNotify(baseDefinition(store), {}, { engine, metrics, silent: true });
+
+        // A matching subscription exists — the walk is skipped because the
+        // caller asked for nobody, NOT because nothing matched the filter.
+        await push.register({ subscription: okSub });
+
+        const result = await push.broadcast({ body: "zero", title: "t" }, { limit: 0 });
+
+        expect(result.total).toBe(0);
+        expect(metrics.count).not.toHaveBeenCalledWith("notify.skipped", 1, { channel: "push", reason: "no-subscriptions-matched" });
+    });
+
+    it("broadcast({ limit: 1 }) still delivers exactly one recipient (the boundary above zero)", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+
+        await push.register({ subscription: okSub });
+        await push.register({ subscription: { endpoint: "https://push.example/ok2", keys: { auth: "a", p256dh: "p" } } });
+
+        const result = await push.broadcast({ body: "one", title: "t" }, { limit: 1 });
+
+        expect(result.total).toBe(1);
+        expect(result.sent).toBe(1);
+        expect(sends).toHaveLength(1);
+    });
+});
+
 describe("ctx.push.broadcast fault-tolerance", () => {
     const webPushSub = (suffix: string) => {
         return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };

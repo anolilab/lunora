@@ -1,6 +1,7 @@
 import type { FunctionDescriptor } from "@lunora/client";
+import { LunoraClient } from "@lunora/client";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { ListResourcesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LocalDeployment } from "../src/local";
@@ -252,5 +253,58 @@ describe("deployment spec resources", () => {
         await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } });
 
         expect(sawAuthorization).toBe(true);
+    });
+});
+
+describe("shared client cache", () => {
+    it("shares one client across the tool and resource surfaces for the same deployment", async () => {
+        expect.assertions(1);
+
+        // A fresh `LunoraClient` per surface (the pre-fix duplication —
+        // `lazyDeploymentTools` and `deploymentSpecResources` each built their
+        // own `createClientCache`) would set the auth token twice: once for
+        // the tool-side client, once for the resource-side client. Sharing one
+        // cache across both means the token is set exactly once, on first
+        // construction.
+        const { asFetch } = stubFetch();
+        const setAuthTokenSpy = vi.spyOn(LunoraClient.prototype, "setAuthToken");
+
+        const server = createLocalMcpServer({ deployment: { token: "shared-token", url: "https://worker.example" }, fetch: asFetch });
+
+        await handlerFor(server, CallToolRequestSchema.shape.method.value)({ params: { arguments: {}, name: "lunora_list_functions" } });
+        await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } });
+
+        expect(setAuthTokenSpy).toHaveBeenCalledTimes(1);
+
+        setAuthTokenSpy.mockRestore();
+    });
+
+    it("keeps working after the client cache evicts the oldest entry past its bound", async () => {
+        expect.assertions(1);
+
+        // No assertion on map internals — the FIFO bound (`shared/evict-oldest.ts`,
+        // capacity 8) just means the first deployment's client gets silently
+        // replaced once 9 distinct deployments have been seen. Re-requesting it
+        // must still work (a fresh client minted transparently), not error.
+        const { asFetch } = stubFetch();
+        const deployments = Array.from({ length: 9 }, (_, index): LocalDeployment => {
+            return { url: `https://worker-${String(index)}.example` };
+        });
+        let current = 0;
+
+        const tools = localTools({ deployment: () => deployments[current], docs: false, fetch: asFetch });
+        const listFunctions = tools.find((tool) => tool.definition.name === "lunora_list_functions");
+
+        for (; current < deployments.length; current += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential rotation through distinct deployments, mirroring a dev-server restart sequence
+            await listFunctions?.handle({});
+        }
+
+        // Re-request the first (now-evicted) deployment.
+        current = 0;
+
+        const result = await listFunctions?.handle({});
+
+        expect(result?.isError).not.toBe(true);
     });
 });

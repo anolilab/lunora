@@ -629,7 +629,24 @@ const searchViaScan = (
     // Same total order the FTS path sorts by, id-terminated (see `searchViaFts`).
     scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    return scored.slice(0, limit).map((entry) => {return { document: entry.doc, score: entry.score }});
+    return scored.slice(0, limit).map((entry) => {
+        return { document: entry.doc, score: entry.score };
+    });
+};
+
+/**
+ * Assert `point` is a usable geo coordinate: finite lat in `[-90, 90]` and
+ * finite lng in `[-180, 180]`. `NaN`/out-of-range coordinates otherwise
+ * poison `encodeGeohash`/haversine silently and produce a misleading empty
+ * result instead of a clear rejection.
+ */
+const assertGeoPoint = (point: { lat: number; lng: number }, label: string, tableName: string, indexName: string): void => {
+    if (!Number.isFinite(point.lat) || point.lat < -90 || point.lat > 90 || !Number.isFinite(point.lng) || point.lng < -180 || point.lng > 180) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `geo index "${indexName}" on table "${tableName}": ${label} must have a finite lat in [-90, 90] and lng in [-180, 180]`,
+        );
+    }
 };
 
 /** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
@@ -643,6 +660,15 @@ const createGeoBuilder = (geo: GeoStage, tableName: string): GeoFilterBuilderLik
                 throw new LunoraError("INTERNAL", `geo index "${staged.indexName}" on table "${tableName}": call .near() or .within(), not both`);
             }
 
+            assertGeoPoint(point, ".near() point", tableName, staged.indexName);
+
+            if (!Number.isFinite(radiusMeters) || radiusMeters <= 0) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `geo index "${staged.indexName}" on table "${tableName}": .near() radiusMeters must be a finite number > 0, got ${String(radiusMeters)}`,
+                );
+            }
+
             staged.near = { point: { lat: point.lat, lng: point.lng }, radiusMeters };
 
             return builder;
@@ -650,6 +676,23 @@ const createGeoBuilder = (geo: GeoStage, tableName: string): GeoFilterBuilderLik
         within: (box) => {
             if (staged.near) {
                 throw new LunoraError("INTERNAL", `geo index "${staged.indexName}" on table "${tableName}": call .near() or .within(), not both`);
+            }
+
+            assertGeoPoint(box.sw, ".within() sw corner", tableName, staged.indexName);
+            assertGeoPoint(box.ne, ".within() ne corner", tableName, staged.indexName);
+
+            if (box.sw.lat > box.ne.lat) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `geo index "${staged.indexName}" on table "${tableName}": .within() corners are transposed (sw.lat > ne.lat)`,
+                );
+            }
+
+            if (box.sw.lng > box.ne.lng) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `geo index "${staged.indexName}" on table "${tableName}": .within() box crosses the antimeridian (sw.lng > ne.lng), which is not supported — split it into two boxes at ±180 and union the results`,
+                );
             }
 
             staged.within = { ne: { lat: box.ne.lat, lng: box.ne.lng }, sw: { lat: box.sw.lat, lng: box.sw.lng } };
@@ -787,11 +830,13 @@ const runGeoFetchScored = (
     onScanned: (count: number) => void = () => undefined,
 ): { distanceMeters: null | number; document: Record<string, unknown> }[] => {
     const isWithin = geo.within !== undefined;
-    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {return {
-        // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
-        distanceMeters: isWithin ? null : entry.distance,
-        document: entry.doc,
-    }});
+    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {
+        return {
+            // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
+            distanceMeters: isWithin ? null : entry.distance,
+            document: entry.doc,
+        };
+    });
 
     onScanned(results.length);
 
@@ -2336,6 +2381,74 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const documentJson = typeof rawDocument === "string" ? rawDocument : JSON.stringify(rawDocument ?? {});
 
         return { docJson: documentJson, row, tableName };
+    };
+
+    /**
+     * Batched sibling of {@link locateRowById}, for the RLS guard's
+     * `deleteMany`/`patchMany` pre-check (`guardByIds` in `rls-guard.ts`):
+     * resolve the owning table of MANY ids in as few statements as possible
+     * instead of one `locateRowById` probe per id.
+     *
+     * Selects only `__t__, id` (the guard needs the table name, not the row —
+     * skipping the document column keeps the probe narrow) and has no
+     * `LIMIT 1`: unlike a single lookup, every id may hit a different table
+     * and all hits are wanted.
+     *
+     * Chunked because the multiplied-placeholder UNION widens with both
+     * dimensions: each of the `nonGlobalTables.length` branches repeats the
+     * full `id IN (...)` list, so one statement over `chunkSize` ids costs
+     * `chunkSize * nonGlobalTables.length` bound placeholders. Sized to stay
+     * under SQLite's historical 999-bind-variable floor regardless of what
+     * the DO runtime actually allows.
+     * @returns a map from id to its owning table; an id absent from the map resolved to no table this writer can see
+     */
+    const locateTablesByIds = (ids: ReadonlyArray<string>, expectedTable?: string): Map<string, string> => {
+        const uniqueIds = [...new Set(ids)];
+
+        const resolved = new Map<string, string>();
+
+        if (uniqueIds.length === 0) {
+            return resolved;
+        }
+
+        const nonGlobalTables = Object.entries(schema.tables)
+            .filter(([, definition]) => definition.shardMode?.kind !== "global")
+            .map(([tableName]) => tableName)
+            .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+
+        if (nonGlobalTables.length === 0) {
+            return resolved;
+        }
+
+        // `Math.max(1, …)` keeps a very-wide schema (900+ tables) from
+        // computing a 0-size chunk; the placeholder budget is best-effort at
+        // that point anyway.
+        const chunkSize = Math.max(1, Math.floor(900 / nonGlobalTables.length));
+
+        for (let start = 0; start < uniqueIds.length; start += chunkSize) {
+            const chunk = uniqueIds.slice(start, start + chunkSize);
+            const idList = dsql.join(
+                // eslint-disable-next-line no-restricted-syntax -- a drizzle tagged-template SQL bind parameter, not a string conversion; same false-positive `where-sql.ts` suppresses
+                chunk.map((id): SQL => dsql`${id}`),
+                dsql`, `,
+            );
+            const branches = nonGlobalTables.map(
+                (tableName) =>
+                    // Mirrors `locateRowById`'s inline-literal table discriminator.
+                    dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id FROM ${dsql.identifier(tableName)} WHERE id IN (${idList})`,
+            );
+            const probeQuery = dsql.join(branches, dsql` UNION ALL `);
+
+            for (const row of runDrizzle(sql, probeQuery)) {
+                const { id, __t__: tableName } = row;
+
+                if (typeof tableName === "string" && typeof id === "string") {
+                    resolved.set(id, tableName);
+                }
+            }
+        }
+
+        return resolved;
     };
 
     // The cross-shard rank-page read unit (compute + hydrate)
@@ -3970,7 +4083,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     // denies protected tables to any handler that never engaged RLS. Triggers
     // keep the unguarded `writer` above (system path). `guardWriter` is a no-op
     // for non-`required` schemas, so the common case pays nothing.
-    return options.enforceRls === true ? guardWriter(writer, schema, (id, expectedTable) => locateRowById(id, expectedTable)?.tableName) : writer;
+    return options.enforceRls === true
+        ? guardWriter(
+              writer,
+              schema,
+              (id, expectedTable) => locateRowById(id, expectedTable)?.tableName,
+              (ids, expectedTable) => locateTablesByIds(ids, expectedTable),
+          )
+        : writer;
 };
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };

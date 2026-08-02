@@ -307,6 +307,33 @@ describe("defineSchema(...).extend(...)", () => {
 
         expect(() => intermediate.extend(second)).toThrow(/extend\("dupes"\): table "dupes_same" already exists/);
     });
+
+    // Plan 258 §5 S3: `defineSchema` only validates the tables it was called
+    // with — an extension's tables never passed through it, so without
+    // re-running `validateIndexFields` on the merged set, a bad
+    // extension-contributed index was never checked at all (it only failed
+    // later, at migration time, as an opaque SQLite error).
+    it("re-validates the merged schema, throwing for an extension-contributed index naming a column absent from its table's shape", () => {
+        expect.assertions(1);
+
+        const broken = defineSchemaExtension("broken", {
+            tables: { widgets: defineTable({ title: v.string() }).index("by_owner", ["ownerId" as never]) },
+        });
+
+        expect(() => defineSchema({ todos: defineTable({ title: v.string() }) }).extend(broken)).toThrow(
+            /table "broken_widgets" index "by_owner" names column "ownerId" which is not in the table's shape/,
+        );
+    });
+
+    it("still accepts a well-formed extension index (no false positive from the re-validation)", () => {
+        expect.assertions(1);
+
+        const ok = defineSchemaExtension("ok", {
+            tables: { widgets: defineTable({ ownerId: v.string(), title: v.string() }).index("by_owner", ["ownerId"]) },
+        });
+
+        expect(() => defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ok)).not.toThrow();
+    });
 });
 
 describe("defineComponent", () => {
@@ -412,6 +439,23 @@ describe("installPlugins", () => {
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["audit_events", "ratelimit_buckets", "todos"]);
         // Same collision policy as `.extend(...)`: a duplicate prefixed table throws.
         expect(() => installPlugins(schema, [ratelimit])).toThrow(/table "ratelimit_buckets" already exists/);
+    });
+
+    // Plan 258 §5 S3: `installPlugins` shares `mergeSchemaExtension` with
+    // `.extend(...)`, so it gets the same re-validation for free — a plugin's
+    // bad index is caught here too, not just on the `.extend(...)` chain.
+    it("re-validates a plugin's contributed index too, throwing for a column absent from the plugin table's shape", () => {
+        expect.assertions(1);
+
+        const broken = definePlugin("broken", {
+            extension: defineSchemaExtension("broken", {
+                tables: { widgets: defineTable({ title: v.string() }).index("by_owner", ["ownerId" as never]) },
+            }),
+        });
+
+        expect(() => installPlugins(defineSchema({ todos: defineTable({ title: v.string() }) }), [broken])).toThrow(
+            /table "broken_widgets" index "by_owner" names column "ownerId" which is not in the table's shape/,
+        );
     });
 });
 

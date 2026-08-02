@@ -141,11 +141,15 @@ describe("codegen-plugin", () => {
             // `vite dev` inside `buildStart`, which fires for both.
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
-            const buildContext = { error: (message: string): never => { throw new Error(message); } };
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
 
-            await expect(
-                (plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext),
-            ).rejects.toThrow(/ERROR-level.*index_references_unknown_field/u);
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(
+                /ERROR-level.*index_references_unknown_field/u,
+            );
         });
 
         it("vite dev only logs the same ERROR-level advisory (never throws)", async () => {

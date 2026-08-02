@@ -97,16 +97,21 @@ export interface MaskOptions<Context = unknown> {
     readonly bypass?: (context: MaskContext<Context>) => boolean;
 
     /**
-     * Per-table index→declared-fields map (regular index `fields`; rank index
-     * `sortBy` ∪ `partitionBy`; geo index `field`). Supplied to close the
-     * bare-index-scan / rank / geo position oracle: a `withIndex(name)` with no
-     * range callback, a `rank`/`rankPage`/`rankBefore` read, or a
-     * `withGeoIndex` read, over an index whose DECLARED fields intersect a
-     * masked column, is rejected. OPTIONAL and additive — omit it and
-     * behaviour is unchanged (the oracle stays open, exactly as before this
-     * option existed). Build it with `indexFieldsFromSchema` (exported from
-     * `@lunora/server`): `mask(policies, { indexFields:
-     * indexFieldsFromSchema(schema) })`.
+     * Per-table, per-KIND index→declared-fields map (regular index `fields`
+     * under `index`; rank index `sortBy` ∪ `partitionBy` under `rank`; geo
+     * index `field` under `geo`). Supplied to close the bare-index-scan /
+     * rank / geo position oracle: a `withIndex(name)` with no range callback,
+     * a `rank`/`rankPage`/`rankBefore` read, or a `withGeoIndex` read, over an
+     * index whose DECLARED fields (for that read's own kind) intersect a
+     * masked column, is rejected. Kept per kind — rather than one flat
+     * name→fields map — because the engine resolves `withIndex` /
+     * `withGeoIndex` / rank reads in three separate namespaces, so the same
+     * index name can legally denote a different index per kind; a flat map
+     * would let one kind's fields shadow another's for a colliding name.
+     * OPTIONAL and additive — omit it and behaviour is unchanged (the oracle
+     * stays open, exactly as before this option existed). Build it with
+     * `indexFieldsFromSchema` (exported from `@lunora/server`):
+     * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`.
      */
     readonly indexFields?: IndexFieldsByTable;
     readonly roles?: ReadonlyArray<Role>;

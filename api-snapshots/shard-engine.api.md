@@ -3256,7 +3256,7 @@ const geoTableName: (table: string, indexName: string) => string;
 ### `guardWriter` (const)
 
 ```ts
-const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId) => W;
+const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds) => W;
 ```
 
 ### `hasTrigger` (const)
@@ -3904,7 +3904,7 @@ const selectShapeRows: (sql: SqlExec, table: string, effectiveWhere: WhereInput 
 ### `sendDeltaFrames` (const)
 
 ```ts
-const sendDeltaFrames: (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string) => boolean;
+const sendDeltaFrames: (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string, lastMutationId?: number) => boolean;
 ```
 
 ### `serializeSqlValue` (const)

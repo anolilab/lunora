@@ -39,6 +39,18 @@ export interface NodePlatform {
      * its own — a `NodePlatform` a caller stops using without calling `close()`
      * leaks the open file handle (plus its WAL/SHM sidecar files) and keeps
      * the process alive on outstanding timers. Safe to call more than once.
+     *
+     * **`close()` is a terminal state, not merely a cleanup step.** After it
+     * runs: `scheduler.schedule()` throws instead of arming a fresh timer
+     * nothing would ever clear; `scheduler.list()` returns `[]` and
+     * `scheduler.cancel()` answers `false` (the job map is empty, so this
+     * happens naturally, without a throw — keeping teardown-order races
+     * benign); `shard.alarms.set()`/`delete()` throw before mutating any
+     * in-memory state (checked against the connection's own open/closed state,
+     * the single source of truth); `shard.alarms.get()` keeps answering
+     * whatever it last held. A no-op instead of a throw would be
+     * indistinguishable from a working call — exactly the silent-vanishing
+     * this lifecycle exists to end.
      */
     close: () => void;
     /** In-process shard directory (see `createNodeShardDirectory`'s docstring for what it cannot do). */

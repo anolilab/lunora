@@ -738,6 +738,7 @@ const MESSAGE_IDS = [
     "No rows generated — all columns were skipped.",
     "Inserted {count} rows. Skipped FK columns: {cols}",
     "Inserted {count} rows successfully.",
+    "Inserted {inserted} of {total} rows — {conflicts} skipped as id conflicts.",
     "Generate & insert",
     "Inserting…",
     // Time Travel (PITR) panel.

@@ -1,5 +1,5 @@
 import type { FunctionReference } from "@lunora/client";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { effectScope } from "vue";
 
 import { useSubscription } from "../src/use-subscription";
@@ -8,7 +8,22 @@ import { createFakeClient } from "./fake-client";
 const msgRef = { __lunoraRef: "messages:subscribe" } as unknown as FunctionReference;
 const args = { channelId: "c1" } as unknown;
 
+// Solid (`createEffect`/`onMount`) and Angular (`shouldOpenSubscription`/
+// `PLATFORM_ID`) are SSR-safe by construction — do not port this guard there
+// (plan 282 §1/§8).
 describe(useSubscription, () => {
+    // `useSubscription` gates its live subscription on a browser `window`
+    // (SSR guard); the vitest env is `node` (no `window`), so define one for
+    // these client-path tests. The dedicated SSR test below removes it to
+    // exercise the guard, mirroring `@lunora/vue`'s `use-presence.test.ts`.
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
     it("is undefined until the first server push", () => {
         const fake = createFakeClient();
 
@@ -87,6 +102,22 @@ describe(useSubscription, () => {
         expect(error.value).toBeInstanceOf(Error);
         expect(error.value?.message).toBe("boom");
         expect((error.value as { code?: string }).code).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("does not subscribe during SSR (no window)", () => {
+        const fake = createFakeClient();
+
+        // Simulate the server render: no browser `window`.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const { data, error } = scope.run(() => fake.provide(() => useSubscription(msgRef, args)))!;
+
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(data.value).toBeUndefined();
+        expect(error.value).toBeUndefined();
 
         scope.stop();
     });

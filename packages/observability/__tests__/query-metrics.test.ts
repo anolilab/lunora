@@ -191,7 +191,7 @@ describe("recordQueryMetric + readQueryMetrics", () => {
         }
     });
 
-    it("skips new entries once the cap is reached", () => {
+    it("refuses a brand-new statement once the cap is reached, protecting incumbents", () => {
         expect.assertions(2);
 
         const { sql, close } = createSqliteExec();
@@ -208,9 +208,11 @@ describe("recordQueryMetric + readQueryMetrics", () => {
 
             const rows = readQueryMetrics(sql);
 
+            // Refused, not evicted: the table stays at the cap and every
+            // incumbent statement survives — a flood of one-off shapes must
+            // not be able to trade away the app's own tracked statements.
             expect(rows).toHaveLength(QUERY_METRICS_MAX_STATEMENTS);
 
-            // The extra statement must NOT appear (it was dropped).
             const found = rows.some((r) => r.normalizedSql.includes("extra_col"));
 
             expect(found).toBe(false);
@@ -316,6 +318,22 @@ describe("per-handle memoization (OBS-02)", () => {
         const rows = readQueryMetrics(fresh);
 
         expect(rows.some((row) => row.normalizedSql.includes("extra_col"))).toBe(false);
+    }, 15_000);
+
+    it("reports capped on readQueryInsights once the tracked-statement count reaches the cap", () => {
+        expect.assertions(2);
+
+        const { sql } = createSqliteExec();
+
+        for (let index = 0; index < QUERY_METRICS_MAX_STATEMENTS - 1; index += 1) {
+            recordQueryMetric(sql, `SELECT col${String(index)} FROM t`, 1, 0, 0, index);
+        }
+
+        expect(readQueryInsights(sql, 60_000, QUERY_METRICS_MAX_STATEMENTS).capped).toBe(false);
+
+        recordQueryMetric(sql, `SELECT col${String(QUERY_METRICS_MAX_STATEMENTS - 1)} FROM t`, 1, 0, 0, QUERY_METRICS_MAX_STATEMENTS);
+
+        expect(readQueryInsights(sql, 60_000, QUERY_METRICS_MAX_STATEMENTS).capped).toBe(true);
     }, 15_000);
 });
 

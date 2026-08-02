@@ -85,6 +85,8 @@ import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
+import { optionalWriterOverride } from "../optional-writer-override";
+import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import type { IndexFieldsByTable } from "../schema";
 import { tagMaskMiddleware } from "./policy-tag";
 import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies, Permission, Role } from "./types";
@@ -134,6 +136,7 @@ interface SearchScoredDocument {
 }
 
 interface TableReaderLike {
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
     collect: () => Promise<Record<string, unknown>[]>;
     collectWithScores: () => Promise<ScoredDocument[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
@@ -182,6 +185,8 @@ interface MaskDatabase {
     rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
+    /** Cross-shard companion to `rankPage`, gated the same way `rankPage` is masked below. */
+    rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
@@ -381,11 +386,11 @@ const wrapDatabase = <Context>(
     context: MaskContext<Context>,
     indexFields: IndexFieldsByTable | undefined,
 ): MaskDatabase => {
-    // `rankBefore` is the one optional method (the D1 twin omits it) — captured
-    // here (mirrors `../rls/middleware`'s `baseRankBefore`) so the conditional
-    // override below can call it without re-narrowing `base.rankBefore` inside
-    // the nested closure.
+    // `rankBefore`/`rankPageRows` are both optional (the D1 twin omits both) —
+    // captured here so `optionalWriterOverride` below can call each without
+    // re-narrowing `base.<method>` inside the nested closure.
     const baseRankBefore = base.rankBefore;
+    const baseRankPageRows = base.rankPageRows;
 
     /**
      * SECURITY (position oracle on the index DECLARATION path): `assertIndexFieldsAllowed`
@@ -400,22 +405,32 @@ const wrapDatabase = <Context>(
      * trilaterates a masked `v.geoPoint()` column to geohash precision.
      *
      * Unlike `assertIndexFieldsAllowed`, this guards the index's DECLARED fields —
-     * it needs `indexFields`, the per-table index→fields map an app supplies via
-     * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
-     * ({@link MaskOptions.indexFields}). Fails OPEN (returns without throwing) for
-     * the un-hardenable cases: `indexFields` wasn't supplied, or the table/index
+     * it needs `indexFields`, the per-table, per-KIND index→fields map an app
+     * supplies via `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`
+     * ({@link MaskOptions.indexFields}). The caller passes its own `kind` — one of
+     * `"index" | "geo" | "rank"`, the same vocabulary `@lunora/shard-engine`'s
+     * `IndexUseHook` already uses — because the engine resolves `withIndex` /
+     * `withGeoIndex` / rank reads in THREE SEPARATE namespaces
+     * (`tableDefinition.indexes` / `.geoIndexes` / `.rankIndexes`), so the same
+     * index NAME can legally denote a different index per kind. Looking up only
+     * `[tableName][indexName]` on a flat map would let one kind's fields shadow
+     * another's for a colliding name — checking the wrong index's fields instead
+     * of the documented fail-open — which is exactly the bug this kind parameter
+     * closes (plan 258). Fails OPEN (returns without throwing) for the
+     * un-hardenable cases: `indexFields` wasn't supplied, or the table/kind/index
      * name isn't declared in it (an unknown index name errors downstream anyway,
      * so there is nothing left to protect by throwing here too). Only a KNOWN
-     * index whose declared fields intersect the masked column set throws.
+     * index (of the CALLER'S kind) whose declared fields intersect the masked
+     * column set throws.
      */
-    const assertIndexDeclarationAllowed = (tableName: string, indexName: string, method: string): void => {
+    const assertIndexDeclarationAllowed = (tableName: string, indexName: string, method: string, kind: "geo" | "index" | "rank"): void => {
         const columns = perTable.get(tableName);
 
         if (!columns) {
             return;
         }
 
-        const declaredFields = indexFields?.[tableName]?.[indexName];
+        const declaredFields = indexFields?.[tableName]?.[kind]?.[indexName];
 
         if (!declaredFields) {
             return;
@@ -439,6 +454,17 @@ const wrapDatabase = <Context>(
      */
     const wrapReader = (reader: TableReaderLike, columns: MaskColumns<Context>, tableName: string): TableReaderLike => {
         return {
+            // The spread-free literal must re-declare EVERY reader member; the
+            // public `TableReader` type promises lazy iteration (`types.ts`) and
+            // the raw + RLS readers deliver it — omitting it here made
+            // `for await` throw only on masked tables. Rows are masked exactly
+            // like every other terminal.
+            // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+            async *[Symbol.asyncIterator]() {
+                for await (const row of { [Symbol.asyncIterator]: () => reader[Symbol.asyncIterator]() }) {
+                    yield maskRow(row, columns, context);
+                }
+            },
             collect: async () => {
                 const rows = await reader.collect();
 
@@ -529,7 +555,7 @@ const wrapDatabase = <Context>(
                 // Declared-fields guard FIRST: it closes the BARE scan (no `range`),
                 // which the callback-recorder just below can't see — see the guard
                 // function's own docblock, above `wrapDatabase`.
-                assertIndexDeclarationAllowed(tableName, indexName, "withIndex");
+                assertIndexDeclarationAllowed(tableName, indexName, "withIndex", "index");
                 assertIndexFieldsAllowed(range, columns, tableName, "withIndex");
 
                 return wrapReader(reader.withIndex(indexName, range), columns, tableName);
@@ -549,7 +575,7 @@ const wrapDatabase = <Context>(
             // keyed off the geo index's declared field (see
             // `indexFieldsFromSchema`).
             withGeoIndex: (indexName, build) => {
-                assertIndexDeclarationAllowed(tableName, indexName, "withGeoIndex");
+                assertIndexDeclarationAllowed(tableName, indexName, "withGeoIndex", "geo");
 
                 return wrapReader(reader.withGeoIndex(indexName, build), columns, tableName);
             },
@@ -823,6 +849,21 @@ const wrapDatabase = <Context>(
             return maskRow(row, columns, context);
         },
 
+        // Delegates to `base.lookupById` directly, not `locate` above (which
+        // folds the table name away) — the `...base` spread would otherwise expose it unmasked.
+        async lookupById(id, expectedTable) {
+            const located = await base.lookupById?.(id, expectedTable);
+
+            if (!located) {
+                // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
+                return null;
+            }
+
+            const columns = perTable.get(located.tableName);
+
+            return { row: columns ? maskRow(located.row, columns, context) : located.row, tableName: located.tableName };
+        },
+
         groupBy(tableName, options) {
             assertReductionAllowed(tableName, [...options.by, options.agg?.field], "groupBy");
             assertWhereAllowed(tableName, options.where, "groupBy");
@@ -839,14 +880,14 @@ const wrapDatabase = <Context>(
 
         async rank(tableName, indexName, options) {
             assertRankWhereAllowed(tableName, options, "rank");
-            assertIndexDeclarationAllowed(tableName, indexName, "rank");
+            assertIndexDeclarationAllowed(tableName, indexName, "rank", "rank");
 
             return base.rank(tableName, indexName, options);
         },
 
         async rankPage(tableName, indexName, options) {
             assertRankWhereAllowed(tableName, options, "rankPage");
-            assertIndexDeclarationAllowed(tableName, indexName, "rankPage");
+            assertIndexDeclarationAllowed(tableName, indexName, "rankPage", "rank");
 
             const page = await base.rankPage(tableName, indexName, options);
             const columns = perTable.get(tableName);
@@ -854,19 +895,29 @@ const wrapDatabase = <Context>(
             return columns ? maskPage(page, columns, context) : page;
         },
 
-        // `rankBefore` is the one optional method (the D1 twin omits it) — only
-        // override it when `base` actually carries one, mirroring the `...base`
-        // spread's own pass-through for a writer that doesn't.
-        ...(baseRankBefore
-            ? {
-                  rankBefore(tableName: string, indexName: string, options: unknown) {
-                      assertRankWhereAllowed(tableName, options, "rankBefore");
-                      assertIndexDeclarationAllowed(tableName, indexName, "rankBefore");
+        // `rankBefore`/`rankPageRows` are the two optional methods (the D1 twin omits both) — see `optionalWriterOverride`.
+        ...optionalWriterOverride("rankBefore", baseRankBefore, (rankBefore) => (tableName: string, indexName: string, options: unknown) => {
+            assertRankWhereAllowed(tableName, options, "rankBefore");
+            assertIndexDeclarationAllowed(tableName, indexName, "rankBefore", "rank");
 
-                      return baseRankBefore(tableName, indexName, options);
-                  },
-              }
-            : {}),
+            return rankBefore(tableName, indexName, options);
+        }),
+        ...optionalWriterOverride("rankPageRows", baseRankPageRows, (rankPageRows) => async (tableName: string, indexName: string, options: unknown) => {
+            assertRankWhereAllowed(tableName, options, "rankPageRows");
+            assertIndexDeclarationAllowed(tableName, indexName, "rankPageRows", "rank");
+
+            const result = await rankPageRows(tableName, indexName, options);
+            const columns = perTable.get(tableName);
+
+            return columns
+                ? {
+                      ...result,
+                      rows: result.rows.map((row) => {
+                          return { ...row, doc: maskRow(row.doc, columns, context) };
+                      }),
+                  }
+                : result;
+        }),
     };
 
     // SECURITY: the generated runtime glues a per-table facade

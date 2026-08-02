@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from "vue";
+
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import AuthCard from "./AuthCard.vue";
@@ -27,13 +29,18 @@ const context = useAuthUIContextRef();
 const t = context.value.localization;
 const { actions, state } = useController(createSignUpController);
 
+// The server can close self-serve sign-up (`emailAndPassword.disableSignUp`).
+// Computed, not read at setup: `setup()` never re-runs, so a gate resolved
+// here would stay frozen on the pre-discovery answer.
+const signUp = computed(() => context.value.signUp);
+
 const onSocial = (provider: string): void => {
     void signInWithSocial(context.value, provider);
 };
 </script>
 
 <template>
-    <AuthCard :title="t.signUp">
+    <AuthCard v-if="signUp" :title="t.signUp">
         <!--
             Social buttons belong on sign-up too — OAuth is a sign-up path, not
             just a sign-in one, and omitting them here sends new users through a

@@ -314,8 +314,10 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
      * starting from the events currently in the log and continuing with
      * every future `applyEvent` / `replayFromLog` call.
      *
-     * The generator runs indefinitely — it never returns. Callers should
-     * break out of the `for await` loop or use an `AbortSignal` to stop.
+     * The generator runs indefinitely unless given a `signal` — callers
+     * should break out of the `for await` loop or pass an `AbortSignal` to
+     * stop it (an abort settles the generator, `done: true`, on its next
+     * iteration step; it does not throw).
      * @example
      * ```ts
      * for await (const entry of source.events()) {
@@ -335,6 +337,20 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
 
             wake?.();
         });
+
+        // Abort must also settle the phase-2 park below: the promise is
+        // otherwise resolved only by the state-changed listener, so an abort
+        // while idle would never re-evaluate the loop condition — the
+        // documented cancellation path would hang and leak the listener +
+        // buffer forever. `once` since the generator only ever needs to wake
+        // once per abort; removed in `finally` for a signal that outlives
+        // this generator (a shared/long-lived signal must not accumulate
+        // dead listeners across many `events()` calls).
+        const onAbort = (): void => {
+            wake?.();
+        };
+
+        signal?.addEventListener("abort", onAbort, { once: true });
 
         try {
             // ── Phase 1 — yield past entries ────────────────────────
@@ -371,6 +387,7 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
             }
         } finally {
             unsub();
+            signal?.removeEventListener("abort", onAbort);
         }
     }
 

@@ -63,6 +63,29 @@ describe("lunora() Astro integration", () => {
             expect(warn.mock.calls[0]?.[0]).toMatch(/server entry "src\/worker\.ts" not found/u);
         });
 
+        it("falls back to console.warn when the caller supplies no logger at all", () => {
+            expect.assertions(2);
+
+            // Real Astro always passes a logger; this covers a caller invoking
+            // the hook directly without one (`logger` is optional on
+            // `ConfigDoneContext`) — and, more importantly, that the fallback
+            // itself is reachable: `context.logger?.warn` is only ever tested
+            // elsewhere with a logger present, so this branch of `warn` had no
+            // coverage at all.
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+
+            const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+            const integration = lunora({ serverEntry: "src/worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: { config: { root: URL } }) => void;
+
+            hook({ config: { root: pathToFileURL(`${directory}/`) } });
+
+            expect(consoleWarn).toHaveBeenCalledTimes(1);
+            expect(consoleWarn.mock.calls[0]?.[0]).toMatch(/server entry "src\/worker\.ts" not found/u);
+
+            consoleWarn.mockRestore();
+        });
+
         it("warns when serverEntry exists but does not call withLunora", () => {
             expect.assertions(2);
 

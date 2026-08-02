@@ -65,3 +65,57 @@ describe("lookupById probe — sequential per-table SELECT vs single UNION-ALL",
         }
     });
 });
+
+/**
+ * The RLS guard's `deleteMany`/`patchMany` pre-check (plan 291): resolving the
+ * owning table of MANY ids at once.
+ *
+ * - **per-id** — one single-id UNION-ALL probe (the bench above) PER id, the
+ * pre-fix `guardById` loop.
+ * - **batched** — one UNION-ALL probe per table, each branch scoped by
+ * `id IN (...)` over the WHOLE batch — `locateTablesByIds`'s shape.
+ *
+ * Same 8-table schema; the batch is 50 ids, all real rows (spread round-robin
+ * across the tables) so both variants do genuine work rather than short-circuit.
+ */
+const BATCH_SIZE = 50;
+const batchTableNames = tableNames;
+const batchIds = Array.from({ length: BATCH_SIZE }, (_, index) => `batch-row-${String(index)}`);
+
+for (const [index, id] of batchIds.entries()) {
+    const tableName = batchTableNames[index % batchTableNames.length]!;
+
+    harness.raw(`INSERT INTO "${tableName}" (id, _creationTime, __doc__) VALUES (?, ?, ?)`, id, 1, JSON.stringify({ v: 1 }));
+}
+
+const perIdUnionSql = `${batchTableNames.map((tableName) => `SELECT '${tableName}' AS __t__, id, _creationTime, __doc__ FROM "${tableName}" WHERE id = ?`).join(" UNION ALL ")} LIMIT 1`;
+
+const batchedInListSql = batchTableNames
+    .map((tableName) => `SELECT '${tableName}' AS __t__, id FROM "${tableName}" WHERE id IN (${batchIds.map(() => "?").join(", ")})`)
+    .join(" UNION ALL ");
+
+describe(`RLS guard id→table probe — ${String(BATCH_SIZE)} bare ids: per-id UNION loop vs one batched IN-list UNION`, () => {
+    bench(`per-id: ${String(BATCH_SIZE)} single-id UNION-ALL probes (pre-fix guardById loop)`, () => {
+        let resolved = 0;
+
+        for (const id of batchIds) {
+            const [row] = harness.raw(perIdUnionSql, ...batchTableNames.map(() => id));
+
+            if (row) {
+                resolved += 1;
+            }
+        }
+
+        if (resolved !== BATCH_SIZE) {
+            throw new Error("bench invariant: not every batch row was located");
+        }
+    });
+
+    bench("batched: one IN-list UNION-ALL probe across all tables (locateTablesByIds)", () => {
+        const rows = harness.raw(batchedInListSql, ...batchTableNames.flatMap(() => batchIds));
+
+        if (rows.length !== BATCH_SIZE) {
+            throw new Error("bench invariant: not every batch row was located");
+        }
+    });
+});

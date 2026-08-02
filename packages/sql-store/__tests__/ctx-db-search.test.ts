@@ -4,6 +4,7 @@ import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike, Valida
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createSqlCtxDb } from "../src/ctx-db";
 import { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations } from "../src/ctx-db-search";
 import type { SqlDialect } from "../src/dialect";
 import { companionFor } from "../src/search-layout";
@@ -351,6 +352,145 @@ describe("global search provisioning", () => {
             );
 
             expect(rows.map((document) => document["_id"])).toStrictEqual(["b"]);
+        });
+
+        it("prefix-matches a final token ending in an astral (surrogate-pair) character (plan 272)", async () => {
+            expect.assertions(1);
+
+            // U+10437 (𐐷, DESERET SMALL LETTER YEE) is a surrogate pair in
+            // UTF-16 — the exact shape `searchTermRange` must derive a
+            // code-point-correct upper bound for, not a code-unit one.
+            const astral = String.fromCodePoint(0x1_04_37);
+
+            createNotesTable();
+            insertNote("a", `${astral}ord some other text`);
+            insertNote("b", "unrelated document");
+
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            const rows = await runSqlSearch(
+                exec,
+                dialect,
+                notesDefinition,
+                "notes",
+                { definition: BY_BODY, field: "body", filters: [], hasQuery: true, indexName: "by_body", query: astral },
+                10,
+            );
+
+            expect(rows.map((document) => document["_id"])).toStrictEqual(["a"]);
+        });
+    });
+
+    // Plan 269: RLS installs a `.filter()` predicate at `query()` time, BEFORE
+    // the caller can chain `.withSearchIndex(...)` — so the predicate must be
+    // chainable on the bare (stage-less) reader and still apply once a search
+    // stage is chosen. These exercise the full `createSqlCtxDb` reader (not the
+    // lower-level `runSqlSearch` helper above) since the bug lives in the
+    // reader's `filter` member, not in the search execution itself.
+    describe("query() reader — filter() before withSearchIndex() (plan 269)", () => {
+        const makeWriter = () => createSqlCtxDb({ clock: () => 1, dialect, exec, schema: searchSchema });
+
+        it("carries a pre-stage filter into a staged search (the RLS repro)", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+
+            const writer = makeWriter();
+
+            await writer.insert("notes", { body: "hello world", channel: "general" });
+            await writer.insert("notes", { body: "hello world", channel: "other" });
+
+            const rows = await writer
+                .query("notes")
+                .filter((document) => document["channel"] === "general")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .collect();
+
+            expect(rows.map((row) => row["channel"])).toStrictEqual(["general"]);
+        });
+
+        it("honours the pre-stage predicate on every terminal", async () => {
+            expect.assertions(3);
+
+            createNotesTable();
+
+            const writer = makeWriter();
+
+            await writer.insert("notes", { body: "hello world", channel: "general" });
+            await writer.insert("notes", { body: "hello world", channel: "other" });
+
+            const chain = () =>
+                writer
+                    .query("notes")
+                    .filter((document) => document["channel"] === "general")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello"));
+
+            const taken = await chain().take(10);
+
+            expect(taken.map((row) => row["channel"])).toStrictEqual(["general"]);
+
+            const first = await chain().first();
+
+            expect(first?.["channel"]).toBe("general");
+
+            const paged = await chain().paginate({ numItems: 10 });
+
+            expect(paged.page.map((row) => row["channel"])).toStrictEqual(["general"]);
+        });
+
+        it("applies filters staged both before and after withSearchIndex()", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+
+            const writer = makeWriter();
+
+            await writer.insert("notes", { body: "hello world", channel: "general" });
+            await writer.insert("notes", { body: "hello world", channel: "other" });
+            await writer.insert("notes", { body: "hello moon", channel: "general" });
+
+            const rows = await writer
+                .query("notes")
+                .filter((document) => document["channel"] === "general")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .filter((document) => (document["body"] as string).includes("world"))
+                .collect();
+
+            expect(rows.map((row) => row["body"])).toStrictEqual(["hello world"]);
+        });
+
+        it("still throws LEGACY_READER_ERROR on a stage-less chain (no regression)", async () => {
+            expect.assertions(3);
+
+            createNotesTable();
+
+            const writer = makeWriter();
+
+            await writer.insert("notes", { body: "hello world", channel: "general" });
+
+            // A `.filter()` with no `.withSearchIndex()` staged is still not a
+            // real reader — only the throw moves from `.filter()` (eagerly) to
+            // the terminal.
+            await expect(
+                writer
+                    .query("notes")
+                    .filter(() => true)
+                    .collect(),
+            ).rejects.toThrow(/legacy query\(\)\/withIndex\(\) reader is not available/u);
+
+            // `.withIndex()` keeps throwing immediately — untouched by this fix.
+            expect(() => writer.query("notes").withIndex("by_body")).toThrow(/legacy query\(\)\/withIndex\(\) reader is not available/u);
+
+            // The async iterator on a stage-less chain rejects too — advance it
+            // once directly rather than looping, since the throw happens before
+            // any value would ever be yielded.
+            await expect(
+                writer
+                    .query("notes")
+                    .filter(() => true)
+                    [Symbol.asyncIterator]() // eslint-disable-line no-unexpected-multiline -- continues the chain above, not a new statement; Prettier owns this line-wrap
+                    .next(),
+            ).rejects.toThrow(/legacy query\(\)\/withIndex\(\) reader is not available/u);
         });
     });
 });

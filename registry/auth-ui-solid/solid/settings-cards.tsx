@@ -34,7 +34,7 @@ const ProfileCard = (props: ProfileCardProps = {}): JSX.Element => {
     );
 
     return (
-        <AuthCard title={t.profile}>
+        <AuthCard headingLevel={2} title={t.profile}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
@@ -60,7 +60,7 @@ const ChangeEmailCard = (): JSX.Element => {
     const [state, actions] = createController(createChangeEmailController);
 
     return (
-        <AuthCard title={t.changeEmail}>
+        <AuthCard headingLevel={2} title={t.changeEmail}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
@@ -87,7 +87,7 @@ const ChangePasswordCard = (): JSX.Element => {
     const [state, actions] = createController(createChangePasswordController);
 
     return (
-        <AuthCard title={t.changePassword}>
+        <AuthCard headingLevel={2} title={t.changePassword}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
@@ -140,7 +140,7 @@ const DeleteAccountCard = (): JSX.Element => {
     const [state, actions] = createController(createDeleteAccountController);
 
     return (
-        <AuthCard description={t.deleteAccountWarning} title={t.deleteAccount}>
+        <AuthCard description={t.deleteAccountWarning} headingLevel={2} title={t.deleteAccount}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
                 <Field
@@ -167,7 +167,7 @@ const SessionsCard = (): JSX.Element => {
     const [state, actions] = createController(createSessionsController);
 
     return (
-        <AuthCard title={t.sessions}>
+        <AuthCard headingLevel={2} title={t.sessions}>
             <FormBanner error={state.error} />
             <Show
                 fallback={
@@ -237,7 +237,7 @@ const PasskeysCard = (): JSX.Element => {
     }
 
     return (
-        <AuthCard title={t.passkeys}>
+        <AuthCard headingLevel={2} title={t.passkeys}>
             <FormBanner error={state.error} />
             <Show fallback={<p class="lunora-auth-card__description">…</p>} when={!state.loading}>
                 <Show fallback={<p class="lunora-auth-card__description">{t.passkeysEmpty}</p>} when={state.items.length > 0}>

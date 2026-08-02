@@ -84,6 +84,15 @@ const sniffImageType = async (file: File): Promise<boolean> => {
     return MAGIC_SIGNATURES.some((signature) => signature.every((run) => runMatches(run)));
 };
 
+/**
+ * Whether a picked file passes the client-side image check: accept-list when
+ * the browser reports a type, magic-byte sniff when it doesn't. Shared by the
+ * avatar and organization-logo controllers so the empty-`type` handling can't
+ * drift between the two copies again — see {@link sniffImageType}'s docblock
+ * for why an empty `type` isn't a green light.
+ */
+const isAcceptedImage = async (file: File): Promise<boolean> => (file.type === "" ? sniffImageType(file) : ACCEPTED_TYPES.has(file.type));
+
 const createAvatarUploadController = (context: ControllerContext, options: { initialImage?: string } = {}): AvatarUploadController => {
     const store = createStore<AvatarUploadState>({ imageUrl: options.initialImage, status: "idle" });
 
@@ -132,7 +141,7 @@ const createAvatarUploadController = (context: ControllerContext, options: { ini
                 // doesn't know, which happens for real image files often enough
                 // (some file managers' drag-and-drop, camera-roll exports) that
                 // sniffing the bytes beats either trusting or rejecting blindly.
-                if (file.type === "" ? !(await sniffImageType(file)) : !ACCEPTED_TYPES.has(file.type)) {
+                if (!(await isAcceptedImage(file))) {
                     store.update({ error: context.localization.avatarWrongType, status: "error" });
 
                     return;
@@ -159,4 +168,4 @@ const createAvatarUploadController = (context: ControllerContext, options: { ini
 };
 
 export type { AvatarUploadActions, AvatarUploadController, AvatarUploadState };
-export { ACCEPT_ATTRIBUTE, ACCEPTED_TYPES, createAvatarUploadController };
+export { ACCEPT_ATTRIBUTE, ACCEPTED_TYPES, createAvatarUploadController, isAcceptedImage };

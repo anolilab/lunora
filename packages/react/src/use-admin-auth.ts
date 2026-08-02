@@ -83,8 +83,8 @@ function useAdminAuthList<T>(
     const { enabled = true, pageSize = DEFAULT_PAGE_SIZE } = options;
     const [limit, setLimit] = useState(pageSize);
 
-    // Fold the acting admin's bearer token into the cache key. Without this, a
-    // token swap on the same `LunoraClient` (admin A → admin B via
+    // Fold the acting admin's identity fingerprint into the cache key. Without
+    // this, a token swap on the same `LunoraClient` (admin A → admin B via
     // `setAuthToken`, e.g. an admin console that lets one operator switch
     // accounts) would briefly serve admin A's cached rows to admin B under the
     // same collection key, until the `staleTime: 0` refetch resolves —
@@ -93,21 +93,32 @@ function useAdminAuthList<T>(
     // subscription (`use-auth.ts`) so every mounted list hook picks up a swap
     // immediately rather than waiting for an unrelated re-render.
     //
+    // The key ingredient is `client.currentIdentity()` — a `subj:`-labelled
+    // user id or a non-reversible hash of the token — rather than the raw
+    // bearer token itself. Query keys are not private: `LunoraProvider` allows
+    // a bring-your-own `QueryClient`, so a token embedded in the key would be
+    // serialized into `localStorage` by any app-side `persistQueryClient`
+    // persister, rendered verbatim in React Query Devtools, and captured by any
+    // telemetry that logs query keys. `currentIdentity()` is the discriminator
+    // built for exactly this: it partitions the cache per credential without
+    // ever exposing the credential itself, and a same-user token refresh (same
+    // `subj:`) keeps the same key instead of forcing a spurious refetch.
+    //
     // Residual caveat: `placeholderData: keepPreviousData` below (added for
     // `loadMore`) shows the *previous* observer's data as a placeholder while
-    // any new key resolves, including the key produced by a token swap — so a
-    // narrow placeholder-only window (never a persistent cache read) can still
-    // surface admin A's rows to admin B until the refetch lands. Scoping the
-    // placeholder to same-token key changes would close that gap; left as a
-    // follow-up since this fold already satisfies the ask (a token swap gets
-    // its own cache entry, not admin A's).
-    const token = useSyncExternalStore(
+    // any new key resolves, including the key produced by an identity swap —
+    // so a narrow placeholder-only window (never a persistent cache read) can
+    // still surface admin A's rows to admin B until the refetch lands. Scoping
+    // the placeholder to same-identity key changes would close that gap; left
+    // as a follow-up since this fold already satisfies the ask (an identity
+    // swap gets its own cache entry, not admin A's).
+    const identity = useSyncExternalStore(
         (onChange) => client.onAuthTokenChange(onChange),
-        () => client.getAuthToken(),
-        () => client.getAuthToken(),
+        () => client.currentIdentity(),
+        () => client.currentIdentity(),
     );
 
-    const queryKey: QueryKey = [ADMIN_AUTH_KEY, token ?? "anon", ...key, limit];
+    const queryKey: QueryKey = [ADMIN_AUTH_KEY, identity ?? "anon", ...key, limit];
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `fetchPage` is a fresh closure supplied by each caller hook (`useAuthUsers`/`useOrganizations`/`useAuthSessions`) and is not part of the cache identity — `queryKey` (built from the caller's own filter/search/sort args plus `limit` above) already encodes every input that should invalidate the cache. Folding `fetchPage` itself into the key would defeat TanStack's dedup (a fresh closure every render is never `===` the previous one).
     const query = useTanStackQuery<AuthPage<T>>({

@@ -135,12 +135,19 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                     return;
                 }
 
-                const warn =
-                    context.logger?.warn ??
-                    ((message: string) => {
+                // Not `context.logger?.warn ?? fallback`: that extracts the method as a
+                // detached function reference, and Astro's real `Logger.warn` reads `this`
+                // internally — called detached, it throws `Cannot read properties of
+                // undefined (reading 'options')`. Wrapping in a closure keeps the call a
+                // proper `context.logger.warn(...)` method call.
+                const warn = (message: string): void => {
+                    if (context.logger?.warn) {
+                        context.logger.warn(message);
+                    } else {
                         // eslint-disable-next-line no-console -- no `logger` was supplied on this call; fall back so the warning is never silently dropped
                         console.warn(message);
-                    });
+                    }
+                };
                 const entryPath = fileURLToPath(new URL(serverEntry, root));
 
                 if (!existsSync(entryPath)) {

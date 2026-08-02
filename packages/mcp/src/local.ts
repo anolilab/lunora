@@ -21,6 +21,10 @@ import { LunoraClient } from "@lunora/client";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+// `shared/` is bundler-inlined (not a package): relative import, no `.js`
+// extension, and this package's tsconfig drops `outDir`/`rootDir` for it (see
+// packages/mcp/tsconfig.json).
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { McpResourceProvider, McpResourceSummary, McpTool } from "./compose";
 import { createToolServer } from "./compose";
 import { createRemoteDocsIndex } from "./docs/remote-index";
@@ -84,11 +88,29 @@ const NO_DEPLOYMENT_MESSAGE =
     "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
 
 /**
- * Reuse one `LunoraClient` per `url|token` pair.
+ * Small — the realistic population is one dev server plus a handful of stale
+ * restarts, not a long tail of distinct deployments.
+ */
+const MAX_CLIENT_CACHE = 8;
+
+/**
+ * Reuse one `LunoraClient` per `url|token` pair, shared by both the tool and
+ * resource surfaces (one instance built by {@link createLocalMcpServer} and
+ * injected into both), so a tool call and a resource read against the same
+ * deployment share one client instead of minting their own.
  *
  * Not just an allocation win: `tools.ts` memoizes the deployment's function
- * registry in a `WeakMap` keyed by client, so minting a fresh client per call
- * would re-fetch that registry on every single tool call.
+ * registry in a `WeakMap` keyed by client, so minting a fresh client per
+ * surface would re-fetch that registry on every single tool call.
+ *
+ * Bounded FIFO (`evictOldestEntry`, `shared/evict-oldest.ts`): this server is
+ * long-lived by design (an editor spawns it once and keeps it alive across
+ * every `lunora dev` restart afterwards — see the resolver rationale above),
+ * and every restart can rotate the dev server's port/token, so an unbounded
+ * map would accrete one dead client per restart for the process's life.
+ * Evicting a client whose request is still in flight is safe — eviction only
+ * drops the map's reference; the in-flight call keeps its own reference to
+ * the client alive.
  */
 const createClientCache = (fetchImplementation: typeof fetch | undefined): ((deployment: LocalDeployment) => LunoraClient) => {
     const cache = new Map<string, LunoraClient>();
@@ -109,6 +131,7 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
             client.setAuthToken(deployment.token);
         }
 
+        evictOldestEntry(cache, MAX_CLIENT_CACHE);
         cache.set(key, client);
 
         return client;
@@ -124,9 +147,12 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
  * session. Calling one while nothing is running returns an actionable error
  * instead.
  */
-const lazyDeploymentTools = (source: LocalDeploymentSource, allowWrites: boolean, fetchImplementation: typeof fetch | undefined): ReadonlyArray<McpTool> => {
+const lazyDeploymentTools = (
+    source: LocalDeploymentSource,
+    allowWrites: boolean,
+    clientFor: (deployment: LocalDeployment) => LunoraClient,
+): ReadonlyArray<McpTool> => {
     const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
-    const clientFor = createClientCache(fetchImplementation);
 
     return toolDefinitions(allowWrites).map((definition) => {
         return {
@@ -198,9 +224,8 @@ const SPEC_RESOURCE_ENTRIES: ReadonlyArray<SpecResourceEntry> = [
  * endpoint but no spec configured still resolves 200 with an empty document,
  * so it stays listed — only a hard failure omits it.
  */
-const deploymentSpecResources = (source: LocalDeploymentSource, fetchImplementation: typeof fetch | undefined): McpResourceProvider => {
+const deploymentSpecResources = (source: LocalDeploymentSource, clientFor: (deployment: LocalDeployment) => LunoraClient): McpResourceProvider => {
     const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
-    const clientFor = createClientCache(fetchImplementation);
 
     /** The live document for `entry`, or `undefined` when the deployment can't serve it. */
     const fetchEntry = async (entry: SpecResourceEntry): Promise<Record<string, unknown> | undefined> => {
@@ -273,8 +298,16 @@ const combineResourceProviders = (providers: ReadonlyArray<McpResourceProvider>)
  * surface that always works), then the caller's extras, then the deployment
  * tools. Order also decides precedence — `createToolServer` keeps the first
  * registration of a duplicated name.
+ *
+ * `clientFor` is the shared client cache built once by
+ * {@link createLocalMcpServer} and threaded into both the tool and resource
+ * surfaces. Exported (and called directly by tests) without going through
+ * `createLocalMcpServer`, so a caller that omits it gets a private,
+ * call-scoped cache — same shape as before this surface was shared, just
+ * without the cross-surface sharing that only matters once a resource
+ * surface exists alongside it.
  */
-const localTools = (options: LocalMcpServerOptions): ReadonlyArray<McpTool> => {
+const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient): ReadonlyArray<McpTool> => {
     const tools: McpTool[] = [];
 
     if (options.docs !== false) {
@@ -291,7 +324,7 @@ const localTools = (options: LocalMcpServerOptions): ReadonlyArray<McpTool> => {
     tools.push(...(options.extraTools ?? []));
 
     if (options.deployment !== undefined) {
-        tools.push(...lazyDeploymentTools(options.deployment, options.allowWrites ?? false, options.fetch));
+        tools.push(...lazyDeploymentTools(options.deployment, options.allowWrites ?? false, clientFor ?? createClientCache(options.fetch)));
     }
 
     return tools;
@@ -315,16 +348,20 @@ const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
         resourceProviders.push(docsResources(index));
     }
 
+    // One client cache for the whole server, shared by the tool and resource
+    // surfaces below — see `createClientCache`'s docstring for why.
+    const clientFor = createClientCache(options.fetch);
+
     // Only offer the spec resources when a deployment is configured at all —
     // mirrors the docs-index check above (the whole surface is opt-in, not a
     // live probe at server-build time).
     if (options.deployment !== undefined) {
-        resourceProviders.push(deploymentSpecResources(options.deployment, options.fetch));
+        resourceProviders.push(deploymentSpecResources(options.deployment, clientFor));
     }
 
     return createToolServer(
         { name: LOCAL_SERVER_NAME, version: options.version ?? "0.0.0" },
-        localTools(options),
+        localTools(options, clientFor),
         resourceProviders.length === 0 ? undefined : combineResourceProviders(resourceProviders),
     );
 };

@@ -4,6 +4,7 @@ import { LunoraError } from "@lunora/errors";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 
@@ -37,6 +38,14 @@ const useSubscription = <F extends FunctionReference>(
             if (currentArgs === "skip") {
                 data.value = undefined;
                 error.value = undefined;
+                return;
+            }
+
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onCleanup` (see
+            // `use-presence.ts`'s guard rationale) — skip the subscription
+            // server-side and leave `data`/`error` at their inert initial values.
+            if (!isBrowser()) {
                 return;
             }
 

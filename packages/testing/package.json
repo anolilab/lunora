@@ -65,10 +65,10 @@
     },
     "dependencies": {
         "@lunora/agent": "1.0.0-alpha.35",
-        "@lunora/errors": "1.0.0-alpha.10",
-        "@lunora/mail": "1.0.0-alpha.37",
+        "@lunora/errors": "1.0.0-alpha.11",
+        "@lunora/mail": "1.0.0-alpha.38",
         "@lunora/server": "1.0.0-alpha.56",
-        "@lunora/shard-engine": "1.0.0-alpha.4"
+        "@lunora/shard-engine": "1.0.0-alpha.5"
     },
     "devDependencies": {
         "@lunora/do": "1.0.0-alpha.61",

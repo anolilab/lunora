@@ -339,6 +339,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesMask": false,
         "usesRateLimit": false,
         "usesRls": false,
+        "analyzableBody": true,
         "exportName": "registerDevice",
         "file": "push",
         "hasEmailArg": false,
@@ -363,6 +364,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesMask": false,
         "usesRateLimit": false,
         "usesRls": false,
+        "analyzableBody": true,
         "exportName": "announce",
         "file": "push",
         "hasEmailArg": false,
@@ -387,6 +389,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesMask": false,
         "usesRateLimit": false,
         "usesRls": false,
+        "analyzableBody": true,
         "exportName": "listAnnouncements",
         "file": "push",
         "hasEmailArg": false,
@@ -411,6 +414,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesMask": false,
         "usesRateLimit": false,
         "usesRls": false,
+        "analyzableBody": true,
         "exportName": "broadcast",
         "file": "push",
         "hasEmailArg": false,
@@ -539,7 +543,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
     class extends ShardDOBase {
         private migrated = false;
 
-        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             // Internal functions are reachable server-side only: via `ctx.run*`
@@ -552,7 +556,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             this.ensureMigrated();
 
-            const ctx = this.buildCtx({ functionPath });
+            // `headroom`, when the caller supplied one, is threaded straight
+            // through to `buildCtx` — bypassing its `this.transactionHeadroom()`
+            // fallback (the racy shared-field read) entirely for THIS dispatch.
+            // The main `/rpc` path always supplies one; `dispatchLifecycle` /
+            // `handleRunAs` don't mint their own and omit it, so they keep the
+            // prior fallback behavior unchanged.
+            const ctx = this.buildCtx({ functionPath, headroom });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -814,7 +824,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return importShardRows(writer, schema as unknown as SchemaLike, { rows: args.rows, startLine: args.startLine });
         }
 
-        protected override async deleteRowThroughWriter(table: string, id: string): Promise<void> {
+        protected override async deleteRowThroughWriter(table: string, id: string, headroom?: TransactionHeadroomTracker): Promise<void> {
             const definition = (schema as unknown as SchemaLike).tables[table];
 
             if (!definition) {
@@ -836,6 +846,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // `runShardBulkDelete` (a normal `/rpc` dispatch) calls this with no
+                // explicit `headroom`, so it falls back to `this.transactionHeadroom()`
+                // — the SAME per-dispatch meter every other write goes through, mirroring
+                // `buildCtx`'s `options.headroom ?? this.transactionHeadroom()`. The TTL
+                // sweep (an alarm work item, no dispatch in flight) passes its own
+                // by-value tracker explicitly instead.
+                headroom: headroom ?? this.transactionHeadroom(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,

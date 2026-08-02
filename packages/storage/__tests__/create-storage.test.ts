@@ -460,6 +460,15 @@ describe("createStorage", () => {
         expect(Number(url.searchParams.get("exp"))).toBeGreaterThan(Math.floor(Date.now() / 1000));
     });
 
+    it("getSignedUrl() rejects a publicBaseUrl carrying a path", async () => {
+        expect.assertions(1);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, publicBaseUrl: "https://cdn.test/files", signingSecret: "shh" });
+
+        await expect(storage.getSignedUrl("x.png")).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    });
+
     it("generateUploadUrl() mints a PUT URL pinning the content-type", async () => {
         expect.assertions(3);
 

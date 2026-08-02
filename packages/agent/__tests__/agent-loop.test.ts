@@ -1365,6 +1365,152 @@ describe(runAgentLoop, () => {
         expect(runtime.threads.get("thread-1")?.status).toBe("idle");
     });
 
+    it("memoizes a function needsApproval gate in its own durable step — it resolves once, not once per replay", async () => {
+        let gateCalls = 0;
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: () => {
+                        gateCalls += 1;
+
+                        return false;
+                    },
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("done")]);
+
+        const first = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(first).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(gateCalls).toBe(1);
+
+        // Replay: SAME journal + runtime (same instance) — every durable step,
+        // including the gate, is served from its memo. Nothing re-executes.
+        const replay = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(replay).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(gateCalls).toBe(1);
+        expect(journal.invoked.filter((name) => name === "tool:approval-gate:call_1")).toHaveLength(1);
+    });
+
+    it("does not hang on a replayed false→true gate flip — the memoized decision wins, no approval wait entered", async () => {
+        let flip = false;
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: () => flip,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("done")]);
+
+        const first = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(first).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+
+        // The world changes after the original pass — a naive re-evaluation on
+        // replay would now gate `true` and park the run on a wait no client will
+        // ever resolve. The memoized `false` must win instead.
+        flip = true;
+
+        const replay = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(replay).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(journal.waitedNames).toStrictEqual([]);
+        expect([...runtime.messages.values()].some((message) => message.status === "awaiting_approval")).toBe(false);
+    });
+
+    it("hands the function gate a read-only context with no setState", async () => {
+        let sawSetState: boolean | undefined;
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: (_input, context) => {
+                        sawSetState = "setState" in context;
+
+                        return false;
+                    },
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        expect(sawSetState).toBe(false);
+    });
+
+    it("keys the gate's durable step per call id — two calls in one turn each memoize independently", async () => {
+        const gateCallCounts: Record<string, number> = {};
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: (input: { amount: number }) => `charged ${String(input.amount)}`,
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: (_input, context) => {
+                        gateCallCounts[context.toolCallId] = (gateCallCounts[context.toolCallId] ?? 0) + 1;
+
+                        return false;
+                    },
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([
+            {
+                text: "charging both…",
+                toolCalls: [
+                    { id: "call_1", input: { amount: 10 }, name: "charge" },
+                    { id: "call_2", input: { amount: 20 }, name: "charge" },
+                ],
+            },
+            finalTurn("done"),
+        ]);
+
+        const first = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(first).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(gateCallCounts).toStrictEqual({ call_1: 1, call_2: 1 });
+        expect(journal.invoked).toContain("tool:approval-gate:call_1");
+        expect(journal.invoked).toContain("tool:approval-gate:call_2");
+
+        // Replay: both calls' gate decisions are memoized independently.
+        const replay = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(replay).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(gateCallCounts).toStrictEqual({ call_1: 1, call_2: 1 });
+    });
+
     it("streams token deltas in order and persists the concatenated final text", async () => {
         const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
         const runtime = memoryRuntime();

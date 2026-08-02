@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { queryParameter } from "../core/browser-location";
 import { createResetPasswordController } from "../core/reset-password";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
@@ -8,12 +9,15 @@ import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
 const props = defineProps<{
-    /** The reset token from the URL (`?token=...`). */
+    /** Defaults to `?token=` from the URL. */
     token?: string;
 }>();
 
 const { localization: t } = useAuthUI();
-const { actions, state } = useController((context) => createResetPasswordController(context, { token: props.token }));
+// Captured at setup: the controller consumes the token once on creation, so a
+// token that changes afterwards means a new card, not a new state.
+const token = props.token ?? queryParameter("token");
+const { actions, state } = useController((context) => createResetPasswordController(context, { token }));
 </script>
 
 <template>

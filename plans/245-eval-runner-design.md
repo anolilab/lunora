@@ -17,18 +17,18 @@ commands/eval, confirmed by reading the diff)
 ## 1. Current state (recap, verified)
 
 - The kit is complete and untouched by this design:
-  - `packages/testing/src/scorer.ts` — `evaluate(cases, produce, scorers)` →
-    `EvalResult { average, items: EvalItemResult[] }`; five scorers.
-  - `packages/testing/src/agent-harness.ts` — `agentHarness(agent, { script,
-    functions? })` drives `runAgentLoop` against an in-memory `agents:*`
-    runtime double and a `DurableStepJournal`. **No network, no Durable
-    Object, no `wrangler dev`** — confirmed by reading the whole file.
-    `agentHarness(...).run(...)` resolves in-process.
-  - `packages/testing/src/evaluation-telemetry.ts` — `recordEvaluation({name,
-    score, label?, span?})` returns `{ "gen_ai.evaluation.<name>.score":
-    number, "gen_ai.evaluation.<name>.label"?: string }` and, when handed a
-    `SpanHandle`, calls `span.setAttributes(...)` — i.e. it rides the SAME
-    span as the generation it grades, it does not create a new one.
+    - `packages/testing/src/scorer.ts` — `evaluate(cases, produce, scorers)` →
+      `EvalResult { average, items: EvalItemResult[] }`; five scorers.
+    - `packages/testing/src/agent-harness.ts` — `agentHarness(agent, { script,
+functions? })` drives `runAgentLoop` against an in-memory `agents:*`
+      runtime double and a `DurableStepJournal`. **No network, no Durable
+      Object, no `wrangler dev`** — confirmed by reading the whole file.
+      `agentHarness(...).run(...)` resolves in-process.
+    - `packages/testing/src/evaluation-telemetry.ts` — `recordEvaluation({name,
+score, label?, span?})` returns `{ "gen_ai.evaluation.<name>.score":
+number, "gen_ai.evaluation.<name>.label"?: string }` and, when handed a
+      `SpanHandle`, calls `span.setAttributes(...)` — i.e. it rides the SAME
+      span as the generation it grades, it does not create a new one.
 - No runner: `packages/cli/src/commands/` has no `eval` directory; `cli.ts`
   registers 30 commands, none named `eval`.
 - No Studio surface: `packages/studio/src/features/` has no `evals/`; nothing
@@ -40,7 +40,7 @@ commands/eval, confirmed by reading the diff)
 
 - **Command shape**: `verify` (`packages/cli/src/commands/verify/{index,handler}.ts`)
   is the closest sibling — a read-only, offline-safe command with `--format
-  pretty|json` (`util/output-format.ts`: `validateOutputFormat`,
+pretty|json` (`util/output-format.ts`: `validateOutputFormat`,
   `loggerForFormat`, `isJsonFormat`, `printJson`) and a testable
   `run*Command(options): Promise<{code, ...}>` function wrapped by
   `defineHandler` (`util/command.ts`) for the cerebro `execute`. `lunora eval`
@@ -91,11 +91,9 @@ export default {
             script: [finalTurn("Your refund was issued.")],
         });
 
-        return evaluate(
-            [{ expected: "refund", input: "where's my refund?" }],
-            async (input) => (await harness.run({ input, threadKey: input })).text ?? "",
-            [containsScorer("refund")],
-        );
+        return evaluate([{ expected: "refund", input: "where's my refund?" }], async (input) => (await harness.run({ input, threadKey: input })).text ?? "", [
+            containsScorer("refund"),
+        ]);
     },
 };
 ```
@@ -104,7 +102,7 @@ export default {
   exports; default is fine only as the sole export", `CLAUDE.md`) makes this
   the only compliant shape that also carries per-eval metadata (`name`,
   `threshold`) alongside the executable body. A bare `export default async ()
-  => EvalResult` (no metadata) was considered and rejected: it can't carry a
+=> EvalResult` (no metadata) was considered and rejected: it can't carry a
   per-eval threshold without a second named export, which the mixed-export
   rule forbids.
 - **`run` is the ENTIRE eval body** — the runner does not call `evaluate`
@@ -113,7 +111,7 @@ export default {
   `EvalResult` its own call to `evaluate(...)` produces. This is what makes
   "the kit is the product, the runner is glue" literal rather than aspirational:
   the runner's contract with a `*.eval.ts` file is exactly `() =>
-  Promise<EvalResult> | EvalResult`, and `EvalResult` is the kit's own
+Promise<EvalResult> | EvalResult`, and `EvalResult` is the kit's own
   existing exported type — nothing new is added to `@lunora/testing`.
 - **No `defineEval` helper (yet)** — the codebase's `define*` convention
   (`defineSchema`, `defineAgent`, `defineWorkflow`, …) would suggest a
@@ -141,7 +139,7 @@ eval` prints an info line and exits 0.
 Mirrors `verify` exactly:
 
 - `lunora eval` — runs every discovered eval, prints a table (`NAME  SCORE
-  THRESHOLD  STATUS`), exits **0** if every eval ran without throwing (no
+THRESHOLD  STATUS`), exits **0** if every eval ran without throwing (no
   threshold set → report-only; this is the "just show me the scores" mode).
 - `lunora eval --threshold 0.8` — a **global** gate: every eval's `.average`
   must be `>= 0.8`, unless the eval's own `threshold` export overrides it
@@ -151,7 +149,7 @@ Mirrors `verify` exactly:
 - `--format json` — mirrors `verify`'s contract bit-for-bit: every
   human/progress line moves to stderr (`loggerForFormat`), stdout carries one
   JSON document (`printJson`) shaped `{ code, evals: [{ name, path, average?,
-  threshold?, passed, error?, items? }] }`. Machine-readable, pipeable to
+threshold?, passed, error?, items? }] }`. Machine-readable, pipeable to
   `jq`, and the shape a CI step greps for a specific eval's score without
   re-running anything.
 - **No per-eval exit code** — one process, one exit code, exactly like every
@@ -255,7 +253,7 @@ Model on `TracesPanel` directly (same admin query hook, same shard-scoped
 live-push pattern):
 
 - **Query**: `useAdminQuery(ADMIN_FUNCTIONS.getTraces, {}, { live: true,
-  shardKey })` — identical call to what `TracesPanel` already makes.
+shardKey })` — identical call to what `TracesPanel` already makes.
 - **Extraction**: client-side, over the returned `TraceSummary[]`. For each
   span in each trace, scan `attributes` for keys matching
   `/^gen_ai\.evaluation\.([^.]+)\.score$/`; the capture group is the eval
@@ -264,7 +262,7 @@ live-push pattern):
   `filterTraces`/`spanBar` helpers in `trace-geometry.ts` — same file-shape
   precedent.
 - **Grouping/layout**: group extracted `(name, score, traceId, spanName,
-  startTs)` rows by eval `name` into a card per eval — most-recent score,
+startTs)` rows by eval `name` into a card per eval — most-recent score,
   a small run count, a "min/mean/max over what's currently in the ring"
   summary (NOT a trend line — the ring doesn't support one), and a list of
   recent runs each linking to its trace (reusing the existing trace-id

@@ -31,6 +31,7 @@ import { LunoraError } from "@lunora/errors";
 import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
 import { createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
 
 /**
@@ -93,6 +94,14 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                         "INTERNAL",
                         `@lunora/agent: no Workflow binding "${target.binding}" on env for an inbound agent — run codegen/dev so wrangler.jsonc declares it`,
                     );
+                }
+
+                // `run` is built by an app-authored `onEmail` mapper from a fully
+                // untrusted inbound email — reject the reserved workflow
+                // branch-marker key at this trust boundary before it ever reaches
+                // `create()`.
+                if (hasBranchMarker(run)) {
+                    throw new LunoraError("BAD_REQUEST", `@lunora/agent: inbound run params ${BRANCH_MARKER_REJECTION}`);
                 }
 
                 // `AgentEmailRun` is the run-input shape (input/owner/threadKey/title).
