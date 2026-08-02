@@ -161,4 +161,39 @@ describe("cloudflare shard host transaction", () => {
 
         expect(storage.calls).toStrictEqual(["rolled-back"]);
     });
+
+    it("attaches a platform failure as the cause when both fail", async () => {
+        expect.assertions(2);
+
+        const storage = {
+            transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
+                await closure().catch(() => undefined);
+
+                throw new Error("rollback failed");
+            },
+        };
+        const thrown = new LunoraError("CONFLICT", "not your turn");
+
+        await expect(hostWith(storage).transaction(() => Promise.reject(thrown))).rejects.toBe(thrown);
+        expect((thrown.cause as Error | undefined)?.message).toBe("rollback failed");
+    });
+
+    it("still delivers the closure's error when it cannot carry a cause", async () => {
+        expect.assertions(2);
+
+        // A frozen sentinel error rejects the `cause` write with a `TypeError`.
+        // Unguarded, that TypeError would replace the error the handler threw —
+        // the exact loss this wrapper exists to prevent.
+        const storage = {
+            transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
+                await closure().catch(() => undefined);
+
+                throw new Error("rollback failed");
+            },
+        };
+        const frozen = Object.freeze(new LunoraError("CONFLICT", "not your turn"));
+
+        await expect(hostWith(storage).transaction(() => Promise.reject(frozen))).rejects.toBe(frozen);
+        expect(frozen.cause).toBeUndefined();
+    });
 });

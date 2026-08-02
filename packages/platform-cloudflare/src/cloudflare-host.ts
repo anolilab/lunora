@@ -95,6 +95,33 @@ const createShardAlarms = (storage: AlarmStorageLike): ShardAlarms => {
     };
 };
 
+/**
+ * Record `platformError` as the cause of the error a closure threw, when both
+ * failed.
+ *
+ * Best-effort by construction: the write can itself throw, because a frozen or
+ * sealed error — a module-level `Object.freeze(new Error(…))` sentinel is a real
+ * pattern — rejects it with a `TypeError`. Unguarded, that `TypeError` would
+ * replace the error the handler threw, which is the exact loss the caller of
+ * this helper exists to prevent. Attaching a cause is a courtesy; delivering the
+ * handler's own error is the contract, so the courtesy loses.
+ */
+const attachCause = (thrown: unknown, platformError: unknown): void => {
+    // `thrown === platformError` would make the error its own cause.
+    if (!(thrown instanceof Error) || thrown === platformError || thrown.cause !== undefined) {
+        return;
+    }
+
+    try {
+        // `defineProperty` rather than assignment: it states the intent (add an
+        // own property to this instance) and keeps the lint rule about mutating
+        // a parameter honest, since the mutation is the whole point here.
+        Object.defineProperty(thrown, "cause", { configurable: true, value: platformError, writable: true });
+    } catch {
+        // Non-writable `cause`; drop the platform error rather than mask the closure's.
+    }
+};
+
 const createShardHost = (state: DurableObjectState): ShardHost => {
     const { storage } = state;
 
@@ -192,12 +219,9 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
                     throw error;
                 }
 
-                // Both failed: the handler's error is what the caller acted on,
-                // so it stays the thrown value, but a broken storage layer must
-                // not vanish behind it.
-                if (thrown.value instanceof Error && thrown.value.cause === undefined && error !== thrown.value) {
-                    thrown.value.cause = error;
-                }
+                // Both failed. The handler's error is the one the caller acted
+                // on, so it stays the thrown value; the platform's rides along.
+                attachCause(thrown.value, error);
 
                 throw thrown.value;
             }
