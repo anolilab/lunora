@@ -32,6 +32,6 @@ describe("resolveDeployDriver", () => {
     it("lists the registered target ids", () => {
         expect.assertions(1);
 
-        expect(deployTargetIds()).toStrictEqual(["cloudflare"]);
+        expect(deployTargetIds()).toStrictEqual(["cloudflare", "node"]);
     });
 });
