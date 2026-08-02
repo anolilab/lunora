@@ -1,3 +1,10 @@
+## @lunora/do [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.62...%40lunora%2Fdo%401.0.0-alpha.63) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/do [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.61...%40lunora%2Fdo%401.0.0-alpha.62) (2026-08-02)
 
 
