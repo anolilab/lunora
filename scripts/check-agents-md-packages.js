@@ -1,26 +1,29 @@
 /**
- * Guards the `AGENTS.md` (`CLAUDE.md` symlinks to it) `### Packages` table
- * against `packages/*` actually existing on disk.
+ * Guards against `AGENTS.md` losing track of a package.
  *
- * AGENTS.md is the file every coding agent reads to decide which package owns
- * a change. A package added or extracted without a table row (or at least a
- * prose mention) is invisible to that decision — five packages (`auth-ui`,
- * `platform`, `platform-cloudflare`, `platform-node`, `shard-engine`) drifted
- * out of the file this way before plan 287 fixed it. This check keeps the fix
- * from silently rotting again.
+ * `AGENTS.md` (which `CLAUDE.md` symlinks to) is what every coding agent reads
+ * to decide which package owns a change. Its `### Packages` table is
+ * hand-maintained, so a new or extracted package only appears there if whoever
+ * added it remembered — and five in a row did not: `@lunora/auth-ui`,
+ * `@lunora/platform`, `@lunora/platform-cloudflare`, `@lunora/platform-node`,
+ * and `@lunora/shard-engine` all shipped without a row. An agent asked to touch
+ * auth UI found no `auth-ui` package, and either edited `@lunora/auth` or
+ * invented a location. Wrong-package edits and duplicated code are the failure
+ * mode, and nothing else in the repo catches it.
  *
- * Coverage: `packages/` only — `apps/`, `examples/`, `tests/` are out of
- * scope for the table by design (plan 287 §9 records the decision).
+ * The check is deliberately loose: it asserts only that each `packages/*`
+ * manifest name appears *somewhere* in the file. A prose mention counts. That
+ * keeps it from being brittle about table formatting (Prettier reflows the
+ * column widths on every edit) while still failing on the case that actually
+ * hurts — a package the file has never heard of.
  *
- * Match rule: substring match on the exact manifest `name` anywhere in
- * AGENTS.md — a table cell or a prose mention both count. Parsing the table
- * structure would be more precise but brittle to reformatting; a name that
- * shows up in prose (like the platform-family paragraph) is still coverage a
- * reader can act on, which is what keeps this check honest without being
- * brittle.
+ * Scope is `packages/` only. `apps/`, `examples/`, `templates/`, and `tests/`
+ * are described by the repo-layout table rather than enumerated, so requiring a
+ * per-directory mention there would fail on the file's own design.
  *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
+
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +33,16 @@ const rootDir = join(__dirname, "..");
 const packagesDir = join(rootDir, "packages");
 const agentsMdPath = join(rootDir, "AGENTS.md");
 
-const agentsMd = readFileSync(agentsMdPath, "utf8");
+let agentsMd;
+
+try {
+    agentsMd = readFileSync(agentsMdPath, "utf8");
+} catch {
+    console.error("❌ AGENTS.md is missing or unreadable at the repo root.");
+    console.error("   It is the entry point for every coding agent — restore it before continuing.");
+
+    process.exit(1);
+}
 
 const missing = [];
 
@@ -39,35 +51,32 @@ for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
         continue;
     }
 
-    const manifestPath = join(packagesDir, entry.name, "package.json");
-
     let manifest;
 
     try {
-        manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        manifest = JSON.parse(readFileSync(join(packagesDir, entry.name, "package.json"), "utf8"));
     } catch {
-        // Unreadable/missing package.json — nothing to name-check.
         continue;
     }
 
-    if (typeof manifest.name !== "string") {
+    if (typeof manifest.name !== "string" || agentsMd.includes(manifest.name)) {
         continue;
     }
 
-    if (!agentsMd.includes(manifest.name)) {
-        missing.push(manifest.name);
-    }
+    missing.push({ directory: entry.name, name: manifest.name });
 }
 
 if (missing.length > 0) {
-    console.error(`❌ AGENTS.md does not mention ${missing.length} packages/* package(s):`);
+    console.error(`❌ ${missing.length} package(s) exist on disk but are never mentioned in AGENTS.md:`);
 
-    for (const name of missing.sort()) {
-        console.error(`   - ${name}`);
+    for (const { directory, name } of missing) {
+        console.error(`   ${name} (packages/${directory})`);
     }
 
-    console.error("   Add a `### Packages` table row (or at least a prose mention) to AGENTS.md.");
+    console.error("   Add a row to the `### Packages` table describing what the package owns.");
+    console.error("   Agents use that table to pick which package a change belongs in.");
+
     process.exit(1);
 }
 
-console.log("✅ AGENTS.md mentions every packages/* package.");
+console.log("✅ Every packages/* manifest name appears in AGENTS.md.");

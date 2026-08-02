@@ -11,9 +11,12 @@ The Lunora documentation & marketing site (`@lunora/docs`) — built with **TanS
 ## Commands
 
 ```bash
-pnpm dev      # Dev server (runs generate-packages + copy-docs first)
-pnpm build    # Production build (runs generate-packages + copy-docs + fetch-stats + vite build)
-pnpm serve    # Preview production build
+pnpm dev               # Dev server (runs generate-packages + copy-docs first)
+pnpm build             # generate-packages + copy-docs + check-doc-imports + fetch-stats + vite build
+pnpm serve             # Preview production build
+pnpm start             # Serve the built output (.output/server/index.mjs)
+pnpm lint:doc-imports  # Verify code samples in docs import real, exported symbols
+pnpm lint:types        # fumadocs-mdx codegen, then tsc --noEmit
 ```
 
 ## Architecture
@@ -43,7 +46,8 @@ Scripts run before Vite build (in order):
 
 1. **`scripts/generate-packages.js`** — discovers flat workspace packages via `project.json` `category:*` tags + `package.json`, merges with `src/data/packages-metadata.json`, outputs `src/data/packages.ts`.
 2. **`scripts/copy-package-docs.js`** — copies every `packages/<name>/docs/` into `src/content/docs/packages/<name>/`, sanitises MDX for Fumadocs, and builds a categorised `packages/meta.json` (categories come from `CATEGORY_CONFIG`).
-3. **`scripts/fetch-stats.js`** — fetches npm + GitHub stats (derived from `packages.ts`, repo `anolilab/lunora`) into `src/data/stats.json`. Network-bound; skipped by `dev`.
+3. **`scripts/check-doc-imports.mjs`** — fails the build when a code sample imports a symbol no package actually exports. Run it alone with `pnpm lint:doc-imports`; it does not run in `dev`.
+4. **`scripts/fetch-stats.js`** — fetches npm + GitHub stats (derived from `packages.ts`, repo `anolilab/lunora`) into `src/data/stats.json`. Network-bound; skipped by `dev`.
 
 ### Adding a Package to the Website
 
