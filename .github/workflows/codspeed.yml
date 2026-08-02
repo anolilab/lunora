@@ -18,8 +18,38 @@
     "contents": "read" # to fetch code (actions/checkout)
 
 "jobs":
+    # PR-only path gate: docs/plans-only PRs skip the whole install+build+bench
+    # job. Push runs (main/alpha baselines) are never gated — CodSpeed needs a
+    # complete baseline on every branch head.
+    "files-changed":
+        "name": "Detect what files changed"
+        "if": "github.event_name == 'pull_request'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 5
+        "outputs":
+            "benchmarks": "${{ steps.changes.outputs.benchmarks }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Check for file changes"
+              "id": "changes"
+              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
+              "with":
+                  "token": "${{ github.token }}"
+                  "filters": ".github/file-filters.yml"
+
     "benchmark":
         "name": "Benchmarks"
+        # `!cancelled()` (not the implicit success()) because files-changed is
+        # skipped on push/dispatch, which would otherwise skip this job too.
+        "if": "!cancelled() && (github.event_name != 'pull_request' || needs.files-changed.outputs.benchmarks == 'true')"
+        "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         # Scope the CodSpeed OIDC token to an environment so secrets and
@@ -74,8 +104,19 @@
             # Benchmarks import workspace packages from their built `dist/`, which
             # is gitignored. Without this the bench suites fail to resolve
             # `@lunora/*` entries ("Failed to resolve entry for package ...").
+            # On PRs only the affected packages (plus their dependsOn chain) are
+            # built — mirroring the affected bench selection below; pushes build
+            # everything for the full baseline run.
             - "name": "Build packages"
-              "run": "pnpm run build:packages"
+              "shell": "bash"
+              "env":
+                  "EVENT_NAME": "${{ github.event_name }}"
+              "run": |
+                  if [ "$EVENT_NAME" = "pull_request" ]; then
+                      pnpm run build:affected:packages
+                  else
+                      pnpm run build:packages
+                  fi
 
             # On PRs only the benches whose project (or an upstream dependency)
             # changed are run; on push to main/alpha every bench runs so CodSpeed

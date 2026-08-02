@@ -2,6 +2,15 @@
 "on":
     "pull_request":
         "branches": ["main", "alpha", "next", "beta"]
+        # The review diffs the dependency graph — only manifests, lockfiles,
+        # vendored patches, action pins, and the python SDK can change it.
+        "paths":
+            - "**/package.json"
+            - "pnpm-lock.yaml"
+            - "pnpm-workspace.yaml"
+            - "patches/**"
+            - ".github/workflows/**"
+            - "sdks/**"
 "permissions": {}
 "jobs":
     "dependency-review":
