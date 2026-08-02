@@ -343,9 +343,17 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 };
 
 /**
- * True when a type's own symbol resolves to a non-exported interface/type-alias
- * declared in the handler's source file — i.e. a name unreachable from
- * `_generated/api.ts`.
+ * True when a type's own symbol resolves to an interface/type-alias declared in
+ * the handler's source file — i.e. a name unreachable from `_generated/api.ts`.
+ *
+ * Exported declarations count too. The checker prints an exported local type by
+ * name (it is nameable from the handler), but codegen only ever emits an import
+ * for a qualifier the checker itself rendered as `import("…")` — it never
+ * synthesises one for the handler's own module. So `export interface Board` came
+ * out as a bare `Board` in `_generated/api.ts` with nothing importing it: TS2304
+ * in generated code, while `lunora codegen` exits 0. Structurally expanding it,
+ * exactly as a non-exported declaration already was, keeps the emitted type
+ * identical in shape and resolvable from anywhere.
  */
 const symbolDeclaredUnreachable = (type: Type, handlerFilePath: string): boolean => {
     for (const candidate of [type.getSymbol(), type.getAliasSymbol()]) {
@@ -364,7 +372,7 @@ const symbolDeclaredUnreachable = (type: Type, handlerFilePath: string): boolean
                 continue;
             }
 
-            if ((Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) && !declaration.isExported()) {
+            if (Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) {
                 return true;
             }
         }

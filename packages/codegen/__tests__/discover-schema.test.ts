@@ -25,6 +25,34 @@ const projectWith = (schemaSource: string): { project: Project; schemaPath: stri
 };
 
 describe("discoverSchema", () => {
+    it("keeps a shorthand column (`defineTable({ status })`) in the table shape", () => {
+        expect.assertions(2);
+
+        // A shorthand property is its own initializer. Skipping it dropped the
+        // column from the shape entirely: `Doc_tasks` came out without `status`,
+        // and an index over it only surfaced as a misleading
+        // `index_references_unknown_field` advisory. `object-shorthand` rewrites
+        // `status: status` into this form, so a lint run could cause the loss.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const status = v.union(v.literal("todo"), v.literal("done"));
+
+            export const schema = defineSchema({
+                tasks: defineTable({ title: v.string(), status }).index("by_status", ["status"]),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const tasks = schema.tables.find((table) => table.name === "tasks");
+
+        expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title", "status"]);
+        // The validator is behind an identifier, so its type is unresolvable
+        // here — but the column exists, which is what the index and the runtime
+        // insert both depend on.
+        expect(tasks?.shape.status?.kind).toBe("any");
+    });
+
     it("captures `.externallyManaged()` into the table IR; defaults to false", () => {
         expect.assertions(2);
 
