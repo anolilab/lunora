@@ -95,6 +95,33 @@ const createShardAlarms = (storage: AlarmStorageLike): ShardAlarms => {
     };
 };
 
+/**
+ * Record `platformError` as the cause of the error a closure threw, when both
+ * failed.
+ *
+ * Best-effort by construction: the write can itself throw, because a frozen or
+ * sealed error — a module-level `Object.freeze(new Error(…))` sentinel is a real
+ * pattern — rejects it with a `TypeError`. Unguarded, that `TypeError` would
+ * replace the error the handler threw, which is the exact loss the caller of
+ * this helper exists to prevent. Attaching a cause is a courtesy; delivering the
+ * handler's own error is the contract, so the courtesy loses.
+ */
+const attachCause = (thrown: unknown, platformError: unknown): void => {
+    // `thrown === platformError` would make the error its own cause.
+    if (!(thrown instanceof Error) || thrown === platformError || thrown.cause !== undefined) {
+        return;
+    }
+
+    try {
+        // `defineProperty` rather than assignment: it states the intent (add an
+        // own property to this instance) and keeps the lint rule about mutating
+        // a parameter honest, since the mutation is the whole point here.
+        Object.defineProperty(thrown, "cause", { configurable: true, value: platformError, writable: true });
+    } catch {
+        // Non-writable `cause`; drop the platform error rather than mask the closure's.
+    }
+};
+
 const createShardHost = (state: DurableObjectState): ShardHost => {
     const { storage } = state;
 
@@ -114,41 +141,35 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
      * until the closure settles, which is exactly the contract's
      * "no two closures run at once for this shard key".
      *
-     * The closure settles to an outcome INSIDE the gate and is re-thrown outside
-     * it, because workerd treats a throwing `blockConcurrencyWhile` closure as
-     * unrecoverable: it ABORTS the Durable Object (the `durableObjectReset`
-     * marker on the propagated error), discarding its in-memory state and every
-     * hibernating WebSocket subscription attached to it, and hands the caller a
-     * flattened plain `Error` with none of the original's properties.
-     *
-     * That is the right default for the initialization work the API was designed
-     * for, where a failure leaves the object undefined. It is the wrong default
-     * here: this gate wraps every mutation, so an ordinary application error —
-     * a `NOT_FOUND`, a "not your turn" `CONFLICT`, a failed auth guard — was
-     * tearing down the shard for every other client connected to it, and
-     * arriving at the client as a generic 500 `INTERNAL`. The mutation's own
-     * writes are already rolled back by the transaction inside this closure, so
-     * the object's state is well defined after a failure and there is nothing to
-     * abort for.
-     *
-     * Serialization is unchanged: the gate is still held for the whole closure,
-     * which now resolves rather than rejects.
+     * workerd treats a *rejecting* `blockConcurrencyWhile` closure as
+     * unrecoverable: it aborts the Durable Object — discarding in-memory state
+     * and every hibernating WebSocket subscription on it — and flattens the
+     * error to a plain `Error`. That is the right default for the
+     * initialization work the API was designed for, and the wrong one for a
+     * gate wrapping every mutation, where a rejection is an ordinary
+     * application error and the transaction inside has already rolled the
+     * writes back. So the closure settles to an outcome here and is re-raised
+     * outside the gate, which the contract requires
+     * ({@link ShardHost.runSerialized}). The gate is still held for the whole
+     * closure — it resolves instead of rejecting.
      */
     const runSerialized: ShardHost["runSerialized"] = async (function_) => {
         if (typeof state.blockConcurrencyWhile === "function") {
-            const outcome = await state.blockConcurrencyWhile<{ error: unknown; ok: false } | { ok: true; value: unknown }>(async () => {
+            // `as const` on the discriminant lets `T` infer through, so the
+            // success value needs no cast on the way out.
+            const settled = await state.blockConcurrencyWhile(async () => {
                 try {
-                    return { ok: true, value: await function_() };
+                    return { ok: true as const, value: await function_() };
                 } catch (error) {
-                    return { error, ok: false };
+                    return { error, ok: false as const };
                 }
             });
 
-            if (outcome.ok) {
-                return outcome.value as never;
+            if (!settled.ok) {
+                throw settled.error;
             }
 
-            throw outcome.error;
+            return settled.value;
         }
 
         // Test doubles may not supply the gate. Running bare keeps them working;
@@ -164,21 +185,14 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
      * Doubles whose storage lacks it fall through to a bare call; their fakes
      * carry no transactional semantics to preserve anyway.
      *
-     * The closure's throw is re-thrown from the saved instance rather than from
-     * whatever comes back out of `storage.transaction`. workerd rolls the
-     * transaction back correctly, but the exception it propagates is a FLATTENED
-     * copy — a plain `Error` whose message is the original's `name: message` and
-     * which carries none of its own properties. `isLunoraError` is structural
-     * (`type`/`code`/`status`), so every coded error a handler threw failed that
-     * check on the way out and was rendered as a generic 500 `INTERNAL` /
-     * "Internal error": a `NOT_FOUND` mutation, a `CONFLICT` on a unique index,
-     * an `UNAUTHENTICATED` guard — all indistinguishable to the client, and all
-     * logged as internal faults. Queries were unaffected (they never enter a
-     * transaction), which is what made the failure look arbitrary.
-     *
-     * The re-throw still happens after the platform has rolled back: the closure
-     * rethrows first, so `storage.transaction` sees the failure and aborts as
-     * before. Only the *identity* of the error the caller receives is restored.
+     * workerd rolls back correctly but propagates a FLATTENED copy of the
+     * closure's error: a plain `Error` whose message is the original's
+     * `name: message`, carrying none of its own properties. `isLunoraError` is
+     * structural (`type`/`code`/`status`), so a copy is indistinguishable from
+     * an unrecognized throw and is redacted to an internal fault. The original
+     * instance is therefore saved on the way past and re-raised, which the
+     * contract requires ({@link ShardHost.transaction}). Rollback ordering is
+     * unchanged: the closure still throws into `storage.transaction` first.
      */
     const transaction: ShardHost["transaction"] = async (function_) => {
         const transactional = storage as undefined | { transaction?: <R>(closure: () => Promise<R>) => Promise<R> };
@@ -199,10 +213,17 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
                     }
                 });
             } catch (error) {
-                // `thrown` is unset when the platform itself failed the commit
-                // (a rollback error, a storage fault) — that error is genuinely
-                // the platform's and is surfaced unchanged.
-                throw thrown ? thrown.value : error;
+                // `thrown` unset means the platform itself failed the commit or
+                // rollback — genuinely its error, surfaced unchanged.
+                if (!thrown) {
+                    throw error;
+                }
+
+                // Both failed. The handler's error is the one the caller acted
+                // on, so it stays the thrown value; the platform's rides along.
+                attachCause(thrown.value, error);
+
+                throw thrown.value;
             }
         }
 
