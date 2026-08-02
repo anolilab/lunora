@@ -1,24 +1,18 @@
 import { LunoraError } from "@lunora/errors";
+import type { ShardHost } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
 
 import { createShardHost } from "../src/cloudflare-host";
 
 /**
- * Error identity across the durable-transaction boundary.
+ * Unit-level pins for the error-identity contract documented on `runSerialized`
+ * and `transaction` in ../src/cloudflare-host.ts.
  *
- * workerd rolls a failed `storage.transaction` back correctly, but the exception
- * it propagates back out is a FLATTENED copy: a plain `Error` whose message is
- * the original's `name: message`, carrying none of its own properties. Since
- * `isLunoraError` is structural (`type` + `code` + `status`), every coded error a
- * mutation handler threw failed that check on the way out and was rendered to the
- * client as a generic 500 `INTERNAL` / "Internal error" — a `NOT_FOUND`, a
- * `CONFLICT` on a unique index, an `UNAUTHENTICATED` guard, all identical and all
- * logged as internal faults. Queries never enter a transaction, so they were
- * unaffected, which is what made the behaviour look arbitrary.
- *
- * These tests pin the two halves that have to stay true together: the closure's
- * throw still reaches the platform (so the rollback happens), and the caller
- * still receives the *original* error object.
+ * The doubles below reproduce the two workerd behaviours those wrappers exist to
+ * absorb (flatten on rethrow, abort on rejection). Because a double can only
+ * assert against the author's model of the platform, the same properties are
+ * pinned against the real thing by the conformance suite running under
+ * `runInDurableObject` in `@lunora/do`'s workerd project.
  */
 
 /** A `storage` double that flattens a thrown error exactly the way workerd does. */
@@ -47,7 +41,7 @@ const flatteningStorage = (): { calls: string[]; transaction: <R>(closure: () =>
     };
 };
 
-const hostWith = (storage: unknown) => createShardHost({ storage } as never);
+const hostWith = (storage: Partial<DurableObjectState["storage"]> | Record<string, unknown>): ShardHost => createShardHost({ storage } as never);
 
 /**
  * A `blockConcurrencyWhile` double that mirrors workerd's behaviour: a closure
@@ -73,22 +67,17 @@ const gate = (): { aborted: boolean; blockConcurrencyWhile: <R>(closure: () => P
 
 describe("cloudflare shard host transaction", () => {
     it("rethrows the handler's own error instance, not the platform's flattened copy", async () => {
-        expect.assertions(4);
+        expect.assertions(2);
 
         const storage = flatteningStorage();
         const thrown = new LunoraError("NOT_FOUND", "lobby not found");
 
+        // Identity, not shape: a reconstructed copy can carry the same message
+        // and still have lost `code`/`status`, which is the whole failure.
         await expect(hostWith(storage).transaction(() => Promise.reject(thrown))).rejects.toBe(thrown);
 
-        // Same object, so the wire-relevant fields the error renderer keys on survive.
-        await expect(hostWith(storage).transaction(() => Promise.reject(thrown))).rejects.toMatchObject({
-            code: "NOT_FOUND",
-            status: 404,
-        });
-
-        expect(storage.calls).toStrictEqual(["rolled-back", "rolled-back"]);
         // The closure must still throw INTO the platform, or nothing rolls back.
-        expect(storage.calls).not.toContain("committed");
+        expect(storage.calls).toStrictEqual(["rolled-back"]);
     });
 
     it("still surfaces a platform-side failure that the closure never raised", async () => {
@@ -171,5 +160,40 @@ describe("cloudflare shard host transaction", () => {
         });
 
         expect(storage.calls).toStrictEqual(["rolled-back"]);
+    });
+
+    it("attaches a platform failure as the cause when both fail", async () => {
+        expect.assertions(2);
+
+        const storage = {
+            transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
+                await closure().catch(() => undefined);
+
+                throw new Error("rollback failed");
+            },
+        };
+        const thrown = new LunoraError("CONFLICT", "not your turn");
+
+        await expect(hostWith(storage).transaction(() => Promise.reject(thrown))).rejects.toBe(thrown);
+        expect((thrown.cause as Error | undefined)?.message).toBe("rollback failed");
+    });
+
+    it("still delivers the closure's error when it cannot carry a cause", async () => {
+        expect.assertions(2);
+
+        // A frozen sentinel error rejects the `cause` write with a `TypeError`.
+        // Unguarded, that TypeError would replace the error the handler threw —
+        // the exact loss this wrapper exists to prevent.
+        const storage = {
+            transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
+                await closure().catch(() => undefined);
+
+                throw new Error("rollback failed");
+            },
+        };
+        const frozen = Object.freeze(new LunoraError("CONFLICT", "not your turn"));
+
+        await expect(hostWith(storage).transaction(() => Promise.reject(frozen))).rejects.toBe(frozen);
+        expect(frozen.cause).toBeUndefined();
     });
 });
