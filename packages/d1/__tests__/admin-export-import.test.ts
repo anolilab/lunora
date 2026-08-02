@@ -205,6 +205,25 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
         });
 
+        it("attributes errors to each row's own `line` when non-contiguous (interspersed shard-local rows filtered out upstream)", async () => {
+            expect.assertions(1);
+
+            // Simulates `@lunora/runtime`'s import stream: these three global rows
+            // actually sat at NDJSON lines 2, 5, and 6 — lines 1, 3, and 4 were
+            // shard-local rows the caller already filtered out before reaching
+            // here. Without `line` on each row, position-derived counting would
+            // report 1, 2, 3 instead.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "ok", value: "x" }, line: 2, table: "settings" },
+                    { doc: { _id: "s2", name: 42, value: "x" }, line: 5, table: "settings" },
+                    { doc: { _id: "s3", name: 42, value: "y" }, line: 6, table: "settings" },
+                ],
+            });
+
+            expect(result.errors.map((error) => error.line)).toStrictEqual([5, 6]);
+        });
+
         it("counts _id collisions as conflicts and skips them", async () => {
             expect.assertions(3);
 

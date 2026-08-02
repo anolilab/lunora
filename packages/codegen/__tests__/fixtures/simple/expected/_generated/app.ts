@@ -390,6 +390,14 @@ const buildTableShardingResolver = (): AdminTableResolver => (table) => {
  * `@lunora/d1`'s `importGlobalRows`. Mirrors `runShardImport`'s shard-local
  * twin (`createShardCtxDb` + `importShardRows`) — same `{ rows, startLine }`
  * shape, same trusted-import `allowExplicitId` semantics, forwarded as-is.
+ *
+ * Passes each row's own `line` through rather than dropping it: the caller
+ * (`@lunora/runtime`'s NDJSON import stream) already carries the row's true
+ * physical source line, and global rows are typically interspersed with
+ * shard-local ones it filtered out before calling here — a single
+ * `startLine` plus positional counting would mis-attribute every row after
+ * the first gap. `importGlobalRows` prefers `row.line` when present and
+ * falls back to the position-derived count otherwise.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike) =>
@@ -399,7 +407,7 @@ const buildGlobalImporter =
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             exec,
-            rows: request.rows.map((row) => ({ doc: row.doc, table: row.table })),
+            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
             startLine: request.startLine,
         });
     };
