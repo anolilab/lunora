@@ -755,6 +755,12 @@ const fn: {
 };
 ```
 
+### `ident` (const)
+
+```ts
+const ident: (name: string) => string;
+```
+
 ### `isSql` (const)
 
 ```ts
@@ -789,6 +795,12 @@ const renderOrderTerm: (term: OrderTerm) => string;
 
 ```ts
 const sql: (strings: TemplateStringsArray, ...values: unknown[]) => Sql;
+```
+
+### `tableRef` (const)
+
+```ts
+const tableRef: (ref: string) => string;
 ```
 
 ### `toText` (const)
