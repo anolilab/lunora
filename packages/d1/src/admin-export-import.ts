@@ -15,6 +15,18 @@ import { quoteIdentifier } from "./dialect";
 /** One exported row: `doc` is reconstructed from the column tuple. */
 interface ExportRow {
     doc: Record<string, unknown>;
+
+    /**
+     * True physical source line, when the caller has it (e.g. a global row
+     * pulled out of an interspersed NDJSON import stream by
+     * `@lunora/runtime`'s `import-stream.ts`). When present this overrides the
+     * position-derived line below — the caller-side positions of a
+     * global-only subset don't line up with the original file once
+     * non-global rows have been filtered out. Absent for callers with no
+     * physical source to attribute (e.g. a fresh `exportGlobalRows` roundtrip
+     * in tests), which keeps the positional fallback.
+     */
+    line?: number;
     table: string;
 }
 
@@ -268,8 +280,14 @@ const importGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, 
     for (const row of args.rows) {
         line += 1;
 
+        // Prefer the row's own true physical line when the caller supplied one
+        // (see `ExportRow.line`) — the position-derived `line` above assumes a
+        // contiguous run starting at `startLine`, which interspersed global
+        // rows (shard-local rows filtered out upstream) violate.
+        const effectiveLine = row.line ?? line;
+
         // eslint-disable-next-line no-await-in-loop -- imports apply row-by-row in input order so per-line error/conflict reporting and the shared writer stay deterministic.
-        const outcome = await importOneRow(writer, schema, args, row, line);
+        const outcome = await importOneRow(writer, schema, args, row, effectiveLine);
 
         switch (outcome.kind) {
             case "conflict": {

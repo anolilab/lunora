@@ -118,6 +118,40 @@ commits, schedule it: `ctx.scheduler.runAfter(0, internalFn, args)` — the
 deterministic equivalent of an `afterCommit` hook (a registered function with
 serializable args, not an inline closure).
 
+### Determinism: what actually replays
+
+A `query` handler **can** run more than once for the same logical read: a live
+subscription re-runs its query whenever a table it reads changes, so
+non-deterministic output there (`Date.now()`, `Math.random()`) can genuinely
+flicker between re-evaluations. Compute it in an `action` and pass the value in
+as an argument, or accept that the field is allowed to differ per re-run.
+
+A `mutation` handler does **not** replay under ordinary dispatch. Two
+mechanisms cooperate to guarantee this on the DO-backed runtime:
+
+- **Idempotency dedup.** A client-issued `x-lunora-mutation-id` is deduped by
+  `(identity, mutationId)` — a replay of an unacknowledged write returns the
+  **cached** result without re-running the handler at all.
+- **OCC surfaces as an error, not a retry.** A write guarded by optimistic
+  concurrency that loses the race fails the request with a `409 Conflict`
+  response back to the caller. The runtime does not catch it and re-invoke the
+  handler internally — the caller decides whether to retry, and a retry is a
+  **new** dispatch (a fresh idempotency key if the client mints one per
+  attempt), not a replay of the one that failed.
+
+So `Date.now()` / `crypto.randomUUID()` inside an ordinary `mutation` handler
+is stable for one logical write — the handler body runs exactly once. This is
+the opposite of Convex's model (where OCC failure re-runs the handler), so a
+Convex-shaped mental model treats mutation non-determinism as unsafe when it
+is not; porting that assumption over errs safe. The one place a DO-shaped
+mental model must stay careful: a `mutation` invoked from inside a workflow
+step or a queue consumer can be **called again** if the surrounding step/
+consumer itself replays (Cloudflare Workflows re-executes a step's code on
+retry) — that is a fresh `ctx.runMutation` dispatch from the step's
+perspective, not a replay this guarantee covers, so non-deterministic values
+computed inside such a step should still be treated the way an `action` value
+would be.
+
 ## `defineShape(definition)` — partial replication
 
 Declare a **shape**: a named, partial replication of a table for the

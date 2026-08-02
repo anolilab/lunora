@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
+import { enclosingExportName, isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 
 /**
@@ -40,6 +40,16 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
     // a server-trusted `ctx.*` value — a value like `` `${ctx.auth.userId}:${args.id}` ``
     // references `ctx` and is treated as scoped, so it is not flagged.
     if (!key || !isArgumentDerived(key) || isScopedByContext(key)) {
+        return undefined;
+    }
+
+    // Some sinks (storage keys) only care about caller-controlled input reaching
+    // the sink UNMODIFIED — a value rebuilt by an intervening call (a
+    // content-addressed hash, an encoder) is no longer the bytes the caller chose,
+    // even though it textually references `args`.
+    // eslint-disable-next-line no-secrets/no-secrets -- the referenced helper name below, not a credential
+    // See `isUnmodifiedArgumentPassthrough`.
+    if (config.requireUnmodifiedReach === true && !isUnmodifiedArgumentPassthrough(key)) {
         return undefined;
     }
 
@@ -93,6 +103,16 @@ export interface ArgumentDerivedAccessConfig {
     matchReceiver: (receiverText: string) => boolean;
     /** The sink methods this binding cares about (the property-access name). */
     methods: ReadonlySet<string>;
+
+    /**
+     * When `true`, also require the sink argument to reach the sink UNMODIFIED —
+     * see {@link isUnmodifiedArgumentPassthrough}. A value rebuilt by an
+     * intervening call (e.g. a content-addressed hash minted server-side) still
+     * textually references `args` but is no longer caller-controlled input, so it
+     * is not recorded. Off by default — most sinks want the broader, fail-open
+     * "embeds `args.*` anywhere" match `isArgumentDerived` already gives.
+     */
+    requireUnmodifiedReach?: boolean;
 }
 
 /**

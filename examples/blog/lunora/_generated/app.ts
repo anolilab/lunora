@@ -4,12 +4,12 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
-import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import schema from "../schema.js";
@@ -396,6 +396,15 @@ class AppBuilder<Env extends object> {
             if (database) {
                 options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
+                // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
+                // endpoint: without the former, EVERY row (including a `.global()`
+                // table's) routes to the default shard, so a global table is never
+                // recognised as global and the latter is never reached — the
+                // endpoint answers 200 with `inserted: {}` for a write that never
+                // happened. Both are mechanical over the schema this file already
+                // imports, so there is nothing project-specific to configure.
+                options.resolveTableSharding = buildTableShardingResolver();
+                options.importGlobals = buildGlobalImporter(database);
             }
         }
 
@@ -516,6 +525,47 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
         readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
     };
 };
+
+/**
+ * `resolveTableSharding` for the admin bulk-import endpoint: a lookup over each
+ * table's declared `shardMode` (`defineTable(...).global()` / `.shardBy(field)`
+ * already record exactly this shape on the table) — mechanical, nothing to
+ * configure per project. `undefined` for a table the schema doesn't declare, so
+ * the import endpoint's own unknown-table handling still applies.
+ */
+const buildTableShardingResolver = (): AdminTableResolver => (table) => {
+    const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];
+
+    return declared?.shardMode ? { mode: declared.shardMode } : undefined;
+};
+
+/**
+ * `importGlobals` for the admin bulk-import endpoint: routes `.global()` rows
+ * through the same D1 writer `.global()` reads/writes already use, via
+ * `@lunora/d1`'s `importGlobalRows`. Mirrors `runShardImport`'s shard-local
+ * twin (`createShardCtxDb` + `importShardRows`) — same `{ rows, startLine }`
+ * shape, same trusted-import `allowExplicitId` semantics, forwarded as-is.
+ *
+ * Passes each row's own `line` through rather than dropping it: the caller
+ * (`@lunora/runtime`'s NDJSON import stream) already carries the row's true
+ * physical source line, and global rows are typically interspersed with
+ * shard-local ones it filtered out before calling here — a single
+ * `startLine` plus positional counting would mis-attribute every row after
+ * the first gap. `importGlobalRows` prefers `row.line` when present and
+ * falls back to the position-derived count otherwise.
+ */
+const buildGlobalImporter =
+    (database: D1DatabaseLike) =>
+    (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+        const exec = buildExec(database);
+        const writer = createD1CtxDb({ exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
+
+        return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
+            exec,
+            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
+            startLine: request.startLine,
+        });
+    };
 
 /**
  * Start composing the app. Chain the capability methods, then `.build()`.

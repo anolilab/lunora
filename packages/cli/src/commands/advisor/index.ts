@@ -28,11 +28,16 @@ const advisorCommand: Command = {
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Exit non-zero when the global score is below this value (0-100)", name: "min-score", type: String },
         { description: `Where to write the map (default ${DEFAULT_MAP_PATH})`, name: "out", type: String },
-        // Declared positively. cerebro reads a `no-`-prefixed name as the negative
-        // half of a negatable boolean, so `name: "no-write"` would parse to the key
-        // `write` and the handler's `noWrite` would be permanently undefined —
-        // silently writing the artifact even when the user asked it not to.
-        { description: "Write the map artifact to disk (default true; use --no-write to skip)", name: "write", type: Boolean },
+        // Declared as a `no-*` option, like `codegen`'s `--no-strict-advisories` /
+        // `dev`'s `--no-studio` / `--no-codegen` / `--no-worker`: cerebro reads a
+        // `no-`-prefixed name as the negative half of a negatable boolean and
+        // synthesizes the positive counterpart itself, exposing the RESULT under
+        // the positive camelCase key (`write`) at runtime — so `--no-write` and
+        // `--write` both work and `options.write` defaults to `true`. Declaring
+        // the positive name directly (as this used to) never registers a
+        // `--no-write` flag at all — cerebro only negates options named `no-*`
+        // — which is exactly why `--no-write` was rejected as unknown (#285).
+        { description: "Write the map artifact to disk (default true; use --no-write to skip)", name: "no-write", type: Boolean },
     ],
 };
 

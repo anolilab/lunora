@@ -81,10 +81,10 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "categories": [
             "SCHEMA"
         ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in send (messages:67) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
+        "detail": "`Date.now(…)` in send (messages:67) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `send` is invoked from a workflow step or queue consumer that can itself replay.",
+        "facing": "INTERNAL",
+        "level": "INFO",
         "metadata": {
             "callee": "Date.now",
             "exportName": "send",
@@ -93,7 +93,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "line": 67
         },
         "name": "nondeterministic_query_mutation",
-        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
