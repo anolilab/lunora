@@ -1,7 +1,15 @@
 import { LunoraError } from "@lunora/errors";
+import { rateLimit } from "lunorash/ratelimit";
 
+import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+
+/** Signed-in app, so limits key on the user rather than the IP. */
+const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
+const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 const AVATAR_TTL_SECONDS = 3600;
 const ALLOWED_AVATAR_TYPES = new Set(["image/avif", "image/jpeg", "image/png", "image/webp"]);
@@ -34,17 +42,26 @@ export const list = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => {
 });
 
 /** A short-lived URL for one avatar. An action for the same reason as `messages.attachmentUrl`. */
-export const avatarUrl = action.input({ key: v.string().meta({ schema: { maxLength: 512 } }) }).action(async ({ args: { key }, ctx }): Promise<string> => {
-    if (!ctx.auth.userId) {
-        throw new LunoraError("UNAUTHENTICATED", "sign in to view avatars");
-    }
+export const avatarUrl = action
+    .use(rateLimit(actionLimiter, "upload", byUser))
+    .input({ key: v.string().meta({ schema: { maxLength: 512 } }) })
+    .action(async ({ args: { key }, ctx }): Promise<string> => {
+        if (!ctx.auth.userId) {
+            throw new LunoraError("UNAUTHENTICATED", "sign in to view avatars");
+        }
 
-    if (!key.startsWith("files/avatars/")) {
-        throw new LunoraError("BAD_REQUEST", "not an avatar key");
-    }
+        ctx.log.info("avatar url requested", {});
 
-    return ctx.storage.getSignedUrl(key, { expiresInSeconds: AVATAR_TTL_SECONDS });
-});
+        if (!key.startsWith("files/avatars/")) {
+            throw new LunoraError("BAD_REQUEST", "not an avatar key");
+        }
+
+        try {
+            return await ctx.storage.getSignedUrl(key, { expiresInSeconds: AVATAR_TTL_SECONDS });
+        } catch (error) {
+            throw new LunoraError("INTERNAL", "could not sign an avatar URL: object storage did not answer", { cause: error });
+        }
+    });
 
 /**
  * Create or update the signed-in user's own profile.
@@ -54,6 +71,7 @@ export const avatarUrl = action.input({ key: v.string().meta({ schema: { maxLeng
  * conflict target and the uniqueness guarantee are the same thing.
  */
 export const save = mutation
+    .use(rateLimit(mutationLimiter, "send", byUser))
     .input({ name: v.string().meta({ schema: { maxLength: 80 } }), avatarKey: v.optional(v.string().meta({ schema: { maxLength: 512 } })) })
     .mutation(async ({ args: { avatarKey, name }, ctx }): Promise<Id<"profiles">> => {
         if (!ctx.auth.userId) {
@@ -68,10 +86,13 @@ export const save = mutation
             update: avatarKey === undefined ? { name } : { avatarKey, name },
         });
 
+        ctx.log.info("profile saved", { id });
+
         return id;
     });
 
 export const requestAvatarUpload = action
+    .use(rateLimit(actionLimiter, "upload", byUser))
     .input({ contentType: v.string().meta({ schema: { maxLength: 128 } }) })
     .action(async ({ args: { contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
@@ -86,5 +107,11 @@ export const requestAvatarUpload = action
         // URL, and under the uploader's id so nobody can overwrite another's.
         const key = `files/avatars/${ctx.auth.userId}`;
 
-        return { key, url: await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 }) };
+        ctx.log.info("avatar upload requested", { contentType });
+
+        try {
+            return { key, url: await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 }) };
+        } catch (error) {
+            throw new LunoraError("INTERNAL", "could not sign an avatar upload URL: object storage did not answer", { cause: error });
+        }
     });

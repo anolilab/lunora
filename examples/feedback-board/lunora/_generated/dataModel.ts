@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "lunorash/server/data-model";
 
-export type TableName = "feedback" | "votes" | "comments" | "summaries";
+export type TableName = "feedback" | "votes" | "comments" | "summaries" | "ratelimit_buckets";
 
 /**
  * The tables **this app declared** — every {@link TableName} except those an add-on
@@ -93,11 +93,21 @@ export interface Doc_summaries {
     generatedAt: number;
 }
 
+export interface Doc_ratelimit_buckets {
+    _id: Id<"ratelimit_buckets">;
+    _creationTime: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 export interface DataModel {
     feedback: Doc_feedback;
     votes: Doc_votes;
     comments: Doc_comments;
     summaries: Doc_summaries;
+    ratelimit_buckets: Doc_ratelimit_buckets;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -111,6 +121,7 @@ export interface IndexNamesByTable {
     votes: "by_voter" | "by_feedback_and_voter";
     comments: "by_feedback";
     summaries: "by_generated";
+    ratelimit_buckets: "by_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -121,6 +132,7 @@ export interface SearchIndexNamesByTable {
     votes: never;
     comments: never;
     summaries: never;
+    ratelimit_buckets: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
@@ -131,6 +143,7 @@ export interface RankIndexNamesByTable {
     votes: never;
     comments: never;
     summaries: never;
+    ratelimit_buckets: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -141,6 +154,7 @@ export interface GeoIndexNamesByTable {
     votes: never;
     comments: never;
     summaries: never;
+    ratelimit_buckets: never;
 }
 
 export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
@@ -187,12 +201,22 @@ export interface Insert_summaries {
     generatedAt: number;
 }
 
+export interface Insert_ratelimit_buckets {
+    _id?: Id<"ratelimit_buckets">;
+    _creationTime?: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
     feedback: Insert_feedback;
     votes: Insert_votes;
     comments: Insert_comments;
     summaries: Insert_summaries;
+    ratelimit_buckets: Insert_ratelimit_buckets;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -218,6 +242,7 @@ export interface Relations {
     votes: {};
     comments: {};
     summaries: {};
+    ratelimit_buckets: {};
 }
 
 /** The `with` argument for table `T` — see `@lunora/server/data-model`. */

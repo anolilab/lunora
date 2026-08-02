@@ -1,7 +1,18 @@
 import { LunoraError } from "@lunora/errors";
+import { rateLimit } from "lunorash/ratelimit";
 
+import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+
+/**
+ * Everyone here is signed in, so limits are keyed by user rather than by IP —
+ * one person on a shared network must not be able to exhaust another's budget.
+ */
+const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
+const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 const ATTACHMENT_TTL_SECONDS = 3600;
 
@@ -73,6 +84,7 @@ export const search = query
  * has an attachment.
  */
 export const attachmentUrl = action
+    .use(rateLimit(actionLimiter, "upload", byUser))
     .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }), key: v.string().meta({ schema: { maxLength: 512 } }) })
     .action(async ({ args: { channelId, key }, ctx }): Promise<string> => {
         if (!ctx.auth.userId) {
@@ -85,10 +97,17 @@ export const attachmentUrl = action
             throw new LunoraError("BAD_REQUEST", "that key does not belong to this channel");
         }
 
-        return ctx.storage.getSignedUrl(key, { expiresInSeconds: ATTACHMENT_TTL_SECONDS });
+        ctx.log.info("attachment url requested", { channelId });
+
+        try {
+            return await ctx.storage.getSignedUrl(key, { expiresInSeconds: ATTACHMENT_TTL_SECONDS });
+        } catch (error) {
+            throw new LunoraError("INTERNAL", "could not sign a download URL: object storage did not answer", { cause: error });
+        }
     });
 
 export const send = mutation
+    .use(rateLimit(mutationLimiter, "send", byUser))
     .input({
         channelId: v.string().meta({ schema: { maxLength: 128 } }),
         content: v.string().meta({ schema: { maxLength: 4096 } }),
@@ -110,7 +129,11 @@ export const send = mutation
             throw new LunoraError("BAD_REQUEST", "attachment key does not belong to this caller and channel");
         }
 
-        return ctx.db.insert("messages", { attachmentKey, attachmentName, authorId: ctx.auth.userId, channelId, content });
+        const id = await ctx.db.insert("messages", { attachmentKey, attachmentName, authorId: ctx.auth.userId, channelId, content });
+
+        ctx.log.info("message sent", { attachment: attachmentKey !== undefined, channelId, id });
+
+        return id;
     });
 
 /**
@@ -123,6 +146,7 @@ export const send = mutation
  * this allowlist would only gate the mint, not the object.
  */
 export const requestAttachmentUpload = action
+    .use(rateLimit(actionLimiter, "upload", byUser))
     .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }), contentType: v.string().meta({ schema: { maxLength: 128 } }) })
     .action(async ({ args: { channelId, contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
@@ -137,5 +161,11 @@ export const requestAttachmentUpload = action
         // under the uploader's id so nobody can overwrite someone else's object.
         const key = `${attachmentKeyFor(channelId, ctx.auth.userId)}${crypto.randomUUID()}`;
 
-        return { key, url: await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 }) };
+        ctx.log.info("upload url requested", { channelId, contentType });
+
+        try {
+            return { key, url: await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 }) };
+        } catch (error) {
+            throw new LunoraError("INTERNAL", "could not sign an upload URL: object storage did not answer", { cause: error });
+        }
     });

@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * feedback-board — a public feature-request board: post, upvote, discuss, and
  * let the model read the room.
@@ -57,4 +59,4 @@ export default defineSchema({
         feedbackIds: v.array(v.id("feedback")),
         generatedAt: v.number(),
     }).index("by_generated", ["generatedAt"]),
-});
+}).extend(ratelimit.extension);

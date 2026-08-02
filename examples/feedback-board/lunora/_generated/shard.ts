@@ -80,6 +80,15 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
             "name": "by_generated",
             "type": "index"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "fields": [
+                "key"
+            ],
+            "name": "by_key",
+            "type": "index"
+        }
     ]
 };
 
@@ -233,6 +242,39 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "optional": false,
             "type": "number"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "key",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "value",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "ts",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "prev",
+            "optional": true,
+            "type": "number"
+        }
     ]
 };
 
@@ -245,12 +287,12 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "nondeterministic_query_mutation:summaries:64:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:summaries:90:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in store (summaries:64) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `store` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in store (summaries:90) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `store` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -258,306 +300,11 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "store",
             "file": "summaries",
             "kind": "mutation",
-            "line": 64
+            "line": 90
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:feedback:create",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `create` (feedback) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "create",
-            "file": "feedback",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:feedback:setStatus",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `setStatus` (feedback) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "setStatus",
-            "file": "feedback",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:feedback:toggleVote",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `toggleVote` (feedback) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "toggleVote",
-            "file": "feedback",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:feedback:addComment",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `addComment` (feedback) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "addComment",
-            "file": "feedback",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:feedback:remove",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `remove` (feedback) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "remove",
-            "file": "feedback",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:summaries:generate",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `generate` (summaries) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "generate",
-            "file": "summaries",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:summaries:remove",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `remove` (summaries) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "remove",
-            "file": "summaries",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:feedback:create",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `create` (feedback) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "create",
-            "file": "feedback",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:feedback:setStatus",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `setStatus` (feedback) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "setStatus",
-            "file": "feedback",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:feedback:toggleVote",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `toggleVote` (feedback) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "toggleVote",
-            "file": "feedback",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:feedback:addComment",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `addComment` (feedback) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "addComment",
-            "file": "feedback",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:feedback:remove",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `remove` (feedback) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "remove",
-            "file": "feedback",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:summaries:generate",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public action `generate` (summaries) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "generate",
-            "file": "summaries",
-            "kind": "action"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:summaries:remove",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `remove` (summaries) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "remove",
-            "file": "summaries",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "ai_unbounded_generation_public:summaries:generate",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public procedure runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound. Generation bills per output token, so an anonymous caller can request arbitrarily long completions in a loop — a denial-of-wallet vector that also ties up worker time on long streams.",
-        "detail": "`generate` (summaries) is public and runs an AI generation with no `maxOutputTokens` bound — an anonymous caller can drive unbounded, billable completions in a loop. Add a `maxOutputTokens` cap and rate-limit the entry point.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "generate",
-            "file": "summaries",
-            "kind": "action"
-        },
-        "name": "ai_unbounded_generation_public",
-        "remediation": "Cap the completion with `maxOutputTokens` in the generation config, and rate-limit the public entry point (`.use(rateLimit(...))`). For expensive models, prefer running generation from an internal, authenticated path rather than exposing it directly to anonymous callers.",
-        "title": "Public procedure runs unbounded AI generation (no maxOutputTokens)"
-    },
-    {
-        "cacheKey": "ai_run_without_logging:summaries:generate",
-        "categories": [
-            "PERFORMANCE"
-        ],
-        "description": "A procedure runs an AI generation but emits no structured event. Model calls bill per invocation and are not reproducible, so without one there is no way to attribute spend or trace a bad answer back to its prompt.",
-        "detail": "action `generate` (summaries) runs an AI generation with no structured event, so its cost and output cannot be attributed later.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "generate",
-            "file": "summaries",
-            "kind": "action"
-        },
-        "name": "ai_run_without_logging",
-        "remediation": "Emit an event around the generation — `ctx.span(\"<name>\", …)`, or a `ctx.log` line carrying the model and token usage.",
-        "title": "AI generation with no structured event"
     }
 ];
 
@@ -665,7 +412,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -679,7 +426,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "create",
@@ -690,7 +437,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -704,7 +451,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "setStatus",
@@ -715,7 +462,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -729,7 +476,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "toggleVote",
@@ -740,7 +487,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -754,7 +501,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "addComment",
@@ -765,7 +512,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -779,7 +526,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "remove",
@@ -815,13 +562,13 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": true,
         "reachesOutbound": true,
         "runsAiGeneration": true,
         "throwsBareError": false,
-        "unboundedAiGeneration": true,
+        "unboundedAiGeneration": false,
         "usesInsertManyUnsafe": false,
         "writesUserTable": false,
         "exempt": false,
@@ -829,7 +576,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "generate",
@@ -865,7 +612,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -879,7 +626,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "remove",
@@ -924,7 +671,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "88040490acd3066e", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"comments\": {\n      \"fields\": {\n        \"feedbackId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"authorEmail\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"content\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"isOfficial\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_feedback\": {\n          \"fields\": [\n            \"feedbackId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"feedback\": {\n      \"fields\": {\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"description\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"authorEmail\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"upvoteCount\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"commentCount\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"tags\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_upvotes\": {\n          \"fields\": [\n            \"upvoteCount\"\n          ],\n          \"unique\": false\n        },\n        \"by_status\": {\n          \"fields\": [\n            \"status\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"summaries\": {\n      \"fields\": {\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"summary\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"feedbackIds\": {\n          \"kind\": \"array\",\n          \"optional\": false\n        },\n        \"generatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_generated\": {\n          \"fields\": [\n            \"generatedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"votes\": {\n      \"fields\": {\n        \"feedbackId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"voterEmail\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_voter\": {\n          \"fields\": [\n            \"voterEmail\"\n          ],\n          \"unique\": false\n        },\n        \"by_feedback_and_voter\": {\n          \"fields\": [\n            \"feedbackId\",\n            \"voterEmail\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "5bce9e3eeae77fb8", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"comments\": {\n      \"fields\": {\n        \"feedbackId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"authorEmail\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"content\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"isOfficial\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_feedback\": {\n          \"fields\": [\n            \"feedbackId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"feedback\": {\n      \"fields\": {\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"description\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"authorEmail\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"upvoteCount\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"commentCount\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"tags\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_upvotes\": {\n          \"fields\": [\n            \"upvoteCount\"\n          ],\n          \"unique\": false\n        },\n        \"by_status\": {\n          \"fields\": [\n            \"status\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"summaries\": {\n      \"fields\": {\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"summary\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"feedbackIds\": {\n          \"kind\": \"array\",\n          \"optional\": false\n        },\n        \"generatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_generated\": {\n          \"fields\": [\n            \"generatedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"votes\": {\n      \"fields\": {\n        \"feedbackId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"voterEmail\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_voter\": {\n          \"fields\": [\n            \"voterEmail\"\n          ],\n          \"unique\": false\n        },\n        \"by_feedback_and_voter\": {\n          \"fields\": [\n            \"feedbackId\",\n            \"voterEmail\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -1514,6 +1261,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["votes"] = bindTableFacade(db, "votes");
             facade["comments"] = bindTableFacade(db, "comments");
             facade["summaries"] = bindTableFacade(db, "summaries");
+            facade["ratelimit_buckets"] = bindTableFacade(db, "ratelimit_buckets");
 
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.

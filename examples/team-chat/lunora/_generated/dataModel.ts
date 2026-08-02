@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "lunorash/server/data-model";
 
-export type TableName = "profiles" | "channels" | "messages" | "presence";
+export type TableName = "profiles" | "channels" | "messages" | "presence" | "ratelimit_buckets";
 
 /**
  * The tables **this app declared** — every {@link TableName} except those an add-on
@@ -89,11 +89,21 @@ export interface Doc_presence {
     lastSeen: number;
 }
 
+export interface Doc_ratelimit_buckets {
+    _id: Id<"ratelimit_buckets">;
+    _creationTime: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 export interface DataModel {
     profiles: Doc_profiles;
     channels: Doc_channels;
     messages: Doc_messages;
     presence: Doc_presence;
+    ratelimit_buckets: Doc_ratelimit_buckets;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -107,6 +117,7 @@ export interface IndexNamesByTable {
     channels: "by_name";
     messages: "by_channel";
     presence: "by_channel_session";
+    ratelimit_buckets: "by_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -117,6 +128,7 @@ export interface SearchIndexNamesByTable {
     channels: never;
     messages: "search_content";
     presence: never;
+    ratelimit_buckets: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
@@ -127,6 +139,7 @@ export interface RankIndexNamesByTable {
     channels: never;
     messages: never;
     presence: never;
+    ratelimit_buckets: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -137,6 +150,7 @@ export interface GeoIndexNamesByTable {
     channels: never;
     messages: never;
     presence: never;
+    ratelimit_buckets: never;
 }
 
 export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
@@ -179,12 +193,22 @@ export interface Insert_presence {
     lastSeen: number;
 }
 
+export interface Insert_ratelimit_buckets {
+    _id?: Id<"ratelimit_buckets">;
+    _creationTime?: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
     profiles: Insert_profiles;
     channels: Insert_channels;
     messages: Insert_messages;
     presence: Insert_presence;
+    ratelimit_buckets: Insert_ratelimit_buckets;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -210,6 +234,7 @@ export interface Relations {
     channels: {};
     messages: {};
     presence: {};
+    ratelimit_buckets: {};
 }
 
 /** The `with` argument for table `T` — see `@lunora/server/data-model`. */

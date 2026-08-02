@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * tanstack-start — server-rendered, then live.
  *
@@ -17,4 +19,4 @@ export default defineSchema({
         body: v.string(),
         postedAt: v.number(),
     }).index("by_posted", ["postedAt"]),
-});
+}).extend(ratelimit.extension);

@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * team-chat — channels, live messages, presence, and file uploads.
  *
@@ -55,4 +57,4 @@ export default defineSchema({
     })
         .shardBy("channelId")
         .index("by_channel_session", ["channelId", "sessionId"], { unique: true }),
-});
+}).extend(ratelimit.extension);

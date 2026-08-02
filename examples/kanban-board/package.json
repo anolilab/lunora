@@ -14,6 +14,7 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/vite": "workspace:*",
         "lunorash": "workspace:*",

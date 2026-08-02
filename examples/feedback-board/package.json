@@ -15,6 +15,7 @@
     "dependencies": {
         "@lunora/ai": "workspace:*",
         "@lunora/errors": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/vite": "workspace:*",
         "lunorash": "workspace:*",

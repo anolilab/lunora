@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "lunorash/server/data-model";
 
-export type TableName = "messages";
+export type TableName = "messages" | "ratelimit_buckets";
 
 /**
  * The tables **this app declared** — every {@link TableName} except those an add-on
@@ -62,8 +62,18 @@ export interface Doc_messages {
     postedAt: number;
 }
 
+export interface Doc_ratelimit_buckets {
+    _id: Id<"ratelimit_buckets">;
+    _creationTime: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 export interface DataModel {
     messages: Doc_messages;
+    ratelimit_buckets: Doc_ratelimit_buckets;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -74,6 +84,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  */
 export interface IndexNamesByTable {
     messages: "by_posted";
+    ratelimit_buckets: "by_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -81,6 +92,7 @@ export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
 /** Per-table search-index name union. `never` for tables without searchIndex. */
 export interface SearchIndexNamesByTable {
     messages: never;
+    ratelimit_buckets: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
@@ -88,6 +100,7 @@ export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable
 /** Per-table rank-index name union. `never` for tables without a rankIndex. */
 export interface RankIndexNamesByTable {
     messages: never;
+    ratelimit_buckets: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -95,6 +108,7 @@ export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
 /** Per-table geo-index name union. `never` for tables without a geoIndex. */
 export interface GeoIndexNamesByTable {
     messages: never;
+    ratelimit_buckets: never;
 }
 
 export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
@@ -110,9 +124,19 @@ export interface Insert_messages {
     postedAt: number;
 }
 
+export interface Insert_ratelimit_buckets {
+    _id?: Id<"ratelimit_buckets">;
+    _creationTime?: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
     messages: Insert_messages;
+    ratelimit_buckets: Insert_ratelimit_buckets;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -135,6 +159,7 @@ export interface ManyRelation<Target extends keyof DataModel> {
 /** Per-table relation map keyed by accessor name. `{}` for tables with none. */
 export interface Relations {
     messages: {};
+    ratelimit_buckets: {};
 }
 
 /** The `with` argument for table `T` — see `@lunora/server/data-model`. */

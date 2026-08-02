@@ -1,5 +1,13 @@
+import { rateLimit } from "lunorash/ratelimit";
+
+import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+/** No sign-in here, so the limit is keyed by caller IP — it is the only identity there is. */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byCaller = { key: (ctx: MutationCtx): string => ctx.ip ?? "anon" };
 
 /** What the page renders: the list and its summary, read together. */
 export interface Board {
@@ -33,5 +41,12 @@ export const board = query.input({ limit: v.optional(v.number()) }).query(async 
 });
 
 export const send = mutation
+    .use(rateLimit(limiter, "send", byCaller))
     .input({ author: v.string().meta({ schema: { maxLength: 80 } }), body: v.string().meta({ schema: { maxLength: 140 } }) })
-    .mutation(async ({ args: { author, body }, ctx }): Promise<Id<"messages">> => ctx.db.insert("messages", { author, body, postedAt: Date.now() }));
+    .mutation(async ({ args: { author, body }, ctx }): Promise<Id<"messages">> => {
+        const id = await ctx.db.insert("messages", { author, body, postedAt: Date.now() });
+
+        ctx.log.info("message posted", { author, id });
+
+        return id;
+    });

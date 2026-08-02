@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import { rateLimit } from "lunorash/ratelimit";
 
 import {
     applyMove,
@@ -13,9 +14,14 @@ import {
 } from "./chess.js";
 import type { PieceType } from "./chess.js";
 import { ratingUpdates } from "./players.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+/** Signed-in app, so limits key on the player rather than the IP. */
+const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byPlayer = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 const PROMOTION_CHOICES = new Set<PieceType>(["Q", "R", "B", "N"]);
 
@@ -59,45 +65,50 @@ export const mine = query.query(async ({ ctx }): Promise<Doc<"games">[]> => {
 });
 
 /** Host starts play. Host takes white. */
-export const start = mutation.input({ lobbyId: v.id("lobbies") }).mutation(async ({ args: { lobbyId }, ctx }): Promise<Id<"games">> => {
-    const lobby = await ctx.db.get(lobbyId);
+export const start = mutation
+    .use(rateLimit(mutationLimiter, "move", byPlayer))
+    .input({ lobbyId: v.id("lobbies") })
+    .mutation(async ({ args: { lobbyId }, ctx }): Promise<Id<"games">> => {
+        const lobby = await ctx.db.get(lobbyId);
 
-    if (!lobby) {
-        throw new LunoraError("NOT_FOUND", "lobby not found");
-    }
+        if (!lobby) {
+            throw new LunoraError("NOT_FOUND", "lobby not found");
+        }
 
-    if (lobby.hostId !== ctx.auth.userId) {
-        throw new LunoraError("UNAUTHORIZED", "only the host can start the game");
-    }
+        if (lobby.hostId !== ctx.auth.userId) {
+            throw new LunoraError("UNAUTHORIZED", "only the host can start the game");
+        }
 
-    if (!lobby.guestId) {
-        throw new LunoraError("CONFLICT", "waiting for an opponent");
-    }
+        if (!lobby.guestId) {
+            throw new LunoraError("CONFLICT", "waiting for an opponent");
+        }
 
-    // Without this, a second `start` on the same lobby mints a second game and
-    // repoints the lobby at it: the first stays `active` forever in
-    // `listActive`, and both can be played out and settle Elo for the same pair.
-    // The UI hides the button once a game exists, which is exactly why this has
-    // to be enforced here rather than there.
-    if (lobby.gameId) {
-        throw new LunoraError("CONFLICT", "this lobby already started a game");
-    }
+        // Without this, a second `start` on the same lobby mints a second game and
+        // repoints the lobby at it: the first stays `active` forever in
+        // `listActive`, and both can be played out and settle Elo for the same pair.
+        // The UI hides the button once a game exists, which is exactly why this has
+        // to be enforced here rather than there.
+        if (lobby.gameId) {
+            throw new LunoraError("CONFLICT", "this lobby already started a game");
+        }
 
-    const gameId = await ctx.db.insert("games", {
-        blackId: lobby.guestId,
-        moveCount: 0,
-        position: serializeState(createInitialState()),
-        startedAt: Date.now(),
-        status: "active",
-        whiteId: lobby.hostId,
+        const gameId = await ctx.db.insert("games", {
+            blackId: lobby.guestId,
+            moveCount: 0,
+            position: serializeState(createInitialState()),
+            startedAt: Date.now(),
+            status: "active",
+            whiteId: lobby.hostId,
+        });
+
+        ctx.log.info("game started", { black: lobby.guestId, gameId, white: lobby.hostId });
+
+        // The guest is subscribed to the lobby, so writing the id here is how they
+        // learn the game exists — no polling, no second channel.
+        await ctx.db.patch(lobbyId, { gameId, isOpen: false });
+
+        return gameId;
     });
-
-    // The guest is subscribed to the lobby, so writing the id here is how they
-    // learn the game exists — no polling, no second channel.
-    await ctx.db.patch(lobbyId, { gameId, isOpen: false });
-
-    return gameId;
-});
 
 /**
  * Play a move.
@@ -113,6 +124,7 @@ export const start = mutation.input({ lobbyId: v.id("lobbies") }).mutation(async
  * players cannot both move against the same position.
  */
 export const makeMove = mutation
+    .use(rateLimit(mutationLimiter, "move", byPlayer))
     .input({
         gameId: v.id("games"),
         from: v.string().meta({ schema: { maxLength: 2 } }),
@@ -195,6 +207,8 @@ export const makeMove = mutation
             ...(result === "black_wins" ? { winnerId: game.blackId } : {}),
         });
 
+        ctx.log.info("move played", { gameId, notation, result: result ?? "in-progress", turn: game.moveCount + 1 });
+
         if (result) {
             await settle(ctx, game, result);
         }
@@ -242,29 +256,38 @@ const settle = async (ctx: MutationCtx, game: Doc<"games">, result: "black_wins"
     await ctx.db.patch(black._id, updates.black);
 };
 
-export const resign = mutation.input({ gameId: v.id("games") }).mutation(async ({ args: { gameId }, ctx }): Promise<void> => {
-    const game = await requirePlayer(ctx, gameId);
+export const resign = mutation
+    .use(rateLimit(mutationLimiter, "move", byPlayer))
+    .input({ gameId: v.id("games") })
+    .mutation(async ({ args: { gameId }, ctx }): Promise<void> => {
+        const game = await requirePlayer(ctx, gameId);
 
-    const result = ctx.auth.userId === game.whiteId ? "black_wins" : "white_wins";
+        const result = ctx.auth.userId === game.whiteId ? "black_wins" : "white_wins";
 
-    await ctx.db.patch(gameId, {
-        drawOfferedBy: null,
-        endedAt: Date.now(),
-        result,
-        status: "completed",
-        winnerId: result === "white_wins" ? game.whiteId : game.blackId,
+        await ctx.db.patch(gameId, {
+            drawOfferedBy: null,
+            endedAt: Date.now(),
+            result,
+            status: "completed",
+            winnerId: result === "white_wins" ? game.whiteId : game.blackId,
+        });
+
+        ctx.log.info("game resigned", { by: ctx.auth.userId, gameId, result });
+        await settle(ctx, game, result);
     });
 
-    await settle(ctx, game, result);
-});
+export const offerDraw = mutation
+    .use(rateLimit(mutationLimiter, "move", byPlayer))
+    .input({ gameId: v.id("games") })
+    .mutation(async ({ args: { gameId }, ctx }): Promise<void> => {
+        const game = await requirePlayer(ctx, gameId);
 
-export const offerDraw = mutation.input({ gameId: v.id("games") }).mutation(async ({ args: { gameId }, ctx }): Promise<void> => {
-    const game = await requirePlayer(ctx, gameId);
-
-    await ctx.db.patch(gameId, { drawOfferedBy: ctx.auth.userId });
-});
+        ctx.log.info("draw offered", { by: ctx.auth.userId, gameId });
+        await ctx.db.patch(gameId, { drawOfferedBy: ctx.auth.userId });
+    });
 
 export const respondToDraw = mutation
+    .use(rateLimit(mutationLimiter, "move", byPlayer))
     .input({ gameId: v.id("games"), accept: v.boolean() })
     .mutation(async ({ args: { accept, gameId }, ctx }): Promise<void> => {
         const game = await requirePlayer(ctx, gameId);
@@ -274,11 +297,13 @@ export const respondToDraw = mutation
         }
 
         if (!accept) {
+            ctx.log.info("draw declined", { gameId });
             await ctx.db.patch(gameId, { drawOfferedBy: null });
 
             return;
         }
 
+        ctx.log.info("draw accepted", { gameId });
         await ctx.db.patch(gameId, { drawOfferedBy: null, endedAt: Date.now(), result: "draw", status: "completed" });
         await settle(ctx, game, "draw");
     });

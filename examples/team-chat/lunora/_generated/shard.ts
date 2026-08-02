@@ -67,6 +67,15 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
             "type": "index",
             "unique": true
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "fields": [
+                "key"
+            ],
+            "name": "by_key",
+            "type": "index"
+        }
     ]
 };
 
@@ -198,6 +207,39 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "optional": false,
             "type": "number"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "key",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "value",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "ts",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "prev",
+            "optional": true,
+            "type": "number"
+        }
     ]
 };
 
@@ -226,12 +268,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Table has no insert path"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:presence:45:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:presence:54:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in heartbeat (presence:45) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `heartbeat` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in heartbeat (presence:54) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `heartbeat` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -239,19 +281,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "heartbeat",
             "file": "presence",
             "kind": "mutation",
-            "line": 45
+            "line": 54
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:presence:50:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:presence:60:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in heartbeat (presence:50) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `heartbeat` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in heartbeat (presence:60) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `heartbeat` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -259,272 +301,11 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "heartbeat",
             "file": "presence",
             "kind": "mutation",
-            "line": 50
+            "line": 60
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:channels:create",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `create` (channels) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "create",
-            "file": "channels",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:messages:attachmentUrl",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `attachmentUrl` (messages) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "attachmentUrl",
-            "file": "messages",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:messages:send",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `send` (messages) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "send",
-            "file": "messages",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:messages:requestAttachmentUpload",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `requestAttachmentUpload` (messages) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestAttachmentUpload",
-            "file": "messages",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:presence:heartbeat",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `heartbeat` (presence) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "heartbeat",
-            "file": "presence",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:presence:leave",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `leave` (presence) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "leave",
-            "file": "presence",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:profiles:avatarUrl",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `avatarUrl` (profiles) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "avatarUrl",
-            "file": "profiles",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:profiles:save",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `save` (profiles) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "save",
-            "file": "profiles",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:profiles:requestAvatarUpload",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `requestAvatarUpload` (profiles) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestAvatarUpload",
-            "file": "profiles",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:channels:create",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `create` (channels) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "create",
-            "file": "channels",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:messages:attachmentUrl",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public action `attachmentUrl` (messages) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "attachmentUrl",
-            "file": "messages",
-            "kind": "action"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:messages:send",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `send` (messages) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "send",
-            "file": "messages",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:messages:requestAttachmentUpload",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public action `requestAttachmentUpload` (messages) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "requestAttachmentUpload",
-            "file": "messages",
-            "kind": "action"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:presence:heartbeat",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `heartbeat` (presence) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "heartbeat",
-            "file": "presence",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
     },
     {
         "cacheKey": "procedure_without_structured_event:presence:leave",
@@ -543,132 +324,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "procedure_without_structured_event",
         "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
         "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:profiles:avatarUrl",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public action `avatarUrl` (profiles) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "avatarUrl",
-            "file": "profiles",
-            "kind": "action"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:profiles:save",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `save` (profiles) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "save",
-            "file": "profiles",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:profiles:requestAvatarUpload",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public action `requestAvatarUpload` (profiles) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "requestAvatarUpload",
-            "file": "profiles",
-            "kind": "action"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "action_without_error_handling:messages:attachmentUrl",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "An `action` calls an outbound surface (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`. Those fail routinely, and an uncaught rejection reaches the caller with no indication of which dependency broke.",
-        "detail": "Action `attachmentUrl` (messages) calls an outbound surface with no `try`/`catch`. A dependency failure will surface to the caller unexplained.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "attachmentUrl",
-            "file": "messages",
-            "kind": "action"
-        },
-        "name": "action_without_error_handling",
-        "remediation": "Wrap the outbound call in `try`/`catch`, then either degrade or rethrow a coded `LunoraError` naming the dependency that failed.",
-        "title": "Action performs outbound I/O with no error handling"
-    },
-    {
-        "cacheKey": "action_without_error_handling:messages:requestAttachmentUpload",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "An `action` calls an outbound surface (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`. Those fail routinely, and an uncaught rejection reaches the caller with no indication of which dependency broke.",
-        "detail": "Action `requestAttachmentUpload` (messages) calls an outbound surface with no `try`/`catch`. A dependency failure will surface to the caller unexplained.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestAttachmentUpload",
-            "file": "messages",
-            "kind": "action"
-        },
-        "name": "action_without_error_handling",
-        "remediation": "Wrap the outbound call in `try`/`catch`, then either degrade or rethrow a coded `LunoraError` naming the dependency that failed.",
-        "title": "Action performs outbound I/O with no error handling"
-    },
-    {
-        "cacheKey": "action_without_error_handling:profiles:avatarUrl",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "An `action` calls an outbound surface (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`. Those fail routinely, and an uncaught rejection reaches the caller with no indication of which dependency broke.",
-        "detail": "Action `avatarUrl` (profiles) calls an outbound surface with no `try`/`catch`. A dependency failure will surface to the caller unexplained.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "avatarUrl",
-            "file": "profiles",
-            "kind": "action"
-        },
-        "name": "action_without_error_handling",
-        "remediation": "Wrap the outbound call in `try`/`catch`, then either degrade or rethrow a coded `LunoraError` naming the dependency that failed.",
-        "title": "Action performs outbound I/O with no error handling"
-    },
-    {
-        "cacheKey": "action_without_error_handling:profiles:requestAvatarUpload",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "An `action` calls an outbound surface (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`. Those fail routinely, and an uncaught rejection reaches the caller with no indication of which dependency broke.",
-        "detail": "Action `requestAvatarUpload` (profiles) calls an outbound surface with no `try`/`catch`. A dependency failure will surface to the caller unexplained.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestAvatarUpload",
-            "file": "profiles",
-            "kind": "action"
-        },
-        "name": "action_without_error_handling",
-        "remediation": "Wrap the outbound call in `try`/`catch`, then either degrade or rethrow a coded `LunoraError` naming the dependency that failed.",
-        "title": "Action performs outbound I/O with no error handling"
     }
 ];
 
@@ -701,7 +356,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -715,7 +370,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "create",
@@ -776,9 +431,9 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
-        "handlesErrors": false,
+        "handlesErrors": true,
         "reachesOutbound": true,
         "runsAiGeneration": false,
         "throwsBareError": false,
@@ -790,7 +445,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "attachmentUrl",
@@ -801,7 +456,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -815,7 +470,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "send",
@@ -826,9 +481,9 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
-        "handlesErrors": false,
+        "handlesErrors": true,
         "reachesOutbound": true,
         "runsAiGeneration": false,
         "throwsBareError": false,
@@ -840,7 +495,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "requestAttachmentUpload",
@@ -876,7 +531,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -890,7 +545,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "heartbeat",
@@ -915,7 +570,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "leave",
@@ -951,9 +606,9 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
-        "handlesErrors": false,
+        "handlesErrors": true,
         "reachesOutbound": true,
         "runsAiGeneration": false,
         "throwsBareError": false,
@@ -965,7 +620,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "avatarUrl",
@@ -976,7 +631,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
         "handlesErrors": false,
         "reachesOutbound": false,
@@ -990,7 +645,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "save",
@@ -1001,9 +656,9 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
     },
     {
         "callsMail": false,
-        "emitsEvent": false,
+        "emitsEvent": true,
         "fanOut": false,
-        "handlesErrors": false,
+        "handlesErrors": true,
         "reachesOutbound": true,
         "runsAiGeneration": false,
         "throwsBareError": false,
@@ -1015,7 +670,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "requestAvatarUpload",
@@ -1060,7 +715,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "4ec9889960fc9a3b", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"channels\": {\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdBy\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_name\": {\n          \"fields\": [\n            \"name\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"messages\": {\n      \"fields\": {\n        \"channelId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"authorId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"content\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"attachmentKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"attachmentName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_channel\": {\n          \"fields\": [\n            \"channelId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"shardBy:channelId\"\n    },\n    \"presence\": {\n      \"fields\": {\n        \"channelId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"sessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_channel_session\": {\n          \"fields\": [\n            \"channelId\",\n            \"sessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"shardBy:channelId\"\n    },\n    \"profiles\": {\n      \"fields\": {\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"avatarKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_user\": {\n          \"fields\": [\n            \"userId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "2c4508c76fb08865", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"channels\": {\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdBy\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_name\": {\n          \"fields\": [\n            \"name\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"messages\": {\n      \"fields\": {\n        \"channelId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"authorId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"content\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"attachmentKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"attachmentName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_channel\": {\n          \"fields\": [\n            \"channelId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"shardBy:channelId\"\n    },\n    \"presence\": {\n      \"fields\": {\n        \"channelId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"sessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_channel_session\": {\n          \"fields\": [\n            \"channelId\",\n            \"sessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"shardBy:channelId\"\n    },\n    \"profiles\": {\n      \"fields\": {\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"avatarKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_user\": {\n          \"fields\": [\n            \"userId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"ratelimit_buckets\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -1679,6 +1334,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["channels"] = bindTableFacade(db, "channels");
             facade["messages"] = bindTableFacade(db, "messages");
             facade["presence"] = bindTableFacade(db, "presence");
+            facade["ratelimit_buckets"] = bindTableFacade(db, "ratelimit_buckets");
 
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.

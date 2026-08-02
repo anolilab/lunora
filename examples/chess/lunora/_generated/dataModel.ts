@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "lunorash/server/data-model";
 
-export type TableName = "profiles" | "lobbies" | "games" | "moves";
+export type TableName = "profiles" | "lobbies" | "games" | "moves" | "ratelimit_buckets";
 
 /**
  * The tables **this app declared** — every {@link TableName} except those an add-on
@@ -104,11 +104,21 @@ export interface Doc_moves {
     special?: string;
 }
 
+export interface Doc_ratelimit_buckets {
+    _id: Id<"ratelimit_buckets">;
+    _creationTime: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 export interface DataModel {
     profiles: Doc_profiles;
     lobbies: Doc_lobbies;
     games: Doc_games;
     moves: Doc_moves;
+    ratelimit_buckets: Doc_ratelimit_buckets;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -122,6 +132,7 @@ export interface IndexNamesByTable {
     lobbies: "by_open_public" | "by_invite_code" | "by_guest" | "by_host";
     games: "by_black" | "by_white" | "by_status";
     moves: "by_game_turn";
+    ratelimit_buckets: "by_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -132,6 +143,7 @@ export interface SearchIndexNamesByTable {
     lobbies: never;
     games: never;
     moves: never;
+    ratelimit_buckets: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
@@ -142,6 +154,7 @@ export interface RankIndexNamesByTable {
     lobbies: never;
     games: never;
     moves: never;
+    ratelimit_buckets: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -152,6 +165,7 @@ export interface GeoIndexNamesByTable {
     lobbies: never;
     games: never;
     moves: never;
+    ratelimit_buckets: never;
 }
 
 export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
@@ -209,12 +223,22 @@ export interface Insert_moves {
     special?: string;
 }
 
+export interface Insert_ratelimit_buckets {
+    _id?: Id<"ratelimit_buckets">;
+    _creationTime?: number;
+    key: string;
+    value: number;
+    ts: number;
+    prev?: number;
+}
+
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
     profiles: Insert_profiles;
     lobbies: Insert_lobbies;
     games: Insert_games;
     moves: Insert_moves;
+    ratelimit_buckets: Insert_ratelimit_buckets;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -240,6 +264,7 @@ export interface Relations {
     lobbies: {};
     games: {};
     moves: {};
+    ratelimit_buckets: {};
 }
 
 /** The `with` argument for table `T` — see `@lunora/server/data-model`. */

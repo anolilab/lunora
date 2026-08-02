@@ -13,6 +13,7 @@
         "lint:types": "tsc --noEmit"
     },
     "dependencies": {
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",

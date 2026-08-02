@@ -1,7 +1,18 @@
 import { LunoraError } from "@lunora/errors";
+import { rateLimit } from "lunorash/ratelimit";
 
+import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+/**
+ * This board has no sign-in, so a deployed instance is reachable by anyone and
+ * the limit is the only thing between it and a script. Keyed by caller IP —
+ * there is no user identity to key on.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byCaller = { key: (ctx: MutationCtx): string => ctx.ip ?? "anon" };
 
 const feedbackStatus = v.union(
     v.literal("open"),
@@ -62,6 +73,7 @@ export const myVotes = query
     });
 
 export const create = mutation
+    .use(rateLimit(limiter, "write", byCaller))
     .input({
         title: v.string().meta({ schema: { maxLength: 200 } }),
         description: v.string().meta({ schema: { maxLength: 4000 } }),
@@ -69,13 +81,21 @@ export const create = mutation
         authorEmail: v.optional(v.string().meta({ schema: { maxLength: 254 } })),
         tags: v.optional(v.array(v.string().meta({ schema: { maxLength: 40 } }))),
     })
-    .mutation(async ({ args: { authorEmail, authorName, description, tags, title }, ctx }): Promise<Id<"feedback">> =>
-        ctx.db.insert("feedback", { authorEmail, authorName, commentCount: 0, description, status: "open", tags, title, upvoteCount: 0 }),
-    );
+    .mutation(async ({ args: { authorEmail, authorName, description, tags, title }, ctx }): Promise<Id<"feedback">> => {
+        const id = await ctx.db.insert("feedback", { authorEmail, authorName, commentCount: 0, description, status: "open", tags, title, upvoteCount: 0 });
 
-export const setStatus = mutation.input({ id: v.id("feedback"), status: feedbackStatus }).mutation(async ({ args: { id, status }, ctx }): Promise<void> => {
-    await ctx.db.patch(id, { status });
-});
+        ctx.log.info("feedback created", { id, title });
+
+        return id;
+    });
+
+export const setStatus = mutation
+    .use(rateLimit(limiter, "write", byCaller))
+    .input({ id: v.id("feedback"), status: feedbackStatus })
+    .mutation(async ({ args: { id, status }, ctx }): Promise<void> => {
+        ctx.log.info("feedback status changed", { id, status });
+        await ctx.db.patch(id, { status });
+    });
 
 /**
  * Toggle this voter's upvote.
@@ -86,6 +106,7 @@ export const setStatus = mutation.input({ id: v.id("feedback"), status: feedback
  * can sort by votes through an index instead of counting rows per card.
  */
 export const toggleVote = mutation
+    .use(rateLimit(limiter, "write", byCaller))
     .input({ feedbackId: v.id("feedback"), voterEmail: v.string().meta({ schema: { maxLength: 254 } }) })
     .mutation(async ({ args: { feedbackId, voterEmail }, ctx }): Promise<{ voted: boolean }> => {
         const post = await ctx.db.get(feedbackId);
@@ -102,17 +123,20 @@ export const toggleVote = mutation
         if (existing) {
             await ctx.db.delete(existing._id);
             await ctx.db.patch(feedbackId, { upvoteCount: Math.max(0, post.upvoteCount - 1) });
+            ctx.log.info("vote withdrawn", { feedbackId });
 
             return { voted: false };
         }
 
         await ctx.db.insert("votes", { feedbackId, voterEmail });
         await ctx.db.patch(feedbackId, { upvoteCount: post.upvoteCount + 1 });
+        ctx.log.info("vote cast", { feedbackId });
 
         return { voted: true };
     });
 
 export const addComment = mutation
+    .use(rateLimit(limiter, "write", byCaller))
     .input({
         feedbackId: v.id("feedback"),
         authorName: v.string().meta({ schema: { maxLength: 80 } }),
@@ -130,31 +154,36 @@ export const addComment = mutation
         const id = await ctx.db.insert("comments", { authorEmail, authorName, content, feedbackId, isOfficial: isOfficial ?? false });
 
         await ctx.db.patch(feedbackId, { commentCount: post.commentCount + 1 });
+        ctx.log.info("comment added", { feedbackId, id });
 
         return id;
     });
 
 /** Delete a post and everything hanging off it, in one transaction. */
-export const remove = mutation.input({ id: v.id("feedback") }).mutation(async ({ args: { id }, ctx }): Promise<void> => {
-    // The unique index's leading column is `feedbackId`, so it also serves as
-    // the "every vote on this post" lookup.
-    const votes = await ctx.db
-        .query("votes")
-        .withIndex("by_feedback_and_voter", (q) => q.eq("feedbackId", id))
-        .collect();
+export const remove = mutation
+    .use(rateLimit(limiter, "write", byCaller))
+    .input({ id: v.id("feedback") })
+    .mutation(async ({ args: { id }, ctx }): Promise<void> => {
+        // The unique index's leading column is `feedbackId`, so it also serves as
+        // the "every vote on this post" lookup.
+        const votes = await ctx.db
+            .query("votes")
+            .withIndex("by_feedback_and_voter", (q) => q.eq("feedbackId", id))
+            .collect();
 
-    for (const vote of votes) {
-        await ctx.db.delete(vote._id);
-    }
+        for (const vote of votes) {
+            await ctx.db.delete(vote._id);
+        }
 
-    const rows = await ctx.db
-        .query("comments")
-        .withIndex("by_feedback", (q) => q.eq("feedbackId", id))
-        .collect();
+        const rows = await ctx.db
+            .query("comments")
+            .withIndex("by_feedback", (q) => q.eq("feedbackId", id))
+            .collect();
 
-    for (const comment of rows) {
-        await ctx.db.delete(comment._id);
-    }
+        for (const comment of rows) {
+            await ctx.db.delete(comment._id);
+        }
 
-    await ctx.db.delete(id);
-});
+        ctx.log.info("feedback removed", { comments: rows.length, id, votes: votes.length });
+        await ctx.db.delete(id);
+    });

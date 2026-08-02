@@ -1522,6 +1522,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../../packages/errors
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1653,6 +1656,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../../packages/errors
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1693,6 +1699,9 @@ importers:
 
   examples/kanban-board:
     dependencies:
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1905,6 +1914,9 @@ importers:
 
   examples/tanstack-start:
     dependencies:
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1969,6 +1981,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../../packages/errors
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react

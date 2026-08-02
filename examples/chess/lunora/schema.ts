@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * chess — lobbies, live games, spectators, Elo.
  *
@@ -76,4 +78,4 @@ export default defineSchema({
         captured: v.optional(v.string()),
         special: v.optional(v.string()),
     }).index("by_game_turn", ["gameId", "turnNumber"], { unique: true }),
-});
+}).extend(ratelimit.extension);

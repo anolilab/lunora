@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * kanban-board — one board, four columns, drag-and-drop reordering.
  *
@@ -22,4 +24,4 @@ export default defineSchema({
         status: v.union(v.literal("todo"), v.literal("in-progress"), v.literal("done"), v.literal("archived")),
         order: v.string(),
     }).index("by_status_and_order", ["status", "order"]),
-});
+}).extend(ratelimit.extension);

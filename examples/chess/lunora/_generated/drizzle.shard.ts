@@ -67,3 +67,14 @@ export const moves = sqliteTable("moves", {
 }, (t) => ({
     by_game_turn: uniqueIndex("by_game_turn").on(t.gameId, t.turnNumber),
 }));
+
+export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    key: text("key").notNull(),
+    value: real("value").notNull(),
+    ts: real("ts").notNull(),
+    prev: real("prev"),
+}, (t) => ({
+    by_key: index("by_key").on(t.key),
+}));

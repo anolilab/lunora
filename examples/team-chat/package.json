@@ -16,6 +16,7 @@
         "@lunora/auth": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/errors": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/storage": "workspace:*",
         "@lunora/vite": "workspace:*",
