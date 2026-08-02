@@ -1,3 +1,4 @@
+import { ConsentDialogLink } from "@c15t/react";
 import DiscordLogoIcon from "@icons-pack/react-simple-icons/icons/SiDiscord.mjs";
 import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { Link } from "@tanstack/react-router";
@@ -10,8 +11,10 @@ import FlickeringGrid from "@/components/ui/flickering-grid";
 
 type TanstackLink = { title: string; to: string };
 type ExternalLinkType = { href: string; title: string };
+type ConsentDialogEntry = { consentDialog: true; title: string };
+type FooterEntry = ConsentDialogEntry | ExternalLinkType | TanstackLink;
 
-const columns: { links: (ExternalLinkType | TanstackLink)[]; title: string }[] = [
+const columns: { links: FooterEntry[]; title: string }[] = [
     {
         links: [
             { title: "Server", to: "/packages/server" },
@@ -35,6 +38,7 @@ const columns: { links: (ExternalLinkType | TanstackLink)[]; title: string }[] =
     {
         links: [
             { title: "Privacy", to: "/privacy" },
+            { consentDialog: true, title: "Cookie settings" },
             { title: "Code of Conduct", to: "/code-of-conduct" },
             { title: "Imprint", to: "/imprint" },
             { title: "Press & Brand", to: "/press" },
@@ -49,9 +53,13 @@ const socials: { href: string; icon: ReactNode; label: string }[] = [
     { href: "https://github.com/anolilab/lunora/discussions", icon: <MessagesSquare className="size-5" />, label: "Discussions" },
 ];
 
-const FooterLink: FC<{ link: ExternalLinkType | TanstackLink }> = ({ link }) => {
+const FooterLink: FC<{ link: FooterEntry }> = ({ link }) => {
     const className =
         "flex flex-1 items-center border-b border-white/[0.08] px-6 py-5 text-sm text-white/55 transition-colors last:border-b-0 hover:text-white";
+
+    if ("consentDialog" in link) {
+        return <ConsentDialogLink className={`${className} cursor-pointer`}>{link.title}</ConsentDialogLink>;
+    }
 
     if ("href" in link) {
         return (
