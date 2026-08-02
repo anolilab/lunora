@@ -1,6 +1,7 @@
 {
     "name": "@lunora/platform-node",
     "version": "0.0.0",
+    "private": true,
     "description": "Node implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost over better-sqlite3 and an in-process socket registry (dev/test target)",
     "keywords": [
         "better-sqlite3",
