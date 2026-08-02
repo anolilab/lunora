@@ -334,7 +334,7 @@ class ResetPasswordCardComponent implements OnInit {
     selector: "lunora-reset-password-otp-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.resetPassword" [description]="t.resetPasswordOtpDescription">
+        <!-- secret-scanner:allow -- i18n key, not a credential --><lunora-auth-card [title]="t.resetPassword" [description]="t.resetPasswordOtpDescription">
             <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                 <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
                 <lunora-auth-field
