@@ -26,6 +26,7 @@
             "api_surface": "${{ steps.changes.outputs.api_surface }}"
             "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable }}"
             "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable }}"
+            "registry_sync": "${{ steps.changes.outputs.registry_sync }}"
             "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable }}"
         "steps":
             - "name": "Harden Runner"
@@ -309,6 +310,7 @@
     # outright.
     "registry-sync":
         "name": "Lint (auth-ui registry sync)"
+        "if": "needs.files-changed.outputs.registry_sync == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 10

@@ -50,6 +50,25 @@ e2e:
 codecov:
     - "codecov.yml"
 
+# CodSpeed benchmarks: anything that can change a bench result or the bench
+# selection. `vis affected test:bench` narrows further inside the job; this
+# gate only exists so docs/plans-only PRs skip the install+build entirely.
+benchmarks:
+    - "packages/**"
+    - "shared/**"
+    - "**/tsconfig*.json"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "package.json"
+    - "vis.config.ts"
+    - ".github/workflows/codspeed.yml"
+
+# The auth-ui → registry/auth-ui-* copy-sync check.
+registry_sync:
+    - "packages/auth-ui/**"
+    - "registry/**"
+    - "scripts/sync-auth-ui-registry.mjs"
+
 # The template scaffold+install+build+typecheck matrix. It packs every publishable
 # package and runs a real `pnpm install` per template, so it is far too slow for
 # every PR — but it is the ONLY gate that proves `lunora init` still installs and

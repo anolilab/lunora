@@ -4,6 +4,22 @@
         "branches": ["main", "alpha", "next", "beta"]
     "pull_request":
         "branches": ["main", "alpha", "next", "beta"]
+        # Only scan PRs that touch analyzable JS/TS source (or this workflow).
+        # Docs/plans-only PRs skip; push + weekly schedule stay ungated so
+        # branch heads always carry a complete code-scanning baseline.
+        "paths":
+            - "**/*.ts"
+            - "**/*.tsx"
+            - "**/*.mts"
+            - "**/*.cts"
+            - "**/*.js"
+            - "**/*.jsx"
+            - "**/*.mjs"
+            - "**/*.cjs"
+            - "**/*.vue"
+            - "**/*.svelte"
+            - "**/*.astro"
+            - ".github/workflows/codeql.yml"
     "schedule":
         - "cron": "0 0 * * 1"
 "permissions": {}
