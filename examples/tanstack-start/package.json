@@ -1,0 +1,39 @@
+{
+    "name": "@lunora-example/tanstack-start",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "vite build && wrangler deploy -c dist/server/wrangler.json",
+        "dev": "vite",
+        "lint:types": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@lunora/react": "workspace:*",
+        "@tanstack/react-query": "catalog:frontend",
+        "@tanstack/react-router": "catalog:frontend",
+        "@tanstack/react-start": "catalog:frontend",
+        "lunorash": "workspace:*",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
+    },
+    "devDependencies": {
+        "@cloudflare/vite-plugin": "catalog:vite",
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/vite": "workspace:*",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "@vitejs/plugin-react": "catalog:web",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

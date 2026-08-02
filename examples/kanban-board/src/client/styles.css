@@ -1,0 +1,207 @@
+:root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --border: #dfe1e6;
+    --text: #172b4d;
+    --muted: #6b778c;
+    --accent: #0052cc;
+}
+
+.dark {
+    --bg: #10131a;
+    --surface: #1c2130;
+    --border: #2c3446;
+    --text: #e6e9f0;
+    --muted: #8b96ad;
+    --accent: #6ea8ff;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: system-ui, sans-serif;
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 100vh;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+button,
+.search,
+.card-input,
+.palette-input {
+    font: inherit;
+    color: inherit;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    padding: 6px 10px;
+}
+
+button {
+    cursor: pointer;
+}
+
+.search {
+    width: min(320px, 50vw);
+}
+
+.loading {
+    color: var(--muted);
+}
+
+.columns {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    overflow-x: auto;
+}
+
+.column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 0 0 280px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.column-header h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+}
+
+.count {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.column-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 60px;
+}
+
+.card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    cursor: grab;
+}
+
+.card-title {
+    flex: 1;
+    text-align: left;
+    border: none;
+    background: none;
+    padding: 0;
+}
+
+.card-delete {
+    border: none;
+    background: none;
+    padding: 0 4px;
+    color: var(--muted);
+}
+
+.card-input {
+    width: 100%;
+}
+
+.drop-indicator {
+    height: 2px;
+    margin: 2px 0;
+    border-radius: 2px;
+    background: var(--accent);
+}
+
+.add-card {
+    border: none;
+    background: none;
+    text-align: left;
+    color: var(--muted);
+}
+
+.palette-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    padding-top: 15vh;
+    background: rgb(0 0 0 / 40%);
+}
+
+.palette {
+    width: min(480px, 90vw);
+    height: fit-content;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+}
+
+.palette-input {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    padding: 12px;
+}
+
+.palette-list {
+    list-style: none;
+}
+
+.palette-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    border: none;
+    border-radius: 0;
+    background: none;
+    padding: 10px 12px;
+    text-align: left;
+}
+
+.palette-item:hover {
+    background: var(--bg);
+}

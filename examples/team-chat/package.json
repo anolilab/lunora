@@ -1,0 +1,39 @@
+{
+    "name": "@lunora-example/team-chat",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "wrangler deploy",
+        "dev": "vite",
+        "lint:types": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@lunora/auth": "workspace:*",
+        "@lunora/d1": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/storage": "workspace:*",
+        "@lunora/vite": "workspace:*",
+        "better-auth": "catalog:auth",
+        "lunorash": "workspace:*",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

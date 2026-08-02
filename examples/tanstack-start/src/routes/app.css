@@ -1,0 +1,87 @@
+:root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --border: #e0e3e9;
+    --text: #171c26;
+    --muted: #6b7688;
+    color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f121a;
+        --surface: #181c26;
+        --border: #2a3040;
+        --text: #e7eaf1;
+        --muted: #97a2b6;
+    }
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, sans-serif;
+}
+
+.page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 40px 16px;
+}
+
+h1 {
+    font-size: 22px;
+}
+
+.muted {
+    color: var(--muted);
+    font-size: 14px;
+}
+
+form {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+button,
+input {
+    font: inherit;
+    color: inherit;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+input[name="body"] {
+    flex: 1;
+    min-width: 200px;
+}
+
+button {
+    cursor: pointer;
+}
+
+ul {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    list-style: none;
+}
+
+li {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+}

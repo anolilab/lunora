@@ -1,0 +1,138 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "comments": {
+            "fields": {
+                "feedbackId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "authorName": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "authorEmail": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "content": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "isOfficial": {
+                    "kind": "boolean",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_feedback": {
+                    "fields": ["feedbackId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "feedback": {
+            "fields": {
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "description": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "status": {
+                    "kind": "union",
+                    "optional": false
+                },
+                "authorName": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "authorEmail": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "upvoteCount": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "commentCount": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "tags": {
+                    "kind": "array",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_upvotes": {
+                    "fields": ["upvoteCount"],
+                    "unique": false
+                },
+                "by_status": {
+                    "fields": ["status"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "summaries": {
+            "fields": {
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "summary": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "feedbackIds": {
+                    "kind": "array",
+                    "optional": false
+                },
+                "generatedAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_generated": {
+                    "fields": ["generatedAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "votes": {
+            "fields": {
+                "feedbackId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "voterEmail": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_voter": {
+                    "fields": ["voterEmail"],
+                    "unique": false
+                },
+                "by_feedback_and_voter": {
+                    "fields": ["feedbackId", "voterEmail"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}
