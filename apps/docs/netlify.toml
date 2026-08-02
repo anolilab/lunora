@@ -5,13 +5,32 @@
 #   - exit 0  -> build is skipped (cancelled)
 #   - exit !0 -> build proceeds
 #
+# This step runs BEFORE Netlify provisions Node/Corepack/pnpm (dependency
+# install happens after the ignore gate), so a `pnpm exec ...` command here
+# always fails with "pnpm: command not found" -> Netlify's inverted semantics
+# read that failure as "proceed", so the gate has never actually skipped a
+# build; the docs site has rebuilt on every push regardless of whether
+# anything affecting it changed. We invoke the `vis` binary directly by its
+# node_modules/.bin path instead of going through pnpm: the pnpm-generated
+# shim at that path only needs `node` on PATH (already true at this point) and
+# never shells out to pnpm itself. Netlify's packagePath for this site is
+# apps/docs, so `../../node_modules/.bin/vis` reaches the workspace-root
+# install from here.
+#
 # `vis ci ignore` is graph-aware: it skips the deploy when nothing affecting the
 # docs site changed, and still rebuilds when an upstream `@lunora/*` package the
 # docs pull content from changed (which a plain `git diff -- apps/docs` would
 # miss). It auto-detects Netlify's CACHED_COMMIT_REF as the git base and falls
 # back to HEAD~1, and uses inverted Vercel/Netlify exit semantics by default.
 #
+# The `[ -x ... ] && ... || exit 1` guard fails safe: on a cold build with no
+# cached node_modules, the vis binary won't exist yet at this path, so we exit
+# non-zero and the build proceeds rather than silently skipping a possibly
+# needed deploy. Any other failure (a broken/partial cached install, vis
+# itself erroring) falls through the same `|| exit 1`, so every path other
+# than an explicit "not affected" verdict from vis converges on "build".
+#
 # Build command, publish dir, and base directory remain configured in the
 # Netlify UI; this file only adds the ignore gate.
 [build]
-  ignore = "pnpm exec vis ci ignore lunora-docs-app"
+  ignore = "[ -x ../../node_modules/.bin/vis ] && ../../node_modules/.bin/vis ci ignore lunora-docs-app || exit 1"
