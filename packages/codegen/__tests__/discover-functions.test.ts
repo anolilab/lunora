@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverFunctions } from "../src/discover-functions";
 
 const NAMESPACE_COLLISION_RE = /Namespace collision/u;
-const CURSOR_DOC_ARRAY_RE = /CursorDoc\[\]/u;
 
 let workdir: string;
 
@@ -253,13 +252,16 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe('null | { _id: Id<"cursors">; note?: string }');
         });
 
-        it("preserves return types that reference exported local types", () => {
+        it("expands an EXPORTED local type too — `_generated` never imports the handler's own module", () => {
             expect.assertions(1);
 
-            // The mirror case: when the same interface IS exported, downstream
-            // code can `import { CursorDoc } from "..."` to reach it — emit
-            // is still going to need to relocate the path, but the *name* is
-            // valid so we shouldn't drop the inferred return type.
+            // Exporting the interface makes it nameable from the handler, so the
+            // checker prints the bare name `CursorDoc[]` — and emit only rewrites
+            // qualifiers the checker itself rendered as `import("…")`. It never
+            // synthesises an import for the handler's own module, so that bare
+            // name reached `_generated/api.ts` unresolved: TS2304 in generated
+            // code while `lunora codegen` exited 0. Expand it, like the
+            // non-exported case above.
             writeFunction(
                 "cursors.ts",
                 `
@@ -279,7 +281,7 @@ describe("discoverFunctions", () => {
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
             const result = discoverFunctions(project, workdir);
 
-            expect(result[0]?.returnType).toMatch(CURSOR_DOC_ARRAY_RE);
+            expect(result[0]?.returnType).toBe("{ id: string }[]");
         });
 
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
