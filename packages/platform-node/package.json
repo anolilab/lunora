@@ -68,6 +68,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/do": "1.0.0-alpha.61",
         "@lunora/platform-cloudflare": "1.0.0-alpha.3",
         "@lunora/runtime": "1.0.0-alpha.49",
         "@lunora/shard-engine": "1.0.0-alpha.6",
