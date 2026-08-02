@@ -23,7 +23,16 @@ describe("nondeterministic_query_mutation", () => {
         expect(run()).toHaveLength(0);
     });
 
-    it("flags Date.now() inside a mutation handler", () => {
+    // Issue #286: ordinary mutations don't replay on this (DO-backed) runtime —
+    // an idempotency dedup returns the cached result rather than re-running the
+    // handler, and an OCC conflict throws to the caller instead of an internal
+    // retry — so a mutation handler runs at most once per logical write and
+    // `Date.now()` inside one is stable. Confirmed 193 of 385 non-INFO findings
+    // on one real codebase were this exact "stamp createdAt in a mutation"
+    // pattern. Dropped to INFO (not silenced — a mutation dispatched from a
+    // workflow step/queue consumer that itself replays is still a real
+    // caveat, and the finding is the breadcrumb to it).
+    it("drops Date.now() inside a mutation handler to INFO", () => {
         expect.assertions(2);
 
         const calls: AdvisorNondeterministicCall[] = [{ callee: "Date.now", exportName: "sendMessage", file: "messages", kind: "mutation", line: 12 }];
@@ -33,9 +42,28 @@ describe("nondeterministic_query_mutation", () => {
         expect(findings[0]).toMatchObject({
             cacheKey: "nondeterministic_query_mutation:messages:12:Date.now",
             categories: ["SCHEMA"],
-            level: "WARN",
+            facing: "INTERNAL",
+            level: "INFO",
             metadata: { callee: "Date.now", exportName: "sendMessage", file: "messages", kind: "mutation", line: 12 },
             name: "nondeterministic_query_mutation",
+        });
+    });
+
+    // A query IS genuinely re-run by a live subscription whenever a table it
+    // reads changes, so this half keeps its original WARN — the premise this
+    // rule needs actually holds for queries.
+    it("keeps Date.now() inside a query handler at WARN (a live subscription can re-run it)", () => {
+        expect.assertions(2);
+
+        const calls: AdvisorNondeterministicCall[] = [{ callee: "Date.now", exportName: "listMessages", file: "messages", kind: "query", line: 8 }];
+        const findings = run(calls);
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "nondeterministic_query_mutation:messages:8:Date.now",
+            facing: "EXTERNAL",
+            level: "WARN",
+            metadata: { callee: "Date.now", exportName: "listMessages", file: "messages", kind: "query", line: 8 },
         });
     });
 

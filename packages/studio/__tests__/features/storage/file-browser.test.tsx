@@ -180,7 +180,18 @@ describe("fileBrowser", () => {
         const lastCall = mock.listStorageObjects.mock.calls.at(-1) as [{ prefix?: string }];
 
         expect(lastCall[0]).toMatchObject({ prefix: "" });
-        // Back at root we again see the two sub-folders.
+
+        // Back at root we again see the two sub-folders. The re-list call resolving
+        // (awaited above) doesn't guarantee the follow-up render has committed yet —
+        // wait for the DOM itself rather than racing it on the same microtask. Not an
+        // `expect(...)` inside `waitFor`: that would count every retry attempt toward
+        // `expect.assertions(2)` above and fail it on any retry.
+        await waitFor(() => {
+            if (screen.queryAllByTestId("fb-folder").length !== 2) {
+                throw new Error("not re-rendered with both folders yet");
+            }
+        });
+
         expect(screen.getAllByTestId("fb-folder")).toHaveLength(2);
     });
 

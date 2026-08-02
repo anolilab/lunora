@@ -37,10 +37,20 @@ const deployCommand: Command = {
             type: String,
         },
         { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
-        // Declared as a `no-*` option, like `lunora codegen`'s identically-named
-        // flag: cerebro only synthesizes a negation for options declared that
-        // way, so a positive `strict-advisories` would have made the advertised
-        // `--no-strict-advisories` an unknown-option error.
+        // Both the positive AND the `no-*` form are declared explicitly, same as
+        // `lunora codegen`'s identically-named flag (#285): relying on cerebro to
+        // synthesize `--strict-advisories` from only the `no-*` declaration clones
+        // this option's "Don't fail…" description onto the positive flag verbatim
+        // (so `--help` couldn't distinguish the two), AND gives the synthesized
+        // option an unconditional `defaultValue: true` — meaning
+        // `options.strictAdvisories` was never `undefined` and the CI-vs-local
+        // fallback in `resolveStrictAdvisories` never ran. Declaring both forms
+        // ourselves, neither with a `defaultValue`, fixes both.
+        {
+            description: "Fail the deploy on ERROR-level codegen advisories even locally (the gate already defaults to on in CI)",
+            name: "strict-advisories",
+            type: Boolean,
+        },
         {
             description:
                 "Don't fail the deploy on ERROR-level codegen advisories (the gate defaults to on in CI, off locally). Never downgrades platform diagnostics.",

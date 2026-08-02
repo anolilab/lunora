@@ -6,6 +6,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import discoverStorageKeyAccesses from "../src/discover-storage-key-accesses";
+import type { FunctionIR } from "../src/ir";
 
 let workdir: string;
 let project: Project;
@@ -143,5 +144,61 @@ describe("discoverStorageKeyAccesses", () => {
         write("browse.ts", `export const browse = query(async ({ ctx, args }) => { return ctx.storage.docs.list(args.prefix); });`);
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    // Issue #284: `storage_key_from_user_args` had no reachability model — both
+    // real-world false positives were `internalAction`s receiving a
+    // content-addressed storage id minted server-side.
+    it("ignores a key rebuilt by an intervening call (content-addressed, not caller-controlled)", () => {
+        expect.assertions(1);
+
+        write(
+            "extraction.ts",
+            `export const extractDocumentText = internalAction(async ({ ctx, args }) => { return ctx.storage.docs.getUrl(hashOf(args.storageId)); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("ignores a key reached through one local hop to an intervening call", () => {
+        expect.assertions(1);
+
+        write(
+            "hop-call.ts",
+            `export const extractDocumentText = internalAction(async ({ ctx, args }) => {
+                const key = hashOf(args.storageId);
+                return ctx.storage.docs.getUrl(key);
+            });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("attaches the enclosing procedure's visibility when `functions` is supplied", () => {
+        expect.assertions(2);
+
+        write(
+            "extraction2.ts",
+            `export const extractDocumentText = internalAction(async ({ ctx, args }) => { return ctx.storage.docs.get(args.storageId); });`,
+        );
+
+        const functions: FunctionIR[] = [
+            { args: {}, exportName: "extractDocumentText", filePath: "extraction2", kind: "action", returnType: "unknown", visibility: "internal" },
+        ];
+        const found = discoverStorageKeyAccesses(project, join(workdir, "lunora"), functions);
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ visibility: "internal" });
+    });
+
+    it("leaves visibility undefined when the access can't be attributed to a supplied function", () => {
+        expect.assertions(2);
+
+        write("orphan.ts", `export const orphan = query(async ({ ctx, args }) => { return ctx.storage.docs.get(args.storageId); });`);
+
+        const found = discoverStorageKeyAccesses(project, join(workdir, "lunora"), []);
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.visibility).toBeUndefined();
     });
 });
