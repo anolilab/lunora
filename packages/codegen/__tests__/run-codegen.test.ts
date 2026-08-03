@@ -359,7 +359,9 @@ export default defineSchema({
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.server).toContain('from "@lunora/server"');
-            expect(result.generated.dataModel).toContain('from "@lunora/server/data-model"');
+            // The query-DSL bindings moved to server.ts so dataModel.ts stays free
+            // of the server package — see its emitter docblock.
+            expect(result.generated.server).toContain('from "@lunora/server/data-model"');
             expect(result.generated.api).toContain('import { anyApi } from "@lunora/client";');
             expect(result.generated.api).toContain('from "@lunora/client"');
             expect(result.generated.shard).toContain('from "@lunora/do"');
@@ -375,7 +377,7 @@ export default defineSchema({
 
             // Base surface routed through the umbrella…
             expect(result.generated.server).toContain('from "lunorash/server"');
-            expect(result.generated.dataModel).toContain('from "lunorash/server/data-model"');
+            expect(result.generated.server).toContain('from "lunorash/server/data-model"');
             expect(result.generated.api).toContain('import { anyApi } from "lunorash/client";');
             expect(result.generated.api).toContain('from "lunorash/client"');
             expect(result.generated.shard).toContain('from "lunorash/do"');
@@ -1196,7 +1198,7 @@ export default crons;
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js"',
+                'import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -1250,6 +1252,26 @@ export default crons;
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
+        it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
+            expect.assertions(4);
+
+            // A sibling package — a web app, another Worker — consumes `api.ts` for
+            // its `Doc`/`Id` types. `api.ts` imports `dataModel.ts`, so every server
+            // type `dataModel.ts` named had to be resolvable in that consumer too:
+            // installing a SERVER package to compile a branded string and a few
+            // interfaces. The query-DSL bindings that need it now live in
+            // `server.ts`, which no consumer imports.
+            const { api, dataModel } = runCodegen({ projectRoot: workdir }).generated;
+
+            // The property, stated directly: no imports at all.
+            expect(dataModel).not.toContain("import ");
+            expect(dataModel).not.toContain("@lunora/server");
+            expect(dataModel).not.toContain("lunorash/server");
+
+            // …while still carrying everything `api.ts` reaches for.
+            expect(api).toContain('from "./dataModel.js"');
+        });
+
         it("emits per-table ctx.db facade types in dataModel.ts", () => {
             expect.assertions(9);
 
@@ -1260,19 +1282,20 @@ export default crons;
             expect(result.generated.dataModel).toContain("export type Insert<T extends keyof DataModel>");
 
             // The typed `where` DSL is re-exported from the shipped
-            // `@lunora/server/data-model` module; the per-table reader/writer
-            // facades are bound to this project's maps.
-
-            expect(result.generated.dataModel).toContain('from "@lunora/server/data-model";');
-            expect(result.generated.dataModel).toContain("    Where,\n    WhereOf,\n    WhereOperators,");
-            expect(result.generated.dataModel).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
-            expect(result.generated.dataModel).toContain("export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<");
-            expect(result.generated.dataModel).toContain("export type DatabaseReaderFacade = DatabaseReaderFacadeOf<");
-            expect(result.generated.dataModel).toContain("export type DatabaseWriterFacade = DatabaseWriterFacadeOf<");
+            // `@lunora/server/data-model` module and the per-table reader/writer
+            // facades are bound to this project's maps — both in `server.ts`,
+            // because both need the server package. `dataModel.ts` stays free of
+            // it so a sibling package can compile `api.ts` without one.
+            expect(result.generated.server).toContain('from "@lunora/server/data-model";');
+            expect(result.generated.server).toContain("    Where,\n    WhereOf,\n    WhereOperators,");
+            expect(result.generated.server).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
+            expect(result.generated.server).toContain("export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<");
+            expect(result.generated.server).toContain("export type DatabaseReaderFacade = DatabaseReaderFacadeOf<");
+            expect(result.generated.server).toContain("export type DatabaseWriterFacade = DatabaseWriterFacadeOf<");
 
             // Typed full-text search support is re-exported (the SearchReader /
             // SearchFilterBuilder bodies live in the shipped module now).
-            expect(result.generated.dataModel).toContain("    SearchFilterBuilder,\n    SearchReader,");
+            expect(result.generated.server).toContain("    SearchFilterBuilder,\n    SearchReader,");
         });
 
         it("emits the ctx.orm namespace bound to the shipped facade generics", () => {
@@ -1282,14 +1305,14 @@ export default crons;
 
             // The read facade (with findFirstOrThrow) is bound from the shipped
             // module rather than emitted inline.
-            expect(result.generated.dataModel).toContain("= TableReaderFacadeOf<");
+            expect(result.generated.server).toContain("= TableReaderFacadeOf<");
 
             // The kitcn-style ORM surfaces stay generated (they wire Insert/Id).
-            expect(result.generated.dataModel).toContain("export interface OrmReader");
-            expect(result.generated.dataModel).toContain("export interface OrmWriter extends OrmReader");
-            expect(result.generated.dataModel).toContain("export interface OrmInsertBuilder<T extends keyof DataModel>");
-            expect(result.generated.dataModel).toContain("export interface OrmUpdateBuilder<T extends keyof DataModel>");
-            expect(result.generated.dataModel).toContain("export interface OrmReplaceBuilder<T extends keyof DataModel>");
+            expect(result.generated.server).toContain("export interface OrmReader");
+            expect(result.generated.server).toContain("export interface OrmWriter extends OrmReader");
+            expect(result.generated.server).toContain("export interface OrmInsertBuilder<T extends keyof DataModel>");
+            expect(result.generated.server).toContain("export interface OrmUpdateBuilder<T extends keyof DataModel>");
+            expect(result.generated.server).toContain("export interface OrmReplaceBuilder<T extends keyof DataModel>");
 
             // Wired onto the typed contexts: reads get OrmReader, writes get OrmWriter.
             expect(result.generated.server).toContain("readonly orm: OrmReader;");
@@ -3826,9 +3849,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("LUNORA_FUNCTIONS");
             expect(output).toContain("export const v = vBase as unknown as");
             expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
-            // The facade import stays minimal (ORM types are always pulled in).
+            // The facade import now pulls the schema MAPS (the facade types are
+            // defined here, not imported — they moved out of dataModel.ts).
             expect(output).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";',
+                'import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";',
             );
         });
     });

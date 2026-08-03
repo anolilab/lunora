@@ -244,7 +244,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     return {
         agents,
         containers,
-        dataModelContent: emitDataModel(schema, useUmbrella),
+        dataModelContent: emitDataModel(schema),
         declaredDependencies,
         dependencies,
         env,

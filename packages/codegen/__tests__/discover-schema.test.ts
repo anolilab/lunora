@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { CodegenDiagnosticError } from "../src/diagnostics";
 import discoverSchema from "../src/discover-schema";
-import { emitDataModel } from "../src/emit";
+import { emitDataModel, emitServer } from "../src/emit";
 import { runtimeTableToIR } from "../src/resolve-package-extension";
 
 /**
@@ -515,6 +515,7 @@ describe("discoverSchema", () => {
 
         const schema = discoverSchema(project, schemaPath);
         const dataModel = emitDataModel(schema);
+        const server = emitServer({ schema });
 
         expect(dataModel).toContain("export interface RankIndexNamesByTable");
         // Per-table union: declared name for `scores`, `never` for `users`.
@@ -522,7 +523,9 @@ describe("discoverSchema", () => {
         expect(dataModel).toContain("export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];");
         // The per-table rank-index map is threaded into the facade binding (the
         // `RANK` generic), which constrains `rank`/`rankPage` to declared names.
-        expect(dataModel).toContain("= TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;");
+        // The binding itself lives in `server.ts` — it needs the server package,
+        // and `dataModel.ts` is kept free of it so a client can compile it.
+        expect(server).toContain("= TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;");
     });
 
     it("carries a rankIndex declared on an extension table onto the prefixed table", () => {
@@ -891,7 +894,9 @@ describe("discoverSchema", () => {
             });
         `);
 
-        const dataModel = emitDataModel(discoverSchema(project, schemaPath));
+        const relationSchema = discoverSchema(project, schemaPath);
+        const dataModel = emitDataModel(relationSchema);
+        const server = emitServer({ schema: relationSchema });
 
         // Phantom descriptors + the per-table Relations map.
         expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel>");
@@ -901,11 +906,13 @@ describe("discoverSchema", () => {
 
         // The with-inference machinery binds the shipped generics to this
         // project's DataModel + Relations (the bodies live in
-        // `@lunora/server/data-model`, so they never regenerate here).
-        expect(dataModel).toContain("export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;");
-        expect(dataModel).toContain("export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;");
-        expect(dataModel).toContain("import type {\n    DatabaseReaderFacade as DatabaseReaderFacadeOf,");
-        expect(dataModel).toContain('} from "@lunora/server/data-model";');
+        // `@lunora/server/data-model`, so they never regenerate here). It sits in
+        // `server.ts`, which is the file allowed to need the server package.
+        expect(server).toContain("export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;");
+        expect(server).toContain("export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;");
+        expect(server).toContain("import type {\n    DatabaseReaderFacade as DatabaseReaderFacadeOf,");
+        // The dependency-free property, asserted from the other side.
+        expect(dataModel).not.toContain("@lunora/server");
     });
 
     it("emits an empty Relations entry for tables that declare none", () => {
