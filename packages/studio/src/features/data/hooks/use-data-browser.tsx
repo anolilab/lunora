@@ -2,6 +2,10 @@ import { useLunora } from "@lunora/react";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same wire
+// codec the shard writer stores `__doc__` with, so display and save agree on the
+// encoding rather than studio growing a second, drifting decoder.
+import { decodeWire, encodeWire } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import { useMirroredRef } from "../../../hooks/use-mirrored-ref";
@@ -130,13 +134,17 @@ const META_COLUMNS = new Set<string>(["__doc__", "__id__", "_creationTime", "_id
  * The editable document for a row. Shard rows keep their fields in a `__doc__`
  * JSON column; when present we parse it, otherwise we fall back to the row's own
  * non-meta columns. Used to prefill the edit form.
+ *
+ * `decodeWire` mirrors the codec the shard writer stores with, so a `v.bigint()`
+ * or `v.bytes()` field arrives as its value rather than the raw tagged array. It
+ * is a no-op on a tree with no sentinel, so a plain-JSON document is unchanged.
  */
 const rowDocument = (row: TableRow): Record<string, unknown> => {
     const raw = row["__doc__"];
 
     if (typeof raw === "string") {
         try {
-            const parsed = JSON.parse(raw) as unknown;
+            const parsed = decodeWire(JSON.parse(raw));
 
             if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
                 return parsed as Record<string, unknown>;
@@ -842,7 +850,13 @@ const useDataBrowser = ({
 
         if (op !== "delete") {
             try {
-                parsedDocument = documentText === undefined || documentText.trim() === "" ? {} : (JSON.parse(documentText) as Record<string, unknown>);
+                // The editor's text is the ENCODED document (see `onRowEdit`), so
+                // decode before sending: a `v.bigint()` field goes back over the
+                // wire as a real bigint the writer's validator accepts, instead
+                // of the tagged array it would otherwise reject. No-op for the
+                // plain-JSON documents every other table has.
+                parsedDocument =
+                    documentText === undefined || documentText.trim() === "" ? {} : (decodeWire(JSON.parse(documentText)) as Record<string, unknown>);
             } catch (error) {
                 setWriteError(`Invalid JSON: ${(error as Error).message}`);
 
@@ -1045,7 +1059,15 @@ const useDataBrowser = ({
 
     const onRowEdit = (id: null | string, original: TableRow): void => {
         setWriteError(null);
-        setEditing({ docText: JSON.stringify(rowDocument(original), null, 2), id });
+        // Seed the JSON editor from the ENCODED document, not the decoded one.
+        // The rows now carry real `bigint`/`ArrayBuffer` values (the display
+        // decode above), and `JSON.stringify` throws outright on a bigint and
+        // flattens an ArrayBuffer to `{}` — so a money row would either blow up
+        // the editor or silently offer a lossy document to save back. Encoding
+        // first shows the exact stored form, which `writeRow` decodes on the way
+        // out, making an untouched save byte-identical. `encodeWire` is identity
+        // for JSON-safe data, so an ordinary row's editor text is unchanged.
+        setEditing({ docText: JSON.stringify(encodeWire(rowDocument(original)), null, 2), id });
     };
 
     const onRowDelete = (id: null | string): void => {

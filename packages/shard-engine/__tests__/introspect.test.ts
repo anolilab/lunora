@@ -295,6 +295,57 @@ describe("introspect", () => {
 
             expect(page.columns).toEqual(["__id__", "text", "votes"]);
         });
+
+        // The doc blob is written through the wire codec (`encodeDocJson`), so a
+        // `v.bigint()` / `v.bytes()` column is stored as a tagged array. Display
+        // must go back through the codec, not bare `JSON.parse` — otherwise the
+        // data browser shows `["$lunora.wire$","bigint","1000"]` where an amount
+        // belongs. The money path (`paymentSessions.amountMinor`) is exactly this.
+        it("decodes wire-tagged doc fields rather than surfacing the raw tag", () => {
+            expect.assertions(3);
+
+            database.raw(`CREATE TABLE "sessions" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(
+                `INSERT INTO "sessions" VALUES ('s1', 1, '{"amountMinor":["$lunora.wire$","bigint","1000"],"blob":["$lunora.wire$","bytes","AAEC","ArrayBuffer"],"note":"ok"}')`,
+            );
+
+            const page = readTablePage(database.sql, { table: "sessions" });
+            const row = page.rows[0] as { amountMinor: unknown; blob: unknown; note: unknown };
+
+            expect(row.amountMinor).toBe(1000n);
+            expect(row.blob).toBeInstanceOf(ArrayBuffer);
+            // Untagged siblings are untouched.
+            expect(row.note).toBe("ok");
+        });
+
+        // The fidelity guarantee that makes the decode safe to apply everywhere:
+        // a document with no tagged leaves must come back exactly as before.
+        it("leaves a plain-JSON doc byte-identical through the decode", () => {
+            expect.assertions(2);
+
+            const page = readTablePage(database.sql, { table: "posts" });
+
+            expect(page.columns).toEqual(["id", "_creationTime", "title", "authorId"]);
+            expect(page.rows).toEqual([
+                { _creationTime: 1, authorId: "u1", id: "p1", title: "Hi" },
+                { _creationTime: 2, authorId: "u2", id: "p2", title: "Yo" },
+            ]);
+        });
+
+        // `decodeWire` throws on a malformed tag (an over-long or non-numeric
+        // bigint). `safeParseObject`'s non-throwing contract must hold, so the
+        // page degrades to "unexpanded" instead of failing the whole read.
+        it("falls back to the unexpanded page when a doc carries a malformed tag", () => {
+            expect.assertions(2);
+
+            database.raw(`CREATE TABLE "broken" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(`INSERT INTO "broken" VALUES ('b1', 1, '{"amountMinor":["$lunora.wire$","bigint","not-a-number"]}')`);
+
+            const page = readTablePage(database.sql, { table: "broken" });
+
+            expect(page.columns).toEqual(["id", "_creationTime", "__doc__"]);
+            expect(page.total).toBe(1);
+        });
     });
 
     describe("readTablePage — structured filters", () => {

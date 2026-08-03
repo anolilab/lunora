@@ -1,5 +1,7 @@
 import type { ReactElement } from "react";
 
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules).
+import { decodeWire } from "../../../../../shared/wire-codec";
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -34,6 +36,16 @@ const ALERT_STATES = new Set(["past_due", "unpaid"]);
 /**
  * Read a field whether the row exposes it as a column (global/D1 tables) or
  * nested in the shard row's `__doc__` JSON blob — mirrors the data browser.
+ *
+ * `decodeWire` matches the codec the shard writer stores `__doc__` with, so this
+ * reader can't disagree with the writer about what a stored value means.
+ *
+ * It changes nothing today: the only `v.bigint()` columns in the payment schema
+ * are on `paymentSessions` (`amountMinor` / `capturedMinor` / `refundedMinor`),
+ * and this panel reads only `subscriptions` and `events` — every field it
+ * renders is a string or a number. It is here so that a sessions view, or any
+ * later bigint/bytes column on these tables, cannot silently render a raw
+ * `["$lunora.wire$",…]` tag; `decodeWire` is a no-op on untagged JSON.
  */
 const readField = (row: Row, key: string): unknown => {
     if (row[key] !== undefined) {
@@ -44,7 +56,7 @@ const readField = (row: Row, key: string): unknown => {
 
     if (typeof raw === "string") {
         try {
-            const parsed = JSON.parse(raw) as unknown;
+            const parsed = decodeWire(JSON.parse(raw));
 
             if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
                 return (parsed as Row)[key];

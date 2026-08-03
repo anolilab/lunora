@@ -136,6 +136,15 @@ export const formatCell = (value: unknown): string => {
             return value.toString();
         }
         default: {
+            // A `v.bytes()` column decodes to an ArrayBuffer (or a typed-array
+            // view for a custom scalar), which has no own enumerable keys — so
+            // `JSON.stringify` renders it as a bare `{}`, telling the operator
+            // nothing. Show the size instead; the bytes themselves are not
+            // meaningfully readable in a grid cell.
+            if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+                return `<bytes: ${String(value.byteLength)}>`;
+            }
+
             return JSON.stringify(value);
         }
     }

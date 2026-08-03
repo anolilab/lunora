@@ -1,7 +1,7 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { dispatchByKind, fireAndForget } from "../../src/lib/internal";
+import { dispatchByKind, fireAndForget, formatCell } from "../../src/lib/internal";
 
 const REF: FunctionReference = { __lunoraRef: "messages:list" };
 
@@ -80,5 +80,30 @@ describe("fireAndForget", () => {
         await Promise.resolve();
 
         expect(onError).not.toHaveBeenCalled();
+    });
+});
+
+describe("formatCell", () => {
+    // A `v.bytes()` column decodes to an ArrayBuffer, which has no own
+    // enumerable keys — `JSON.stringify` renders it as a bare `{}`, telling the
+    // operator nothing at all about the cell.
+    it("summarizes byte values by size instead of stringifying them to {}", () => {
+        expect.assertions(3);
+
+        expect(formatCell(new ArrayBuffer(3))).toBe("<bytes: 3>");
+        expect(formatCell(new Uint8Array([1, 2, 3, 4]))).toBe("<bytes: 4>");
+        // A typed array reports its BYTE length, not its element count.
+        expect(formatCell(new Uint32Array([1, 2]))).toBe("<bytes: 8>");
+    });
+
+    it("leaves every other value formatted exactly as before", () => {
+        expect.assertions(6);
+
+        expect(formatCell(null)).toBe("");
+        expect(formatCell(undefined)).toBe("");
+        expect(formatCell(1000n)).toBe("1000");
+        expect(formatCell("text")).toBe("text");
+        expect(formatCell(false)).toBe("false");
+        expect(formatCell({ a: 1 })).toBe('{"a":1}');
     });
 });

@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
+import { decodeDocJson as decodeDocumentJson } from "./do-sql";
 import type { SortDirection } from "./schema-types";
 
 /**
@@ -842,12 +843,24 @@ const MAX_FACET_LIMIT = 200;
 const DOC_COLUMN = "__doc__";
 
 /**
- * JSON-parse to a plain object, or `undefined` when the text isn't a JSON object.
- * @returns the parsed object, or `undefined` when parsing fails or the result is not a plain object
+ * Parse a stored `__doc__` blob to a plain object, or `undefined` when the text
+ * isn't a JSON object.
+ *
+ * Routes through `decodeDocJson` (`./do-sql`) — the decode half of the pair the writer
+ * encodes with — so a `v.bigint()` / `v.bytes()` column reaches display as its
+ * value rather than as the raw tagged form (`["$lunora.wire$","bigint","1000"]`).
+ * `decodeWire` is a no-op on a tree with no sentinel, so a plain-JSON document
+ * (the overwhelming majority) parses exactly as it did under bare `JSON.parse`.
+ *
+ * The non-throwing contract is preserved deliberately: `decodeDocJson` can throw
+ * on a malformed tag (an over-long bigint, >64 nesting), and display code must
+ * degrade to "unexpandable" rather than fail the whole page — so the decode sits
+ * inside the same `try` as the parse.
+ * @returns the parsed object, or `undefined` when parsing/decoding fails or the result is not a plain object
  */
 const safeParseObject = (text: string): Record<string, unknown> | undefined => {
     try {
-        const value = JSON.parse(text) as unknown;
+        const value = decodeDocumentJson(text) as unknown;
 
         return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
     } catch {
