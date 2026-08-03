@@ -6,7 +6,10 @@ import { join } from "node:path";
  */
 export const EXAMPLES = [
     { name: "kanban-board", port: 5273 },
-    { name: "feedback-board", port: 5274 },
+    // Workers AI has no local emulation: the `AI` binding is proxied to
+    // Cloudflare even under `vite dev`, so this one cannot boot without an
+    // authenticated account. See the credential gate in the Playwright config.
+    { name: "feedback-board", needsCloudflareAuth: true, port: 5274 },
     { name: "team-chat", port: 5275 },
     { name: "chess", port: 5276 },
     { name: "tanstack-start", port: 5277 },

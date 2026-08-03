@@ -45,7 +45,26 @@ const selected = process.argv.reduce<string[]>((names, argument, index) => {
     return names;
 }, []);
 
-const wanted = selected.length > 0 ? EXAMPLES.filter(({ name }) => selected.includes(name)) : EXAMPLES;
+const chosen = selected.length > 0 ? EXAMPLES.filter(({ name }) => selected.includes(name)) : EXAMPLES;
+
+/**
+ * Drop the examples that need a Cloudflare account when CI has no token.
+ *
+ * A runner has neither `CLOUDFLARE_API_TOKEN` nor a cached `wrangler login`, so
+ * the Workers AI binding fails the whole suite at boot rather than failing one
+ * project. Locally the example is left in: a developer usually is logged in,
+ * and if not, the plugin's own error names the variable to set.
+ */
+const gated = chosen.filter((example) => !("needsCloudflareAuth" in example) || !isCI || Boolean(process.env.CLOUDFLARE_API_TOKEN));
+
+if (gated.length < chosen.length) {
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[examples-e2e] skipping ${chosen.length - gated.length} example(s) that need a Cloudflare account — set CLOUDFLARE_API_TOKEN to include them.`,
+    );
+}
+
+const wanted = gated;
 
 export default defineConfig({
     expect: { timeout: 10_000 },
@@ -54,7 +73,7 @@ export default defineConfig({
     // specs in parallel on top of that starves slower runners.
     fullyParallel: false,
     outputDir: "./test-results-examples",
-    projects: EXAMPLES.map(({ name, port }) => ({
+    projects: wanted.map(({ name, port }) => ({
         name,
         testMatch: `${name}.spec.ts`,
         use: { ...devices["Desktop Chrome"], baseURL: `http://localhost:${port}` },

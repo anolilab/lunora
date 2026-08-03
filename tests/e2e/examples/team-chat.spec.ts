@@ -19,7 +19,7 @@ const signUp = async (page: Page, name: string): Promise<void> => {
     await page.getByRole("button", { name: "Create an account" }).click();
     await page.getByLabel("Display name").fill(name);
     await page.getByLabel("Email").fill(`${name.toLowerCase()}@example.test`);
-    await page.getByLabel("Password").fill("correct-horse-battery-staple");
+    await page.getByLabel("Password").fill("correct-horse-battery-staple"); // secret-scanner:allow
     await page.getByRole("button", { name: "Create account" }).click();
 
     // The sidebar's "Channels" is a <strong>, not a heading — its input is the

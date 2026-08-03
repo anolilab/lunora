@@ -280,7 +280,7 @@ export const offerDraw = mutation
     .use(rateLimit(mutationLimiter, "move", byPlayer))
     .input({ gameId: v.id("games") })
     .mutation(async ({ args: { gameId }, ctx }): Promise<void> => {
-        const game = await requirePlayer(ctx, gameId);
+        await requirePlayer(ctx, gameId);
 
         ctx.log.info("draw offered", { by: ctx.auth.userId, gameId });
         await ctx.db.patch(gameId, { drawOfferedBy: ctx.auth.userId });
