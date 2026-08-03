@@ -93,6 +93,17 @@ const ControlledDataBrowser = ({ editable, initialShardKey, pageSize }: DataBrow
     );
 };
 
+/**
+ * Type into the table's search box.
+ *
+ * The toolbar is not in the DOM the instant the first row paints, so a
+ * synchronous `getByTestId` here is a race that only loses on a loaded runner —
+ * which is exactly how it failed in CI and never locally.
+ */
+const typeFilter = async (value: string): Promise<void> => {
+    fireEvent.change(await screen.findByTestId("db-filter"), { target: { value } });
+};
+
 const renderBrowser = (mock: MockClientHooks, props: DataBrowserProps = {}): ReactElement => (
     <LunoraProvider client={mock.asClient}>
         <ControlledDataBrowser editable={props.editable} initialShardKey={props.initialShardKey} pageSize={props.pageSize} />
@@ -454,7 +465,7 @@ describe("dataBrowser", () => {
 
         await screen.findByTestId("db-rows");
 
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "WOR" } });
+        await typeFilter("WOR");
 
         // Debounced → re-fetched from the server with the search arg.
         await waitFor(() => {
@@ -490,7 +501,7 @@ describe("dataBrowser", () => {
         await screen.findByTestId("db-rows");
 
         // Server keeps the rows containing "o" (hello, world); sort them ascending locally.
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "o" } });
+        await typeFilter("o");
 
         await waitFor(() => {
             if (rowTexts().length !== 2) {
@@ -808,7 +819,7 @@ describe("dataBrowser — editable", () => {
         await waitFor(() => {
             expect(screen.getAllByTestId("db-row").length).toBeGreaterThan(0);
         });
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "world" } });
+        await typeFilter("world");
 
         // Wait for the debounced server search to narrow the page to just m2.
         await waitFor(() => {
@@ -1550,7 +1561,7 @@ describe("dataBrowser — table switch reset (STUDIO-01)", () => {
         // Type a search for table A, then switch WITHOUT waiting for its 300ms
         // debounce to settle — the reset must discard it outright, not merely win
         // a race against it.
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "alpha" } });
+        await typeFilter("alpha");
         fireEvent.click(screen.getByTestId("apply-shard-switch"));
 
         await screen.findByText("beta-world");
@@ -1998,7 +2009,7 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
         // debounced round trip (state → debounce → onViewChange → URL →
         // `initialSearch`) must be a fixed point: it can echo `initialSearch`
         // back without ever resetting what's on screen.
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hel" } });
+        await typeFilter("hel");
 
         await waitFor(() => {
             const reads = mock.query.mock.calls.filter(
@@ -2015,36 +2026,7 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
         // re-seed reacting to the mirror's own echo of `initialSearch`.
         expect(screen.getByTestId<HTMLInputElement>("db-filter").value).toBe("hel");
 
-        const readCount = (): number =>
-            mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
-
-        /*
-         * Let the reads go quiet before snapshotting.
-         *
-         * The `waitFor` above returns as soon as the *first* "hel" read lands,
-         * and on a loaded runner a legitimate follow-up can still be in flight
-         * at that moment — so snapshotting there made the assertion a race
-         * against machine speed rather than a test of the re-seed loop. A loop
-         * never stops issuing reads, so it can never reach a quiet window;
-         * anything else reaches one almost immediately.
-         */
-        let settledCount = readCount();
-
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-            const before = readCount();
-
-            // eslint-disable-next-line no-await-in-loop -- sequential quiet windows are the point
-            await act(async () => {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 100);
-                });
-            });
-
-            if (readCount() === before) {
-                settledCount = before;
-                break;
-            }
-        }
+        const settledCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
 
         // Wait well past every debounce window; a re-seed loop would keep
         // issuing reads (its own reset re-triggers the mirror, which re-seeds
@@ -2055,7 +2037,9 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
             });
         });
 
-        expect(readCount()).toBe(settledCount);
+        const laterCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        expect(laterCount).toBe(settledCount);
     });
 
     it("keeps mirroring — and never reverts a SECOND change — after the URL has already echoed back the first one", async () => {
@@ -2085,7 +2069,7 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
         // First change: type "hel" and let it debounce-settle, mirror, and echo
         // back through `initialSearch` — the exact round trip the same-table
         // gate exists to survive.
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hel" } });
+        await typeFilter("hel");
 
         await waitFor(
             () => {
@@ -2116,7 +2100,7 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
 
         // Second change: type "hell" — a further, distinct edit made AFTER the
         // first one's echo has already landed as this render's `initialSearch`.
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hell" } });
+        await typeFilter("hell");
 
         await waitFor(
             () => {
