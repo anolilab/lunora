@@ -1,7 +1,7 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { dispatchByKind, fireAndForget, formatCell } from "../../src/lib/internal";
+import { dispatchByKind, fireAndForget, formatCell, jsonRowReplacer } from "../../src/lib/internal";
 
 const REF: FunctionReference = { __lunoraRef: "messages:list" };
 
@@ -107,5 +107,27 @@ describe("formatCell", () => {
         expect(formatCell("text")).toBe("text");
         expect(formatCell(false)).toBe("false");
         expect(formatCell({ a: 1 })).toBe('{"a":1}');
+    });
+});
+
+describe("jsonRowReplacer", () => {
+    // The client decodes the wire codec, so a `v.bigint()` column reaches the
+    // studio as a real bigint — and `JSON.stringify` throws outright on one.
+    // Any row-serializing surface (JSON view, JSON export) dies without this.
+    it("keeps a row with decoded bigint and bytes serializable", () => {
+        expect.assertions(2);
+
+        const row = { amountMinor: 1000n, blob: new ArrayBuffer(3), note: "ok" };
+
+        expect(() => JSON.stringify([row])).toThrow(/BigInt/u);
+        expect(JSON.stringify(row, jsonRowReplacer)).toBe('{"amountMinor":"1000","blob":"<bytes: 3 B>","note":"ok"}');
+    });
+
+    it("leaves every other value untouched", () => {
+        expect.assertions(1);
+
+        const row = { flag: true, nested: { list: [1, "two", null] }, num: 1, text: "x" };
+
+        expect(JSON.stringify(row, jsonRowReplacer)).toBe(JSON.stringify(row));
     });
 });
