@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
@@ -94,11 +94,70 @@ const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoP
 const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
 
 /**
+ * Identifiers currently being followed to their declaration, so a self- or
+ * mutually-referential `const` (`const a = b; const b = a;`) terminates instead
+ * of recursing forever. Parsing is synchronous and single-threaded, so one
+ * module-level set is enough; every entry is removed in a `finally`.
+ */
+const resolvingAliases = new Set<Identifier>();
+
+/**
+ * Follow a bare identifier to the validator expression its `const` holds.
+ *
+ * A validator written once and reused — `const vDocumentDoc = v.object({…})`,
+ * then `.output(v.union(vDocumentDoc, v.null()))` — used to reach the parser as
+ * an `Identifier`, which is not a `CallExpression`, so it fell through to the
+ * `{ kind: "any" }` catch-all and rendered `unknown` in the generated api. That
+ * left consumers narrowing `unknown` to `{}` and erroring on every property
+ * access, and pushed authors toward inlining a 20-field object literal at every
+ * call site rather than keeping one source of truth for a table's public shape.
+ *
+ * Resolved through the SYMBOL (with `getAliasedSymbol` for an import) rather
+ * than `getDefinitionNodes`, so a validator imported from a sibling module
+ * resolves the same as a local one — go-to-definition would stop at the
+ * `ImportSpecifier`.
+ *
+ * Applies to every validator position, not just `.output()`: `.input()` shapes,
+ * table columns, and nested `v.array(vRow)` / `v.optional(vRow)` arguments all
+ * route through {@link parseValidator}, and all degraded the same way.
+ */
+const resolveValidatorAlias = (identifier: Identifier): Expression | undefined => {
+    const symbol = identifier.getSymbol();
+    const declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    return declaration.getInitializer();
+};
+
+/**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
  * Used by both schema discovery and function-args discovery so the rendered
  * TS types are identical regardless of where a validator appears.
  */
 const parseValidator = (expression: Expression): ValidatorIR => {
+    if (Node.isIdentifier(expression) && !resolvingAliases.has(expression)) {
+        const target = resolveValidatorAlias(expression);
+
+        if (target !== undefined) {
+            resolvingAliases.add(expression);
+
+            try {
+                return parseValidator(target);
+            } catch {
+                // The const held something this parser doesn't recognise as a
+                // validator (`v.somethingUnknown(…)` throws below). Alias
+                // resolution is a best-effort improvement over the catch-all, so
+                // a failure keeps the pre-existing behaviour rather than turning
+                // a rendered `unknown` into a hard codegen abort.
+            } finally {
+                resolvingAliases.delete(expression);
+            }
+        }
+    }
+
     if (Node.isCallExpression(expression)) {
         // parseValidatorCall <-> parseValidator/parseObjectShape are mutually
         // recursive, so one forward reference is unavoidable here. Arrow consts
