@@ -187,6 +187,19 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             return new Date(copycat.dateString(input)).getTime();
         }
 
+        case "from": {
+            // `v.from(externalSchema)` delegates to a Standard Schema library, and
+            // there is nothing here to introspect — the seeder cannot know whether
+            // it wants a UUID, an ISO date, or a 20-field object. Falling through
+            // to the generic `copycat.word` would produce a value the very next
+            // `ctx.db.insert` rejects, reported as a validation failure on a row
+            // nobody wrote by hand. Refuse by name instead.
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/seed: column "${fieldName}" is a v.from() validator, whose external Standard Schema the seeder cannot introspect. Give the column a concrete v.* type, or exclude the table from seeding and insert its rows yourself.`,
+            );
+        }
+
         case "id": {
             // Reached only when the FK has no seeded parent — emit a placeholder id.
             return copycat.uuid(input);

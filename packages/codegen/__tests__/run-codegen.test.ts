@@ -1546,6 +1546,38 @@ export default crons;
             expect(result.generated.drizzleShard).not.toContain('sqliteTable("users"');
         });
 
+        it("renders a v.from() column as a typed JSON column", () => {
+            expect.assertions(3);
+
+            // `v.from()` used to be rejected in a column. An external Standard
+            // Schema can describe anything, so there is no narrower SQL type to
+            // pick — it maps to JSON text like `v.object`/`v.record`/`v.union`,
+            // carrying the type recovered from `~standard.types.output` so a
+            // reader of `Doc_*` still sees the real shape instead of `unknown`.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+declare const serverSchema: Std<{ command: string; env: Record<string, string>; }>;
+
+export const schema = defineSchema({
+    agents: defineTable({ label: v.string(), mcpServers: v.from(serverSchema) }),
+});
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.drizzleShard).toContain('mcpServers: text("mcpServers", { mode: "json" })');
+            expect(result.generated.drizzleShard).toContain("$type<{ command: string; env: Record<string, string>; }>()");
+            // The recovered type reaches Doc_agents too, not just the drizzle view.
+            expect(result.generated.dataModel).toContain("mcpServers: { command: string; env: Record<string, string>; }");
+        });
+
         it("output matches committed expected/ files (snapshot)", () => {
             expect.assertions(12);
 

@@ -5589,7 +5589,12 @@ interface DrizzleColumn {
 
 const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
     switch (validator.kind) {
+        // `from` rides with the composites: an external Standard Schema can
+        // describe anything, so there is no narrower SQL type to pick. The
+        // `$type<…>()` annotation carries the type recovered from
+        // `~standard.types.output`, or `unknown` when it could not be rendered.
         case "array":
+        case "from":
         case "object":
         case "record":
         case "union": {
