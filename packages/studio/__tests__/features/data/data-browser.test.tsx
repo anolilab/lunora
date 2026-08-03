@@ -2245,6 +2245,33 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
         expect(JSON.stringify(encodeWire(write[1].doc))).toBe(STORED_DOC_JSON);
     });
 
+    // Valid JSON that is not a DOCUMENT. `[1,2]` was always rejectable by the
+    // old `!Array.isArray` check, but a root-level tag parses as an array and
+    // DECODES to a Uint8Array/Date — neither an array nor null — so an
+    // array-only check would let it through and the writer would persist junk
+    // fields. The guard is by prototype, so both are refused before the write.
+    it.each([
+        ["a bare array", "[1, 2, 3]"],
+        ["a root-level bytes tag", '["$lunora.wire$", "bytes", "AAEC", "ArrayBuffer"]'],
+        ["a root-level date tag", '["$lunora.wire$", "date", 0]'],
+    ])("refuses to write %s as a document", async (_label, text) => {
+        expect.assertions(2);
+
+        const mock = createMoneyClient();
+
+        await openSessions(mock);
+
+        fireEvent.click(screen.getByTestId("db-edit-s1"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
+        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: text } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        const writeError = await screen.findByTestId("db-write-error");
+
+        expect(writeError.textContent).toContain("must be a JSON object");
+        expect(mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+    });
+
     it("leaves a plain-JSON row's editor text unchanged", async () => {
         expect.assertions(1);
 

@@ -131,6 +131,26 @@ const NO_ARGS: Record<string, unknown> = {};
 const META_COLUMNS = new Set<string>(["__doc__", "__id__", "_creationTime", "_id", "id"]);
 
 /**
+ * Narrow a decoded value to a document, or `undefined` when it isn't one.
+ *
+ * Checked by prototype rather than `!Array.isArray`. The two are equivalent for
+ * a bare `JSON.parse`, whose only non-plain root is an array — but a decoded
+ * value can be a `Uint8Array`, `Date` or `Map` (a doc whose root is a tagged
+ * value parses as an array and decodes to one of those), which an array-only
+ * check would wave through. Mirrors `encodeWire`'s own definition of a plain
+ * object, so the two ends agree on what a document is.
+ */
+const asDocument = (value: unknown): Record<string, unknown> | undefined => {
+    if (value === null || typeof value !== "object") {
+        return undefined;
+    }
+
+    const proto = Object.getPrototypeOf(value) as object | null;
+
+    return proto === null || proto === Object.prototype ? (value as Record<string, unknown>) : undefined;
+};
+
+/**
  * The editable document for a row. Shard rows keep their fields in a `__doc__`
  * JSON column; when present we parse it, otherwise we fall back to the row's own
  * non-meta columns. Used to prefill the edit form.
@@ -144,10 +164,10 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
 
     if (typeof raw === "string") {
         try {
-            const parsed = decodeWire(JSON.parse(raw));
+            const parsed = asDocument(decodeWire(JSON.parse(raw)));
 
-            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-                return parsed as Record<string, unknown>;
+            if (parsed !== undefined) {
+                return parsed;
             }
         } catch {
             // fall through to the column-strip path
@@ -855,8 +875,24 @@ const useDataBrowser = ({
                 // wire as a real bigint the writer's validator accepts, instead
                 // of the tagged array it would otherwise reject. No-op for the
                 // plain-JSON documents every other table has.
-                parsedDocument =
-                    documentText === undefined || documentText.trim() === "" ? {} : (decodeWire(JSON.parse(documentText)) as Record<string, unknown>);
+                if (documentText === undefined || documentText.trim() === "") {
+                    parsedDocument = {};
+                } else {
+                    // Validate the decoded root before it becomes a write. The
+                    // editor is free text, so it can hold a non-object (`[1,2]`,
+                    // `"x"`) or a root-level tag that decodes to a Date/bytes —
+                    // neither is a document, and sending one would have the
+                    // writer persist junk fields rather than reject it.
+                    const decoded = asDocument(decodeWire(JSON.parse(documentText)));
+
+                    if (decoded === undefined) {
+                        setWriteError("The document must be a JSON object.");
+
+                        return;
+                    }
+
+                    parsedDocument = decoded;
+                }
             } catch (error) {
                 setWriteError(`Invalid JSON: ${(error as Error).message}`);
 

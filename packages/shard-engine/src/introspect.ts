@@ -856,13 +856,29 @@ const DOC_COLUMN = "__doc__";
  * on a malformed tag (an over-long bigint, >64 nesting), and display code must
  * degrade to "unexpandable" rather than fail the whole page — so the decode sits
  * inside the same `try` as the parse.
+ *
+ * The root must be a PLAIN object, checked by prototype rather than by
+ * `!Array.isArray`. Under bare `JSON.parse` those were equivalent, because the
+ * only non-plain root JSON can produce is an array. Decoding breaks that: a doc
+ * whose root is a tagged value (`["$lunora.wire$","bytes",…]`) parses as an
+ * array but *decodes* to a `Uint8Array`/`Date`/`Map`, which is neither null nor
+ * an array — so an array-only check would now admit it and expansion would
+ * spread it into junk columns (`{"0":1,"1":2,…}` for bytes). Mirrors
+ * `encodeWire`'s own definition of a plain object, so decode and encode agree
+ * on what a document is.
  * @returns the parsed object, or `undefined` when parsing/decoding fails or the result is not a plain object
  */
 const safeParseObject = (text: string): Record<string, unknown> | undefined => {
     try {
         const value = decodeDocumentJson(text) as unknown;
 
-        return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+        if (value === null || typeof value !== "object") {
+            return undefined;
+        }
+
+        const proto = Object.getPrototypeOf(value) as object | null;
+
+        return proto === null || proto === Object.prototype ? (value as Record<string, unknown>) : undefined;
     } catch {
         return undefined;
     }

@@ -332,6 +332,28 @@ describe("introspect", () => {
             ]);
         });
 
+        // A doc whose ROOT is a tagged value parses as an array but decodes to a
+        // Uint8Array / Date / Map — none of which is a document. Under bare
+        // `JSON.parse` the `!Array.isArray` check caught this; after decoding it
+        // does not, and spreading a Uint8Array would emit junk numeric columns
+        // (`{"0":1,"1":2,...}`). The guard is by prototype for exactly this.
+        it.each([
+            ["bytes", `["$lunora.wire$","bytes","AAEC","ArrayBuffer"]`],
+            ["date", `["$lunora.wire$","date",0]`],
+            ["map", `["$lunora.wire$","map",[["a",1]]]`],
+        ])("refuses to expand a doc whose root decodes to a %s", (kind, doc) => {
+            expect.assertions(2);
+
+            database.raw(`CREATE TABLE "root_${kind}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(`INSERT INTO "root_${kind}" VALUES ('r1', 1, '${doc}')`);
+
+            const page = readTablePage(database.sql, { table: `root_${kind}` });
+
+            // Unexpanded — never a row of numeric byte columns.
+            expect(page.columns).toEqual(["id", "_creationTime", "__doc__"]);
+            expect(Object.keys(page.rows[0] as object)).toEqual(["id", "_creationTime", "__doc__"]);
+        });
+
         // `decodeWire` throws on a malformed tag (an over-long or non-numeric
         // bigint). `safeParseObject`'s non-throwing contract must hold, so the
         // page degrades to "unexpanded" instead of failing the whole read.
