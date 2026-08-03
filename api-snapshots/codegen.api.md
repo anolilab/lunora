@@ -1056,7 +1056,7 @@ const emitCrons: (crons: ReadonlyArray<CronJobIR>) => string;
 ### `emitDataModel` (const)
 
 ```ts
-const emitDataModel: (schema: SchemaIR, useUmbrella?: boolean) => string;
+const emitDataModel: (schema: SchemaIR) => string;
 ```
 
 ### `emitDrizzleSchema` (const)
