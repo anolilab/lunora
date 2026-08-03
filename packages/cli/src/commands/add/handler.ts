@@ -6,6 +6,7 @@ import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { TextPrompt } from "../../util/tui-prompts";
@@ -258,20 +259,7 @@ const resolveFeatureItems = async (feature: NormalizedFeature, options: AddFeatu
  * answers. Every writer is idempotent, so the common case is silent.
  */
 const syncLintIgnores = (cwd: string, logger: Logger): void => {
-    const outcomes = applyLintIgnores(cwd, detectLintTools(cwd));
-
-    for (const outcome of outcomes) {
-        if (outcome.status === "created" || outcome.status === "updated") {
-            logger.success(`${outcome.status} ${outcome.path} — ${outcome.tool} now skips Lunora's generated files`);
-        }
-
-        // An ESLint flat config is arbitrary JavaScript, so it is never rewritten
-        // on the user's behalf. Print exactly what to paste instead of leaving
-        // them to discover the omission as a few thousand lint errors.
-        if (outcome.status === "manual" && outcome.snippet !== undefined) {
-            logger.warn(`${outcome.path} needs one entry so ESLint skips Lunora's generated files — add to the exported array:\n${outcome.snippet}`);
-        }
-    }
+    reportLintIgnoreOutcomes(applyLintIgnores(cwd, detectLintTools(cwd)), logger);
 };
 
 /**

@@ -64,6 +64,7 @@ interface BindingRequirement {
     type:
         | "ai"
         | "analytics_engine"
+        | "assets"
         | "browser"
         | "container"
         | "d1"
@@ -112,11 +113,10 @@ interface BindingManifest {
  * setting is something this translation has not caught up with.
  */
 const NON_BINDING_FIELDS = new Set([
+    "$schema",
     "account_id",
-    "assets",
     "compatibility_date",
     "compatibility_flags",
-    "env",
     "keep_vars",
     "main",
     "migrations",
@@ -132,24 +132,6 @@ const NON_BINDING_FIELDS = new Set([
     "workers_dev",
 ]);
 
-/** The binding sections {@link collectBindings} understands. */
-const KNOWN_BINDING_FIELDS = new Set([
-    "ai",
-    "analytics_engine_datasets",
-    "browser",
-    "containers",
-    "d1_databases",
-    "durable_objects",
-    "hyperdrive",
-    "images",
-    "kv_namespaces",
-    "pipelines",
-    "queues",
-    "r2_buckets",
-    "vectorize",
-    "workflows",
-]);
-
 /**
  * The wider config this reads. {@link WranglerConfigShape} covers what the
  * Alchemy translation models; a manifest additionally reports the sections that
@@ -158,6 +140,8 @@ const KNOWN_BINDING_FIELDS = new Set([
 interface ManifestConfigShape extends WranglerConfigShape {
     ai?: { binding?: string };
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
+    /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
+    assets?: { binding?: string; directory?: string };
     browser?: { binding?: string };
     containers?: ReadonlyArray<{ class_name?: string; name?: string }>;
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
@@ -186,83 +170,145 @@ const sqliteClassNames = (config: ManifestConfigShape): ReadonlySet<string> => {
 const compact = (requirement: BindingRequirement): BindingRequirement =>
     Object.fromEntries(Object.entries(requirement).filter(([, value]) => value !== undefined)) as unknown as BindingRequirement;
 
-// eslint-disable-next-line sonarjs/cognitive-complexity -- one linear pass per wrangler section; splitting it would scatter the section↔type mapping this file exists to state
-const collectBindings = (config: ManifestConfigShape): BindingRequirement[] => {
+/**
+ * Every array-shaped wrangler section that maps to one binding per entry, as a
+ * table rather than a loop apiece.
+ *
+ * `binding`/`resource`/`resourceId` name the entry fields each section uses for
+ * the three manifest columns. Keeping it declarative means adding a section is
+ * one row — and lets {@link KNOWN_BINDING_FIELDS} be derived from it, instead of
+ * a third hand-maintained list that can silently fall out of step.
+ */
+const ARRAY_SECTIONS: ReadonlyArray<{
+    bindingKey: string;
+    field: keyof ManifestConfigShape;
+    resourceIdKey?: string;
+    resourceKey?: string;
+    type: BindingRequirement["type"];
+}> = [
+    { bindingKey: "binding", field: "analytics_engine_datasets", resourceKey: "dataset", type: "analytics_engine" },
+    { bindingKey: "name", field: "containers", type: "container" },
+    { bindingKey: "binding", field: "d1_databases", resourceIdKey: "database_id", resourceKey: "database_name", type: "d1" },
+    { bindingKey: "binding", field: "hyperdrive", resourceIdKey: "id", type: "hyperdrive" },
+    { bindingKey: "binding", field: "kv_namespaces", resourceIdKey: "id", type: "kv" },
+    { bindingKey: "binding", field: "pipelines", resourceKey: "pipeline", type: "pipeline" },
+    { bindingKey: "binding", field: "r2_buckets", resourceKey: "bucket_name", type: "r2" },
+    { bindingKey: "binding", field: "vectorize", resourceKey: "index_name", type: "vectorize" },
+    { bindingKey: "binding", field: "workflows", resourceKey: "name", type: "workflow" },
+];
+
+/** Parameterless `{ binding }` sections — the platform capabilities with nothing to provision. */
+const SINGLETON_SECTIONS: ReadonlyArray<{ field: "ai" | "assets" | "browser" | "images"; type: BindingRequirement["type"] }> = [
+    { field: "ai", type: "ai" },
+    { field: "assets", type: "assets" },
+    { field: "browser", type: "browser" },
+    { field: "images", type: "images" },
+];
+
+/** The binding sections this module understands, derived from the tables above so the three can never disagree. */
+const KNOWN_BINDING_FIELDS = new Set<string>([
+    ...ARRAY_SECTIONS.map((section) => section.field as string),
+    ...SINGLETON_SECTIONS.map((section) => section.field),
+    "durable_objects",
+    "queues",
+]);
+
+const readString = (entry: Record<string, unknown>, key: string | undefined): string | undefined => {
+    const value = key === undefined ? undefined : entry[key];
+
+    return typeof value === "string" && value !== "" ? value : undefined;
+};
+
+/** The table-driven sections: one binding per array entry. */
+const collectArrayBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
     const out: BindingRequirement[] = [];
+
+    for (const section of ARRAY_SECTIONS) {
+        for (const raw of (config[section.field] as ReadonlyArray<Record<string, unknown>> | undefined) ?? []) {
+            const binding = readString(raw, section.bindingKey);
+
+            // A section entry with no binding name has nothing a Worker can read
+            // off `env`. Emitting `{"binding": ""}` would hand an IaC program a
+            // resource it cannot wire, so it is reported instead — the same
+            // "surface it, never invent it" rule the `unknown` list follows.
+            if (binding === undefined) {
+                unnamed.push(section.field);
+                continue;
+            }
+
+            out.push({
+                binding,
+                className: readString(raw, "class_name"),
+                resource: readString(raw, section.resourceKey),
+                resourceId: readString(raw, section.resourceIdKey),
+                type: section.type,
+            });
+        }
+    }
+
+    return out;
+};
+
+/** Durable Objects — the only section whose storage mode is declared elsewhere (`migrations`). */
+const collectDurableObjectBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
     const sqlite = sqliteClassNames(config);
-
-    for (const entry of config.d1_databases ?? []) {
-        out.push({ binding: entry.binding ?? "", resource: entry.database_name, resourceId: entry.database_id, type: "d1" });
-    }
-
-    for (const entry of config.r2_buckets ?? []) {
-        out.push({ binding: entry.binding ?? "", resource: entry.bucket_name, type: "r2" });
-    }
-
-    for (const entry of config.kv_namespaces ?? []) {
-        out.push({ binding: entry.binding ?? "", resourceId: entry.id, type: "kv" });
-    }
+    const out: BindingRequirement[] = [];
 
     for (const entry of config.durable_objects?.bindings ?? []) {
-        const className = entry.class_name;
+        if (entry.name === undefined || entry.name === "") {
+            unnamed.push("durable_objects");
+            continue;
+        }
 
         out.push({
-            binding: entry.name ?? "",
-            className,
+            binding: entry.name,
+            className: entry.class_name,
             // Only meaningful for a class this Worker defines; a `script_name`
             // binding points at another Worker's class, whose storage mode is
             // that Worker's business.
-            sqlite: entry.script_name === undefined && className !== undefined ? sqlite.has(className) : undefined,
+            sqlite: entry.script_name === undefined && entry.class_name !== undefined ? sqlite.has(entry.class_name) : undefined,
             type: "durable_object",
         });
     }
 
-    for (const entry of config.vectorize ?? []) {
-        out.push({ binding: entry.binding ?? "", resource: entry.index_name, type: "vectorize" });
-    }
+    return out;
+};
 
-    for (const entry of config.hyperdrive ?? []) {
-        out.push({ binding: entry.binding ?? "", resourceId: entry.id, type: "hyperdrive" });
-    }
+/** Queues — the one section producing two kinds, only one of which is an `env` binding. */
+const collectQueueBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
+    const out: BindingRequirement[] = [];
 
     for (const entry of config.queues?.producers ?? []) {
-        out.push({ binding: entry.binding ?? "", resource: entry.queue, type: "queue_producer" });
+        if (entry.binding === undefined || entry.binding === "") {
+            unnamed.push("queues.producers");
+            continue;
+        }
+
+        out.push({ binding: entry.binding, resource: entry.queue, type: "queue_producer" });
     }
 
     // A consumer has no `env` binding — it is a subscription. `binding` carries
     // the queue name so the entry still has a stable identity to sort and diff on.
     for (const entry of config.queues?.consumers ?? []) {
-        out.push({ binding: entry.queue ?? "", resource: entry.queue, type: "queue_consumer" });
-    }
-
-    for (const entry of config.workflows ?? []) {
-        out.push({ binding: entry.binding ?? "", className: entry.class_name, resource: entry.name, type: "workflow" });
-    }
-
-    for (const entry of config.containers ?? []) {
-        out.push({ binding: entry.name ?? "", className: entry.class_name, type: "container" });
-    }
-
-    for (const entry of config.analytics_engine_datasets ?? []) {
-        out.push({ binding: entry.binding ?? "", resource: entry.dataset, type: "analytics_engine" });
-    }
-
-    for (const [section, type] of [
-        [config.ai, "ai"],
-        [config.browser, "browser"],
-        [config.images, "images"],
-    ] as const) {
-        if (section?.binding !== undefined) {
-            out.push({ binding: section.binding, type });
+        if (entry.queue === undefined || entry.queue === "") {
+            unnamed.push("queues.consumers");
+            continue;
         }
-    }
 
-    for (const entry of config.pipelines ?? []) {
-        out.push({ binding: entry.binding ?? "", resource: entry.pipeline, type: "pipeline" });
+        out.push({ binding: entry.queue, resource: entry.queue, type: "queue_consumer" });
     }
 
     return out;
 };
+
+const collectBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => [
+    ...collectArrayBindings(config, unnamed),
+    ...collectDurableObjectBindings(config, unnamed),
+    ...collectQueueBindings(config, unnamed),
+    ...SINGLETON_SECTIONS.filter((section) => config[section.field]?.binding !== undefined).map((section) => {
+        return { binding: config[section.field]?.binding as string, type: section.type };
+    }),
+];
 
 /**
  * Build the manifest for a parsed `wrangler.jsonc`.
@@ -273,13 +319,18 @@ const collectBindings = (config: ManifestConfigShape): BindingRequirement[] => {
  * @returns the requirements document.
  */
 const buildBindingManifest = (config: ManifestConfigShape): BindingManifest => {
-    const unknown = Object.keys(config)
-        .filter((field) => !NON_BINDING_FIELDS.has(field) && !KNOWN_BINDING_FIELDS.has(field))
-        .toSorted((a, b) => a.localeCompare(b));
-
-    const bindings = collectBindings(config)
+    // Entries this run could not name. Reported alongside the unmodelled
+    // sections, for the same reason: an under-provisioned deploy must be visible
+    // here rather than at runtime.
+    const unnamed: string[] = [];
+    const bindings = collectBindings(config, unnamed)
         .map((requirement) => compact(requirement))
         .toSorted((a, b) => a.type.localeCompare(b.type) || a.binding.localeCompare(b.binding));
+
+    const unknown = [
+        ...Object.keys(config).filter((field) => !NON_BINDING_FIELDS.has(field) && !KNOWN_BINDING_FIELDS.has(field)),
+        ...unnamed.map((field) => `${field} (entry with no binding name)`),
+    ].toSorted((a, b) => a.localeCompare(b));
 
     return {
         bindings,

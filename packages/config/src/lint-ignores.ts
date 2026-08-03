@@ -39,10 +39,11 @@
  */
 /* eslint-enable jsdoc/check-indentation */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
 
+import { readProjectDependencyNames } from "./detect-framework";
 import { applyModify } from "./jsonc-edit";
 
 /**
@@ -84,70 +85,113 @@ interface LintIgnoreOutcome {
     tool: LintTool;
 }
 
-/** Config filenames that identify a tool even when its dependency is not declared (a global install, or a monorepo root dep). */
-const CONFIG_FILES: Record<LintTool, ReadonlyArray<string>> = {
-    biome: ["biome.json", "biome.jsonc"],
-    eslint: ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"],
-    oxlint: [".oxlintrc.json"],
-    prettier: [
-        ".prettierrc",
-        ".prettierrc.json",
-        ".prettierrc.js",
-        ".prettierrc.mjs",
-        ".prettierrc.cjs",
-        "prettier.config.js",
-        "prettier.config.mjs",
-        "prettier.config.cjs",
-    ],
+/**
+ * Per-tool facts, in one table so adding a fifth tool is one entry rather than
+ * an edit to four parallel maps that must be kept in step. `apply` is attached
+ * below, after the writers are declared.
+ *
+ * `shadowable` marks a tool whose config REPLACES rather than merges with one
+ * further up the tree — see {@link resolveConfigTarget} for why that decides
+ * whether a missing config may be created.
+ */
+const TOOLS: Record<LintTool, { configFiles: ReadonlyArray<string>; packages: ReadonlyArray<string>; shadowable: boolean }> = {
+    biome: { configFiles: ["biome.json", "biome.jsonc"], packages: ["@biomejs/biome"], shadowable: true },
+    eslint: {
+        configFiles: ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"],
+        packages: ["eslint"],
+        shadowable: true,
+    },
+    oxlint: { configFiles: [".oxlintrc.json"], packages: ["oxlint"], shadowable: true },
+    prettier: {
+        // `.prettierignore` only ever ADDS exclusions and is resolved from the
+        // working directory rather than by walking up, so a nested one cannot
+        // disable anything an outer one enforced.
+        configFiles: [
+            ".prettierrc",
+            ".prettierrc.json",
+            ".prettierrc.js",
+            ".prettierrc.mjs",
+            ".prettierrc.cjs",
+            "prettier.config.js",
+            "prettier.config.mjs",
+            "prettier.config.cjs",
+        ],
+        packages: ["prettier"],
+        shadowable: false,
+    },
 };
 
-/** Package names that identify a tool from `package.json`. */
-const TOOL_PACKAGES: Record<LintTool, ReadonlyArray<string>> = {
-    biome: ["@biomejs/biome"],
-    eslint: ["eslint"],
-    oxlint: ["oxlint"],
-    prettier: ["prettier"],
-};
+const ALL_TOOLS = Object.keys(TOOLS) as ReadonlyArray<LintTool>;
 
-const ALL_TOOLS: ReadonlyArray<LintTool> = ["biome", "eslint", "oxlint", "prettier"];
+/** The first existing config file for `tool` in `directory`, or `undefined`. */
+const configFileIn = (directory: string, tool: LintTool): string | undefined =>
+    TOOLS[tool].configFiles.map((name) => join(directory, name)).find((path) => existsSync(path));
 
-/** Every declared dependency name in `projectRoot`'s manifest, across all dependency fields. */
-const declaredPackages = (projectRoot: string): ReadonlySet<string> => {
-    const manifestPath = join(projectRoot, "package.json");
+/**
+ * Walk up from `projectRoot` looking for `tool`'s config, stopping at the
+ * repository boundary (a directory holding `.git`) or the filesystem root.
+ *
+ * The boundary matters: without it a lone project nested anywhere under a
+ * developer's home directory could bind to an unrelated config far above it.
+ */
+const findConfigFileUpward = (projectRoot: string, tool: LintTool): string | undefined => {
+    let directory = projectRoot;
 
-    if (!existsSync(manifestPath)) {
-        return new Set();
-    }
+    for (;;) {
+        const found = configFileIn(directory, tool);
 
-    try {
-        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
-        const names = new Set<string>();
-
-        for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
-            const section = manifest[field];
-
-            if (section !== null && typeof section === "object") {
-                for (const name of Object.keys(section)) {
-                    names.add(name);
-                }
-            }
+        if (found !== undefined) {
+            return found;
         }
 
-        // A `prettier` key in package.json IS a prettier config, and plenty of
-        // projects configure it there instead of a dotfile.
-        if (manifest["prettier"] !== undefined) {
-            names.add("prettier");
+        if (existsSync(join(directory, ".git"))) {
+            return undefined;
         }
 
-        return names;
-    } catch {
-        return new Set();
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return undefined;
+        }
+
+        directory = parent;
     }
 };
 
-/** The first existing config file for `tool`, or `undefined`. */
-const findConfigFile = (projectRoot: string, tool: LintTool): string | undefined =>
-    CONFIG_FILES[tool].map((name) => join(projectRoot, name)).find((path) => existsSync(path));
+/**
+ * Where `tool`'s ignores should go, and whether the file may be created.
+ *
+ * The distinction exists because of monorepos. `detectLintTools` fires on a
+ * declared dependency alone — deliberately — but in a workspace the dependency
+ * is declared in the package while the config lives at the root. Creating a
+ * fresh config in the package directory does not add ignores there, it
+ * **shadows the root**: ESLint 9 stops at the first flat config it finds walking
+ * up, so a package-level file containing only `ignores` and no rules silently
+ * switches off everything the root enforced — and lint still exits 0. Biome and
+ * oxlint replace the outer rule set the same way.
+ *
+ * So a config found further up is reported for the user to extend, never
+ * duplicated downward. Creation is reserved for the case it was meant for: a
+ * standalone project with no config anywhere above it.
+ */
+const resolveConfigTarget = (projectRoot: string, tool: LintTool): { action: "create" | "extend" | "report"; path: string } => {
+    const local = configFileIn(projectRoot, tool);
+
+    if (local !== undefined) {
+        return { action: "extend", path: local };
+    }
+
+    // A `projectRoot` that holds `.git` IS a repository root, so nothing above it
+    // belongs to this project — checked here because the upward walk starts at
+    // the parent and would otherwise step straight over the boundary.
+    const isRepositoryRoot = existsSync(join(projectRoot, ".git"));
+    const inherited = TOOLS[tool].shadowable && !isRepositoryRoot ? findConfigFileUpward(dirname(projectRoot), tool) : undefined;
+
+    // The canonical filename for a fresh config is the first the tool lists.
+    const [preferred = ""] = TOOLS[tool].configFiles;
+
+    return inherited === undefined ? { action: "create", path: join(projectRoot, preferred) } : { action: "report", path: inherited };
+};
 
 /**
  * Which linters/formatters this project already uses, by declared dependency or
@@ -159,9 +203,25 @@ const findConfigFile = (projectRoot: string, tool: LintTool): string | undefined
  * tool the project genuinely runs.
  */
 const detectLintTools = (projectRoot: string): LintTool[] => {
-    const packages = declaredPackages(projectRoot);
+    const packages = readProjectDependencyNames(projectRoot);
+    // A `prettier` key in package.json IS a prettier config, and plenty of
+    // projects configure it there instead of a dotfile. Kept local rather than
+    // pushed into the shared dependency reader — it is a prettier fact, not a
+    // dependency fact.
+    const configuresPrettierInManifest = (): boolean => {
+        try {
+            return (JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as Record<string, unknown>)["prettier"] !== undefined;
+        } catch {
+            return false;
+        }
+    };
 
-    return ALL_TOOLS.filter((tool) => TOOL_PACKAGES[tool].some((name) => packages.has(name)) || findConfigFile(projectRoot, tool) !== undefined);
+    return ALL_TOOLS.filter(
+        (tool) =>
+            TOOLS[tool].packages.some((name) => packages.has(name)) ||
+            configFileIn(projectRoot, tool) !== undefined ||
+            (tool === "prettier" && configuresPrettierInManifest()),
+    );
 };
 
 /** Marker comment so a re-run can tell its own block from lines the user added. */
@@ -217,9 +277,27 @@ const mergeJsonArray = (path: string, pointer: ReadonlyArray<string>, values: Re
     return { path, status: preexisting ? "updated" : "created", tool };
 };
 
+/** The ignore entries as a config fragment, for a config this module will not edit itself. */
+const jsonIgnoresSnippet = (pointer: string, values: ReadonlyArray<string>): string => `"${pointer}": [${values.map((value) => `"${value}"`).join(", ")}]`;
+
+const biomeIgnoresSnippet = (): string =>
+    jsonIgnoresSnippet(
+        "files.includes",
+        LUNORA_IGNORED_PATHS.map((entry) => `!${entry.endsWith("/") ? `${entry}**` : entry}`),
+    );
+
 /** Create or extend `.oxlintrc.json`'s `ignorePatterns` (gitignore-style, per oxlint's schema). */
-const applyOxlint = (projectRoot: string): LintIgnoreOutcome =>
-    mergeJsonArray(join(projectRoot, ".oxlintrc.json"), ["ignorePatterns"], LUNORA_IGNORED_PATHS, "oxlint");
+const applyOxlint = (projectRoot: string): LintIgnoreOutcome => {
+    const { action, path } = resolveConfigTarget(projectRoot, "oxlint");
+
+    // Same shadowing rule as biome/eslint: a nested `.oxlintrc.json` replaces the
+    // rule set an ancestor config declared rather than merging with it.
+    if (action === "report") {
+        return { path, snippet: jsonIgnoresSnippet("ignorePatterns", LUNORA_IGNORED_PATHS), status: "manual", tool: "oxlint" };
+    }
+
+    return mergeJsonArray(path, ["ignorePatterns"], LUNORA_IGNORED_PATHS, "oxlint");
+};
 
 /**
  * Extend Biome's exclusions.
@@ -231,9 +309,16 @@ const applyOxlint = (projectRoot: string): LintIgnoreOutcome =>
  * negations to subtract from.
  */
 const applyBiome = (projectRoot: string): LintIgnoreOutcome => {
-    const path = findConfigFile(projectRoot, "biome") ?? join(projectRoot, "biome.json");
+    const { action, path } = resolveConfigTarget(projectRoot, "biome");
+
+    // Inherited from an ancestor: extending it would reach outside the project we
+    // were asked about, and copying it down would shadow it. Report instead.
+    if (action === "report") {
+        return { path, snippet: biomeIgnoresSnippet(), status: "manual", tool: "biome" };
+    }
+
     // Captured BEFORE the write, like `mergeJsonArray` — see the note there.
-    const preexisting = existsSync(path);
+    const preexisting = action === "extend";
     const text = preexisting ? readFileSync(path, "utf8") : "{}\n";
     const files = ((parseJsonc(text) ?? {}) as Record<string, unknown>)["files"] ?? {};
     const filesRecord = files as Record<string, unknown>;
@@ -274,17 +359,21 @@ const eslintIgnoresSnippet = (): string =>
  * creating one would leave behind something that looks like it works.
  */
 const applyEslint = (projectRoot: string): LintIgnoreOutcome => {
-    const existing = findConfigFile(projectRoot, "eslint");
+    const { action, path: targetPath } = resolveConfigTarget(projectRoot, "eslint");
     const snippet = eslintIgnoresSnippet();
 
-    if (existing !== undefined) {
-        const text = readFileSync(existing, "utf8");
+    if (action !== "create") {
+        const text = readFileSync(targetPath, "utf8");
         const status: LintIgnoreStatus = LUNORA_IGNORED_PATHS.every((entry) => text.includes(entry)) ? "unchanged" : "manual";
 
-        return { path: existing, ...(status === "manual" ? { snippet } : {}), status, tool: "eslint" };
+        return { path: targetPath, ...(status === "manual" ? { snippet } : {}), status, tool: "eslint" };
     }
 
-    const path = join(projectRoot, "eslint.config.js");
+    // `.mjs`, not `.js`: the body is ESM, and a project without `"type": "module"`
+    // in its manifest would have Node load a `.js` config as CommonJS and ESLint
+    // die on `Unexpected token 'export'`. The `.mjs` extension is correct either
+    // way, so it needs no manifest inspection to stay right.
+    const path = join(projectRoot, "eslint.config.mjs");
 
     writeFileSync(
         path,

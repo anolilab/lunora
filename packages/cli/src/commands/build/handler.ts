@@ -56,12 +56,14 @@ interface BuildCommandOptions {
  * manifest: an empty requirements document reads as "this Worker needs nothing",
  * which an IaC program would act on by provisioning nothing.
  */
-const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): string | undefined => {
+const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): { error?: string } => {
     const wranglerPath = findWranglerFile(projectRoot);
     const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<ManifestConfigShape>(wranglerPath).parsed;
 
     if (parsed === undefined) {
-        return `--emit-bindings found no readable wrangler config in ${projectRoot}. The manifest is derived from it, and an empty one would tell a deployer this Worker needs nothing.`;
+        return {
+            error: `--emit-bindings found no readable wrangler config in ${projectRoot}. The manifest is derived from it, and an empty one would tell a deployer this Worker needs nothing.`,
+        };
     }
 
     const manifest = buildBindingManifest(parsed);
@@ -82,7 +84,7 @@ const writeBindingManifest = (projectRoot: string, target: string, logger: Logge
         );
     }
 
-    return undefined;
+    return {};
 };
 
 /**
@@ -112,7 +114,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<DeployComm
     options.logger.success(`build complete — bundle written to ${outDirectory}`);
 
     if (options.emitBindings !== undefined) {
-        const error = writeBindingManifest(options.cwd ?? process.cwd(), options.emitBindings, options.logger);
+        const { error } = writeBindingManifest(options.cwd ?? process.cwd(), options.emitBindings, options.logger);
 
         if (error !== undefined) {
             options.logger.error(error);

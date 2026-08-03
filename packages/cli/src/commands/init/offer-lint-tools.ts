@@ -17,6 +17,7 @@
  */
 import type { LintIgnoreOutcome, LintTool } from "@lunora/config";
 
+import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 
 /** One choice in the multi-select. */
@@ -63,17 +64,7 @@ const offerLintTools = async (deps: LintToolOfferDeps): Promise<LintIgnoreOutcom
 
     const outcomes = deps.apply(chosen);
 
-    for (const outcome of outcomes) {
-        if (outcome.status === "created" || outcome.status === "updated") {
-            deps.logger.success(`${outcome.status} ${outcome.path}`);
-        }
-
-        // Only reachable when the template shipped an ESLint config of its own —
-        // it is arbitrary JavaScript, so it is reported rather than rewritten.
-        if (outcome.status === "manual" && outcome.snippet !== undefined) {
-            deps.logger.warn(`Add this to the array exported by ${outcome.path} so ESLint skips Lunora's generated files:\n${outcome.snippet}`);
-        }
-    }
+    reportLintIgnoreOutcomes(outcomes, deps.logger);
 
     return outcomes;
 };

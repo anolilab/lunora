@@ -126,13 +126,7 @@ interface InitCommandOptions {
     interactive?: boolean;
 
     /**
-     * Inject the offer's prompts (tests). When set, the offer is treated as
-     * interactive regardless of TTY, and these drive the feature multi-select,
-     * the auth-provider sub-select, and the storage bucket-name text input.
-     */
-
-    /**
-     * Test seam for the lint/formatter multi-select. Separate from `prompt`
+     * Test seam for the lint/formatter multi-select. Separate from {@link prompt}
      * because that one is pinned to the feature-offer's value union — reusing it
      * here would only typecheck through a cast.
      */
@@ -151,6 +145,12 @@ interface InitCommandOptions {
 
     /** Probe for which package managers are installed (tests). Defaults to a real `&lt;pm> --version` check. */
     packageManagerProbe?: PackageManagerProbe;
+
+    /**
+     * Inject the offer's prompts (tests). When set, the offer is treated as
+     * interactive regardless of TTY, and these drive the feature multi-select,
+     * the auth-provider sub-select, and the storage bucket-name text input.
+     */
     prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
 
     /**
@@ -1157,6 +1157,14 @@ const offerIsInteractive = (options: InitCommandOptions): boolean =>
  * in, and detection is what pre-selects the prompt.
  */
 const offerLintIgnores = async (projectDirectory: string, interactive: boolean, options: InitCommandOptions): Promise<void> => {
+    // Every other post-scaffold step carries its own dry-run guard; this one
+    // writes to the filesystem, so it needs the same. `--in-place --dry-run` is
+    // the case that makes it matter: the target is the user's existing repo, not
+    // a directory this run created, so an unguarded write lands in real work.
+    if (options.dryRun === true) {
+        return;
+    }
+
     await offerLintTools({
         apply: (tools) => applyLintIgnores(projectDirectory, tools),
         detected: detectLintTools(projectDirectory),

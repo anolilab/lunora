@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -146,17 +146,20 @@ describe("applyLintIgnores", () => {
         expect(files.ignore).toContain("lunora/_generated/");
     });
 
-    it("creates a flat eslint config when the project has none", () => {
-        expect.assertions(3);
+    it("creates a flat eslint config when the project has none, as .mjs", () => {
+        expect.assertions(4);
 
         const [outcome] = applyLintIgnores(workdir, ["eslint"]);
 
         expect(outcome?.status).toBe("created");
 
-        const text = readFileSync(join(workdir, "eslint.config.js"), "utf8");
+        const text = readFileSync(join(workdir, "eslint.config.mjs"), "utf8");
 
         expect(text).toContain("ignores:");
         expect(text).toContain('"lunora/_generated/**"');
+        // The body is ESM. A `.js` config in a package without `"type": "module"`
+        // is loaded as CommonJS, and ESLint dies on `Unexpected token 'export'`.
+        expect(existsSync(join(workdir, "eslint.config.js"))).toBe(false);
     });
 
     it("refuses to rewrite an existing eslint config, and hands back the snippet", () => {
@@ -173,6 +176,71 @@ describe("applyLintIgnores", () => {
         expect(outcome?.status).toBe("manual");
         expect(outcome?.snippet).toContain("ignores:");
         expect(readFileSync(join(workdir, "eslint.config.js"), "utf8")).toBe(original);
+    });
+
+    it("never shadows a monorepo root config by creating a nested one", () => {
+        expect.assertions(6);
+
+        // The damaging case. In a workspace the dependency is declared in the
+        // package while the config lives at the root, and `detectLintTools` fires
+        // on the dependency alone. Creating a package-level config here does not
+        // add ignores — it SHADOWS the root: ESLint 9 stops at the first flat
+        // config walking up, so a file holding only `ignores` and no rules
+        // silently switches off everything the root enforced, and lint exits 0.
+        // Biome and oxlint replace an outer rule set the same way.
+        mkdirSync(join(workdir, ".git"), { recursive: true });
+        writeFileSync(join(workdir, "eslint.config.mjs"), "export default [];\n", "utf8");
+        writeFileSync(join(workdir, "biome.json"), "{}\n", "utf8");
+        writeFileSync(join(workdir, ".oxlintrc.json"), "{}\n", "utf8");
+
+        const packageDirectory = join(workdir, "apps", "web");
+
+        mkdirSync(packageDirectory, { recursive: true });
+        writeFileSync(
+            join(packageDirectory, "package.json"),
+            JSON.stringify({ devDependencies: { "@biomejs/biome": "^2", eslint: "^9", oxlint: "^1" } }),
+            "utf8",
+        );
+
+        const outcomes = applyLintIgnores(packageDirectory, ["biome", "eslint", "oxlint"]);
+
+        for (const outcome of outcomes) {
+            expect(outcome.status).toBe("manual");
+        }
+
+        expect(existsSync(join(packageDirectory, "eslint.config.mjs"))).toBe(false);
+        expect(existsSync(join(packageDirectory, "biome.json"))).toBe(false);
+        expect(existsSync(join(packageDirectory, ".oxlintrc.json"))).toBe(false);
+    });
+
+    it("stops the upward search at the repository boundary", () => {
+        expect.assertions(2);
+
+        // Without a boundary a project nested anywhere under a developer's home
+        // directory could bind to an unrelated config far above it.
+        writeFileSync(join(workdir, "eslint.config.mjs"), "export default [];\n", "utf8");
+
+        const repository = join(workdir, "repo");
+
+        mkdirSync(join(repository, ".git"), { recursive: true });
+        writeFileSync(join(repository, "package.json"), JSON.stringify({ devDependencies: { eslint: "^9" } }), "utf8");
+
+        const [outcome] = applyLintIgnores(repository, ["eslint"]);
+
+        expect(outcome?.status).toBe("created");
+        expect(existsSync(join(repository, "eslint.config.mjs"))).toBe(true);
+    });
+
+    it("still extends a config that lives in the project directory itself", () => {
+        expect.assertions(2);
+
+        // The shadowing guard must not block the ordinary single-repo case.
+        writeFileSync(join(workdir, ".oxlintrc.json"), JSON.stringify({ rules: { eqeqeq: "error" } }, undefined, 2), "utf8");
+
+        const [outcome] = applyLintIgnores(workdir, ["oxlint"]);
+
+        expect(outcome?.status).toBe("updated");
+        expect(readJson(".oxlintrc.json")["ignorePatterns"]).toStrictEqual([...LUNORA_IGNORED_PATHS]);
     });
 
     it("reports an existing eslint config that already lists the paths as unchanged", () => {

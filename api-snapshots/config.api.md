@@ -1445,7 +1445,7 @@ interface BindingRequirement {
     resource?: string;
     resourceId?: string;
     sqlite?: boolean;
-    type: "ai" | "analytics_engine" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "vectorize" | "workflow";
+    type: "ai" | "analytics_engine" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "vectorize" | "workflow";
 }
 ```
 
@@ -1477,6 +1477,10 @@ interface ManifestConfigShape extends WranglerConfigShape {
         binding?: string;
         dataset?: string;
     }>;
+    assets?: {
+        binding?: string;
+        directory?: string;
+    };
     browser?: {
         binding?: string;
     };

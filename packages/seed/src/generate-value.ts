@@ -196,7 +196,8 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             // nobody wrote by hand. Refuse by name instead.
             throw new LunoraError(
                 "INTERNAL",
-                `@lunora/seed: column "${fieldName}" is a v.from() validator, whose external Standard Schema the seeder cannot introspect. Give the column a concrete v.* type, or exclude the table from seeding and insert its rows yourself.`,
+                `@lunora/seed: column "${fieldName}" is a v.from() validator, whose external Standard Schema the seeder cannot introspect to invent a conforming value. ` +
+                    `Supply one via \`overrides\` (\`{ <table>: { ${fieldName}: … } }\`), restrict the run with \`only\` so the table is skipped, or give the column a concrete v.* type.`,
             );
         }
 

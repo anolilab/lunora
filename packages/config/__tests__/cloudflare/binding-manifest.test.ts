@@ -66,6 +66,52 @@ describe("buildBindingManifest", () => {
         expect(manifest.bindings).toStrictEqual([]);
     });
 
+    it("says nothing about the settings every real wrangler config carries", () => {
+        expect.assertions(1);
+
+        // `$schema` heads every scaffolded `wrangler.jsonc` in this repo. Reporting
+        // it as unmodelled on every single run trains the user to ignore the one
+        // signal the design depends on.
+        const config = {
+            $schema: "node_modules/wrangler/config-schema.json",
+            compatibility_date: "2026-04-07",
+            main: "src/index.ts",
+            name: "app",
+            observability: { enabled: true },
+        } as unknown as ManifestConfigShape;
+
+        expect(buildBindingManifest(config).unknown).toStrictEqual([]);
+    });
+
+    it("models the assets binding, and reports per-environment overrides it does not", () => {
+        expect.assertions(2);
+
+        // `assets` carries a real `env` binding and used to be dropped as a
+        // non-binding setting. `env.<name>` genuinely is not modelled — so it has
+        // to be reported, not silently ignored, or a config that declares all its
+        // real bindings under `env.production` yields a manifest describing none.
+        const config = {
+            assets: { binding: "ASSETS", directory: "./public" },
+            env: { production: { d1_databases: [{ binding: "DB" }] } },
+        } as unknown as ManifestConfigShape;
+        const manifest = buildBindingManifest(config);
+
+        expect(manifest.bindings).toStrictEqual([{ binding: "ASSETS", type: "assets" }]);
+        expect(manifest.unknown).toStrictEqual(["env"]);
+    });
+
+    it("reports an entry with no binding name rather than inventing one", () => {
+        expect.assertions(2);
+
+        // `{"binding": ""}` in a document whose whole purpose is being consumed by
+        // an IaC program is the same failure as dropping it, wearing a different
+        // hat — the program gets a resource it cannot wire to anything.
+        const manifest = buildBindingManifest({ r2_buckets: [{ bucket_name: "orphan" }, { binding: "FILES", bucket_name: "files" }] });
+
+        expect(manifest.bindings).toStrictEqual([{ binding: "FILES", resource: "files", type: "r2" }]);
+        expect(manifest.unknown).toStrictEqual(["r2_buckets (entry with no binding name)"]);
+    });
+
     it("lists var NAMES but never their values", () => {
         expect.assertions(1);
 

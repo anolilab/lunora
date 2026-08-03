@@ -182,3 +182,34 @@ describe("generateValue — time-named number columns", () => {
         expect(generateValue(v.number(), "createdAt", "same-input", NOW)).toBe(generateValue(v.number(), "createdAt", "same-input", NOW));
     });
 });
+
+describe("generateValue — v.from()", () => {
+    const fake = {
+        "~standard": {
+            validate: (value: unknown) => {
+                return { value };
+            },
+            vendor: "fake",
+            version: 1 as const,
+        },
+    };
+
+    it("refuses by name instead of generating a value that fails on insert", () => {
+        expect.assertions(2);
+
+        // There is nothing to introspect: the seeder cannot know whether the
+        // external schema wants a UUID, an ISO date, or a 20-field object. The
+        // generic word fallback would produce a value the very next
+        // `ctx.db.insert` rejects, reported as a validation failure on a row
+        // nobody wrote by hand.
+        expect(() => generateValue(v.from(fake), "mcpServers", "input", NOW)).toThrow(/mcpServers/u);
+        // The message must name escapes the seeder actually offers.
+        expect(() => generateValue(v.from(fake), "mcpServers", "input", NOW)).toThrow(/overrides|only/u);
+    });
+
+    it("refuses through v.optional() too, rather than silently emitting undefined", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(v.optional(v.from(fake)), "mcpServers", "input", NOW)).toThrow(/mcpServers/u);
+    });
+});
