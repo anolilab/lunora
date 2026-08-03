@@ -290,7 +290,9 @@ describe("studio", () => {
 
         fireEvent.click(await renderAndFind("dash-tab-migrations"));
 
-        await screen.findByTestId("lunora-migrations-route");
+        // Another lazy-mounted panel: the default 1s findBy window is too tight
+        // under a fully loaded suite run, same as the schedule panel above.
+        await screen.findByTestId("lunora-migrations-route", undefined, { timeout: 5000 });
 
         expect(screen.queryByTestId("lunora-home")).toBeNull();
     });

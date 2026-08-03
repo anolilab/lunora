@@ -1,0 +1,114 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "channels": {
+            "fields": {
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdBy": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_name": {
+                    "fields": ["name"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "messages": {
+            "fields": {
+                "channelId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "authorId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "content": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "attachmentKey": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "attachmentName": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_channel": {
+                    "fields": ["channelId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:channelId"
+        },
+        "presence": {
+            "fields": {
+                "channelId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "sessionId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "userId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "lastSeen": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_channel_session": {
+                    "fields": ["channelId", "sessionId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:channelId"
+        },
+        "profiles": {
+            "fields": {
+                "userId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "avatarKey": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_user": {
+                    "fields": ["userId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        }
+    },
+    "version": 1
+}

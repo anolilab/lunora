@@ -109,7 +109,9 @@ dist/
 
 # Playwright artifacts
 test-results/
+test-results-examples/
 playwright-report/
+playwright-report-examples/
 
 # Claude
 .claude/settings.local.json
