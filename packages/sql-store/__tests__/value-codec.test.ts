@@ -62,6 +62,20 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
         expect(sqliteDecode("plain", "any")).toBe("plain");
     });
 
+    it("from: round-trips an object without turning a numeric string into a number", () => {
+        expect.assertions(4);
+
+        // `v.from(externalSchema)` is heterogeneous — the schema may describe an
+        // object OR a scalar — and `sqliteEncode` keys off the runtime JS type.
+        // So `from` rides the union/any rule, not object/array/record: parsing
+        // unconditionally would read a `v.from(z.string())` column holding "123"
+        // back as the number 123, and the generated type promises a string.
+        expect(sqliteDecode(sqliteEncode({ command: "run" }), "from")).toEqual({ command: "run" });
+        expect(sqliteDecode(sqliteEncode(["a"]), "from")).toEqual(["a"]);
+        expect(sqliteDecode(sqliteEncode("123"), "from")).toBe("123");
+        expect(sqliteDecode(sqliteEncode("plain"), "from")).toBe("plain");
+    });
+
     it("null is preserved regardless of kind", () => {
         expect.assertions(1);
 
