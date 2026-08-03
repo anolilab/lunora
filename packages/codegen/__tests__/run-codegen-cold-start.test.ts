@@ -84,6 +84,50 @@ describe("runCodegen — cold-start reproducibility (#283)", () => {
         expect(second.generated.api).toBe(first.generated.api);
     });
 
+    it("does not collapse a Doc<T> for a table added since the last run (warm but stale)", () => {
+        expect.assertions(2);
+
+        // The residual half of #283. The cold-start bootstrap only fires when a
+        // generated file is MISSING, so an everyday edit — add a table, add a
+        // handler that returns a row from it — still inferred pass 1 against the
+        // PREVIOUS run's `dataModel.ts`, which has no `Doc_projects`. That is why
+        // `lunora codegen` still needed two passes on a warm tree, and why a
+        // project ends up wrapping the CLI in a run-until-the-hash-stops-changing
+        // loop.
+        runCodegen({ lint: false, projectRoot: workdir });
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+    projects: defineTable({ name: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "projects.ts"),
+            `import type { Doc } from "./_generated/dataModel";
+import { query } from "@lunora/server";
+
+export const getProject = query({
+    args: {},
+    handler: async (): Promise<Doc<"projects"> | null> => {
+        return null;
+    },
+});
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ lint: false, projectRoot: workdir });
+
+        expect(result.generated.api).not.toContain('getProject: FunctionReference<"query", {}, unknown>');
+        expect(result.generated.api).toContain('getProject: FunctionReference<"query", {}, import("./dataModel.js").Doc_projects | null>;');
+    });
+
     it("does not rewrite server.ts a second time on a warm run for a project using a feature flag", () => {
         expect.assertions(1);
 

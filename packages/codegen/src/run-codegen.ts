@@ -366,6 +366,34 @@ const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: 
 };
 
 /**
+ * Point `project`'s copy of `filePath` at `content`, without disturbing a file
+ * that already matches. Absent, `createSourceFile` adds it (the cold-start
+ * case). Present and identical, it is left untouched — every warm run of an
+ * unchanged project, where doing nothing keeps the fully-resolved program the
+ * Project was constructed with.
+ *
+ * Present but stale, it is rewritten IN PLACE with `replaceWithText`.
+ * `createSourceFile` with the overwrite option looks equivalent and is not: it
+ * swaps in a NEW SourceFile, so every already-loaded handler module still points
+ * at the old, now-orphaned one and its `dataModel` type import stops resolving.
+ */
+const syncProjectFile = (project: Project, filePath: string, content: string): void => {
+    const existing = project.getSourceFile(filePath);
+
+    if (existing === undefined) {
+        project.createSourceFile(filePath, content, { overwrite: true });
+
+        return;
+    }
+
+    if (existing.getFullText() === content) {
+        return;
+    }
+
+    existing.replaceWithText(content);
+};
+
+/**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
  * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
  * cross-file type resolution and path aliases work; falls back to an isolated
@@ -496,57 +524,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // would have. The full `server.ts` (with that later detail) overwrites
     // this provisional one before `runCodegen` returns, via the normal write
     // phase below.
-    if (!options.dryRun) {
-        const bootstrapDirectory = join(lunoraDirectory, "_generated");
-        const bootstrapDataModelPath = join(bootstrapDirectory, "dataModel.ts");
-        const bootstrapServerPath = join(bootstrapDirectory, "server.ts");
-
-        // Only bootstrap on a genuine cold start (either target missing). On a
-        // warm run `project` already has the FULL previous-run declarations —
-        // `createCodegenProject` loads every tsconfig-included file, `_generated/**`
-        // among them, from disk at construction time — so there is nothing to
-        // synthesize. Gating on existence, not just writing, matters: the schema-only
-        // bootstrap content omits every feature flag `emitServer` takes below
-        // (identity/env/hasAi/hasKv/…), so for any project using at least one of them
-        // it differs from the on-disk full content — `writeIfChanged` would overwrite
-        // the full `server.ts` with the reduced one here, then the write phase below
-        // would immediately overwrite it back, forcing two disk writes (and two
-        // `_generated/**` watcher triggers) on every single warm run, not only a cold
-        // start.
-        if (!existsSync(bootstrapDataModelPath) || !existsSync(bootstrapServerPath)) {
-            const declaredDependenciesForBootstrap = readPackageDependencies(options.projectRoot);
-            const useUmbrellaForBootstrap = (declaredDependenciesForBootstrap ?? new Set<string>()).has("lunorash");
-            const bootstrapDataModelContent = emitDataModel(schema, useUmbrellaForBootstrap);
-            const bootstrapServerContent = emitServer({ schema, useUmbrella: useUmbrellaForBootstrap });
-
-            if (!existsSync(bootstrapDirectory)) {
-                mkdirSync(bootstrapDirectory, { recursive: true });
-            }
-
-            writeIfChanged(bootstrapDataModelPath, bootstrapDataModelContent);
-            writeIfChanged(bootstrapServerPath, bootstrapServerContent);
-
-            // Make sure `project` sees this content even if its module resolution
-            // would otherwise cache the pre-write (missing/stale) state — belt and
-            // suspenders alongside the disk write above.
-            project.createSourceFile(bootstrapDataModelPath, bootstrapDataModelContent, { overwrite: true });
-            project.createSourceFile(bootstrapServerPath, bootstrapServerContent, { overwrite: true });
-        }
-    }
-
-    const functions = discoverFunctions(project, lunoraDirectory);
-    const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
-    const migrations = discoverMigrations(project, lunoraDirectory);
-
-    // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
-    // and custom mutators (`lunora/mutators.ts`). Shapes gate the generated DO's
-    // `resolveShape` override + the `_generated/collections.ts` factories;
-    // mutators register into `LUNORA_FUNCTIONS` (transaction-wrapped) and the
-    // `isCustomMutator` push-protocol override. Both return `[]` when their file
-    // is absent, so a project without them emits byte-identical generated code.
-    const shapes = discoverShapes(project, lunoraDirectory);
-    const mutators = discoverMutators(project, lunoraDirectory);
-
     // Typed identity layer (Plan 080): the single `defineIdentity(...)` claim
     // contract declared in `lunora/identity.ts`. When present, `emitServer`
     // narrows `ctx.auth.getIdentity()`, the RLS policy `ctx.auth.identity`, and
@@ -584,6 +561,171 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // before the config layer's reconciliation ever sees them.
     assertNoWorkflowAgentCollision(workflows, agents);
 
+    // Containers declared via `defineContainer` exports in `lunora/containers.ts`.
+    // Gates `_generated/containers.ts` (the Container DO classes) + the typed
+    // `ctx.containers` on ActionCtx, feeds the config layer's wrangler
+    // reconciliation (containers[] + CONTAINER_* DO bindings + migrations), and
+    // the `container_*` advisor lints below.
+    const containers = discoverContainers(project, lunoraDirectory);
+
+    // Read-only storage access-rule metadata (the studio's access-rules view),
+    // statically discovered from every `.use(storageRules(...))` chain and
+    // emitted into the generated ShardDO's `storageRulesMetadata()` override.
+    const storageRulesMetadata = discoverStorageRulesMetadata(project, lunoraDirectory);
+
+    // Single-pass code-usage detection for every optional, package-backed
+    // feature: each flag is set when a `lunora/` source imports the feature's
+    // `@lunora/*` package or reads its generated `ctx.*` helper. `ai` and
+    // `payments` gate wiring the SDK into the generated ShardDO + the typed
+    // ActionCtx — so a non-AI / non-payment project never imports those into its
+    // worker; the rest additionally feed the studio nav gating below.
+    const rawFeatureUsage = discoverFeatureUsage(project, lunoraDirectory);
+    // Intersect what the app uses with what the deploy target supports. For the
+    // default Cloudflare target the matrix marks nothing unsupported, so the
+    // gate is the identity and the emitted surface (and goldens) is unchanged;
+    // a target that lacks a used feature omits its `ctx.*` surface below and
+    // reports a `platform_unsupported_feature` diagnostic.
+    // Resolved here rather than demanded of every caller: a call site that omits
+    // the target emits the DEFAULT surface with no diagnostic, so the mismatch
+    // stays invisible until the deployed app fails. Falling back to the
+    // project's declared target makes every caller correct without remembering.
+    const platformGate = gatePlatformFeatures(rawFeatureUsage, resolveCodegenTarget(options.projectRoot, options.target));
+    const featureUsage = platformGate.usage;
+    const hasAi = featureUsage.ai;
+    const hasPayments = featureUsage.payments;
+    // New Cloudflare-capability ctx augmentations (Plans 027/028/031/032/035/036).
+    // These flip the emitted ctx type seam in `server.ts` (type-only dynamic
+    // imports); the runtime ShardDO wiring lands with each capability's package.
+    const hasKv = featureUsage.kv;
+    // `ctx.access` — the verified Cloudflare Access identity facade, wired onto
+    // every ctx when a `lunora/` source reads `ctx.access`. NB: distinct from the
+    // `hasAccess` below (a declared `@lunora/cloudflare-access` dependency, which
+    // gates the worker's `.access()` resolveIdentity builder method). The
+    // `accessContext()` middleware imports the package's `/context` subpath, so it
+    // never trips this usage probe — the two paths don't collide.
+    const hasAccessFacade = featureUsage.access;
+    // `ctx.flags` is gated on the project actually declaring a `lunora/flags.ts`
+    // (`defineFlags(...)`) — the generated ShardDO imports that module's default
+    // export for its OpenFeature provider, so wiring `ctx.flags` without it would
+    // emit a broken import. (A handler reading `ctx.flags` without the module is a
+    // compile error — the field is only typed when the module exists.)
+    const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
+    // `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) is gated on the
+    // project declaring a `lunora/notify.ts` (`defineNotify(...)`), mirroring
+    // `hasFlags`: the generated ShardDO imports that module's default export to
+    // build both facades via `createNotify(notifyConfig, env)`, so wiring the ctx
+    // fields without it would emit a broken import. Notify rides EVERY ctx (like
+    // `ctx.flags`); the `notify_send_outside_action` lint — not the type — keeps
+    // non-deterministic sends out of query/mutation handlers.
+    const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
+    const hasHyperdrive = featureUsage.hyperdrive;
+    // Batteries-included sandbox tools (`@lunora/agent/sandbox`). `browserTool`
+    // drives `ctx.browser`, so it flips `hasBrowser` (provisioning the BROWSER
+    // binding + wiring `ctx.browser` onto the action ctx the dispatcher runs on);
+    // either tool registers the `sandbox:invoke` dispatcher via `emitFunctions`.
+    const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
+    const usesSandbox = sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer;
+    const hasBrowser = featureUsage.browser || sandboxUsage.usesSandboxBrowser;
+    const hasImages = featureUsage.images;
+    const hasAnalytics = featureUsage.analytics;
+    const hasPipelines = featureUsage.pipelines;
+    const hasR2sql = featureUsage.r2sql;
+    const hasX402 = featureUsage.x402;
+
+    const declaredDependencies = readPackageDependencies(options.projectRoot);
+    const dependencies = declaredDependencies ?? new Set<string>();
+
+    // When the project depends on the `lunora` umbrella (instead of the granular
+    // `@lunora/*` base packages), the generated files import the base surface
+    // through the umbrella's subpaths (`lunorash/server`, `lunorash/do`, …) so the
+    // app needs only the single `lunorash` dependency installed.
+    const useUmbrella = dependencies.has("lunorash");
+
+    // Fail before emit when the schema needs an add-on that is not installed.
+    // Emitting first would push the failure into `tsc`, reported inside a
+    // generated file the user did not write.
+    assertRequiredPackages(schema, declaredDependencies);
+
+    const outputDirectory = join(lunoraDirectory, "_generated");
+
+    // The DECLARATION SURFACE, emitted before anything infers a type against it
+    // (issue #283).
+    //
+    // `discoverFunctions` below reads each handler's return type out of `project`
+    // as it stands right now. Everything a handler's type can depend on —
+    // `Doc<T>`/`Id<T>` from `dataModel.ts`, the schema-typed `ctx.db` and its
+    // paginated results from `server.ts` — lives in these two files, so whatever
+    // version of them the project happens to hold is what pass 1 infers against.
+    // Both are pure functions of inputs already computed above, so they are
+    // rendered here in full rather than at the write phase below.
+    //
+    // Emitting only on a cold start was not enough: an ordinary edit (add a
+    // table, add a handler returning a row from it) left pass 1 inferring against
+    // the PREVIOUS run's declarations, which name neither the new table nor its
+    // `Doc`. That collapsed the return to `unknown`/`{}` and WROTE the collapse
+    // into `api.ts`, so the tree only converged on a second `lunora codegen` —
+    // which is what pushes projects into wrapping the CLI in a
+    // run-until-the-hash-stops-changing loop. Rendering unconditionally costs
+    // nothing extra: these are the same two strings the run emits anyway, and
+    // `writeIfChanged` no-ops when the bytes match, so an unchanged project
+    // touches neither disk nor any `_generated/**` watcher.
+    const dataModelContent = emitDataModel(schema, useUmbrella);
+    const serverContent = emitServer({
+        agents,
+        containers,
+        env,
+        hasAccessFacade,
+        hasAi,
+        hasAnalytics,
+        hasBrowser,
+        hasFlags,
+        hasHyperdrive,
+        hasImages,
+        hasKv,
+        hasNotify,
+        hasPayments,
+        hasPipelines,
+        hasR2sql,
+        hasX402,
+        identity,
+        queues,
+        schema,
+        storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
+        useUmbrella,
+        workflows,
+    });
+
+    const dataModelPath = join(outputDirectory, "dataModel.ts");
+    const serverPath = join(outputDirectory, "server.ts");
+
+    if (!options.dryRun) {
+        if (!existsSync(outputDirectory)) {
+            mkdirSync(outputDirectory, { recursive: true });
+        }
+
+        writeIfChanged(dataModelPath, dataModelContent);
+        writeIfChanged(serverPath, serverContent);
+    }
+
+    // Make `project` see this content regardless of `dryRun` and regardless of
+    // whether its module resolution cached the pre-write state — inference below
+    // must read the declarations this run produced, not the ones it started with.
+    syncProjectFile(project, dataModelPath, dataModelContent);
+    syncProjectFile(project, serverPath, serverContent);
+
+    const functions = discoverFunctions(project, lunoraDirectory);
+    const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+    const migrations = discoverMigrations(project, lunoraDirectory);
+
+    // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
+    // and custom mutators (`lunora/mutators.ts`). Shapes gate the generated DO's
+    // `resolveShape` override + the `_generated/collections.ts` factories;
+    // mutators register into `LUNORA_FUNCTIONS` (transaction-wrapped) and the
+    // `isCustomMutator` push-protocol override. Both return `[]` when their file
+    // is absent, so a project without them emits byte-identical generated code.
+    const shapes = discoverShapes(project, lunoraDirectory);
+    const mutators = discoverMutators(project, lunoraDirectory);
+
     const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
@@ -593,18 +735,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
-    // Containers declared via `defineContainer` exports in `lunora/containers.ts`.
-    // Gates `_generated/containers.ts` (the Container DO classes) + the typed
-    // `ctx.containers` on ActionCtx, feeds the config layer's wrangler
-    // reconciliation (containers[] + CONTAINER_* DO bindings + migrations), and
-    // the `container_*` advisor lints below.
-    const containers = discoverContainers(project, lunoraDirectory);
-
-    // Workflows (`_generated/workflows.ts` — the WorkflowEntrypoint classes — the
-    // typed `ctx.workflows` on Mutation/Action contexts, and the config layer's
-    // wrangler reconciliation of the `workflows[]` array) are discovered above,
-    // ahead of crons, so a cron may target one.
-
+    //
     // One context feeds both the findings and the scored health map, so the two can
     // never describe different evidence. Built lazily — the ternary keeps every
     // discover* call out of a `lint: false` run.
@@ -697,73 +828,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `discoverMaskHasNonLiteralPolicy` and `assertNoMaskedShapeTable`'s docblock.
     assertNoMaskedShapeTable(shapes, maskMetadata, discoverMaskHasNonLiteralPolicy(project, lunoraDirectory));
 
-    // Read-only storage access-rule metadata (the studio's access-rules view),
-    // statically discovered from every `.use(storageRules(...))` chain and
-    // emitted into the generated ShardDO's `storageRulesMetadata()` override.
-    const storageRulesMetadata = discoverStorageRulesMetadata(project, lunoraDirectory);
-
-    // Single-pass code-usage detection for every optional, package-backed
-    // feature: each flag is set when a `lunora/` source imports the feature's
-    // `@lunora/*` package or reads its generated `ctx.*` helper. `ai` and
-    // `payments` gate wiring the SDK into the generated ShardDO + the typed
-    // ActionCtx — so a non-AI / non-payment project never imports those into its
-    // worker; the rest additionally feed the studio nav gating below.
-    const rawFeatureUsage = discoverFeatureUsage(project, lunoraDirectory);
-    // Intersect what the app uses with what the deploy target supports. For the
-    // default Cloudflare target the matrix marks nothing unsupported, so the
-    // gate is the identity and the emitted surface (and goldens) is unchanged;
-    // a target that lacks a used feature omits its `ctx.*` surface below and
-    // reports a `platform_unsupported_feature` diagnostic.
-    // Resolved here rather than demanded of every caller: a call site that omits
-    // the target emits the DEFAULT surface with no diagnostic, so the mismatch
-    // stays invisible until the deployed app fails. Falling back to the
-    // project's declared target makes every caller correct without remembering.
-    const platformGate = gatePlatformFeatures(rawFeatureUsage, resolveCodegenTarget(options.projectRoot, options.target));
-    const featureUsage = platformGate.usage;
-    const hasAi = featureUsage.ai;
-    const hasPayments = featureUsage.payments;
-    // New Cloudflare-capability ctx augmentations (Plans 027/028/031/032/035/036).
-    // These flip the emitted ctx type seam in `server.ts` (type-only dynamic
-    // imports); the runtime ShardDO wiring lands with each capability's package.
-    const hasKv = featureUsage.kv;
-    // `ctx.access` — the verified Cloudflare Access identity facade, wired onto
-    // every ctx when a `lunora/` source reads `ctx.access`. NB: distinct from the
-    // `hasAccess` below (a declared `@lunora/cloudflare-access` dependency, which
-    // gates the worker's `.access()` resolveIdentity builder method). The
-    // `accessContext()` middleware imports the package's `/context` subpath, so it
-    // never trips this usage probe — the two paths don't collide.
-    const hasAccessFacade = featureUsage.access;
-    // `ctx.flags` is gated on the project actually declaring a `lunora/flags.ts`
-    // (`defineFlags(...)`) — the generated ShardDO imports that module's default
-    // export for its OpenFeature provider, so wiring `ctx.flags` without it would
-    // emit a broken import. (A handler reading `ctx.flags` without the module is a
-    // compile error — the field is only typed when the module exists.)
-    const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
     // Statically-discovered `ctx.flags.<type>("key")` reads — the generated
     // ShardDO's `evaluateFlags` (studio Flags page) + the reactive read override
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
-    // `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) is gated on the
-    // project declaring a `lunora/notify.ts` (`defineNotify(...)`), mirroring
-    // `hasFlags`: the generated ShardDO imports that module's default export to
-    // build both facades via `createNotify(notifyConfig, env)`, so wiring the ctx
-    // fields without it would emit a broken import. Notify rides EVERY ctx (like
-    // `ctx.flags`); the `notify_send_outside_action` lint — not the type — keeps
-    // non-deterministic sends out of query/mutation handlers.
-    const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
-    const hasHyperdrive = featureUsage.hyperdrive;
-    // Batteries-included sandbox tools (`@lunora/agent/sandbox`). `browserTool`
-    // drives `ctx.browser`, so it flips `hasBrowser` (provisioning the BROWSER
-    // binding + wiring `ctx.browser` onto the action ctx the dispatcher runs on);
-    // either tool registers the `sandbox:invoke` dispatcher via `emitFunctions`.
-    const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
-    const usesSandbox = sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer;
-    const hasBrowser = featureUsage.browser || sandboxUsage.usesSandboxBrowser;
-    const hasImages = featureUsage.images;
-    const hasAnalytics = featureUsage.analytics;
-    const hasPipelines = featureUsage.pipelines;
-    const hasR2sql = featureUsage.r2sql;
-    const hasX402 = featureUsage.x402;
 
     // Which optional, package-backed features the studio should show a nav page
     // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -772,8 +840,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
     // Emitted into the generated ShardDO's `studioFeatures()` override so the
     // studio hides only pages whose backing package the app genuinely never wires.
-    const declaredDependencies = readPackageDependencies(options.projectRoot);
-    const dependencies = declaredDependencies ?? new Set<string>();
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,
@@ -791,48 +857,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflowCount: workflows.length,
     });
 
-    // When the project depends on the `lunora` umbrella (instead of the granular
-    // `@lunora/*` base packages), the generated files import the base surface
-    // through the umbrella's subpaths (`lunorash/server`, `lunorash/do`, …) so the
-    // app needs only the single `lunorash` dependency installed.
-    const useUmbrella = dependencies.has("lunorash");
-
-    // Fail before emit when the schema needs an add-on that is not installed.
-    // Emitting first would push the failure into `tsc`, reported inside a
-    // generated file the user did not write.
-    assertRequiredPackages(schema, declaredDependencies);
-
     // Boundary between the discovery phase (all `discover*` passes + the inline
     // discovers `lintSchema` drives + the metadata discovers above) and the emit
     // phase (the `emit*`/`build*`/serialize work + the file writes below).
+    // `dataModel.ts`/`server.ts` are already rendered (and written) further up —
+    // they are the declaration surface inference reads, so they cannot wait for
+    // this phase.
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
-    const dataModelContent = emitDataModel(schema, useUmbrella);
     const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
-    const serverContent = emitServer({
-        agents,
-        containers,
-        env,
-        hasAccessFacade,
-        hasAi,
-        hasAnalytics,
-        hasBrowser,
-        hasFlags,
-        hasHyperdrive,
-        hasImages,
-        hasKv,
-        hasNotify,
-        hasPayments,
-        hasPipelines,
-        hasR2sql,
-        hasX402,
-        identity,
-        queues,
-        schema,
-        storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
-        useUmbrella,
-        workflows,
-    });
     const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
@@ -986,17 +1019,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 
-    const outputDirectory = join(lunoraDirectory, "_generated");
-
     if (!options.dryRun) {
         if (!existsSync(outputDirectory)) {
             mkdirSync(outputDirectory, { recursive: true });
         }
 
+        // `dataModel.ts` / `server.ts` are deliberately absent here: they are the
+        // declaration surface inference reads, so they were rendered and written
+        // before `discoverFunctions` ran. Writing them again would be a no-op.
         writeIfChanged(join(outputDirectory, "app.ts"), appContent);
-        writeIfChanged(join(outputDirectory, "dataModel.ts"), dataModelContent);
         writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
-        writeIfChanged(join(outputDirectory, "server.ts"), serverContent);
         writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
         writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
         writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);

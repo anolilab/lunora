@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1840,13 +1840,15 @@ export const others = query.input({ id: v.string() }).query(async ({ ctx, args }
             expect(findings[0]?.detail).toContain("reads:");
         });
 
-        it("keeps the handler's type when .output() names a validator it cannot read", () => {
+        it("resolves a hoisted .output() validator to the same type as the inline form (#59)", () => {
             expect.assertions(2);
 
-            // `.output(sharedValidator)` — a hoisted validator, not an inline
-            // call — parses to `{ kind: "any" }`. Preferring that over the
-            // handler would emit `unknown`, which is the exact leak the
-            // .output() preference exists to prevent. Fall back instead.
+            // A shared validator (`const vDocumentDoc = v.object({…})`) reused by
+            // several functions is the natural way to write a table's public
+            // shape once. It used to reach the parser as a bare `Identifier`, fall
+            // through to `{ kind: "any" }`, and render `unknown` — so the only way
+            // to get a real type was to inline a 20-field literal at every call
+            // site. Both forms must now render identically.
             writeFileSync(
                 join(workdir, "lunora", "shared.ts"),
                 `import { query, v } from "./_generated/server.js";
@@ -1860,12 +1862,34 @@ export const inline = query.input({}).output(v.object({ title: v.string() })).qu
 
             const { api } = runCodegen({ projectRoot: workdir }).generated;
 
-            // Hoisted: unreadable validator, so the handler's inferred type wins.
-            // The trailing `;` is TS's own type renderer — which is exactly how
-            // you can tell which path produced it. `unknown` here is the bug.
-            expect(api).toContain('hoisted: FunctionReference<"query", {}, { title: string; }>');
-            // Inline: the declared validator wins, rendered by validatorToType.
+            // Both render through validatorToType (no trailing `;` — that would be
+            // TS's own type renderer, i.e. the handler-inference fallback).
+            expect(api).toContain('hoisted: FunctionReference<"query", {}, { title: string }>');
             expect(api).toContain('inline: FunctionReference<"query", {}, { title: string }>');
+        });
+
+        it("falls back to the handler's type when .output() names something that is not a validator", () => {
+            expect.assertions(1);
+
+            // Alias resolution is best-effort: a const holding a call this parser
+            // does not recognise as a `v.*` builder must keep the previous
+            // behaviour (the handler's inferred type wins) rather than abort the
+            // whole codegen run with `Unsupported validator kind`.
+            writeFileSync(
+                join(workdir, "lunora", "opaque.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+const buildOut = (): unknown => v.object({ title: v.string() });
+const opaqueOut = buildOut();
+
+export const opaque = query.input({}).output(opaqueOut).query(async () => ({ title: "x" }));
+`,
+            );
+
+            const { api } = runCodegen({ projectRoot: workdir }).generated;
+
+            // TS's renderer (trailing `;`), not validatorToType — the fallback path.
+            expect(api).toContain('opaque: FunctionReference<"query", {}, { title: string; }>');
         });
 
         it("renders a recovered v.from() type into the emitted api, end to end", () => {
@@ -1896,6 +1920,87 @@ export const byEmail = query.input({ email: v.from(emailSchema) }).query(async (
 
             expect(result.generated.api).toContain('byEmail: FunctionReference<"query", { email: string }');
             expect(result.generated.api).not.toContain("{ email: unknown }");
+        });
+
+        it("rebases a relative import() qualifier that lands in an ARGUMENT type (#60)", () => {
+            expect.assertions(4);
+
+            // The #47 family, one position over. A recovered `v.from()` type that
+            // names a type from the handler's own `./lib/…` renders as
+            // `import("./lib/tools").Tool` — correct from `lunora/agent.ts`, but
+            // one directory too deep once inlined into `lunora/_generated/*.ts`,
+            // where it means `lunora/_generated/lib/tools`. Only the RETURN type
+            // was rebased, so this was a TS2307 in a generated file while
+            // `lunora codegen` exited 0.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "tools.ts"),
+                `interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+export interface Tool {
+    name: string;
+}
+
+// Only the schema is imported by the handler, so \`Tool\` itself is NOT in scope
+// there and the checker renders it with an \`import("./lib/tools")\` qualifier.
+export declare const toolSchema: Std<Tool>;
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "agent.ts"),
+                `import { query, v } from "./_generated/server.js";
+import { toolSchema } from "./lib/tools";
+
+export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1);
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            // `_generated/` sits one level under `lunora/`, so the qualifier must
+            // climb out of it before naming the user's module.
+            for (const rendered of [api, functions]) {
+                expect(rendered).toContain('import("../lib/tools.js").Tool');
+                expect(rendered).not.toContain('import("./lib/tools")');
+            }
+        });
+
+        it("expands a type IMPORTED into the handler's module instead of leaking a bare name", () => {
+            expect.assertions(4);
+
+            // The other half of the same leak. When the handler DOES import the
+            // type, the checker prints it bare (`Tool`) — correct in the source
+            // file, an undeclared identifier (TS2304) once inlined into
+            // `_generated/*`, which imports nothing from the user's modules. The
+            // reachability guard only covered types declared in the handler's OWN
+            // file, so a shared `./lib/types` interface — the ordinary way to
+            // write one — leaked straight through.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "shapes.ts"),
+                `export interface Badge {
+    label: string;
+}
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "badges.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "./lib/shapes";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                // Expanded structurally, so it resolves with no import at all.
+                expect(rendered).toContain("{ label: string }");
+                expect(rendered).not.toMatch(/,\s*Badge>/u);
+            }
         });
 
         it("types the reference from .output(), not the handler's inferred return", () => {
