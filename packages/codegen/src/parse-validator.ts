@@ -133,6 +133,45 @@ const resolveValidatorAlias = (identifier: Identifier): Expression | undefined =
 };
 
 /**
+ * The conventional local name of the validator factory namespace.
+ *
+ * Matched by name rather than by resolving the import, deliberately: a project
+ * that aliases it (`import { v as val }`) simply does not get alias resolution
+ * and keeps the previous `unknown` rendering — a smaller, safer failure than
+ * mis-classifying an arbitrary call as a validator and throwing on it.
+ */
+const VALIDATOR_NAMESPACE = "v";
+
+/**
+ * Whether `expression` is shaped like a validator: a `v.*(…)` chain, or another
+ * identifier that {@link parseValidator} will resolve in turn (`const b = a;`).
+ *
+ * This is the gate that lets a const reference be followed WITHOUT a catch. A
+ * const holding something unrelated — `const merged = lodash.merge(a, b)` used
+ * where a validator was expected — is left to the `{ kind: "any" }` fallback,
+ * exactly as before alias resolution existed.
+ */
+const rootsAtValidatorFactory = (expression: Expression): boolean => {
+    if (Node.isIdentifier(expression)) {
+        return true;
+    }
+
+    let node: Node = expression;
+
+    while (Node.isCallExpression(node)) {
+        const callee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(callee)) {
+            return false;
+        }
+
+        node = callee.getExpression();
+    }
+
+    return Node.isIdentifier(node) && node.getText() === VALIDATOR_NAMESPACE;
+};
+
+/**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
  * Used by both schema discovery and function-args discovery so the rendered
  * TS types are identical regardless of where a validator appears.
@@ -141,17 +180,19 @@ const parseValidator = (expression: Expression): ValidatorIR => {
     if (Node.isIdentifier(expression) && !resolvingAliases.has(expression)) {
         const target = resolveValidatorAlias(expression);
 
-        if (target !== undefined) {
+        // Gated on the target LOOKING like a validator rather than wrapped in a
+        // try/catch. A catch around the recursive parse would also swallow
+        // `Unsupported validator kind` raised by a typo INSIDE a hoisted
+        // validator — so `const vRow = v.object({ x: v.strng() })` would quietly
+        // render `unknown` while the identical expression written inline aborted
+        // the run. Two forms that are supposed to be interchangeable must not
+        // diverge on the error path, so the check happens before the parse and
+        // anything that gets past it throws exactly as the inline form does.
+        if (target !== undefined && rootsAtValidatorFactory(target)) {
             resolvingAliases.add(expression);
 
             try {
                 return parseValidator(target);
-            } catch {
-                // The const held something this parser doesn't recognise as a
-                // validator (`v.somethingUnknown(…)` throws below). Alias
-                // resolution is a best-effort improvement over the catch-all, so
-                // a failure keeps the pre-existing behaviour rather than turning
-                // a rendered `unknown` into a hard codegen abort.
             } finally {
                 resolvingAliases.delete(expression);
             }

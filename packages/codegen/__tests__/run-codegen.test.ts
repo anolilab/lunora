@@ -1578,6 +1578,47 @@ export const schema = defineSchema({
             expect(result.generated.dataModel).toContain("mcpServers: { command: string; env: Record<string, string>; }");
         });
 
+        it("rebases a v.from() column type that names a sibling module", () => {
+            expect.assertions(4);
+
+            // The column position is the one place a recovered `v.from()` type had
+            // no rebasing: `api.ts`/`functions.ts` got it, `dataModel.ts` and the
+            // drizzle view did not — because a `v.from()` column used to be
+            // rejected outright, so the path was unreachable. The type is relative
+            // to `lunora/schema.ts`, and both files sit one directory deeper.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "schemas.ts"),
+                `interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+export interface McpServer {
+    command: string;
+}
+
+export declare const serverSchema: Std<McpServer>;
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+import { serverSchema } from "./lib/schemas";
+
+export const schema = defineSchema({
+    agents: defineTable({ label: v.string(), server: v.from(serverSchema) }),
+});
+`,
+            );
+
+            const { dataModel, drizzleShard } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [dataModel, drizzleShard]) {
+                expect(rendered).toContain('import("../lib/schemas.js").McpServer');
+                expect(rendered).not.toContain('import("./lib/schemas")');
+            }
+        });
+
         it("output matches committed expected/ files (snapshot)", () => {
             expect.assertions(12);
 
@@ -1903,10 +1944,9 @@ export const inline = query.input({}).output(v.object({ title: v.string() })).qu
         it("falls back to the handler's type when .output() names something that is not a validator", () => {
             expect.assertions(1);
 
-            // Alias resolution is best-effort: a const holding a call this parser
-            // does not recognise as a `v.*` builder must keep the previous
-            // behaviour (the handler's inferred type wins) rather than abort the
-            // whole codegen run with `Unsupported validator kind`.
+            // Alias resolution is gated on the const looking like a `v.*` chain, so
+            // a const holding an unrelated call keeps the previous behaviour (the
+            // handler's inferred type wins) rather than aborting the run.
             writeFileSync(
                 join(workdir, "lunora", "opaque.ts"),
                 `import { query, v } from "./_generated/server.js";
@@ -1920,8 +1960,42 @@ export const opaque = query.input({}).output(opaqueOut).query(async () => ({ tit
 
             const { api } = runCodegen({ projectRoot: workdir }).generated;
 
-            // TS's renderer (trailing `;`), not validatorToType — the fallback path.
-            expect(api).toContain('opaque: FunctionReference<"query", {}, { title: string; }>');
+            // Asserted on the observable outcome — the handler's `{ title: "x" }`
+            // survives — rather than on which renderer produced it. (The two
+            // renderers happen to differ by a trailing `;`, but pinning a test to
+            // that would pass on a broken code path the day either one changes
+            // its spacing.)
+            expect(api).toContain('opaque: FunctionReference<"query", {}, { title: string');
+        });
+
+        it("aborts on a typo inside a hoisted validator, exactly as the inline form does", () => {
+            expect.assertions(2);
+
+            // The failure mode a try/catch around alias resolution would have
+            // introduced: a mistyped `v.*` member inside a HOISTED validator
+            // silently rendering `unknown` while the identical expression written
+            // inline aborted the run. Two forms that are supposed to be
+            // interchangeable must not diverge on the error path either.
+            const hoisted = `import { query, v } from "./_generated/server.js";
+
+const badOut = v.object({ title: v.strng() });
+
+export const one = query.input({}).output(badOut).query(async () => ({ title: "x" }));
+`;
+
+            writeFileSync(join(workdir, "lunora", "typo.ts"), hoisted);
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Unsupported validator kind: strng/u);
+
+            writeFileSync(
+                join(workdir, "lunora", "typo.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+export const one = query.input({}).output(v.object({ title: v.strng() })).query(async () => ({ title: "x" }));
+`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Unsupported validator kind: strng/u);
         });
 
         it("renders a recovered v.from() type into the emitted api, end to end", () => {

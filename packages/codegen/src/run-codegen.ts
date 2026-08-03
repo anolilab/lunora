@@ -502,28 +502,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
 
-    // Cold-start bootstrap (issue #283): `discoverFunctions` below infers each
-    // handler's return type against `project` as it stands RIGHT NOW. On a fresh
-    // clone, CI, or after `rm -rf lunora/_generated`, that project has no
-    // `Doc<T>`/`Id<T>`/typed `ctx.db` for a handler to resolve against — so a
-    // return type that depends on them (a `Doc<…>` read, a paginated result)
-    // collapses to `{}`/`unknown`, and THAT gets written into `api.ts`/
-    // `functions.ts`. A second `lunora codegen` run re-infers against the first
-    // run's own (now-present) output and recovers more — the backend's own
-    // `tsc --noEmit` can even read 0 errors a full pass before a CONSUMING app
-    // does, since the backend mostly doesn't read its own inferred types back
-    // through `api.ts` the way a consumer does. Reproduced by `rm -rf
-    // lunora/_generated && lunora codegen`.
-    //
-    // `dataModel.ts` depends only on `schema` (already known here) and
-    // `server.ts`'s core `Doc`/`Id`/typed builders are schema-only too — the
-    // identity/env/container/workflow/queue narrowing computed further below
-    // only adds detail, it doesn't change whether `ctx.db` resolves — so
-    // pre-writing both with the schema-only info on hand NOW, before
-    // `discoverFunctions` runs, lets pass 1 see the same declarations pass 2
-    // would have. The full `server.ts` (with that later detail) overwrites
-    // this provisional one before `runCodegen` returns, via the normal write
-    // phase below.
     // Typed identity layer (Plan 080): the single `defineIdentity(...)` claim
     // contract declared in `lunora/identity.ts`. When present, `emitServer`
     // narrows `ctx.auth.getIdentity()`, the RLS policy `ctx.auth.identity`, and
@@ -698,18 +676,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
 
-    if (!options.dryRun) {
-        if (!existsSync(outputDirectory)) {
-            mkdirSync(outputDirectory, { recursive: true });
-        }
-
-        writeIfChanged(dataModelPath, dataModelContent);
-        writeIfChanged(serverPath, serverContent);
-    }
-
-    // Make `project` see this content regardless of `dryRun` and regardless of
-    // whether its module resolution cached the pre-write state — inference below
-    // must read the declarations this run produced, not the ones it started with.
+    // In MEMORY only — the disk write waits for the write phase with everything
+    // else. `discoverFunctions` infers against the ts-morph `Project`, not the
+    // filesystem, so this is the whole of what makes the declarations current;
+    // writing here as well would buy nothing and cost atomicity. Anything between
+    // this point and the write phase can throw (`assertNoMaskedShapeTable`, a
+    // parse error in a handler), and an early write would leave a new
+    // `dataModel.ts` beside a stale `api.ts`/`shard.ts` — worst when a table was
+    // REMOVED, since `Doc_x` disappears while the files still referencing it do
+    // not, and the resulting errors point at generated code rather than the real
+    // cause. It would also fire the `_generated/**` watcher mid-failure in the
+    // Vite dev loop.
     syncProjectFile(project, dataModelPath, dataModelContent);
     syncProjectFile(project, serverPath, serverContent);
 
@@ -1024,11 +1001,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             mkdirSync(outputDirectory, { recursive: true });
         }
 
-        // `dataModel.ts` / `server.ts` are deliberately absent here: they are the
-        // declaration surface inference reads, so they were rendered and written
-        // before `discoverFunctions` ran. Writing them again would be a no-op.
         writeIfChanged(join(outputDirectory, "app.ts"), appContent);
+        writeIfChanged(dataModelPath, dataModelContent);
         writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
+        writeIfChanged(serverPath, serverContent);
         writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
         writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
         writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);

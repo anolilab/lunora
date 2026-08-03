@@ -290,6 +290,14 @@ const renderInsertInterface = (table: TableIR): string => {
     return `export interface Insert_${table.name} {\n    _id?: Id<"${table.name}">;\n    _creationTime?: number;${body}}`;
 };
 
+/**
+ * Lunora-relative path of the module column validators are read from. Schema
+ * discovery always parses `lunora/schema.ts`, so a relative `import("…")`
+ * qualifier in a column's rendered type is relative to that file — which is what
+ * {@link relocateUserRelativeImports} rebases against.
+ */
+const SCHEMA_MODULE_PATH = "schema";
+
 /** Emit `_generated/dataModel.ts` — `Doc&lt;"name">` + `Id&lt;"name">` for every table. */
 const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
     const base = baseSpecifiers(useUmbrella);
@@ -404,7 +412,16 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
     // and bind the parameterized generics to this project's \`DataModel\` /
     // \`InsertModel\` / \`Relations\` / index-name maps. Evolving that DSL no
     // longer regenerates a single line here.
-    return `${GENERATED_HEADER}import type {
+    //
+    // Rebased against `schema.ts` on the way out: a `v.from(externalSchema)`
+    // column whose recovered type names something from the schema module's own
+    // `./lib/…` renders as `import("./lib/x")`, which means
+    // `lunora/_generated/lib/x` once inlined here. Applied to the whole rendered
+    // file rather than per-column so a future column-rendering path cannot miss
+    // it; absolute specifiers are left alone.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- rebaseRelativeQualifiers is declared with the other relocators below; call happens at emit time, not module-eval
+    return rebaseRelativeQualifiers(
+        `${GENERATED_HEADER}import type {
     DatabaseReaderFacade as DatabaseReaderFacadeOf,
     DatabaseWriterFacade as DatabaseWriterFacadeOf,
     LoadWith as LoadWithOf,
@@ -573,7 +590,9 @@ export interface OrmWriter extends OrmReader {
     replace: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmReplaceBuilder<T>;
     update: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmUpdateBuilder<T>;
 }
-`;
+`,
+        SCHEMA_MODULE_PATH,
+    );
 };
 
 /**
@@ -1457,7 +1476,10 @@ const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, u
             assertIdentifier(shape.exportName, "shape export name");
 
             const rowType = rowTypeOf(shape);
-            const argsType = renderArgsType(shape.args);
+            // Rebased like every other argument-type site: `_generated/collections.ts`
+            // is in the same directory as `api.ts`, so a relative qualifier reaching
+            // a shape's args resolves one level too deep here too.
+            const argsType = rebaseRelativeQualifiers(renderArgsType(shape.args), shape.filePath);
             const hasArgs = Object.keys(shape.args).length > 0;
             // A parameterless shape must not demand an empty object; a parameterized
             // one must not let the caller forget its partition selector.
@@ -5835,9 +5857,12 @@ const emitDrizzleSchema = (schema: SchemaIR, useUmbrella = false): { global: str
     const globalTables = schema.tables.filter((table) => table.shardMode === "global");
     const shardTables = schema.tables.filter((table) => table.shardMode !== "global");
 
+    // Rebased for the same reason `emitDataModel` is: a `v.from()` column's
+    // `$type<…>()` annotation can carry a qualifier relative to `schema.ts`, and
+    // `drizzle.*.ts` sits one directory deeper.
     return {
-        global: renderDrizzleFile(globalTables, useUmbrella),
-        shard: renderDrizzleFile(shardTables, useUmbrella),
+        global: rebaseRelativeQualifiers(renderDrizzleFile(globalTables, useUmbrella), SCHEMA_MODULE_PATH),
+        shard: rebaseRelativeQualifiers(renderDrizzleFile(shardTables, useUmbrella), SCHEMA_MODULE_PATH),
     };
 };
 

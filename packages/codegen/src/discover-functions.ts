@@ -374,6 +374,32 @@ const GENERATED_DIRECTORY_SEGMENT = "/_generated/";
  * whole trigger, and `export` does not change that.
  */
 const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string): boolean => {
+    const handlerFile = node.getSourceFile();
+
+    /**
+     * Whether `handlerFile` imports `name` from `declarationPath` — the precise
+     * form of "the checker will print this bare".
+     *
+     * Deliberately NOT `type.getText(node).includes("import(")`: that renders the
+     * WHOLE type, type arguments and all, so an imported `Wrapper` wrapping an
+     * out-of-scope `Bar` renders text containing `import(` and the wrapper is
+     * wrongly cleared — printed bare into `_generated/` as a TS2304, one generic
+     * deep. Asking the source file directly is depth-independent, because the
+     * recursion visits each type on its own.
+     */
+    const importsName = (declarationFile: SourceFile, name: string): boolean =>
+        handlerFile.getImportDeclarations().some((declaration) => {
+            if (declaration.getModuleSpecifierSourceFile() !== declarationFile) {
+                return false;
+            }
+
+            // A namespace import (`import * as t`) makes every exported name
+            // reachable, but only as `t.Bar` — which the checker prints qualified
+            // by a local alias that `_generated/` does not have either, so it
+            // counts as bare-nameable exactly like a named import.
+            return declaration.getNamespaceImport() !== undefined || declaration.getNamedImports().some((specifier) => specifier.getName() === name);
+        });
+
     const isBareNameable = (declaration: Node): boolean => {
         const declarationFile = declaration.getSourceFile();
 
@@ -396,7 +422,7 @@ const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string)
             return false;
         }
 
-        return declarationPath === handlerFilePath || !type.getText(node).includes("import(");
+        return declarationPath === handlerFilePath || importsName(declarationFile, declaration.getName());
     };
 
     return [type.getSymbol(), type.getAliasSymbol()]

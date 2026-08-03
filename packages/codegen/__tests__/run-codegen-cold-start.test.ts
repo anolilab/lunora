@@ -15,7 +15,7 @@
  * every other codegen unit test in this suite runs in a checker-degraded
  * sandbox for the same reason (see `discover-functions-any-token.test.ts`).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -126,6 +126,43 @@ export const getProject = query({
 
         expect(result.generated.api).not.toContain('getProject: FunctionReference<"query", {}, unknown>');
         expect(result.generated.api).toContain('getProject: FunctionReference<"query", {}, import("./dataModel.js").Doc_projects | null>;');
+    });
+
+    it("leaves _generated/ untouched when a later phase throws", () => {
+        expect.assertions(2);
+
+        // The declaration surface is rendered before inference, but must not be
+        // WRITTEN before it: everything from `discoverFunctions` to the emit phase
+        // can throw, and a run that committed a new `dataModel.ts` beside a stale
+        // `api.ts`/`shard.ts` leaves the project failing to compile with errors
+        // pointing at generated files rather than the real cause. Worst on a table
+        // REMOVAL, where `Doc_x` vanishes while its referrers stay.
+        runCodegen({ lint: false, projectRoot: workdir });
+
+        const before = readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8");
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+    projects: defineTable({ name: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "broken.ts"),
+            `import { query, v } from "@lunora/server";
+
+export const bad = query.input({ x: v.bogusKind() }).query(async () => 1);
+`,
+            "utf8",
+        );
+
+        expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/Unsupported validator kind/u);
+        expect(readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8")).toBe(before);
     });
 
     it("does not rewrite server.ts a second time on a warm run for a project using a feature flag", () => {
