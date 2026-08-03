@@ -679,6 +679,25 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
     });
 
 /**
+ * Rebase every relative `import("…")` qualifier in a rendered type so it
+ * resolves from inside `_generated/` — `_generated/*` targets via
+ * {@link relocateGeneratedImports}, the user's own modules via
+ * {@link relocateUserRelativeImports}. Order is load-bearing (the user rebase
+ * skips `_generated/` prefixes and hands them on), which is why the pair lives
+ * behind one name instead of being spelled out at each site.
+ *
+ * Applies to ARGUMENT types as well as return types. Only the return type was
+ * rebased before, so a relative qualifier reaching an argument — a
+ * `v.from(externalSchema)` whose recovered `~standard.types.output` names a type
+ * from the handler's own `./lib/…`, or any `{ kind: "any" }` fallback carrying
+ * source text — was written verbatim into `_generated/api.ts` / `functions.ts`,
+ * one directory too deep. That is a TS2307 inside a generated file while
+ * `lunora codegen` exits 0, so it surfaces only when a sibling package
+ * typechecks the same file and has nowhere to filter the error away.
+ */
+const rebaseRelativeQualifiers = (rendered: string, filePath: string): string => relocateGeneratedImports(relocateUserRelativeImports(rendered, filePath));
+
+/**
  * Every base package the `lunorash` umbrella re-exports (its top-level,
  * non-`.`/non-`./package.json` export segments — see
  * `packages/lunora/package.json`). Drives both {@link UMBRELLA_QUALIFIER_RE}
@@ -820,8 +839,8 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
                 // `client.query` / `client.mutation` from `@lunora/client`).
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
-                const argsType = renderArgsType(definition.args);
-                const returnType = relocateGeneratedImports(relocateUserRelativeImports(referenceReturnType(definition), definition.filePath));
+                const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
+                const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
                 return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
             })
@@ -1238,9 +1257,11 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         .map(([file, list]) => {
             const members = list
                 .map((route) => {
-                    const chunkType = relocateGeneratedImports(relocateUserRelativeImports(route.chunkType ?? "unknown", route.filePath));
+                    const chunkType = rebaseRelativeQualifiers(route.chunkType ?? "unknown", route.filePath);
+                    const searchParams = rebaseRelativeQualifiers(renderArgsType(route.searchParams), route.filePath);
+                    const params = rebaseRelativeQualifiers(renderArgsType(route.params), route.filePath);
 
-                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${renderArgsType(route.searchParams)}, ${renderArgsType(route.params)}>;`;
+                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${searchParams}, ${params}>;`;
                 })
                 .join("\n");
 
@@ -1687,9 +1708,9 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
         .map(([file, list]) => {
             const members = list
                 .map((definition) => {
-                    const argsType = renderArgsType(definition.args);
+                    const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = relocateGeneratedImports(relocateUserRelativeImports(definition.returnType, definition.filePath));
+                    const returnType = rebaseRelativeQualifiers(definition.returnType, definition.filePath);
 
                     // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
                     // `callRegistered` awaits the handler, and awaiting a non-thenable
