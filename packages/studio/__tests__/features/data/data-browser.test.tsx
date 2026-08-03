@@ -2015,7 +2015,36 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
         // re-seed reacting to the mirror's own echo of `initialSearch`.
         expect(screen.getByTestId<HTMLInputElement>("db-filter").value).toBe("hel");
 
-        const settledCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
+        const readCount = (): number =>
+            mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        /*
+         * Let the reads go quiet before snapshotting.
+         *
+         * The `waitFor` above returns as soon as the *first* "hel" read lands,
+         * and on a loaded runner a legitimate follow-up can still be in flight
+         * at that moment — so snapshotting there made the assertion a race
+         * against machine speed rather than a test of the re-seed loop. A loop
+         * never stops issuing reads, so it can never reach a quiet window;
+         * anything else reaches one almost immediately.
+         */
+        let settledCount = readCount();
+
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            const before = readCount();
+
+            // eslint-disable-next-line no-await-in-loop -- sequential quiet windows are the point
+            await act(async () => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 100);
+                });
+            });
+
+            if (readCount() === before) {
+                settledCount = before;
+                break;
+            }
+        }
 
         // Wait well past every debounce window; a re-seed loop would keep
         // issuing reads (its own reset re-triggers the mirror, which re-seeds
@@ -2026,9 +2055,7 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
             });
         });
 
-        const laterCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
-
-        expect(laterCount).toBe(settledCount);
+        expect(readCount()).toBe(settledCount);
     });
 
     it("keeps mirroring — and never reverts a SECOND change — after the URL has already echoed back the first one", async () => {
