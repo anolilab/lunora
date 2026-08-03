@@ -202,10 +202,10 @@ export interface Caller {
         comments: (args: { feedbackId: Id<"feedback"> }) => Promise<import("./dataModel.js").Doc_comments[]>;
         create: (args: { title: string; description: string; authorName: string; authorEmail?: string; tags?: Array<string> }) => Promise<Id<"feedback">>;
         get: (args: { id: Id<"feedback"> }) => Promise<import("./dataModel.js").Doc_feedback | null>;
-        list: (args: { status?: unknown; sortBy?: "votes" | "recent" }) => Promise<import("./dataModel.js").Doc_feedback[]>;
+        list: (args: { status?: "open" | "under-review" | "planned" | "in-progress" | "completed" | "closed"; sortBy?: "votes" | "recent" }) => Promise<import("./dataModel.js").Doc_feedback[]>;
         myVotes: (args: { voterEmail: string }) => Promise<Id<"feedback">[]>;
         remove: (args: { id: Id<"feedback"> }) => Promise<void>;
-        setStatus: (args: { id: Id<"feedback">; status: unknown }) => Promise<void>;
+        setStatus: (args: { id: Id<"feedback">; status: "open" | "under-review" | "planned" | "in-progress" | "completed" | "closed" }) => Promise<void>;
         toggleVote: (args: { feedbackId: Id<"feedback">; voterEmail: string }) => Promise<{ voted: boolean; }>;
     };
     summaries: {

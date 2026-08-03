@@ -25,8 +25,9 @@
  * - **oxlint** takes `ignorePatterns` in `.oxlintrc.json`, also gitignore-style
  *   (confirmed against its published `configuration_schema.json`).
  * - **Biome v2** has no ignore key at all — exclusions are negated patterns in
- *   `files.includes`. v1's `files.ignore` still exists in the wild, so the writer
- *   picks whichever key the config already uses rather than sniffing versions.
+ *   `files.includes`, which v1 also accepted alongside its `files.ignore`. Since
+ *   both keys are in the wild and a config states its own answer, the writer
+ *   follows whichever key it already has rather than sniffing a version.
  * - **ESLint** flat config **removed `.eslintignore`**. Writing one would be
  *   worse than doing nothing: ESLint warns that the file is unsupported and then
  *   ignores it, so the project would carry a file that looks like it works.
@@ -70,13 +71,19 @@ const LUNORA_IGNORED_PATHS: ReadonlyArray<string> = [
 type LintTool = "biome" | "eslint" | "oxlint" | "prettier";
 
 /**
- * What happened to one tool's configuration. `"manual"` is not a failure — it
- * means the change is correct but not safe to make automatically, and
- * {@link LintIgnoreOutcome.snippet} carries what to paste.
+ * What happened to one tool's configuration.
+ *
+ * `"manual"` is not a failure — it means the change is correct but not safe to
+ * make automatically, and {@link LintIgnoreOutcome.snippet} carries what to
+ * paste. `"failed"` IS a failure, but only of this step: the command that
+ * triggered it had already done its real work, so it is reported rather than
+ * thrown.
  */
-type LintIgnoreStatus = "created" | "manual" | "unchanged" | "updated";
+type LintIgnoreStatus = "created" | "failed" | "manual" | "unchanged" | "updated";
 
 interface LintIgnoreOutcome {
+    /** For `"failed"`: why the writer could not run. The command itself still succeeded. */
+    message?: string;
     /** Config file that was written, or the one the user must edit for `"manual"`. */
     path: string;
     /** For `"manual"`: the exact text to add. */
@@ -302,11 +309,10 @@ const applyOxlint = (projectRoot: string): LintIgnoreOutcome => {
 /**
  * Extend Biome's exclusions.
  *
- * v2 dropped `files.ignore` for negated patterns in `files.includes`; v1 configs
- * still use `files.ignore`. Rather than sniff a version, follow whichever key
- * the config already has — that is the version's own answer, stated by the
- * project. A fresh config gets the v2 form, which needs a leading `"**"` for the
- * negations to subtract from.
+ * v2 removed `files.ignore` in favour of negated patterns in `files.includes`;
+ * v1 accepted both. Rather than sniff a version, follow whichever key the config
+ * already has — the project has already stated its answer. A fresh config gets
+ * the v2 form, which needs a leading `"**"` for the negations to subtract from.
  */
 const applyBiome = (projectRoot: string): LintIgnoreOutcome => {
     const { action, path } = resolveConfigTarget(projectRoot, "biome");
@@ -400,7 +406,21 @@ const WRITERS: Record<LintTool, (projectRoot: string) => LintIgnoreOutcome> = {
  * @param tools Which tools to configure — normally {@link detectLintTools}'s result, or the user's selection at `init`.
  * @returns one outcome per tool, in the order given.
  */
-const applyLintIgnores = (projectRoot: string, tools: ReadonlyArray<LintTool>): LintIgnoreOutcome[] => tools.map((tool) => WRITERS[tool](projectRoot));
+const applyLintIgnores = (projectRoot: string, tools: ReadonlyArray<LintTool>): LintIgnoreOutcome[] =>
+    tools.map((tool) => {
+        try {
+            return WRITERS[tool](projectRoot);
+        } catch (error) {
+            // Isolated per tool, and never rethrown. Both callers run this AFTER
+            // their real work succeeded — `lunora add` has already installed the
+            // feature, `lunora init` has already scaffolded — so letting a
+            // read-only directory or a full disk escape here would report the
+            // primary action as failed when it did not fail. One tool's
+            // configuration is also independent of the next: a permission error
+            // on `biome.json` says nothing about `.prettierignore`.
+            return { message: error instanceof Error ? error.message : String(error), path: projectRoot, status: "failed", tool };
+        }
+    });
 
 export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS };
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool };

@@ -622,9 +622,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Boundary between the discovery phase (all `discover*` passes + the inline
     // discovers `lintSchema` drives + the metadata discovers above) and the emit
     // phase (the `emit*`/`build*`/serialize work + the file writes below).
-    // `dataModel.ts`/`server.ts` are already rendered (and written) further up —
-    // they are the declaration surface inference reads, so they cannot wait for
-    // this phase.
+    // `dataModel.ts`/`server.ts` are already RENDERED further up — they are the
+    // declaration surface inference reads, so they cannot wait for this phase.
+    // They are not yet WRITTEN: the write happens with every other file below, so
+    // a throw between here and there leaves `_generated/` untouched.
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });

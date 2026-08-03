@@ -661,6 +661,7 @@ interface LinkedProject {
 
 ```ts
 interface LintIgnoreOutcome {
+    message?: string;
     path: string;
     snippet?: string;
     status: LintIgnoreStatus;
@@ -671,7 +672,7 @@ interface LintIgnoreOutcome {
 ### `LintIgnoreStatus` (type)
 
 ```ts
-type LintIgnoreStatus = "created" | "manual" | "unchanged" | "updated";
+type LintIgnoreStatus = "created" | "failed" | "manual" | "unchanged" | "updated";
 ```
 
 ### `LintTool` (type)
@@ -1486,7 +1487,8 @@ interface ManifestConfigShape extends WranglerConfigShape {
     };
     containers?: ReadonlyArray<{
         class_name?: string;
-        name?: string;
+        image?: string;
+        max_instances?: number;
     }>;
     hyperdrive?: ReadonlyArray<{
         binding?: string;

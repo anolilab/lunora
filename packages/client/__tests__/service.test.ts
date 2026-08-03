@@ -118,6 +118,33 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/service binding points at/u);
     });
 
+    it("preserves hint and docsUrl, not just code", async () => {
+        expect.assertions(2);
+
+        // These come from the error catalog and are what make a failure
+        // actionable; restoring only `code`/`data` would give a service-binding
+        // caller a weaker error than the same function throws over HTTP.
+        const service = binding(
+            { error: { code: "NOT_FOUND", docsUrl: "https://lunora.dev/e/not-found", hint: "check the id", message: "nope" } },
+            { status: 404 },
+        );
+
+        await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({ hint: "check the id" });
+        await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({
+            docsUrl: "https://lunora.dev/e/not-found",
+        });
+    });
+
+    it("reports a JSON body that is not an object instead of crashing on it", async () => {
+        expect.assertions(2);
+
+        // `response.json()` resolves `null` for `null` and a scalar for `4`, on
+        // either of which `"error" in parsed` throws `TypeError: Cannot use 'in'
+        // operator` — burying the real cause under an unrelated crash.
+        await expect(createServiceClient(binding("null")).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/not an object/u);
+        await expect(createServiceClient(binding("4")).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/not an object/u);
+    });
+
     it("does not swallow a non-2xx that carried no error envelope", async () => {
         expect.assertions(1);
 

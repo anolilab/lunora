@@ -143,7 +143,7 @@ interface ManifestConfigShape extends WranglerConfigShape {
     /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
     assets?: { binding?: string; directory?: string };
     browser?: { binding?: string };
-    containers?: ReadonlyArray<{ class_name?: string; name?: string }>;
+    containers?: ReadonlyArray<{ class_name?: string; image?: string; max_instances?: number }>;
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
     images?: { binding?: string };
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
@@ -187,7 +187,13 @@ const ARRAY_SECTIONS: ReadonlyArray<{
     type: BindingRequirement["type"];
 }> = [
     { bindingKey: "binding", field: "analytics_engine_datasets", resourceKey: "dataset", type: "analytics_engine" },
-    { bindingKey: "name", field: "containers", type: "container" },
+    // Keyed by `class_name`, not `name`: a wrangler `containers[]` entry has no
+    // `name` field at all (see `@lunora/config`'s own `ContainerEntry`). Keying on
+    // the absent field pushed every real container into `unnamed` — the manifest
+    // reporting a problem it had invented. The identity IS the class, which is
+    // also how the paired `durable_objects.bindings` entry finds it; `image` is
+    // the thing an external deployer has to build or pull.
+    { bindingKey: "class_name", field: "containers", resourceKey: "image", type: "container" },
     { bindingKey: "binding", field: "d1_databases", resourceIdKey: "database_id", resourceKey: "database_name", type: "d1" },
     { bindingKey: "binding", field: "hyperdrive", resourceIdKey: "id", type: "hyperdrive" },
     { bindingKey: "binding", field: "kv_namespaces", resourceIdKey: "id", type: "kv" },

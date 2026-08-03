@@ -94,13 +94,27 @@ interface LunoraServiceClient {
  * see calling the same function in-process. `data` is wire-decoded, so a
  * `bigint` or byte array inside a thrown `LunoraError` survives the hop.
  */
-const reconstructError = (errorBody: { code?: string; data?: unknown; message?: string }): Error & { code?: string; data?: unknown } => {
-    const error = new Error(errorBody.message ?? "request failed") as Error & { code?: string; data?: unknown };
+type ServiceCallError = Error & { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[] };
+
+const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): ServiceCallError => {
+    const error = new Error(errorBody.message ?? "request failed") as ServiceCallError;
 
     error.code = errorBody.code;
 
+    // `hint` and `docsUrl` come from the error catalog and are what make a
+    // failure actionable. Restoring only `code`/`data` would give a
+    // service-binding caller a weaker error than the same function throws over
+    // HTTP, for no reason a caller could see.
     if (errorBody.data !== undefined) {
         error.data = decodeWire(errorBody.data);
+    }
+
+    if (errorBody.hint !== undefined) {
+        error.hint = errorBody.hint;
+    }
+
+    if (errorBody.docsUrl !== undefined) {
+        error.docsUrl = errorBody.docsUrl;
     }
 
     return error;
@@ -133,11 +147,20 @@ const callBinding = async (
         throw new TypeError(`@lunora/client/service: cannot encode args for '${path}' — ${reason}`, error instanceof Error ? { cause: error } : undefined);
     }
 
+    // Deliberately only `content-type`. The HTTP client also sends
+    // `x-lunora-mutation-id`, `x-lunora-client-id`, a bearer token and a D1
+    // bookmark — every one of which describes a BROWSER client's session. A
+    // service-binding caller is a server: it has no client id, and inventing a
+    // mutation id would fabricate an idempotency key that dedups unrelated
+    // writes against each other. The worker reads all of them conditionally, so
+    // their absence changes nothing but the client-replay behaviour that does not
+    // apply here. (Read-your-writes across the binding would need a bookmark the
+    // caller owns; that is a stateful client, and not this.)
     const response = await binding.fetch(
         new Request(`${INTERNAL_ORIGIN}${RPC_PATH}`, { body, headers: { "content-type": "application/json" }, method: "POST" }),
     );
 
-    let parsed: RpcResponseBody;
+    let parsed: unknown;
 
     try {
         parsed = await response.json();
@@ -153,8 +176,23 @@ const callBinding = async (
         );
     }
 
-    if ("error" in parsed) {
-        throw reconstructError(parsed.error);
+    // `response.json()` resolves `null` for the body `null` and a scalar for `4`
+    // or `"ok"`, on either of which `"error" in parsed` throws
+    // `TypeError: Cannot use 'in' operator` — hiding the real cause behind an
+    // unrelated crash. The declared shape is an assumption about a remote Worker,
+    // so it is checked rather than trusted.
+    if (parsed === null || typeof parsed !== "object") {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/client/service: ${kind} "${path}" returned a JSON body that is not an object (status ${response.status.toString()}). Check the service binding points at the Lunora Worker that declares this function.`,
+            { status: response.status },
+        );
+    }
+
+    const envelope = parsed as RpcResponseBody;
+
+    if ("error" in envelope) {
+        throw reconstructError(envelope.error);
     }
 
     if (!response.ok) {
@@ -163,7 +201,7 @@ const callBinding = async (
         });
     }
 
-    return decodeWire(parsed.result);
+    return decodeWire(envelope.result);
 };
 
 /**

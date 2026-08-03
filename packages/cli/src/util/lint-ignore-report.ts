@@ -28,6 +28,14 @@ const reportLintIgnoreOutcomes = (outcomes: ReadonlyArray<LintIgnoreOutcome>, lo
         // a monorepo root belongs to the whole workspace rather than this package.
         // Print exactly what to add instead of leaving it to surface as a few
         // thousand lint errors.
+        // A writer that could not run. The command itself succeeded — this step
+        // runs after the real work — so it is a warning, never an exit code.
+        if (outcome.status === "failed") {
+            logger.warn(
+                `could not configure ${outcome.tool} to skip Lunora's generated files: ${outcome.message ?? "unknown error"}. Add the entries by hand, or re-run once the path is writable.`,
+            );
+        }
+
         if (outcome.status === "manual" && outcome.snippet !== undefined) {
             logger.warn(`${outcome.path} needs an entry so ${outcome.tool} skips Lunora's generated files — add:\n${outcome.snippet}`);
         }

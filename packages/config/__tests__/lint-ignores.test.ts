@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -176,6 +176,30 @@ describe("applyLintIgnores", () => {
         expect(outcome?.status).toBe("manual");
         expect(outcome?.snippet).toContain("ignores:");
         expect(readFileSync(join(workdir, "eslint.config.js"), "utf8")).toBe(original);
+    });
+
+    it("reports a writer failure instead of throwing it at the caller", () => {
+        expect.assertions(3);
+
+        // Both callers run this AFTER their real work succeeded — `lunora add` has
+        // already installed the feature. Letting a read-only directory escape here
+        // would report the primary action as failed when it did not fail. Each
+        // tool is isolated too: a permission error on one config says nothing
+        // about the next.
+        const readOnly = join(workdir, "locked");
+
+        mkdirSync(readOnly, { recursive: true });
+        chmodSync(readOnly, 0o500);
+
+        try {
+            const outcomes = applyLintIgnores(readOnly, ["prettier"]);
+
+            expect(outcomes[0]?.status).toBe("failed");
+            expect(outcomes[0]?.message).toBeDefined();
+            expect(existsSync(join(readOnly, ".prettierignore"))).toBe(false);
+        } finally {
+            chmodSync(readOnly, 0o700);
+        }
     });
 
     it("never shadows a monorepo root config by creating a nested one", () => {

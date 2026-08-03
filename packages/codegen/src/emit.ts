@@ -5625,12 +5625,7 @@ interface DrizzleColumn {
 
 const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
     switch (validator.kind) {
-        // `from` rides with the composites: an external Standard Schema can
-        // describe anything, so there is no narrower SQL type to pick. The
-        // `$type<…>()` annotation carries the type recovered from
-        // `~standard.types.output`, or `unknown` when it could not be rendered.
         case "array":
-        case "from":
         case "object":
         case "record":
         case "union": {
@@ -5654,6 +5649,15 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
         case "timestamp": {
             // Stored as epoch-millisecond integers.
             return { builder: "integer", notNull: true };
+        }
+        case "from": {
+            // Plain text, NOT the `mode: "json"` group above — matching how the
+            // value actually round-trips. `sqliteEncode` keys off the runtime JS
+            // type, so a `v.from(z.string())` column holds a bare `hello`, and
+            // drizzle's json mode would `JSON.parse` that and throw on every read.
+            // The `$type<…>()` annotation still carries the type recovered from
+            // `~standard.types.output`, so `Doc_*` sees the real shape.
+            return { builder: "text", notNull: true, typeAnnotation: validatorToType(validator) };
         }
         case "id": {
             return { builder: "text", notNull: true };

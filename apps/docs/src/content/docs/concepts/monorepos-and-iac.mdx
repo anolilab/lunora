@@ -124,9 +124,16 @@ same account, bind it and use `@lunora/client/service`:
 import { createServiceClient } from "@lunora/client/service";
 import { api } from "@acme/backend/api";
 
-const backend = createServiceClient(env.BACKEND);
+export default {
+    async fetch(request: Request, env: Env) {
+        // `env` is a handler argument on Workers, never a module-scope global —
+        // build the client inside the handler (or pass `env` into a factory).
+        const backend = createServiceClient(env.BACKEND);
+        const threads = await backend.query(api.threads.list, { userId });
 
-const threads = await backend.query(api.threads.list, { userId });
+        return Response.json(threads);
+    },
+};
 ```
 
 The call is typed against the same `api` the browser uses, so a renamed function

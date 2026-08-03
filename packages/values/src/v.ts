@@ -1106,12 +1106,18 @@ const standardIssuePath = (path: ReadonlyArray<unknown> | undefined): (number | 
  * `~standard.types.output` when declared; falls back to `unknown` when the
  * schema omits the types field.
  *
- * **Columns store JSON.** A shard row is a JSON document, so a `v.from()` column
- * needs no SQL type of its own; for a `.global()` table it maps to a JSON text
- * column, the same as `v.object`/`v.record`/`v.union`. That means the on-disk
- * form is the JSON encoding of whatever the external schema produces, so a
- * `v.from(z.string())` column holds `"x"` rather than a bare `TEXT` `x` — use
- * `v.string()` when the plain column type matters (for a comparison index, say).
+ * **Columns are stored by the value's runtime type.** A shard row is a JSON
+ * document, so a `v.from()` column needs no SQL type of its own. For a
+ * `.global()` table it maps to a TEXT column holding whatever the encoder
+ * produces: a scalar is written verbatim (a `v.from(z.string())` column holds a
+ * bare `hello`, not `"hello"`), and an object or array is JSON-encoded. That is
+ * the same rule `v.union` and `v.any` follow, and it is why the column cannot be
+ * a Postgres/MySQL `JSON` column — a bare `hello` is not valid JSON.
+ *
+ * The consequence worth knowing: a stored *string* that itself looks like JSON
+ * (`'{"a":1}'`) is ambiguous on read and decodes to the parsed object. Declare
+ * the column with a concrete `v.*` type when the plain column type matters — for
+ * a comparison index, or to avoid that ambiguity.
  *
  * **Not seedable.** `@lunora/seed` cannot introspect an external schema to
  * invent a valid value, so it refuses a `v.from()` column with an actionable
