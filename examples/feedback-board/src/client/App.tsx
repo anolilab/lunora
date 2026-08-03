@@ -169,6 +169,9 @@ export const App = (): ReactElement => {
                         return (
                             <li key={post._id} className="card post">
                                 <button
+                                    // The visible label is a caret and a number, which reads as
+                                    // "▲ 3" to a screen reader — no indication of what it does.
+                                    aria-label={`${voted ? "Remove upvote from" : "Upvote"} ${post.title}`}
                                     aria-pressed={voted}
                                     className={voted ? "vote voted" : "vote"}
                                     onClick={() => void toggleVote({ feedbackId: post._id, voterEmail: VOTER_EMAIL })}

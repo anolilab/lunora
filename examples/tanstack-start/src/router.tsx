@@ -11,7 +11,8 @@ const isServer = typeof globalThis.window === "undefined";
  *
  * On the server that has to be an absolute URL — there is no page origin to be
  * relative to. In dev the composed worker serves both the SSR handler and
- * `/_lunora/*`, so it loops back to itself.
+ * `/_lunora/*`, so it loops back to itself; `vite.config.ts` injects the port
+ * the dev server actually bound, so this works on any port.
  */
 const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (isServer ? "http://localhost:5173" : globalThis.location.origin);
 

@@ -40,9 +40,11 @@ yaml_lintable:
     - "**/*.yml"
     - "**/*.yaml"
 
-# E2E exercises the playground app + the runtime/client/do/auth packages.
+# E2E exercises the playground app and the five showcase examples, plus the
+# runtime/client/do/auth packages they all run on.
 e2e:
     - "apps/playground/**"
+    - "examples/**"
     - "tests/e2e/**"
     - "packages/**"
     - "pnpm-lock.yaml"

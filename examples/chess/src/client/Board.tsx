@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { ChessMove, ChessState, PieceColor, PieceType, Square } from "../../lunora/chess.js";
 import { getValidMoves, squareToName } from "../../lunora/chess.js";
 
+/** Screen readers announce this, so it spells the piece out — "e2 white pawn", not "e2 white P". */
+const PIECE_NAMES: Record<PieceType, string> = { B: "bishop", K: "king", N: "knight", P: "pawn", Q: "queen", R: "rook" };
+
 const GLYPHS: Record<PieceColor, Record<PieceType, string>> = {
     black: { B: "♝", K: "♚", N: "♞", P: "♟", Q: "♛", R: "♜" },
     white: { B: "♗", K: "♔", N: "♘", P: "♙", Q: "♕", R: "♖" },
@@ -81,7 +84,7 @@ export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElem
                         return (
                             <button
                                 key={`${row}-${col}`}
-                                aria-label={`${squareToName({ col, row })}${piece ? ` ${piece.color} ${piece.type}` : ""}`}
+                                aria-label={`${squareToName({ col, row })}${piece ? ` ${piece.color} ${PIECE_NAMES[piece.type]}` : ""}`}
                                 className={["square", (row + col) % 2 === 0 ? "light" : "dark", isSelected ? "selected" : "", isTarget ? "target" : ""]
                                     .filter(Boolean)
                                     .join(" ")}

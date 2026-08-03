@@ -233,12 +233,22 @@
                   "LUNORA_E2E": "true"
               "run": "pnpm e2e"
 
+            # The showcase examples, driven in a real browser. Separate config
+            # (five apps, five ports) and separate report, but the same built
+            # packages and the same Chromium this job already provisioned.
+            - "name": "Run examples E2E suite"
+              "env":
+                  "CI": "true"
+              "run": "pnpm run e2e:examples"
+
             - "name": "Upload Playwright report on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
                   "name": "playwright-report"
-                  "path": "tests/e2e/playwright-report"
+                  "path": |
+                      tests/e2e/playwright-report
+                      tests/e2e/playwright-report-examples
                   "retention-days": 7
 
     # Scaffold every template, install it, add the auth-ui payload, build, and

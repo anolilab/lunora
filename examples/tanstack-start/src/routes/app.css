@@ -267,3 +267,32 @@ time {
     font-family: var(--mono);
     font-variant-numeric: tabular-nums;
 }
+
+/* Connection state. Dim while it settles, accented once the socket is up. */
+.status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+}
+
+.status::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: currentcolor;
+}
+
+.status.live {
+    color: var(--accent);
+}
+
+.status.live::before {
+    animation: live-pulse 2.4s var(--ease) infinite;
+}

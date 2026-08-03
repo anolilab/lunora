@@ -1,4 +1,4 @@
-import { lunoraQueryOptions, useMutation, useQuery } from "@lunora/react";
+import { lunoraQueryOptions, useConnectionStatus, useMutation, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
@@ -26,11 +26,19 @@ function Home(): ReactElement {
     const board = useQuery(api.messages.board, BOARD_ARGS);
     const { mutate: send, pending } = useMutation(api.messages.send);
 
+    /**
+     * The one thing the server render cannot tell you: whether the socket is up
+     * yet. Until it is, the page is a snapshot — worth saying out loud in an
+     * example whose whole point is the handover from SSR to live.
+     */
+    const status = useConnectionStatus();
+
     return (
         <main className="page">
             <header>
                 <h1>Lunora + TanStack Start</h1>
                 <p className="muted">Server-rendered from the route loader, then live over a socket.</p>
+                <p className={status === "connected" ? "status live" : "status"}>{status === "connected" ? "live" : status}</p>
             </header>
 
             {/*
