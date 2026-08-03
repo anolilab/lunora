@@ -343,38 +343,65 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 };
 
 /**
- * True when the type's symbol is declared in the handler's own source file.
- *
- * `_generated/api.ts` never imports that module — codegen only emits an import
- * for a qualifier the checker itself rendered as `import("…")` — so such a name
- * must be expanded structurally rather than printed. Exported declarations are
- * included: being nameable from the handler is what makes the checker print the
- * bare name, which is exactly the case that does not resolve from `_generated/`.
+ * The one user-land module a generated file DOES import from. `emitApi` /
+ * `emitFunctions` emit `import type { Doc, Id } from "./dataModel.js"` for
+ * whichever of the two a rendered body references (see `referencedDataModelImports`),
+ * so a bare `Doc`/`Id` reference resolves there and must be printed, not expanded.
  */
-const declaredInHandlerModule = (type: Type, handlerFilePath: string): boolean => {
-    for (const candidate of [type.getSymbol(), type.getAliasSymbol()]) {
-        if (!candidate) {
-            continue;
+const GENERATED_DIRECTORY_SEGMENT = "/_generated/";
+
+/**
+ * True when the checker will print this user-land named type as a BARE name at
+ * `node` — the case that does not resolve from `_generated/`.
+ *
+ * `_generated/api.ts` does not import the handler's modules; codegen only emits
+ * an import for a qualifier the checker itself rendered as `import("…")` (plus
+ * the fixed `dataModel` one, excluded below). So a bare name must be expanded
+ * structurally rather than printed, or it lands in the generated file as an
+ * undeclared identifier (TS2304).
+ *
+ * Two ways a name comes out bare, and both must be caught. One: the type is
+ * declared in the handler's own module (`handlerFilePath`). Two: the type is
+ * declared elsewhere in user code but IMPORTED into the handler's module, which
+ * makes it equally nameable there. That second half was missing, so a shared
+ * `./lib/types` interface — the ordinary way to write one — leaked into
+ * `api.ts`/`functions.ts` unimported. It is detected by asking the checker what
+ * it renders: an out-of-scope type comes back carrying an `import("…")`
+ * qualifier, which the emitter rebases against the output directory instead, so
+ * only the qualifier-free rendering is expanded here.
+ *
+ * Exported declarations are included — being nameable from the handler is the
+ * whole trigger, and `export` does not change that.
+ */
+const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string): boolean => {
+    const isBareNameable = (declaration: Node): boolean => {
+        const declarationFile = declaration.getSourceFile();
+
+        if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
+            return false;
         }
 
-        for (const declaration of candidate.getDeclarations()) {
-            const declarationFile = declaration.getSourceFile();
-
-            if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
-                continue;
-            }
-
-            if (declarationFile.getFilePath() !== handlerFilePath) {
-                continue;
-            }
-
-            if (Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) {
-                return true;
-            }
+        if (!Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration)) {
+            return false;
         }
-    }
 
-    return false;
+        const declarationPath = declarationFile.getFilePath();
+
+        // `Doc`/`Id` and friends: the generated files import these by name, so the
+        // bare rendering is correct there. Expanding them instead would discard a
+        // branded `Id` (not an expandable object) and fall all the way back to
+        // `unknown` — measured as every `Doc`/`Id`-shaped return type in the
+        // example apps collapsing at once.
+        if (declarationPath.includes(GENERATED_DIRECTORY_SEGMENT)) {
+            return false;
+        }
+
+        return declarationPath === handlerFilePath || !type.getText(node).includes("import(");
+    };
+
+    return [type.getSymbol(), type.getAliasSymbol()]
+        .flatMap((candidate) => candidate?.getDeclarations() ?? [])
+        .some((declaration) => isBareNameable(declaration));
 };
 
 /** Composite child types of `type` (type arguments + union/intersection members) to recurse into. */
@@ -423,7 +450,7 @@ const referencesUnreachableLocalType = (type: Type, node: Node, handlerFilePath:
 
     seen.add(type);
 
-    if (declaredInHandlerModule(type, handlerFilePath)) {
+    if (printsAsUnimportedName(type, node, handlerFilePath)) {
         return true;
     }
 
