@@ -1,3 +1,5 @@
+## @lunora/shard-engine [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fshard-engine%401.0.0-alpha.7...%40lunora%2Fshard-engine%401.0.0-alpha.8) (2026-08-03)
+
 ## @lunora/shard-engine [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fshard-engine%401.0.0-alpha.6...%40lunora%2Fshard-engine%401.0.0-alpha.7) (2026-08-02)
 
 
