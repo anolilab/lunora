@@ -2022,9 +2022,16 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
             }
         });
 
+        // The wait above only proves the read was ISSUED. `keepPreviousData` is
+        // off, so between that call and the new page committing the whole page —
+        // filter bar included — is unmounted, and a synchronous `getByTestId`
+        // here is a race that only loses on a loaded runner. Same reason, and
+        // same fix, as the sibling test below.
+        const filterInput = await screen.findByTestId<HTMLInputElement>("db-filter");
+
         // The typed value is still exactly what was typed — never reset by a
         // re-seed reacting to the mirror's own echo of `initialSearch`.
-        expect(screen.getByTestId<HTMLInputElement>("db-filter").value).toBe("hel");
+        expect(filterInput.value).toBe("hel");
 
         const settledCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
 
