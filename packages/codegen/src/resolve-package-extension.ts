@@ -125,6 +125,16 @@ const runtimeValidatorToIR = (validator: RuntimeValidator | undefined): Validato
             ir.inner = runtimeValidatorToIR(meta["inner"] as RuntimeValidator | undefined);
             break;
         }
+        case "from": {
+            // Deliberately no `tsType`. The AST path recovers one by asking the
+            // type checker for `~standard.types.output`, but that property is
+            // types-only — it does not exist on the runtime validator object this
+            // function reads, and a package extension contributes its tables as
+            // runtime values with no source to inspect. `unknown` is the honest
+            // answer here rather than a guess; declare the column with a concrete
+            // `v.*` type if a package needs it typed for consumers.
+            break;
+        }
         case "id": {
             ir.tableName = meta["tableName"] as string | undefined;
             break;

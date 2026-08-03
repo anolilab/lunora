@@ -1101,15 +1101,30 @@ const standardIssuePath = (path: ReadonlyArray<unknown> | undefined): (number | 
 
 /**
  * Wrap any Standard Schema v1 validator (`zod`, `valibot`, `arktype`, …) so it
- * can be used as an **args** validator in `query`/`mutation`/`action`. The
- * wrapped validator's output type is inferred from `~standard.types.output`
- * when declared; falls back to `unknown` when the schema omits the types field.
+ * can be used as an args validator in `query`/`mutation`/`action`, or as a table
+ * column. The wrapped validator's output type is inferred from
+ * `~standard.types.output` when declared; falls back to `unknown` when the
+ * schema omits the types field.
  *
- * **Args-only.** `v.from(...)` validators must not be used as table columns —
- * `defineTable` checks the `kind` and throws a clear error if you try.
+ * **Columns are stored by the value's runtime type.** A shard row is a JSON
+ * document, so a `v.from()` column needs no SQL type of its own. For a
+ * `.global()` table it maps to a TEXT column holding whatever the encoder
+ * produces: a scalar is written verbatim (a `v.from(z.string())` column holds a
+ * bare `hello`, not `"hello"`), and an object or array is JSON-encoded. That is
+ * the same rule `v.union` and `v.any` follow, and it is why the column cannot be
+ * a Postgres/MySQL `JSON` column — a bare `hello` is not valid JSON.
  *
- * **Sync-only.** Standard Schema allows async `validate`; Lunora args
- * validation is synchronous and throws when a Promise is returned.
+ * The consequence worth knowing: a stored *string* that itself looks like JSON
+ * (`'{"a":1}'`) is ambiguous on read and decodes to the parsed object. Declare
+ * the column with a concrete `v.*` type when the plain column type matters — for
+ * a comparison index, or to avoid that ambiguity.
+ *
+ * **Not seedable.** `@lunora/seed` cannot introspect an external schema to
+ * invent a valid value, so it refuses a `v.from()` column with an actionable
+ * error rather than generating one that fails validation on insert.
+ *
+ * **Sync-only.** Standard Schema allows async `validate`; Lunora validation is
+ * synchronous and throws when a Promise is returned.
  */
 const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>> => {
     // Cast through a loose shape: the static type guarantees `~standard`, but
@@ -1179,11 +1194,15 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
 
 /**
  * True when `validator` is `v.from(...)` or structurally wraps one through
- * `v.optional` / `v.array` / `v.object` / `v.record` / `v.union`. `defineTable`
- * uses it to reject Standard-Schema-backed validators anywhere in a column —
- * not just at the top level — since they are args-only and have no SQL column
- * type. The nested children live on the validator's `_meta` (`inner`, `shape`,
- * `members`, `keyValidator`/`valueValidator`) and are themselves validators.
+ * `v.optional` / `v.array` / `v.object` / `v.record` / `v.union`. The nested
+ * children live on the validator's `_meta` (`inner`, `shape`, `members`,
+ * `keyValidator`/`valueValidator`) and are themselves validators.
+ *
+ * For tooling that must know whether a value is validated by an external
+ * Standard Schema rather than a concrete `v.*` type — a seeder that cannot
+ * invent a conforming value, a JSON Schema exporter that has nothing to
+ * describe. `defineTable` no longer calls it: a `v.from()` column is allowed
+ * and stores JSON, see {@link from}.
  */
 const isOrWrapsFromValidator = (validator: Validator): boolean => {
     if (validator.kind === "from") {

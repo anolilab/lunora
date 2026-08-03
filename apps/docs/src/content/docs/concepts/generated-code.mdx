@@ -67,6 +67,13 @@ function format(message: Doc<"messages">): string {
 }
 ```
 
+`dataModel.ts` imports nothing. It carries only the shapes derived from your
+schema, so a sibling package — a web app, another Worker — can compile it (and
+`api.ts` through it) with `@lunora/client` alone. The query-DSL bindings that
+need `@lunora/server` live in `server.ts` instead, which only your function code
+imports. See [Monorepos and IaC](/docs/concepts/monorepos-and-iac#consuming-the-generated-api-from-a-sibling-package)
+for the `exports` mapping that goes with it.
+
 ## Importing the generated code
 
 The CLI scaffolds your functions under `lunora/`, with `_generated/` alongside.
@@ -88,6 +95,39 @@ project's declared dependencies, and emits matching imports in `_generated/*`:
 This is opt-in and fully backward-compatible: switching to the umbrella changes
 only the import specifiers in the generated code, never your function code.
 
+## Linting and formatting
+
+`_generated/*` lands in your repo and is compiled under your own settings, so
+your linter and formatter will happily report thousands of problems in files
+nobody wrote. `lunora init` asks which tools you use and configures them to skip
+Lunora's generated and derived paths; `lunora add` re-derives the same answer
+from your `package.json` on every feature install, with no prompt.
+
+The paths excluded are `lunora/_generated/`, `lunora/.lunora-schema.json`,
+`lunora.advisor.map.json`, `.lunora/`, and `.wrangler/`. Two of those are
+committed on purpose — the schema-drift baseline is the whole point of the
+[deploy gate](/docs/concepts/migrations) — which is why `.gitignore` alone does
+not cover it.
+
+Each tool gets its own mechanism, because there is no shared ignore format:
+
+| Tool     | Where the entries go                                           |
+| -------- | -------------------------------------------------------------- |
+| Prettier | `.prettierignore`                                              |
+| oxlint   | `ignorePatterns` in `.oxlintrc.json`                           |
+| Biome    | negated patterns in `files.includes` (or `files.ignore` in v1) |
+| ESLint   | an `ignores` entry in `eslint.config.*`                        |
+
+<Callout type="info">
+    Two cases are reported for you to apply by hand rather than written: an **existing** ESLint flat config (it is arbitrary JavaScript, so it is not rewritten
+    on your behalf) and a config **inherited from a workspace root** (writing a nested one would shadow it — ESLint 9 stops at the first flat config it finds
+    walking up, so a package-level file holding only `ignores` would silently switch off every rule the root enforced). Both print the exact entry to add.
+</Callout>
+
+No `.eslintignore` is ever written: flat config removed support for it, and
+ESLint warns about the file while ignoring its contents, so creating one would
+leave behind something that looks like it works.
+
 ## Regenerating
 
 You rarely run codegen by hand. The Vite plugin (`@lunora/vite`) regenerates
@@ -101,6 +141,12 @@ For CI, scripts, or a manual refresh, run it directly:
 ```bash
 lunora codegen
 ```
+
+One run is enough. Codegen emits the declaration surface (`dataModel.ts`,
+`server.ts`) before it infers any handler's return type, so a single pass
+converges even from a cold `_generated/` or after adding a table — you do not
+need to run it twice, and you do not need a loop that re-runs it until the output
+stops changing. A failed run writes nothing, leaving the previous output intact.
 
 ### Running your own step after codegen
 

@@ -363,7 +363,34 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "status": {},
+                                            "status": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "open",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "under-review",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "planned",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "in-progress",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "completed",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "closed",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            },
                                             "sortBy": {
                                                 "anyOf": [
                                                     {
@@ -564,7 +591,34 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "feedback"
                                             },
-                                            "status": {}
+                                            "status": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "open",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "under-review",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "planned",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "in-progress",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "completed",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "closed",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            }
                                         },
                                         "required": [
                                             "id",

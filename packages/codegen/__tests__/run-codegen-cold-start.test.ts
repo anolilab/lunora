@@ -15,7 +15,7 @@
  * every other codegen unit test in this suite runs in a checker-degraded
  * sandbox for the same reason (see `discover-functions-any-token.test.ts`).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -82,6 +82,87 @@ describe("runCodegen — cold-start reproducibility (#283)", () => {
 
         expect(second.generated.functions).toBe(first.generated.functions);
         expect(second.generated.api).toBe(first.generated.api);
+    });
+
+    it("does not collapse a Doc<T> for a table added since the last run (warm but stale)", () => {
+        expect.assertions(2);
+
+        // The residual half of #283. The cold-start bootstrap only fires when a
+        // generated file is MISSING, so an everyday edit — add a table, add a
+        // handler that returns a row from it — still inferred pass 1 against the
+        // PREVIOUS run's `dataModel.ts`, which has no `Doc_projects`. That is why
+        // `lunora codegen` still needed two passes on a warm tree, and why a
+        // project ends up wrapping the CLI in a run-until-the-hash-stops-changing
+        // loop.
+        runCodegen({ lint: false, projectRoot: workdir });
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+    projects: defineTable({ name: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "projects.ts"),
+            `import type { Doc } from "./_generated/dataModel";
+import { query } from "@lunora/server";
+
+export const getProject = query({
+    args: {},
+    handler: async (): Promise<Doc<"projects"> | null> => {
+        return null;
+    },
+});
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ lint: false, projectRoot: workdir });
+
+        expect(result.generated.api).not.toContain('getProject: FunctionReference<"query", {}, unknown>');
+        expect(result.generated.api).toContain('getProject: FunctionReference<"query", {}, import("./dataModel.js").Doc_projects | null>;');
+    });
+
+    it("leaves _generated/ untouched when a later phase throws", () => {
+        expect.assertions(2);
+
+        // The declaration surface is rendered before inference, but must not be
+        // WRITTEN before it: everything from `discoverFunctions` to the emit phase
+        // can throw, and a run that committed a new `dataModel.ts` beside a stale
+        // `api.ts`/`shard.ts` leaves the project failing to compile with errors
+        // pointing at generated files rather than the real cause. Worst on a table
+        // REMOVAL, where `Doc_x` vanishes while its referrers stay.
+        runCodegen({ lint: false, projectRoot: workdir });
+
+        const before = readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8");
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+    projects: defineTable({ name: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "broken.ts"),
+            `import { query, v } from "@lunora/server";
+
+export const bad = query.input({ x: v.bogusKind() }).query(async () => 1);
+`,
+            "utf8",
+        );
+
+        expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/Unsupported validator kind/u);
+        expect(readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8")).toBe(before);
     });
 
     it("does not rewrite server.ts a second time on a warm run for a project using a feature flag", () => {

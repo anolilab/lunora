@@ -12,10 +12,10 @@ export interface ApiTypes {
         comments: FunctionReference<"query", { feedbackId: Id<"feedback"> }, import("./dataModel.js").Doc_comments[]>;
         create: FunctionReference<"mutation", { title: string; description: string; authorName: string; authorEmail?: string; tags?: Array<string> }, Id<"feedback">>;
         get: FunctionReference<"query", { id: Id<"feedback"> }, import("./dataModel.js").Doc_feedback | null>;
-        list: FunctionReference<"query", { status?: unknown; sortBy?: "votes" | "recent" }, import("./dataModel.js").Doc_feedback[]>;
+        list: FunctionReference<"query", { status?: "open" | "under-review" | "planned" | "in-progress" | "completed" | "closed"; sortBy?: "votes" | "recent" }, import("./dataModel.js").Doc_feedback[]>;
         myVotes: FunctionReference<"query", { voterEmail: string }, Id<"feedback">[]>;
         remove: FunctionReference<"mutation", { id: Id<"feedback"> }, void>;
-        setStatus: FunctionReference<"mutation", { id: Id<"feedback">; status: unknown }, void>;
+        setStatus: FunctionReference<"mutation", { id: Id<"feedback">; status: "open" | "under-review" | "planned" | "in-progress" | "completed" | "closed" }, void>;
         toggleVote: FunctionReference<"mutation", { feedbackId: Id<"feedback">; voterEmail: string }, { voted: boolean; }>;
     };
     summaries: {

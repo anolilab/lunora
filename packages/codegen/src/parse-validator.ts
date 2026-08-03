@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
@@ -94,11 +94,111 @@ const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoP
 const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
 
 /**
+ * Identifiers currently being followed to their declaration, so a self- or
+ * mutually-referential `const` (`const a = b; const b = a;`) terminates instead
+ * of recursing forever. Parsing is synchronous and single-threaded, so one
+ * module-level set is enough; every entry is removed in a `finally`.
+ */
+const resolvingAliases = new Set<Identifier>();
+
+/**
+ * Follow a bare identifier to the validator expression its `const` holds.
+ *
+ * A validator written once and reused — `const vDocumentDoc = v.object({…})`,
+ * then `.output(v.union(vDocumentDoc, v.null()))` — used to reach the parser as
+ * an `Identifier`, which is not a `CallExpression`, so it fell through to the
+ * `{ kind: "any" }` catch-all and rendered `unknown` in the generated api. That
+ * left consumers narrowing `unknown` to `{}` and erroring on every property
+ * access, and pushed authors toward inlining a 20-field object literal at every
+ * call site rather than keeping one source of truth for a table's public shape.
+ *
+ * Resolved through the SYMBOL (with `getAliasedSymbol` for an import) rather
+ * than `getDefinitionNodes`, so a validator imported from a sibling module
+ * resolves the same as a local one — go-to-definition would stop at the
+ * `ImportSpecifier`.
+ *
+ * Applies to every validator position, not just `.output()`: `.input()` shapes,
+ * table columns, and nested `v.array(vRow)` / `v.optional(vRow)` arguments all
+ * route through {@link parseValidator}, and all degraded the same way.
+ */
+const resolveValidatorAlias = (identifier: Identifier): Expression | undefined => {
+    const symbol = identifier.getSymbol();
+    const declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    return declaration.getInitializer();
+};
+
+/**
+ * The conventional local name of the validator factory namespace.
+ *
+ * Matched by name rather than by resolving the import, deliberately: a project
+ * that aliases it (`import { v as val }`) simply does not get alias resolution
+ * and keeps the previous `unknown` rendering — a smaller, safer failure than
+ * mis-classifying an arbitrary call as a validator and throwing on it.
+ */
+const VALIDATOR_NAMESPACE = "v";
+
+/**
+ * Whether `expression` is shaped like a validator: a `v.*(…)` chain, or another
+ * identifier that {@link parseValidator} will resolve in turn (`const b = a;`).
+ *
+ * This is the gate that lets a const reference be followed WITHOUT a catch. A
+ * const holding something unrelated — `const merged = lodash.merge(a, b)` used
+ * where a validator was expected — is left to the `{ kind: "any" }` fallback,
+ * exactly as before alias resolution existed.
+ */
+const rootsAtValidatorFactory = (expression: Expression): boolean => {
+    if (Node.isIdentifier(expression)) {
+        return true;
+    }
+
+    let node: Node = expression;
+
+    while (Node.isCallExpression(node)) {
+        const callee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(callee)) {
+            return false;
+        }
+
+        node = callee.getExpression();
+    }
+
+    return Node.isIdentifier(node) && node.getText() === VALIDATOR_NAMESPACE;
+};
+
+/**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
  * Used by both schema discovery and function-args discovery so the rendered
  * TS types are identical regardless of where a validator appears.
  */
 const parseValidator = (expression: Expression): ValidatorIR => {
+    if (Node.isIdentifier(expression) && !resolvingAliases.has(expression)) {
+        const target = resolveValidatorAlias(expression);
+
+        // Gated on the target LOOKING like a validator rather than wrapped in a
+        // try/catch. A catch around the recursive parse would also swallow
+        // `Unsupported validator kind` raised by a typo INSIDE a hoisted
+        // validator — so `const vRow = v.object({ x: v.strng() })` would quietly
+        // render `unknown` while the identical expression written inline aborted
+        // the run. Two forms that are supposed to be interchangeable must not
+        // diverge on the error path, so the check happens before the parse and
+        // anything that gets past it throws exactly as the inline form does.
+        if (target !== undefined && rootsAtValidatorFactory(target)) {
+            resolvingAliases.add(expression);
+
+            try {
+                return parseValidator(target);
+            } finally {
+                resolvingAliases.delete(expression);
+            }
+        }
+    }
+
     if (Node.isCallExpression(expression)) {
         // parseValidatorCall <-> parseValidator/parseObjectShape are mutually
         // recursive, so one forward reference is unavoidable here. Arrow consts

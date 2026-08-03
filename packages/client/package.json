@@ -60,6 +60,10 @@
             "types": "./dist/upload.d.ts",
             "import": "./dist/upload.mjs"
         },
+        "./service": {
+            "types": "./dist/service.d.ts",
+            "import": "./dist/service.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

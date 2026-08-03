@@ -17,9 +17,16 @@ describe("defineTable", () => {
         expect(messages.searchIndexes).toEqual([]);
     });
 
-    it("rejects a v.from() column (args-only), including when nested under v.optional/array", () => {
-        expect.assertions(3);
+    it("accepts a v.from() column, bare and nested under v.optional/array", () => {
+        expect.assertions(4);
 
+        // `v.from()` used to be args-only, because codegen could not recover the
+        // wrapped schema's type and a column needs one. It can now (via
+        // `~standard.types.output`), and a column needs no SQL type of its own —
+        // a shard row is a JSON document, and a `.global()` table maps this to a
+        // JSON text column like `v.object`/`v.record`/`v.union`. Keeping the
+        // rejection meant maintaining the same shape twice, in two languages, for
+        // every project that also uses zod.
         const fake = {
             "~standard": {
                 validate: (value: unknown) => {
@@ -30,9 +37,13 @@ describe("defineTable", () => {
             },
         };
 
-        expect(() => defineTable({ x: v.from(fake) })).toThrow(/args-only/u);
-        expect(() => defineTable({ x: v.optional(v.from(fake)) })).toThrow(/args-only/u);
-        expect(() => defineTable({ x: v.array(v.from(fake)) })).toThrow(/args-only/u);
+        const table = defineTable({ bare: v.from(fake), items: v.array(v.from(fake)), maybe: v.optional(v.from(fake)) });
+
+        expect(table.shape.bare.kind).toBe("from");
+        expect(table.shape.maybe.kind).toBe("optional");
+        expect(table.shape.items.kind).toBe("array");
+        // The column still validates through the wrapped schema on write.
+        expect(table.shape.bare.parse({ any: "shape" })).toEqual({ any: "shape" });
     });
 
     it(".index appends an index definition", () => {

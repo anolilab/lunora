@@ -627,6 +627,12 @@ const LUNORA_CONFIG_FILE = "lunora.json";
 const LUNORA_EVENT_SOURCE = "lunora";
 ```
 
+### `LUNORA_IGNORED_PATHS` (const)
+
+```ts
+const LUNORA_IGNORED_PATHS: ReadonlyArray<string>;
+```
+
 ### `LUNORA_SKILL_NAMES` (const)
 
 ```ts
@@ -649,6 +655,30 @@ interface LinkedProject {
     workerName?: string;
     workerUrl?: string;
 }
+```
+
+### `LintIgnoreOutcome` (interface)
+
+```ts
+interface LintIgnoreOutcome {
+    message?: string;
+    path: string;
+    snippet?: string;
+    status: LintIgnoreStatus;
+    tool: LintTool;
+}
+```
+
+### `LintIgnoreStatus` (type)
+
+```ts
+type LintIgnoreStatus = "created" | "failed" | "manual" | "unchanged" | "updated";
+```
+
+### `LintTool` (type)
+
+```ts
+type LintTool = "biome" | "eslint" | "oxlint" | "prettier";
 ```
 
 ### `LunoraFormattedLine` (interface)
@@ -963,6 +993,12 @@ Re-exported from `@lunora/codegen` — signature tracked at its source.
 const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
 ```
 
+### `applyLintIgnores` (const)
+
+```ts
+const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
+```
+
 ### `badgeLead` (const)
 
 ```ts
@@ -1041,6 +1077,12 @@ const detectAiAgent: (env?: EnvLike) => AgentDetection | undefined;
 
 ```ts
 const detectFramework: (root: string) => FrameworkDetection;
+```
+
+### `detectLintTools` (const)
+
+```ts
+const detectLintTools: (projectRoot: string) => LintTool[];
 ```
 
 ### `discoverAgentInfo` (const)
@@ -1374,6 +1416,40 @@ interface AlchemyTranslation {
 }
 ```
 
+### `BINDING_MANIFEST_VERSION` (const)
+
+```ts
+const BINDING_MANIFEST_VERSION = 1;
+```
+
+### `BindingManifest` (interface)
+
+```ts
+interface BindingManifest {
+    bindings: ReadonlyArray<BindingRequirement>;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+    crons: ReadonlyArray<string>;
+    name?: string;
+    unknown: ReadonlyArray<string>;
+    vars: ReadonlyArray<string>;
+    version: number;
+}
+```
+
+### `BindingRequirement` (interface)
+
+```ts
+interface BindingRequirement {
+    binding: string;
+    className?: string;
+    resource?: string;
+    resourceId?: string;
+    sqlite?: boolean;
+    type: "ai" | "analytics_engine" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "vectorize" | "workflow";
+}
+```
+
 ### `CLOUDFLARE_DRIVER` (const)
 
 ```ts
@@ -1388,6 +1464,61 @@ interface ExportGap {
     exportName: string;
     kind: "agent" | "container" | "workflow";
     module: "agents" | "containers" | "workflows";
+}
+```
+
+### `ManifestConfigShape` (interface)
+
+```ts
+interface ManifestConfigShape extends WranglerConfigShape {
+    ai?: {
+        binding?: string;
+    };
+    analytics_engine_datasets?: ReadonlyArray<{
+        binding?: string;
+        dataset?: string;
+    }>;
+    assets?: {
+        binding?: string;
+        directory?: string;
+    };
+    browser?: {
+        binding?: string;
+    };
+    containers?: ReadonlyArray<{
+        class_name?: string;
+        image?: string;
+        max_instances?: number;
+    }>;
+    hyperdrive?: ReadonlyArray<{
+        binding?: string;
+        id?: string;
+    }>;
+    images?: {
+        binding?: string;
+    };
+    pipelines?: ReadonlyArray<{
+        binding?: string;
+        pipeline?: string;
+    }>;
+    queues?: {
+        consumers?: ReadonlyArray<{
+            queue?: string;
+        }>;
+        producers?: ReadonlyArray<{
+            binding?: string;
+            queue?: string;
+        }>;
+    };
+    vectorize?: ReadonlyArray<{
+        binding?: string;
+        index_name?: string;
+    }>;
+    workflows?: ReadonlyArray<{
+        binding?: string;
+        class_name?: string;
+        name?: string;
+    }>;
 }
 ```
 
@@ -1789,6 +1920,12 @@ interface WranglerWorkflowEntry {
     name?: string;
     script_name?: string;
 }
+```
+
+### `buildBindingManifest` (const)
+
+```ts
+const buildBindingManifest: (config: ManifestConfigShape) => BindingManifest;
 ```
 
 ### `collectWranglerSecretVariables` (const)

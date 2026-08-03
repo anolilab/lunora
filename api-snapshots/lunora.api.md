@@ -1829,6 +1829,28 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+## `lunorash/client/service`
+
+### `LunoraServiceClient` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `RPC_PATH` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ServiceBindingLike` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ServiceCallOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `createServiceClient` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ## `lunorash/client/ssr`
 
 ### `ArgsOf` (type)

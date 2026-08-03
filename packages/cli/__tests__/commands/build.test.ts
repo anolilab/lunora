@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,5 +66,58 @@ describe("lunora build", () => {
         expect(args).toContain("--dry-run");
         expect(args).toContain("--outdir dist-worker");
         expect(successes.join("\n")).toContain("bundle written to dist-worker");
+    });
+
+    it("writes nothing extra without --emit-bindings", async () => {
+        expect.assertions(1);
+
+        const { spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        await runBuildCommand({ cwd: workdir, logger, spawner });
+
+        expect(existsSync(join(workdir, "bindings.json"))).toBe(false);
+    });
+
+    it("--emit-bindings writes what the bundle needs provisioned", async () => {
+        expect.assertions(4);
+
+        const { spawner } = createRecordingSpawner();
+        const { logger, successes } = silentLogger();
+
+        const result = await runBuildCommand({ cwd: workdir, emitBindings: "out/bindings.json", logger, spawner });
+
+        expect(result.code).toBe(0);
+
+        // Relative paths resolve against the project root, and the parent
+        // directory is created rather than making the caller pre-make it.
+        const manifest = JSON.parse(readFileSync(join(workdir, "out", "bindings.json"), "utf8")) as {
+            bindings: { binding: string; type: string }[];
+            name: string;
+        };
+
+        expect(manifest.name).toBe("lunora-app");
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "DB", resource: "x", resourceId: "real-db-id-abc123", type: "d1" },
+            { binding: "SHARD", className: "ShardDO", sqlite: false, type: "durable_object" },
+        ]);
+        expect(successes.join("\n")).toContain("binding manifest written to");
+    });
+
+    it("--emit-bindings fails rather than describing a Worker that needs nothing", async () => {
+        expect.assertions(2);
+
+        // No wrangler config means no requirements to read. An empty manifest is
+        // the dangerous answer: an IaC program would act on it by provisioning
+        // nothing, and the deploy would fail at runtime on an undefined binding.
+        rmSync(join(workdir, "wrangler.jsonc"), { force: true });
+
+        const { spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runBuildCommand({ cwd: workdir, emitBindings: "bindings.json", logger, spawner });
+
+        expect(result.code).toBe(1);
+        expect(existsSync(join(workdir, "bindings.json"))).toBe(false);
     });
 });

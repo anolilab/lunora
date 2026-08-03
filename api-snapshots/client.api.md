@@ -1847,6 +1847,46 @@ const createQuerySubscription: <F extends FunctionReference, T = ReturnOf<F>>(cl
 const toSubscriptionError: (error: unknown) => SubscriptionError;
 ```
 
+## `@lunora/client/service`
+
+### `LunoraServiceClient` (interface)
+
+```ts
+interface LunoraServiceClient {
+    action: <F extends FunctionReference<"action">>(reference: F, args?: ArgsOf<F>, options?: ServiceCallOptions) => Promise<ReturnOf<F>>;
+    mutation: <F extends FunctionReference<"mutation">>(reference: F, args?: ArgsOf<F>, options?: ServiceCallOptions) => Promise<ReturnOf<F>>;
+    query: <F extends FunctionReference<"query">>(reference: F, args?: ArgsOf<F>, options?: ServiceCallOptions) => Promise<ReturnOf<F>>;
+}
+```
+
+### `RPC_PATH` (const)
+
+```ts
+const RPC_PATH = "/_lunora/rpc";
+```
+
+### `ServiceBindingLike` (interface)
+
+```ts
+interface ServiceBindingLike {
+    fetch: (request: Request) => Promise<Response>;
+}
+```
+
+### `ServiceCallOptions` (interface)
+
+```ts
+interface ServiceCallOptions {
+    shardKey?: string;
+}
+```
+
+### `createServiceClient` (const)
+
+```ts
+const createServiceClient: (binding: ServiceBindingLike) => LunoraServiceClient;
+```
+
 ## `@lunora/client/ssr`
 
 ### `ArgsOf` (type)

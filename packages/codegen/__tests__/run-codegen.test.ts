@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -359,7 +359,9 @@ export default defineSchema({
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.server).toContain('from "@lunora/server"');
-            expect(result.generated.dataModel).toContain('from "@lunora/server/data-model"');
+            // The query-DSL bindings moved to server.ts so dataModel.ts stays free
+            // of the server package — see its emitter docblock.
+            expect(result.generated.server).toContain('from "@lunora/server/data-model"');
             expect(result.generated.api).toContain('import { anyApi } from "@lunora/client";');
             expect(result.generated.api).toContain('from "@lunora/client"');
             expect(result.generated.shard).toContain('from "@lunora/do"');
@@ -375,7 +377,7 @@ export default defineSchema({
 
             // Base surface routed through the umbrella…
             expect(result.generated.server).toContain('from "lunorash/server"');
-            expect(result.generated.dataModel).toContain('from "lunorash/server/data-model"');
+            expect(result.generated.server).toContain('from "lunorash/server/data-model"');
             expect(result.generated.api).toContain('import { anyApi } from "lunorash/client";');
             expect(result.generated.api).toContain('from "lunorash/client"');
             expect(result.generated.shard).toContain('from "lunorash/do"');
@@ -1196,7 +1198,7 @@ export default crons;
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js"',
+                'import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -1250,6 +1252,26 @@ export default crons;
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
+        it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
+            expect.assertions(4);
+
+            // A sibling package — a web app, another Worker — consumes `api.ts` for
+            // its `Doc`/`Id` types. `api.ts` imports `dataModel.ts`, so every server
+            // type `dataModel.ts` named had to be resolvable in that consumer too:
+            // installing a SERVER package to compile a branded string and a few
+            // interfaces. The query-DSL bindings that need it now live in
+            // `server.ts`, which no consumer imports.
+            const { api, dataModel } = runCodegen({ projectRoot: workdir }).generated;
+
+            // The property, stated directly: no imports at all.
+            expect(dataModel).not.toContain("import ");
+            expect(dataModel).not.toContain("@lunora/server");
+            expect(dataModel).not.toContain("lunorash/server");
+
+            // …while still carrying everything `api.ts` reaches for.
+            expect(api).toContain('from "./dataModel.js"');
+        });
+
         it("emits per-table ctx.db facade types in dataModel.ts", () => {
             expect.assertions(9);
 
@@ -1260,19 +1282,20 @@ export default crons;
             expect(result.generated.dataModel).toContain("export type Insert<T extends keyof DataModel>");
 
             // The typed `where` DSL is re-exported from the shipped
-            // `@lunora/server/data-model` module; the per-table reader/writer
-            // facades are bound to this project's maps.
-
-            expect(result.generated.dataModel).toContain('from "@lunora/server/data-model";');
-            expect(result.generated.dataModel).toContain("    Where,\n    WhereOf,\n    WhereOperators,");
-            expect(result.generated.dataModel).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
-            expect(result.generated.dataModel).toContain("export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<");
-            expect(result.generated.dataModel).toContain("export type DatabaseReaderFacade = DatabaseReaderFacadeOf<");
-            expect(result.generated.dataModel).toContain("export type DatabaseWriterFacade = DatabaseWriterFacadeOf<");
+            // `@lunora/server/data-model` module and the per-table reader/writer
+            // facades are bound to this project's maps — both in `server.ts`,
+            // because both need the server package. `dataModel.ts` stays free of
+            // it so a sibling package can compile `api.ts` without one.
+            expect(result.generated.server).toContain('from "@lunora/server/data-model";');
+            expect(result.generated.server).toContain("    Where,\n    WhereOf,\n    WhereOperators,");
+            expect(result.generated.server).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
+            expect(result.generated.server).toContain("export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<");
+            expect(result.generated.server).toContain("export type DatabaseReaderFacade = DatabaseReaderFacadeOf<");
+            expect(result.generated.server).toContain("export type DatabaseWriterFacade = DatabaseWriterFacadeOf<");
 
             // Typed full-text search support is re-exported (the SearchReader /
             // SearchFilterBuilder bodies live in the shipped module now).
-            expect(result.generated.dataModel).toContain("    SearchFilterBuilder,\n    SearchReader,");
+            expect(result.generated.server).toContain("    SearchFilterBuilder,\n    SearchReader,");
         });
 
         it("emits the ctx.orm namespace bound to the shipped facade generics", () => {
@@ -1282,14 +1305,14 @@ export default crons;
 
             // The read facade (with findFirstOrThrow) is bound from the shipped
             // module rather than emitted inline.
-            expect(result.generated.dataModel).toContain("= TableReaderFacadeOf<");
+            expect(result.generated.server).toContain("= TableReaderFacadeOf<");
 
             // The kitcn-style ORM surfaces stay generated (they wire Insert/Id).
-            expect(result.generated.dataModel).toContain("export interface OrmReader");
-            expect(result.generated.dataModel).toContain("export interface OrmWriter extends OrmReader");
-            expect(result.generated.dataModel).toContain("export interface OrmInsertBuilder<T extends keyof DataModel>");
-            expect(result.generated.dataModel).toContain("export interface OrmUpdateBuilder<T extends keyof DataModel>");
-            expect(result.generated.dataModel).toContain("export interface OrmReplaceBuilder<T extends keyof DataModel>");
+            expect(result.generated.server).toContain("export interface OrmReader");
+            expect(result.generated.server).toContain("export interface OrmWriter extends OrmReader");
+            expect(result.generated.server).toContain("export interface OrmInsertBuilder<T extends keyof DataModel>");
+            expect(result.generated.server).toContain("export interface OrmUpdateBuilder<T extends keyof DataModel>");
+            expect(result.generated.server).toContain("export interface OrmReplaceBuilder<T extends keyof DataModel>");
 
             // Wired onto the typed contexts: reads get OrmReader, writes get OrmWriter.
             expect(result.generated.server).toContain("readonly orm: OrmReader;");
@@ -1544,6 +1567,81 @@ export default crons;
 
             // `users` is global — must NOT appear in shard file.
             expect(result.generated.drizzleShard).not.toContain('sqliteTable("users"');
+        });
+
+        it("renders a v.from() column as typed plain text, not a JSON column", () => {
+            expect.assertions(3);
+
+            // `v.from()` used to be rejected in a column. It now maps to plain
+            // TEXT — NOT the `mode: "json"` group — because that is how the value
+            // actually round-trips: `sqliteEncode` keys off the runtime JS type,
+            // so a `v.from(z.string())` column holds a bare `hello`, and drizzle's
+            // json mode would `JSON.parse` that and throw on every read. The
+            // `$type<…>()` annotation still carries the type recovered from
+            // `~standard.types.output`, so `Doc_*` sees the real shape.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+declare const serverSchema: Std<{ command: string; env: Record<string, string>; }>;
+
+export const schema = defineSchema({
+    agents: defineTable({ label: v.string(), mcpServers: v.from(serverSchema) }),
+});
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.drizzleShard).toContain('mcpServers: text("mcpServers")');
+            expect(result.generated.drizzleShard).not.toContain('text("mcpServers", { mode: "json" })');
+            // The recovered type reaches Doc_agents too, not just the drizzle view.
+            expect(result.generated.dataModel).toContain("mcpServers: { command: string; env: Record<string, string>; }");
+        });
+
+        it("rebases a v.from() column type that names a sibling module", () => {
+            expect.assertions(4);
+
+            // The column position is the one place a recovered `v.from()` type had
+            // no rebasing: `api.ts`/`functions.ts` got it, `dataModel.ts` and the
+            // drizzle view did not — because a `v.from()` column used to be
+            // rejected outright, so the path was unreachable. The type is relative
+            // to `lunora/schema.ts`, and both files sit one directory deeper.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "schemas.ts"),
+                `interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+export interface McpServer {
+    command: string;
+}
+
+export declare const serverSchema: Std<McpServer>;
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+import { serverSchema } from "./lib/schemas";
+
+export const schema = defineSchema({
+    agents: defineTable({ label: v.string(), server: v.from(serverSchema) }),
+});
+`,
+            );
+
+            const { dataModel, drizzleShard } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [dataModel, drizzleShard]) {
+                expect(rendered).toContain('import("../lib/schemas.js").McpServer');
+                expect(rendered).not.toContain('import("./lib/schemas")');
+            }
         });
 
         it("output matches committed expected/ files (snapshot)", () => {
@@ -1840,13 +1938,15 @@ export const others = query.input({ id: v.string() }).query(async ({ ctx, args }
             expect(findings[0]?.detail).toContain("reads:");
         });
 
-        it("keeps the handler's type when .output() names a validator it cannot read", () => {
+        it("resolves a hoisted .output() validator to the same type as the inline form (#59)", () => {
             expect.assertions(2);
 
-            // `.output(sharedValidator)` — a hoisted validator, not an inline
-            // call — parses to `{ kind: "any" }`. Preferring that over the
-            // handler would emit `unknown`, which is the exact leak the
-            // .output() preference exists to prevent. Fall back instead.
+            // A shared validator (`const vDocumentDoc = v.object({…})`) reused by
+            // several functions is the natural way to write a table's public
+            // shape once. It used to reach the parser as a bare `Identifier`, fall
+            // through to `{ kind: "any" }`, and render `unknown` — so the only way
+            // to get a real type was to inline a 20-field literal at every call
+            // site. Both forms must now render identically.
             writeFileSync(
                 join(workdir, "lunora", "shared.ts"),
                 `import { query, v } from "./_generated/server.js";
@@ -1860,12 +1960,67 @@ export const inline = query.input({}).output(v.object({ title: v.string() })).qu
 
             const { api } = runCodegen({ projectRoot: workdir }).generated;
 
-            // Hoisted: unreadable validator, so the handler's inferred type wins.
-            // The trailing `;` is TS's own type renderer — which is exactly how
-            // you can tell which path produced it. `unknown` here is the bug.
-            expect(api).toContain('hoisted: FunctionReference<"query", {}, { title: string; }>');
-            // Inline: the declared validator wins, rendered by validatorToType.
+            // Both render through validatorToType (no trailing `;` — that would be
+            // TS's own type renderer, i.e. the handler-inference fallback).
+            expect(api).toContain('hoisted: FunctionReference<"query", {}, { title: string }>');
             expect(api).toContain('inline: FunctionReference<"query", {}, { title: string }>');
+        });
+
+        it("falls back to the handler's type when .output() names something that is not a validator", () => {
+            expect.assertions(1);
+
+            // Alias resolution is gated on the const looking like a `v.*` chain, so
+            // a const holding an unrelated call keeps the previous behaviour (the
+            // handler's inferred type wins) rather than aborting the run.
+            writeFileSync(
+                join(workdir, "lunora", "opaque.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+const buildOut = (): unknown => v.object({ title: v.string() });
+const opaqueOut = buildOut();
+
+export const opaque = query.input({}).output(opaqueOut).query(async () => ({ title: "x" }));
+`,
+            );
+
+            const { api } = runCodegen({ projectRoot: workdir }).generated;
+
+            // Asserted on the observable outcome — the handler's `{ title: "x" }`
+            // survives — rather than on which renderer produced it. (The two
+            // renderers happen to differ by a trailing `;`, but pinning a test to
+            // that would pass on a broken code path the day either one changes
+            // its spacing.)
+            expect(api).toContain('opaque: FunctionReference<"query", {}, { title: string');
+        });
+
+        it("aborts on a typo inside a hoisted validator, exactly as the inline form does", () => {
+            expect.assertions(2);
+
+            // The failure mode a try/catch around alias resolution would have
+            // introduced: a mistyped `v.*` member inside a HOISTED validator
+            // silently rendering `unknown` while the identical expression written
+            // inline aborted the run. Two forms that are supposed to be
+            // interchangeable must not diverge on the error path either.
+            const hoisted = `import { query, v } from "./_generated/server.js";
+
+const badOut = v.object({ title: v.strng() });
+
+export const one = query.input({}).output(badOut).query(async () => ({ title: "x" }));
+`;
+
+            writeFileSync(join(workdir, "lunora", "typo.ts"), hoisted);
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Unsupported validator kind: strng/u);
+
+            writeFileSync(
+                join(workdir, "lunora", "typo.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+export const one = query.input({}).output(v.object({ title: v.strng() })).query(async () => ({ title: "x" }));
+`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Unsupported validator kind: strng/u);
         });
 
         it("renders a recovered v.from() type into the emitted api, end to end", () => {
@@ -1896,6 +2051,87 @@ export const byEmail = query.input({ email: v.from(emailSchema) }).query(async (
 
             expect(result.generated.api).toContain('byEmail: FunctionReference<"query", { email: string }');
             expect(result.generated.api).not.toContain("{ email: unknown }");
+        });
+
+        it("rebases a relative import() qualifier that lands in an ARGUMENT type (#60)", () => {
+            expect.assertions(4);
+
+            // The #47 family, one position over. A recovered `v.from()` type that
+            // names a type from the handler's own `./lib/…` renders as
+            // `import("./lib/tools").Tool` — correct from `lunora/agent.ts`, but
+            // one directory too deep once inlined into `lunora/_generated/*.ts`,
+            // where it means `lunora/_generated/lib/tools`. Only the RETURN type
+            // was rebased, so this was a TS2307 in a generated file while
+            // `lunora codegen` exited 0.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "tools.ts"),
+                `interface Std<T> {
+    "~standard": { types?: { input: T; output: T }; validate: (value: unknown) => { value: T }; vendor: string; version: 1 };
+}
+
+export interface Tool {
+    name: string;
+}
+
+// Only the schema is imported by the handler, so \`Tool\` itself is NOT in scope
+// there and the checker renders it with an \`import("./lib/tools")\` qualifier.
+export declare const toolSchema: Std<Tool>;
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "agent.ts"),
+                `import { query, v } from "./_generated/server.js";
+import { toolSchema } from "./lib/tools";
+
+export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1);
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            // `_generated/` sits one level under `lunora/`, so the qualifier must
+            // climb out of it before naming the user's module.
+            for (const rendered of [api, functions]) {
+                expect(rendered).toContain('import("../lib/tools.js").Tool');
+                expect(rendered).not.toContain('import("./lib/tools")');
+            }
+        });
+
+        it("expands a type IMPORTED into the handler's module instead of leaking a bare name", () => {
+            expect.assertions(4);
+
+            // The other half of the same leak. When the handler DOES import the
+            // type, the checker prints it bare (`Tool`) — correct in the source
+            // file, an undeclared identifier (TS2304) once inlined into
+            // `_generated/*`, which imports nothing from the user's modules. The
+            // reachability guard only covered types declared in the handler's OWN
+            // file, so a shared `./lib/types` interface — the ordinary way to
+            // write one — leaked straight through.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "shapes.ts"),
+                `export interface Badge {
+    label: string;
+}
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "badges.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "./lib/shapes";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                // Expanded structurally, so it resolves with no import at all.
+                expect(rendered).toContain("{ label: string }");
+                expect(rendered).not.toMatch(/,\s*Badge>/u);
+            }
         });
 
         it("types the reference from .output(), not the handler's inferred return", () => {
@@ -3615,9 +3851,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("LUNORA_FUNCTIONS");
             expect(output).toContain("export const v = vBase as unknown as");
             expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
-            // The facade import stays minimal (ORM types are always pulled in).
+            // The facade import now pulls the schema MAPS (the facade types are
+            // defined here, not imported — they moved out of dataModel.ts).
             expect(output).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";',
+                'import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";',
             );
         });
     });

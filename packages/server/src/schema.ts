@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "@lunora/search-core";
 import type { Validator } from "@lunora/values";
-import { isOrWrapsFromValidator, v } from "@lunora/values";
+import { v } from "@lunora/values";
 
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
@@ -288,15 +288,6 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     // Work on a shallow copy so `.softDelete()` can inject its marker column
     // without mutating the caller's object literal.
     const shape = { ...inputShape };
-
-    // v.from() validators are args-only — they delegate to an external Standard
-    // Schema library and do not map to a concrete SQL column type. Reject them
-    // anywhere in a column, including nested under v.optional/array/object/etc.
-    for (const [columnName, validator] of Object.entries(shape)) {
-        if (isOrWrapsFromValidator(validator)) {
-            throw new LunoraError("INTERNAL", `defineTable: column "${columnName}" uses v.from() which is args-only — table columns need a concrete v.* type`);
-        }
-    }
 
     const aggregateIndexes: AggregateIndexDefinition[] = [];
     const geoIndexes: GeoIndexDefinition[] = [];

@@ -307,6 +307,7 @@ interface InitCommandOptions {
         selectManager: (managers: ReadonlyArray<PackageManager>) => Promise<PackageManager>;
     };
     interactive?: boolean;
+    lintPrompt?: LintToolOfferDeps["multiSelect"];
     logger: Logger;
     name?: string;
     overlayBaseFrom?: string;

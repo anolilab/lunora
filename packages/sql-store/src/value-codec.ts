@@ -87,10 +87,15 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  * - `boolean`: 1/0 → true/false (SQLite has no boolean type).
  * - `bigint`: decimal string → `BigInt`.
  * - `object`/`array`/`record`: JSON string → parsed value.
- * - `union`/`any`: parsed back only when the stored string is a JSON non-scalar
- *   (a scalar union member round-trips through SQLite's native column type).
- *   CAVEAT: a union/any member is stored verbatim by {@link sqliteEncode}, so a
- *   legitimate *string* value that itself looks like JSON (`'{"a":1}'`, `'[1,2]'`)
+ * - `union`/`any`/`from`: parsed back only when the stored string is a JSON
+ *   non-scalar (a scalar member round-trips through SQLite's native column type).
+ *   `from` belongs to THIS group, not to `object`/`array`/`record`: an external
+ *   Standard Schema can describe a string just as easily as an object, and
+ *   {@link sqliteEncode} keys off the runtime JS type — so a `v.from(z.string())`
+ *   column holding `"123"` is stored verbatim, and unconditional parsing would
+ *   read it back as the NUMBER 123.
+ *   CAVEAT: a union/any/from member is stored verbatim by {@link sqliteEncode}, so
+ *   a legitimate *string* value that itself looks like JSON (`'{"a":1}'`, `'[1,2]'`)
  *   is ambiguous on read and decodes back to the parsed object/array, not the
  *   original string. This is inherent to sharing one TEXT column between a string
  *   and an object member; disambiguating would require a breaking storage-format
@@ -104,6 +109,7 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
 
     switch (kind) {
         case "any":
+        case "from":
         case "union": {
             return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? tryJsonParse(raw) : raw;
         }

@@ -71,8 +71,13 @@ const mysqlColumnType = (kind: string | undefined): string => {
             return "DOUBLE";
         }
         default: {
-            // string/id/literal/union/any → unbounded text so a value never
+            // string/id/literal/union/any/from → unbounded text so a value never
             // truncates; `indexKeyPrefix` adds a key prefix wherever one is indexed.
+            //
+            // `from` belongs here rather than with the JSON group above, for the
+            // same reason `union`/`any` do: the value is stored by its runtime JS
+            // type, so a `v.from(z.string())` column holds a bare `hello` — which
+            // a MySQL `JSON` column would reject outright at insert.
             return "LONGTEXT";
         }
     }

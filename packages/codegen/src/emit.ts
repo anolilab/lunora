@@ -290,9 +290,16 @@ const renderInsertInterface = (table: TableIR): string => {
     return `export interface Insert_${table.name} {\n    _id?: Id<"${table.name}">;\n    _creationTime?: number;${body}}`;
 };
 
+/**
+ * Lunora-relative path of the module column validators are read from. Schema
+ * discovery always parses `lunora/schema.ts`, so a relative `import("…")`
+ * qualifier in a column's rendered type is relative to that file — which is what
+ * {@link relocateUserRelativeImports} rebases against.
+ */
+const SCHEMA_MODULE_PATH = "schema";
+
 /** Emit `_generated/dataModel.ts` — `Doc&lt;"name">` + `Id&lt;"name">` for every table. */
-const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
-    const base = baseSpecifiers(useUmbrella);
+const emitDataModel = (schema: SchemaIR): string => {
     for (const table of schema.tables) {
         assertIdentifier(table.name, "table name");
     }
@@ -398,45 +405,26 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
         })
         .join("\n");
 
-    // The schema-independent query DSL + table-facade machinery lives in the
-    // shipped \`@lunora/server/data-model\` module, parameterized over the
-    // generated maps below. We re-export the schema-agnostic pieces verbatim
-    // and bind the parameterized generics to this project's \`DataModel\` /
-    // \`InsertModel\` / \`Relations\` / index-name maps. Evolving that DSL no
-    // longer regenerates a single line here.
-    return `${GENERATED_HEADER}import type {
-    DatabaseReaderFacade as DatabaseReaderFacadeOf,
-    DatabaseWriterFacade as DatabaseWriterFacadeOf,
-    LoadWith as LoadWithOf,
-    TableReaderFacade as TableReaderFacadeOf,
-    TableWriterFacade as TableWriterFacadeOf,
-    WithArg as WithArgOf,
-} from "${base.serverDataModel}";
-
-export type {
-    AggregateOp,
-    GroupByEntry,
-    OrderBy,
-    QueryArgs,
-    QueryPage,
-    RankPage,
-    RankResult,
-    RestrictableQueryOptions,
-    RestrictableQueryOptionsOf,
-    SearchFilterBuilder,
-    SearchReader,
-    TableAggregateOptions,
-    TableAggregateOptionsOf,
-    TableGroupByOptions,
-    TableGroupByOptionsOf,
-    TableRankOptions,
-    TableRankPageOptions,
-    Where,
-    WhereOf,
-    WhereOperators,
-} from "${base.serverDataModel}";
-
-export type TableName = ${tableNames};
+    // DEPENDENCY-FREE BY CONSTRUCTION. This file carries only the shapes derived
+    // from the user's schema — `Doc_*`, `Insert_*`, `Id`, the table unions and
+    // index maps — and imports nothing. The query-DSL bindings that parameterize
+    // `@lunora/server/data-model` over those maps live in `server.ts`, which is
+    // the server-only file already.
+    //
+    // That split is the point: a sibling package (a web app, another Worker)
+    // consuming `api.ts` pulls in `dataModel.ts` for `Doc`/`Id`, and used to have
+    // to compile `@lunora/server`'s types to do it — dragging a server package
+    // into every consumer for a branded string and a few interfaces.
+    //
+    // Rebased against `schema.ts` on the way out: a `v.from(externalSchema)`
+    // column whose recovered type names something from the schema module's own
+    // `./lib/…` renders as `import("./lib/x")`, which means
+    // `lunora/_generated/lib/x` once inlined here. Applied to the whole rendered
+    // file rather than per-column so a future column-rendering path cannot miss
+    // it; absolute specifiers are left alone.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- rebaseRelativeQualifiers is declared with the other relocators below; call happens at emit time, not module-eval
+    return rebaseRelativeQualifiers(
+        `${GENERATED_HEADER}export type TableName = ${tableNames};
 
 /**
  * The tables **this app declared** — every {@link TableName} except those an add-on
@@ -528,52 +516,9 @@ export interface Relations {
 ${relationsMap}
 }
 
-/** The \`with\` argument for table \`T\` — see \`@lunora/server/data-model\`. */
-export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;
-
-/** \`Doc<T>\` narrowed to exactly the relations requested in the with-arg \`W\`. */
-export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
-
-/** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
-export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
-
-/** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
-export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
-
-/** Per-table read facade — \`ctx.db.<table>\` on a \`QueryCtx\`. */
-export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
-
-/** Per-table read-write facade — \`ctx.db.<table>\` on a \`MutationCtx\` / \`ActionCtx\`. */
-export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
-
-/** Insert builder returned by \`ctx.orm.insert(table)\`. */
-export interface OrmInsertBuilder<T extends keyof DataModel> {
-    values: (values: Insert<T>) => Promise<Id<T>>;
-}
-
-/** Replace builder returned by \`ctx.orm.replace(table, id)\` — swaps the whole document. */
-export interface OrmReplaceBuilder<T extends keyof DataModel> {
-    with: (values: Insert<T>) => Promise<void>;
-}
-
-/** Update builder returned by \`ctx.orm.update(table, id)\` — patches the named fields. */
-export interface OrmUpdateBuilder<T extends keyof DataModel> {
-    set: (values: Partial<Insert<T>>) => Promise<void>;
-}
-
-/** Read-only ORM surface — \`ctx.orm\` on a \`QueryCtx\`. Mirrors \`ctx.db\` reads under a kitcn-style \`query\` namespace. */
-export interface OrmReader {
-    query: DatabaseReaderFacade;
-}
-
-/** Read-write ORM surface — \`ctx.orm\` on a \`MutationCtx\` / \`ActionCtx\`. Writes are addressed by id, like \`ctx.db\`. */
-export interface OrmWriter extends OrmReader {
-    delete: <T extends keyof DataModel>(table: T, id: Id<T>) => Promise<void>;
-    insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
-    replace: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmReplaceBuilder<T>;
-    update: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmUpdateBuilder<T>;
-}
-`;
+`,
+        SCHEMA_MODULE_PATH,
+    );
 };
 
 /**
@@ -677,6 +622,25 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
 
         return `import("${QUALIFIER_HAS_EXTENSION_RE.test(rebased) ? rebased : `${rebased}.js`}")`;
     });
+
+/**
+ * Rebase every relative `import("…")` qualifier in a rendered type so it
+ * resolves from inside `_generated/` — `_generated/*` targets via
+ * {@link relocateGeneratedImports}, the user's own modules via
+ * {@link relocateUserRelativeImports}. Order is load-bearing (the user rebase
+ * skips `_generated/` prefixes and hands them on), which is why the pair lives
+ * behind one name instead of being spelled out at each site.
+ *
+ * Applies to ARGUMENT types as well as return types. Only the return type was
+ * rebased before, so a relative qualifier reaching an argument — a
+ * `v.from(externalSchema)` whose recovered `~standard.types.output` names a type
+ * from the handler's own `./lib/…`, or any `{ kind: "any" }` fallback carrying
+ * source text — was written verbatim into `_generated/api.ts` / `functions.ts`,
+ * one directory too deep. That is a TS2307 inside a generated file while
+ * `lunora codegen` exits 0, so it surfaces only when a sibling package
+ * typechecks the same file and has nowhere to filter the error away.
+ */
+const rebaseRelativeQualifiers = (rendered: string, filePath: string): string => relocateGeneratedImports(relocateUserRelativeImports(rendered, filePath));
 
 /**
  * Every base package the `lunorash` umbrella re-exports (its top-level,
@@ -820,8 +784,8 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
                 // `client.query` / `client.mutation` from `@lunora/client`).
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
-                const argsType = renderArgsType(definition.args);
-                const returnType = relocateGeneratedImports(relocateUserRelativeImports(referenceReturnType(definition), definition.filePath));
+                const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
+                const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
                 return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
             })
@@ -1238,9 +1202,11 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         .map(([file, list]) => {
             const members = list
                 .map((route) => {
-                    const chunkType = relocateGeneratedImports(relocateUserRelativeImports(route.chunkType ?? "unknown", route.filePath));
+                    const chunkType = rebaseRelativeQualifiers(route.chunkType ?? "unknown", route.filePath);
+                    const searchParams = rebaseRelativeQualifiers(renderArgsType(route.searchParams), route.filePath);
+                    const params = rebaseRelativeQualifiers(renderArgsType(route.params), route.filePath);
 
-                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${renderArgsType(route.searchParams)}, ${renderArgsType(route.params)}>;`;
+                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${searchParams}, ${params}>;`;
                 })
                 .join("\n");
 
@@ -1436,7 +1402,10 @@ const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, u
             assertIdentifier(shape.exportName, "shape export name");
 
             const rowType = rowTypeOf(shape);
-            const argsType = renderArgsType(shape.args);
+            // Rebased like every other argument-type site: `_generated/collections.ts`
+            // is in the same directory as `api.ts`, so a relative qualifier reaching
+            // a shape's args resolves one level too deep here too.
+            const argsType = rebaseRelativeQualifiers(renderArgsType(shape.args), shape.filePath);
             const hasArgs = Object.keys(shape.args).length > 0;
             // A parameterless shape must not demand an empty object; a parameterized
             // one must not let the caller forget its partition selector.
@@ -1687,9 +1656,9 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
         .map(([file, list]) => {
             const members = list
                 .map((definition) => {
-                    const argsType = renderArgsType(definition.args);
+                    const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = relocateGeneratedImports(relocateUserRelativeImports(definition.returnType, definition.filePath));
+                    const returnType = rebaseRelativeQualifiers(definition.returnType, definition.filePath);
 
                     // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
                     // `callRegistered` awaits the handler, and awaiting a non-thenable
@@ -2154,9 +2123,97 @@ import type {
     Validator,
 } from "${base.server}";
 
-import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, OrmReader, OrmWriter, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
+import type {
+    DatabaseReaderFacade as DatabaseReaderFacadeOf,
+    DatabaseWriterFacade as DatabaseWriterFacadeOf,
+    LoadWith as LoadWithOf,
+    TableReaderFacade as TableReaderFacadeOf,
+    TableWriterFacade as TableWriterFacadeOf,
+    WithArg as WithArgOf,
+} from "${base.serverDataModel}";
+
+export type {
+    AggregateOp,
+    GroupByEntry,
+    OrderBy,
+    QueryArgs,
+    QueryPage,
+    RankPage,
+    RankResult,
+    RestrictableQueryOptions,
+    RestrictableQueryOptionsOf,
+    SearchFilterBuilder,
+    SearchReader,
+    TableAggregateOptions,
+    TableAggregateOptionsOf,
+    TableGroupByOptions,
+    TableGroupByOptionsOf,
+    TableRankOptions,
+    TableRankPageOptions,
+    Where,
+    WhereOf,
+    WhereOperators,
+} from "${base.serverDataModel}";
+
+import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
 ${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
+
+/**
+ * The query-DSL bindings: \`@lunora/server/data-model\`'s generics parameterized
+ * over this project's \`DataModel\` / \`InsertModel\` / \`Relations\` / index maps.
+ *
+ * They live here rather than in \`dataModel.ts\` because they are the half that
+ * needs the SERVER package. Keeping \`dataModel.ts\` free of it lets a sibling
+ * package — a web app, another Worker — compile \`api.ts\` for its \`Doc\`/\`Id\`
+ * types without installing a server dependency to do it.
+ */
+
+/** The \`with\` argument for table \`T\` — see \`@lunora/server/data-model\`. */
+export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;
+
+/** \`Doc<T>\` narrowed to exactly the relations requested in the with-arg \`W\`. */
+export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
+
+/** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
+export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
+
+/** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
+export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
+
+/** Per-table read facade — \`ctx.db.<table>\` on a \`QueryCtx\`. */
+export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
+
+/** Per-table read-write facade — \`ctx.db.<table>\` on a \`MutationCtx\` / \`ActionCtx\`. */
+export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
+
+/** Insert builder returned by \`ctx.orm.insert(table)\`. */
+export interface OrmInsertBuilder<T extends keyof DataModel> {
+    values: (values: Insert<T>) => Promise<IdOfTable<T>>;
+}
+
+/** Replace builder returned by \`ctx.orm.replace(table, id)\` — swaps the whole document. */
+export interface OrmReplaceBuilder<T extends keyof DataModel> {
+    with: (values: Insert<T>) => Promise<void>;
+}
+
+/** Update builder returned by \`ctx.orm.update(table, id)\` — patches the named fields. */
+export interface OrmUpdateBuilder<T extends keyof DataModel> {
+    set: (values: Partial<Insert<T>>) => Promise<void>;
+}
+
+/** Read-only ORM surface — \`ctx.orm\` on a \`QueryCtx\`. Mirrors \`ctx.db\` reads under a kitcn-style \`query\` namespace. */
+export interface OrmReader {
+    query: DatabaseReaderFacade;
+}
+
+/** Read-write ORM surface — \`ctx.orm\` on a \`MutationCtx\` / \`ActionCtx\`. Writes are addressed by id, like \`ctx.db\`. */
+export interface OrmWriter extends OrmReader {
+    delete: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => Promise<void>;
+    insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
+    replace: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => OrmReplaceBuilder<T>;
+    update: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => OrmUpdateBuilder<T>;
+}
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
 export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
@@ -5593,6 +5650,15 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
             // Stored as epoch-millisecond integers.
             return { builder: "integer", notNull: true };
         }
+        case "from": {
+            // Plain text, NOT the `mode: "json"` group above — matching how the
+            // value actually round-trips. `sqliteEncode` keys off the runtime JS
+            // type, so a `v.from(z.string())` column holds a bare `hello`, and
+            // drizzle's json mode would `JSON.parse` that and throw on every read.
+            // The `$type<…>()` annotation still carries the type recovered from
+            // `~standard.types.output`, so `Doc_*` sees the real shape.
+            return { builder: "text", notNull: true, typeAnnotation: validatorToType(validator) };
+        }
         case "id": {
             return { builder: "text", notNull: true };
         }
@@ -5809,9 +5875,12 @@ const emitDrizzleSchema = (schema: SchemaIR, useUmbrella = false): { global: str
     const globalTables = schema.tables.filter((table) => table.shardMode === "global");
     const shardTables = schema.tables.filter((table) => table.shardMode !== "global");
 
+    // Rebased for the same reason `emitDataModel` is: a `v.from()` column's
+    // `$type<…>()` annotation can carry a qualifier relative to `schema.ts`, and
+    // `drizzle.*.ts` sits one directory deeper.
     return {
-        global: renderDrizzleFile(globalTables, useUmbrella),
-        shard: renderDrizzleFile(shardTables, useUmbrella),
+        global: rebaseRelativeQualifiers(renderDrizzleFile(globalTables, useUmbrella), SCHEMA_MODULE_PATH),
+        shard: rebaseRelativeQualifiers(renderDrizzleFile(shardTables, useUmbrella), SCHEMA_MODULE_PATH),
     };
 };
 

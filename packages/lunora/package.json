@@ -114,6 +114,10 @@
             "types": "./dist/client/upload.d.ts",
             "import": "./dist/client/upload.mjs"
         },
+        "./client/service": {
+            "types": "./dist/client/service.d.ts",
+            "import": "./dist/client/service.mjs"
+        },
         "./flags": {
             "types": "./dist/flags.d.ts",
             "import": "./dist/flags.mjs"

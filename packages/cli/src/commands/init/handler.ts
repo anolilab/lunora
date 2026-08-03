@@ -1,7 +1,7 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { BADGES, isInteractive } from "@lunora/config";
+import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -43,6 +43,8 @@ import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
 import type { FeatureApply, OfferDeps } from "./offer-extras";
 import { offerRegistryExtras, parseFeatureList } from "./offer-extras";
+import type { LintToolOfferDeps } from "./offer-lint-tools";
+import { offerLintTools } from "./offer-lint-tools";
 import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
 import { applyLunoraOverlay } from "./overlay/apply";
@@ -122,6 +124,13 @@ interface InitCommandOptions {
      * suppresses it regardless. Has no effect once {@link prompt} is injected.
      */
     interactive?: boolean;
+
+    /**
+     * Test seam for the lint/formatter multi-select. Separate from {@link prompt}
+     * because that one is pinned to the feature-offer's value union — reusing it
+     * here would only typecheck through a cast.
+     */
+    lintPrompt?: LintToolOfferDeps["multiSelect"];
 
     logger: Logger;
 
@@ -1142,6 +1151,30 @@ const offerIsInteractive = (options: InitCommandOptions): boolean =>
     options.yes !== true && (options.prompt !== undefined || (options.interactive ?? isInteractive()));
 
 /**
+ * Ask which linter/formatter the project uses and configure it to skip Lunora's
+ * generated files. Runs last, after the feature offer, so the writers see the
+ * final scaffolded `package.json` — a registry item may have pulled a lint tool
+ * in, and detection is what pre-selects the prompt.
+ */
+const offerLintIgnores = async (projectDirectory: string, interactive: boolean, options: InitCommandOptions): Promise<void> => {
+    // Every other post-scaffold step carries its own dry-run guard; this one
+    // writes to the filesystem, so it needs the same. `--in-place --dry-run` is
+    // the case that makes it matter: the target is the user's existing repo, not
+    // a directory this run created, so an unguarded write lands in real work.
+    if (options.dryRun === true) {
+        return;
+    }
+
+    await offerLintTools({
+        apply: (tools) => applyLintIgnores(projectDirectory, tools),
+        detected: detectLintTools(projectDirectory),
+        interactive,
+        logger: options.logger,
+        multiSelect: options.lintPrompt ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
+    });
+};
+
+/**
  * Build the offer's real dependencies (readline prompts + `runAddCommand`) and
  * run the post-scaffold auth/email offer against `projectDir`. Interactive when
  * `--interactive` is set, prompts are injected (tests), or stdin is a TTY —
@@ -1255,6 +1288,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     // `--add` applies its features directly (no headline, no multi-select).
     if (preselected.length > 0) {
         await offerRegistryExtras(deps);
+        await offerLintIgnores(projectDirectory, interactive, options);
 
         return;
     }
@@ -1268,6 +1302,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     }
 
     await offerRegistryExtras(deps);
+    await offerLintIgnores(projectDirectory, interactive, options);
 };
 
 /** Default framework when none is specified — the React create-vite overlay. */
