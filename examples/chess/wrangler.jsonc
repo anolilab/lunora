@@ -1,0 +1,17 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-chess",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "d1_databases": [
+        // better-auth's identity tables only — the game state itself lives in
+        // the ShardDO, not in D1.
+        { "binding": "DB", "database_name": "lunora-example-chess", "database_id": "REPLACE_WITH_D1_ID" },
+    ],
+}
