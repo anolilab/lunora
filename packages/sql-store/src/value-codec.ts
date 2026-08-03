@@ -135,9 +135,13 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
             }
 
             if (ArrayBuffer.isView(raw)) {
-                // Slice on the view's window — a Buffer is a view over a shared pool,
-                // and `.buffer` without slicing would leak unrelated pool bytes.
-                return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+                // Copy through an owned Uint8Array rather than `raw.buffer.slice(...)`:
+                // both narrow to the view's own window — a Buffer is a view over a
+                // shared pool, so an unsliced `.buffer` would leak unrelated pool
+                // bytes — but `.slice()` on the BUFFER preserves its species, handing
+                // back a SharedArrayBuffer for a shared-memory-backed view. `v.bytes()`
+                // validates `instanceof ArrayBuffer`, so that would still fail.
+                return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength).slice().buffer;
             }
 
             return raw;

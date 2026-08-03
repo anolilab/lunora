@@ -135,6 +135,25 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
             expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([11, 22, 33, 44]));
         });
 
+        it("returns a genuine ArrayBuffer for a SharedArrayBuffer-backed view", () => {
+            expect.assertions(3);
+
+            // `.slice()` on a BUFFER preserves its species, so slicing the backing
+            // store of a shared-memory view hands back a SharedArrayBuffer — which
+            // fails `v.bytes()`'s `instanceof ArrayBuffer` check just as the raw view
+            // would. Copying through an owned Uint8Array is what forces a real
+            // ArrayBuffer regardless of the backing store.
+            const shared = new SharedArrayBuffer(8);
+
+            new Uint8Array(shared).set([255, 255, 5, 6, 7, 8, 255, 255]);
+
+            const decoded = sqliteDecode(new Uint8Array(shared, 2, 4), "bytes");
+
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect((decoded as ArrayBuffer).byteLength).toBe(4);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([5, 6, 7, 8]));
+        });
+
         it("null stays null", () => {
             expect.assertions(1);
 
