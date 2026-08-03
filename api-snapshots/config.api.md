@@ -627,6 +627,12 @@ const LUNORA_CONFIG_FILE = "lunora.json";
 const LUNORA_EVENT_SOURCE = "lunora";
 ```
 
+### `LUNORA_IGNORED_PATHS` (const)
+
+```ts
+const LUNORA_IGNORED_PATHS: ReadonlyArray<string>;
+```
+
 ### `LUNORA_SKILL_NAMES` (const)
 
 ```ts
@@ -649,6 +655,29 @@ interface LinkedProject {
     workerName?: string;
     workerUrl?: string;
 }
+```
+
+### `LintIgnoreOutcome` (interface)
+
+```ts
+interface LintIgnoreOutcome {
+    path: string;
+    snippet?: string;
+    status: LintIgnoreStatus;
+    tool: LintTool;
+}
+```
+
+### `LintIgnoreStatus` (type)
+
+```ts
+type LintIgnoreStatus = "created" | "manual" | "unchanged" | "updated";
+```
+
+### `LintTool` (type)
+
+```ts
+type LintTool = "biome" | "eslint" | "oxlint" | "prettier";
 ```
 
 ### `LunoraFormattedLine` (interface)
@@ -963,6 +992,12 @@ Re-exported from `@lunora/codegen` — signature tracked at its source.
 const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
 ```
 
+### `applyLintIgnores` (const)
+
+```ts
+const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
+```
+
 ### `badgeLead` (const)
 
 ```ts
@@ -1041,6 +1076,12 @@ const detectAiAgent: (env?: EnvLike) => AgentDetection | undefined;
 
 ```ts
 const detectFramework: (root: string) => FrameworkDetection;
+```
+
+### `detectLintTools` (const)
+
+```ts
+const detectLintTools: (projectRoot: string) => LintTool[];
 ```
 
 ### `discoverAgentInfo` (const)

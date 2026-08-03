@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 
+import { applyLintIgnores, detectLintTools } from "@lunora/config";
 import { findWranglerFile } from "@lunora/config/cloudflare";
 import { basename, join } from "@visulima/path";
 
@@ -245,6 +246,35 @@ const resolveFeatureItems = async (feature: NormalizedFeature, options: AddFeatu
 };
 
 /**
+ * Keep the project's linters and formatters in step with what Lunora generates.
+ *
+ * Run after every successful `add` rather than only at `init`, because a feature
+ * install is exactly when the generated surface grows — and a project that
+ * adopted Prettier or Biome after `lunora init` would otherwise never be
+ * configured at all.
+ *
+ * Detection-driven with no prompt: `add` already knows the project (it refuses
+ * to run outside one), so asking again would be asking a question the manifest
+ * answers. Every writer is idempotent, so the common case is silent.
+ */
+const syncLintIgnores = (cwd: string, logger: Logger): void => {
+    const outcomes = applyLintIgnores(cwd, detectLintTools(cwd));
+
+    for (const outcome of outcomes) {
+        if (outcome.status === "created" || outcome.status === "updated") {
+            logger.success(`${outcome.status} ${outcome.path} — ${outcome.tool} now skips Lunora's generated files`);
+        }
+
+        // An ESLint flat config is arbitrary JavaScript, so it is never rewritten
+        // on the user's behalf. Print exactly what to paste instead of leaving
+        // them to discover the omission as a few thousand lint errors.
+        if (outcome.status === "manual" && outcome.snippet !== undefined) {
+            logger.warn(`${outcome.path} needs one entry so ESLint skips Lunora's generated files — add to the exported array:\n${outcome.snippet}`);
+        }
+    }
+};
+
+/**
  * `lunora add &lt;feature>`: validate we're in a Lunora project, resolve the
  * feature to its registry item(s) (prompting for the auth provider when
  * interactive), and apply via `runAddCommand`. Returns the applied items so
@@ -338,6 +368,10 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
         transformManifest,
         yes: true,
     });
+
+    if (result.code === 0) {
+        syncLintIgnores(cwd, options.logger);
+    }
 
     return { code: result.code, items };
 };

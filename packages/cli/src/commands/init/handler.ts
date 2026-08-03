@@ -1,7 +1,7 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { BADGES, isInteractive } from "@lunora/config";
+import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -43,6 +43,8 @@ import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
 import type { FeatureApply, OfferDeps } from "./offer-extras";
 import { offerRegistryExtras, parseFeatureList } from "./offer-extras";
+import type { LintToolOfferDeps } from "./offer-lint-tools";
+import { offerLintTools } from "./offer-lint-tools";
 import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
 import { applyLunoraOverlay } from "./overlay/apply";
@@ -123,6 +125,19 @@ interface InitCommandOptions {
      */
     interactive?: boolean;
 
+    /**
+     * Inject the offer's prompts (tests). When set, the offer is treated as
+     * interactive regardless of TTY, and these drive the feature multi-select,
+     * the auth-provider sub-select, and the storage bucket-name text input.
+     */
+
+    /**
+     * Test seam for the lint/formatter multi-select. Separate from `prompt`
+     * because that one is pinned to the feature-offer's value union — reusing it
+     * here would only typecheck through a cast.
+     */
+    lintPrompt?: LintToolOfferDeps["multiSelect"];
+
     logger: Logger;
 
     name?: string;
@@ -136,12 +151,6 @@ interface InitCommandOptions {
 
     /** Probe for which package managers are installed (tests). Defaults to a real `&lt;pm> --version` check. */
     packageManagerProbe?: PackageManagerProbe;
-
-    /**
-     * Inject the offer's prompts (tests). When set, the offer is treated as
-     * interactive regardless of TTY, and these drive the feature multi-select,
-     * the auth-provider sub-select, and the storage bucket-name text input.
-     */
     prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
 
     /**
@@ -1142,6 +1151,22 @@ const offerIsInteractive = (options: InitCommandOptions): boolean =>
     options.yes !== true && (options.prompt !== undefined || (options.interactive ?? isInteractive()));
 
 /**
+ * Ask which linter/formatter the project uses and configure it to skip Lunora's
+ * generated files. Runs last, after the feature offer, so the writers see the
+ * final scaffolded `package.json` — a registry item may have pulled a lint tool
+ * in, and detection is what pre-selects the prompt.
+ */
+const offerLintIgnores = async (projectDirectory: string, interactive: boolean, options: InitCommandOptions): Promise<void> => {
+    await offerLintTools({
+        apply: (tools) => applyLintIgnores(projectDirectory, tools),
+        detected: detectLintTools(projectDirectory),
+        interactive,
+        logger: options.logger,
+        multiSelect: options.lintPrompt ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
+    });
+};
+
+/**
  * Build the offer's real dependencies (readline prompts + `runAddCommand`) and
  * run the post-scaffold auth/email offer against `projectDir`. Interactive when
  * `--interactive` is set, prompts are injected (tests), or stdin is a TTY —
@@ -1255,6 +1280,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     // `--add` applies its features directly (no headline, no multi-select).
     if (preselected.length > 0) {
         await offerRegistryExtras(deps);
+        await offerLintIgnores(projectDirectory, interactive, options);
 
         return;
     }
@@ -1268,6 +1294,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     }
 
     await offerRegistryExtras(deps);
+    await offerLintIgnores(projectDirectory, interactive, options);
 };
 
 /** Default framework when none is specified — the React create-vite overlay. */
