@@ -105,8 +105,8 @@ and explicitly empty. Choose deliberately; the write path enforces the differenc
 ## Bringing your own validators
 
 If your codebase already standardises on Zod, Valibot, or ArkType, `v.from(...)`
-adapts any [Standard Schema](https://standardschema.dev) validator for **function
-arguments**:
+adapts any [Standard Schema](https://standardschema.dev) validator — for function
+arguments and for table columns:
 
 ```ts
 import { z } from "zod";
@@ -116,9 +116,15 @@ export const search = query.input({ filters: v.from(z.object({ tags: z.array(z.s
 });
 ```
 
-It is deliberately not allowed as a table column — the schema is what codegen,
-the Studio, and the advisors read, so table types stay in `v.*`. Validation is
-also synchronous, so a validator returning a Promise throws.
+Codegen recovers the wrapped schema's type from `~standard.types.output`, so
+`args.filters` above is typed from the Zod schema rather than `unknown`. A
+resolvable type is also what a shared `const` gives you — a validator hoisted
+into a named `const` and reused across several `.output()` calls resolves the
+same as one written inline, so a table's public shape can live in one place.
+
+Validation is synchronous, so a validator returning a Promise throws. A
+`v.from()` **column** carries trade-offs worth reading before you reach for one —
+see [Types outside the schema](/docs/concepts/data-types#types-outside-the-schema).
 
 ## Project configuration
 

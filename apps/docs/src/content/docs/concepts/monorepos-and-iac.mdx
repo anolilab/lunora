@@ -70,6 +70,48 @@ separate CLI invocation that races it:
 lunora migrate up --url https://my-worker.example.workers.dev
 ```
 
+### Handing the requirements to your IaC program
+
+The duplication that bites here is the binding list: `wrangler.jsonc` declares
+what the Worker reads, your IaC program declares what to create, and nothing
+keeps them in step. `lunora build --emit-bindings` closes that by emitting the
+requirements as data your program can consume:
+
+```bash
+lunora build --emit-bindings .lunora/bindings.json
+```
+
+```jsonc
+{
+    "version": 1,
+    "name": "acme-backend",
+    "compatibilityDate": "2026-04-07",
+    "bindings": [
+        { "type": "d1", "binding": "DB", "resource": "acme", "resourceId": "…" },
+        { "type": "durable_object", "binding": "SHARD", "className": "ShardDO", "sqlite": true },
+        { "type": "r2", "binding": "FILES", "resource": "acme-files" },
+        { "type": "vectorize", "binding": "VECTORS", "resource": "acme-index" },
+    ],
+    "crons": ["*/5 * * * *"],
+    "vars": ["API_BASE"],
+    "unknown": [],
+}
+```
+
+It is derived from `wrangler.jsonc` **after** the pre-deploy pipeline has
+reconciled it, so it describes what the bundle actually needs rather than what
+happened to be written down. Three things worth knowing:
+
+- **Every binding is listed, including the ones Lunora cannot provision.** A KV
+  namespace id, a Hyperdrive id, a Vectorize index — Lunora warns about these and
+  never writes them, which makes them exactly the ones your program has to create.
+- **`vars` contributes names only.** The file is committed and read by CI, and a
+  var can hold something you would rather not publish.
+- **`unknown` is the honest escape hatch.** A wrangler section this version does
+  not model lands there by name rather than being dropped, so an
+  under-provisioned deploy is visible here instead of at runtime. A non-empty
+  `unknown` is worth reading before you trust the rest.
+
 <Callout type="warn">
     **`wrangler.jsonc` is declaration-only under external IaC.** Lunora's validator reads it to check that every binding a schema needs is declared, but it
     never provisions anything. When your IaC owns the real ids, keep the binding *names* accurate and treat the id fields as placeholders — a real id there is a

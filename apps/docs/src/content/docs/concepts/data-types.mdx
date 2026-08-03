@@ -29,7 +29,7 @@ column may hold; this page is the reference for what those types actually are.
 | `v.literal(value)`     | the literal      | `string`, `number`, `boolean`, `bigint`, or `null`            |
 | `v.optional(inner)`    | `T \| undefined` | The field may be absent                                       |
 | `v.any()`              | `unknown`        | Unchecked — the escape hatch                                  |
-| `v.from(schema)`       | inferred         | Adapt a Standard Schema validator; **arguments only**         |
+| `v.from(schema)`       | inferred         | Adapt a Standard Schema validator (Zod, Valibot, ArkType)     |
 
 Every document additionally carries the framework-managed `_id` and
 `_creationTime`, described in [Document IDs](/docs/concepts/document-ids).
@@ -109,11 +109,35 @@ full table.
 ## Types outside the schema
 
 `v.from(schema)` adapts any [Standard Schema](https://standardschema.dev)
-validator (Zod, Valibot, ArkType) for **function arguments**. It is deliberately
-not allowed as a table column — `defineTable` throws if you try — because the
-schema is what codegen, the studio, and the advisors read to understand your
-data. Validation must also be synchronous; a validator returning a Promise
-throws.
+validator (Zod, Valibot, ArkType), for function arguments **and** table columns.
+It exists for the case where a shape is already defined in another library — an
+AI SDK that demands Zod types, a validator shared with a non-Lunora service — so
+you do not have to maintain the same shape twice, in two languages, and hope they
+stay in step.
+
+Codegen recovers the wrapped schema's type from `~standard.types.output`, so the
+generated `Doc_*` and `api` surface show the real shape rather than `unknown`.
+
+Validation must be synchronous; a validator returning a Promise throws.
+
+### What a `v.from()` column costs
+
+Reach for a concrete `v.*` type when you can. `v.from()` is opaque to everything
+that reads the schema rather than the value:
+
+- **Storage follows the runtime type.** A scalar is written verbatim (a
+  `v.from(z.string())` column holds a bare `hello`, not `"hello"`); an object or
+  array is JSON-encoded. That is the same rule `v.union` and `v.any` follow, and
+  it is why the column cannot be a Postgres/MySQL `JSON` column. One consequence:
+  a stored _string_ that itself looks like JSON (`'{"a":1}'`) is ambiguous on read
+  and decodes to the parsed object.
+- **Indexes.** Declare the column with a concrete type if you need a comparison
+  index on it — the storage form above is what an index would sort.
+- **Seeding.** [`@lunora/seed`](/docs/packages/seed) cannot introspect an
+  external schema to invent a conforming value, so it refuses the column by name.
+  Supply one through `overrides`, or skip the table with `only`.
+- **JSON Schema.** The OpenAPI/OpenRPC surface documents the column as
+  unconstrained, because there is nothing for it to read.
 
 ## See also
 
