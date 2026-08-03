@@ -1,6 +1,6 @@
 {
     "name": "@lunora/values",
-    "version": "1.0.0-alpha.15",
+    "version": "1.0.0-alpha.16",
     "description": "Validators for Lunora: the v.* validator suite with end-to-end return-type inference",
     "keywords": [
         "cloudflare",
