@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { SqlCursor, SqlExec } from "../src/ctx-db";
 import {
     createFanoutCounters,
@@ -296,77 +297,63 @@ describe("introspect", () => {
             expect(page.columns).toEqual(["__id__", "text", "votes"]);
         });
 
-        // The doc blob is written through the wire codec (`encodeDocJson`), so a
-        // `v.bigint()` / `v.bytes()` column is stored as a tagged array. Display
-        // must go back through the codec, not bare `JSON.parse` — otherwise the
-        // data browser shows `["$lunora.wire$","bigint","1000"]` where an amount
-        // belongs. The money path (`paymentSessions.amountMinor`) is exactly this.
-        it("decodes wire-tagged doc fields rather than surfacing the raw tag", () => {
+        /** A canonical doc-stored table holding exactly one row with `doc` as its blob. */
+        const seedDocTable = (name: string, doc: string): void => {
+            database.raw(`CREATE TABLE "${name}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(`INSERT INTO "${name}" VALUES ('r1', 1, '${doc}')`);
+        };
+
+        // The load-bearing invariant for this reader, and the reason it must NOT
+        // decode the wire codec: its result is returned by the admin RPC through
+        // `jsonResponse`, the one DO result path that does not `encodeWire`. A
+        // decoded `v.bigint()` makes `JSON.stringify` THROW (browsing the table
+        // becomes a redacted 500) and a decoded `v.bytes()` flattens to `{}`.
+        // The client decodes the response itself, so the tagged form is what has
+        // to survive this far.
+        it("keeps a wire-tagged doc JSON-serializable, leaving the decode to the client", () => {
             expect.assertions(3);
 
-            database.raw(`CREATE TABLE "sessions" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
-            database.raw(
-                `INSERT INTO "sessions" VALUES ('s1', 1, '{"amountMinor":["$lunora.wire$","bigint","1000"],"blob":["$lunora.wire$","bytes","AAEC","ArrayBuffer"],"note":"ok"}')`,
-            );
+            seedDocTable("sessions", `{"amountMinor":["$lunora.wire$","bigint","1000"],"blob":["$lunora.wire$","bytes","AAEC","ArrayBuffer"],"note":"ok"}`);
 
             const page = readTablePage(database.sql, { table: "sessions" });
-            const row = page.rows[0] as { amountMinor: unknown; blob: unknown; note: unknown };
 
-            expect(row.amountMinor).toBe(1000n);
-            expect(row.blob).toBeInstanceOf(ArrayBuffer);
-            // Untagged siblings are untouched.
-            expect(row.note).toBe("ok");
+            // Serializing is exactly what `jsonResponse` does; it must not throw.
+            expect(() => JSON.stringify(page)).not.toThrow();
+
+            // And what survives is the tagged form the client's `decodeWire`
+            // turns back into a real bigint — verified end-to-end here rather
+            // than assumed, since this reader is one hop from that call.
+            // eslint-disable-next-line unicorn/prefer-structured-clone -- simulating the JSON wire, not cloning: `structuredClone` preserves a bigint and would defeat the assertion
+            const overTheWire = decodeWire(JSON.parse(JSON.stringify(page))) as { rows: { amountMinor: unknown; blob: unknown }[] };
+
+            expect(overTheWire.rows[0]?.amountMinor).toBe(1000n);
+            expect(overTheWire.rows[0]?.blob).toBeInstanceOf(ArrayBuffer);
         });
 
-        // The fidelity guarantee that makes the decode safe to apply everywhere:
-        // a document with no tagged leaves must come back exactly as before.
-        it("leaves a plain-JSON doc byte-identical through the decode", () => {
+        // A tagged blob is still a JSON object, so expansion proceeds normally;
+        // the tag simply rides along as a value.
+        it("expands a wire-tagged doc into columns like any other", () => {
             expect.assertions(2);
 
-            const page = readTablePage(database.sql, { table: "posts" });
+            seedDocTable("tagged", `{"amountMinor":["$lunora.wire$","bigint","1000"],"note":"ok"}`);
 
-            expect(page.columns).toEqual(["id", "_creationTime", "title", "authorId"]);
-            expect(page.rows).toEqual([
-                { _creationTime: 1, authorId: "u1", id: "p1", title: "Hi" },
-                { _creationTime: 2, authorId: "u2", id: "p2", title: "Yo" },
-            ]);
+            const page = readTablePage(database.sql, { table: "tagged" });
+
+            expect(page.columns).toEqual(["id", "_creationTime", "amountMinor", "note"]);
+            expect((page.rows[0] as { note: unknown }).note).toBe("ok");
         });
 
-        // A doc whose ROOT is a tagged value parses as an array but decodes to a
-        // Uint8Array / Date / Map — none of which is a document. Under bare
-        // `JSON.parse` the `!Array.isArray` check caught this; after decoding it
-        // does not, and spreading a Uint8Array would emit junk numeric columns
-        // (`{"0":1,"1":2,...}`). The guard is by prototype for exactly this.
-        it.each([
-            ["bytes", `["$lunora.wire$","bytes","AAEC","ArrayBuffer"]`],
-            ["date", `["$lunora.wire$","date",0]`],
-            ["map", `["$lunora.wire$","map",[["a",1]]]`],
-        ])("refuses to expand a doc whose root decodes to a %s", (kind, doc) => {
-            expect.assertions(2);
+        // Bare `JSON.parse` has no depth cap and no sentinel handling, so a
+        // legacy doc that happens to contain a sentinel-shaped array or deep
+        // nesting is untouched — one more reason the decode does not belong here.
+        it("leaves a legacy doc containing a sentinel-shaped array alone", () => {
+            expect.assertions(1);
 
-            database.raw(`CREATE TABLE "root_${kind}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
-            database.raw(`INSERT INTO "root_${kind}" VALUES ('r1', 1, '${doc}')`);
+            seedDocTable("legacy", `{"tags":["$lunora.wire$","bigint","not-a-number"]}`);
 
-            const page = readTablePage(database.sql, { table: `root_${kind}` });
+            const page = readTablePage(database.sql, { table: "legacy" });
 
-            // Unexpanded — never a row of numeric byte columns.
-            expect(page.columns).toEqual(["id", "_creationTime", "__doc__"]);
-            expect(Object.keys(page.rows[0] as object)).toEqual(["id", "_creationTime", "__doc__"]);
-        });
-
-        // `decodeWire` throws on a malformed tag (an over-long or non-numeric
-        // bigint). `safeParseObject`'s non-throwing contract must hold, so the
-        // page degrades to "unexpanded" instead of failing the whole read.
-        it("falls back to the unexpanded page when a doc carries a malformed tag", () => {
-            expect.assertions(2);
-
-            database.raw(`CREATE TABLE "broken" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
-            database.raw(`INSERT INTO "broken" VALUES ('b1', 1, '{"amountMinor":["$lunora.wire$","bigint","not-a-number"]}')`);
-
-            const page = readTablePage(database.sql, { table: "broken" });
-
-            expect(page.columns).toEqual(["id", "_creationTime", "__doc__"]);
-            expect(page.total).toBe(1);
+            expect((page.rows[0] as { tags: unknown }).tags).toEqual(["$lunora.wire$", "bigint", "not-a-number"]);
         });
     });
 

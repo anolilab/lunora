@@ -114,6 +114,31 @@ export const errorDocumentationUrl = (error: unknown): string | undefined => {
 };
 
 /**
+ * Render a byte count compactly (e.g. `1.4 MB`). `null`/`undefined` render as an
+ * em dash so panels can pass an absent size straight through.
+ */
+export const formatBytes = (bytes: null | number | undefined): string => {
+    if (bytes === null || bytes === undefined) {
+        return "—";
+    }
+
+    if (bytes < 1024) {
+        return `${bytes.toString()} B`;
+    }
+
+    const units = ["KB", "MB", "GB", "TB"];
+    let value = bytes / 1024;
+    let unit = 0;
+
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+
+    return `${value.toFixed(1)} ${units[unit] ?? "TB"}`;
+};
+
+/**
  * Render a single table-cell value as text without throwing on objects or null.
  * Shared by the shard and global data browsers so cell rendering can't drift
  * between them.
@@ -137,12 +162,16 @@ export const formatCell = (value: unknown): string => {
         }
         default: {
             // A `v.bytes()` column decodes to an ArrayBuffer (or a typed-array
-            // view for a custom scalar), which has no own enumerable keys — so
-            // `JSON.stringify` renders it as a bare `{}`, telling the operator
-            // nothing. Show the size instead; the bytes themselves are not
-            // meaningfully readable in a grid cell.
+            // view for a custom scalar). `JSON.stringify` renders an ArrayBuffer
+            // as a bare `{}` and a typed array as its indices (`{"0":1,"1":2}`) —
+            // neither tells the operator anything. Show the size instead; the
+            // bytes are not meaningfully readable in a grid cell.
+            //
+            // Only bytes are special-cased because `v.bytes()` is the only codec
+            // kind a validated document can hold: `Map`/`Set` have no validator,
+            // so they reach a cell only in a document written around the schema.
             if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-                return `<bytes: ${String(value.byteLength)}>`;
+                return `<bytes: ${formatBytes(value.byteLength)}>`;
             }
 
             return JSON.stringify(value);
@@ -208,31 +237,6 @@ export const copyToClipboard = (text: string): boolean => {
     fireAndForget(clipboard.writeText(text));
 
     return true;
-};
-
-/**
- * Render a byte count compactly (e.g. `1.4 MB`). `null`/`undefined` render as an
- * em dash so panels can pass an absent size straight through.
- */
-export const formatBytes = (bytes: null | number | undefined): string => {
-    if (bytes === null || bytes === undefined) {
-        return "—";
-    }
-
-    if (bytes < 1024) {
-        return `${bytes.toString()} B`;
-    }
-
-    const units = ["KB", "MB", "GB", "TB"];
-    let value = bytes / 1024;
-    let unit = 0;
-
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
-
-    return `${value.toFixed(1)} ${units[unit] ?? "TB"}`;
 };
 
 /**

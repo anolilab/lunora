@@ -3,7 +3,6 @@ import { LunoraError } from "@lunora/errors";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
-import { decodeDocJson as decodeDocumentJson } from "./do-sql";
 import type { SortDirection } from "./schema-types";
 
 /**
@@ -843,42 +842,30 @@ const MAX_FACET_LIMIT = 200;
 const DOC_COLUMN = "__doc__";
 
 /**
- * Parse a stored `__doc__` blob to a plain object, or `undefined` when the text
- * isn't a JSON object.
+ * JSON-parse a stored `__doc__` blob to a plain object, or `undefined` when the
+ * text isn't a JSON object.
  *
- * Routes through `decodeDocJson` (`./do-sql`) — the decode half of the pair the writer
- * encodes with — so a `v.bigint()` / `v.bytes()` column reaches display as its
- * value rather than as the raw tagged form (`["$lunora.wire$","bigint","1000"]`).
- * `decodeWire` is a no-op on a tree with no sentinel, so a plain-JSON document
- * (the overwhelming majority) parses exactly as it did under bare `JSON.parse`.
+ * **Deliberately does NOT decode the wire codec.** A `v.bigint()` / `v.bytes()`
+ * column is stored tagged (`["$lunora.wire$","bigint","1000"]`), and it is
+ * tempting to decode it here so the value reaches display "already correct".
+ * That breaks the read outright: this function feeds `readTablePage`, whose
+ * result is returned by the admin RPC through `jsonResponse` — the one DO result
+ * path that does **not** `encodeWire` (contrast the user dispatch and the WS
+ * push, which both do). `JSON.stringify` throws on a bigint and flattens an
+ * `ArrayBuffer` to `{}`, so decoding here turns browsing any bigint table into
+ * a redacted 500.
  *
- * The non-throwing contract is preserved deliberately: `decodeDocJson` can throw
- * on a malformed tag (an over-long bigint, >64 nesting), and display code must
- * degrade to "unexpandable" rather than fail the whole page — so the decode sits
- * inside the same `try` as the parse.
- *
- * The root must be a PLAIN object, checked by prototype rather than by
- * `!Array.isArray`. Under bare `JSON.parse` those were equivalent, because the
- * only non-plain root JSON can produce is an array. Decoding breaks that: a doc
- * whose root is a tagged value (`["$lunora.wire$","bytes",…]`) parses as an
- * array but *decodes* to a `Uint8Array`/`Date`/`Map`, which is neither null nor
- * an array — so an array-only check would now admit it and expansion would
- * spread it into junk columns (`{"0":1,"1":2,…}` for bytes). Mirrors
- * `encodeWire`'s own definition of a plain object, so decode and encode agree
- * on what a document is.
- * @returns the parsed object, or `undefined` when parsing/decoding fails or the result is not a plain object
+ * It is also unnecessary. `LunoraClient` decodes the whole response
+ * (`decodeWire(body.result)`), so the tagged array becomes a real bigint on the
+ * client, before the grid ever sees it. The rows must stay JSON-safe from here
+ * to that call. The `readTablePage` test asserts exactly that.
+ * @returns the parsed object, or `undefined` when parsing fails or the result is not a plain object
  */
 const safeParseObject = (text: string): Record<string, unknown> | undefined => {
     try {
-        const value = decodeDocumentJson(text) as unknown;
+        const value = JSON.parse(text) as unknown;
 
-        if (value === null || typeof value !== "object") {
-            return undefined;
-        }
-
-        const proto = Object.getPrototypeOf(value) as object | null;
-
-        return proto === null || proto === Object.prototype ? (value as Record<string, unknown>) : undefined;
+        return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
     } catch {
         return undefined;
     }

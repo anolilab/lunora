@@ -84,16 +84,18 @@ describe("fireAndForget", () => {
 });
 
 describe("formatCell", () => {
-    // A `v.bytes()` column decodes to an ArrayBuffer, which has no own
-    // enumerable keys — `JSON.stringify` renders it as a bare `{}`, telling the
-    // operator nothing at all about the cell.
-    it("summarizes byte values by size instead of stringifying them to {}", () => {
-        expect.assertions(3);
+    // A `v.bytes()` column decodes to an ArrayBuffer or a typed-array view.
+    // `JSON.stringify` renders the former as a bare `{}` and the latter as its
+    // indices (`{"0":1,"1":2,…}`) — neither says anything useful about the cell.
+    it("summarizes byte values by size instead of stringifying them", () => {
+        expect.assertions(4);
 
-        expect(formatCell(new ArrayBuffer(3))).toBe("<bytes: 3>");
-        expect(formatCell(new Uint8Array([1, 2, 3, 4]))).toBe("<bytes: 4>");
+        expect(formatCell(new ArrayBuffer(3))).toBe("<bytes: 3 B>");
+        expect(formatCell(new Uint8Array([1, 2, 3, 4]))).toBe("<bytes: 4 B>");
         // A typed array reports its BYTE length, not its element count.
-        expect(formatCell(new Uint32Array([1, 2]))).toBe("<bytes: 8>");
+        expect(formatCell(new Uint32Array([1, 2]))).toBe("<bytes: 8 B>");
+        // Scaled by the shared `formatBytes`, not a bespoke byte count.
+        expect(formatCell(new ArrayBuffer(2 * 1024 * 1024))).toBe("<bytes: 2.0 MB>");
     });
 
     it("leaves every other value formatted exactly as before", () => {

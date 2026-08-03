@@ -2201,7 +2201,7 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
         // `1000`, not `["$lunora.wire$","bigint","1000"]`.
         expect(screen.getByTestId("db-cell-s1-amountMinor").textContent).toBe("1000");
         // A byte summary, not `{}` (what `JSON.stringify` gives an ArrayBuffer).
-        expect(screen.getByTestId("db-cell-s1-blob").textContent).toBe("<bytes: 3>");
+        expect(screen.getByTestId("db-cell-s1-blob").textContent).toBe("<bytes: 3 B>");
     });
 
     it("round-trips an untouched save byte-identically to what the shard stored", async () => {

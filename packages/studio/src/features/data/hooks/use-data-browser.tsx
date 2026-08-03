@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 // Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same wire
 // codec the shard writer stores `__doc__` with, so display and save agree on the
 // encoding rather than studio growing a second, drifting decoder.
-import { decodeWire, encodeWire } from "../../../../../../shared/wire-codec";
+import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import { useMirroredRef } from "../../../hooks/use-mirrored-ref";
@@ -131,26 +131,6 @@ const NO_ARGS: Record<string, unknown> = {};
 const META_COLUMNS = new Set<string>(["__doc__", "__id__", "_creationTime", "_id", "id"]);
 
 /**
- * Narrow a decoded value to a document, or `undefined` when it isn't one.
- *
- * Checked by prototype rather than `!Array.isArray`. The two are equivalent for
- * a bare `JSON.parse`, whose only non-plain root is an array — but a decoded
- * value can be a `Uint8Array`, `Date` or `Map` (a doc whose root is a tagged
- * value parses as an array and decodes to one of those), which an array-only
- * check would wave through. Mirrors `encodeWire`'s own definition of a plain
- * object, so the two ends agree on what a document is.
- */
-const asDocument = (value: unknown): Record<string, unknown> | undefined => {
-    if (value === null || typeof value !== "object") {
-        return undefined;
-    }
-
-    const proto = Object.getPrototypeOf(value) as object | null;
-
-    return proto === null || proto === Object.prototype ? (value as Record<string, unknown>) : undefined;
-};
-
-/**
  * The editable document for a row. Shard rows keep their fields in a `__doc__`
  * JSON column; when present we parse it, otherwise we fall back to the row's own
  * non-meta columns. Used to prefill the edit form.
@@ -163,14 +143,10 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
     const raw = row["__doc__"];
 
     if (typeof raw === "string") {
-        try {
-            const parsed = asDocument(decodeWire(JSON.parse(raw)));
+        const parsed = decodeDocument(raw);
 
-            if (parsed !== undefined) {
-                return parsed;
-            }
-        } catch {
-            // fall through to the column-strip path
+        if (parsed !== undefined) {
+            return parsed;
         }
     }
 
@@ -869,32 +845,40 @@ const useDataBrowser = ({
         let parsedDocument: Record<string, unknown> | undefined;
 
         if (op !== "delete") {
+            let raw: unknown;
+
+            try {
+                raw = documentText === undefined || documentText.trim() === "" ? {} : JSON.parse(documentText);
+            } catch (error) {
+                setWriteError(`Invalid JSON: ${(error as Error).message}`);
+
+                return;
+            }
+
             try {
                 // The editor's text is the ENCODED document (see `onRowEdit`), so
                 // decode before sending: a `v.bigint()` field goes back over the
                 // wire as a real bigint the writer's validator accepts, instead
                 // of the tagged array it would otherwise reject. No-op for the
                 // plain-JSON documents every other table has.
-                if (documentText === undefined || documentText.trim() === "") {
-                    parsedDocument = {};
-                } else {
-                    // Validate the decoded root before it becomes a write. The
-                    // editor is free text, so it can hold a non-object (`[1,2]`,
-                    // `"x"`) or a root-level tag that decodes to a Date/bytes —
-                    // neither is a document, and sending one would have the
-                    // writer persist junk fields rather than reject it.
-                    const decoded = asDocument(decodeWire(JSON.parse(documentText)));
+                //
+                // Separate from the parse above so a malformed TAG — which is
+                // well-formed JSON — isn't reported as a syntax error.
+                const decoded = decodeWire(raw);
 
-                    if (decoded === undefined) {
-                        setWriteError("The document must be a JSON object.");
+                // The editor is free text, so it can hold valid JSON that is not
+                // a document: `[1, 2]`, or a root-level tag that decodes to a
+                // Date/bytes. Sending one would have the writer persist junk
+                // fields rather than reject it.
+                if (!isPlainObject(decoded)) {
+                    setWriteError("The document must be a JSON object.");
 
-                        return;
-                    }
-
-                    parsedDocument = decoded;
+                    return;
                 }
+
+                parsedDocument = decoded;
             } catch (error) {
-                setWriteError(`Invalid JSON: ${(error as Error).message}`);
+                setWriteError(`Invalid document: ${(error as Error).message}`);
 
                 return;
             }
