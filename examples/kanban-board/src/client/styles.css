@@ -1,19 +1,60 @@
+/*
+ * kanban-board — "technical instrument"
+ *
+ * The chassis is shared across the Lunora examples: layered near-black
+ * surfaces, hairline rules, mono-forward type, one saturated accent per app.
+ * Every font here already ships on a developer's machine, so the example draws
+ * no network font and works offline in Miniflare.
+ *
+ * Accent: amber (ordering, motion, things moved by hand).
+ */
+
 :root {
-    --bg: #f4f5f7;
-    --surface: #ffffff;
-    --border: #dfe1e6;
-    --text: #172b4d;
-    --muted: #6b778c;
-    --accent: #0052cc;
+    /* Surfaces are layered rather than flat — depth from stacking, not shadow. */
+    --bg: #0b0d11;
+    --panel: #11141a;
+    --raised: #171b23;
+    --line: #232833;
+    --line-bright: #323947;
+
+    --text: #e6e9ef;
+    --dim: #8f98a8;
+    --faint: #5d6675;
+
+    --accent: #f0a742;
+    --accent-dim: #7a5520;
+    --danger: #ff6b6b;
+
+    /* Mono carries the chrome, sans carries prose. */
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+
+    --r-sm: 3px;
+    --r: 6px;
+    --r-lg: 10px;
+
+    /* Motion is mechanical: fast, decisive, no bounce. */
+    --ease: cubic-bezier(0.2, 0, 0, 1);
+    --fast: 120ms;
+    --base: 200ms;
+    --slow: 340ms;
+
+    color-scheme: dark;
 }
 
-.dark {
-    --bg: #10131a;
-    --surface: #1c2130;
-    --border: #2c3446;
-    --text: #e6e9f0;
-    --muted: #8b96ad;
-    --accent: #6ea8ff;
+/* The header toggle sets this; dark is the default the design was drawn for. */
+.app.light {
+    --bg: #f4f5f8;
+    --panel: #ffffff;
+    --raised: #ffffff;
+    --line: #dfe3ea;
+    --line-bright: #c6ccd8;
+    --text: #12151b;
+    --dim: #5a6474;
+    --faint: #8b94a3;
+    --accent: #b06d05;
+    --accent-dim: #f0d9b0;
+    color-scheme: light;
 }
 
 * {
@@ -22,25 +63,54 @@
     padding: 0;
 }
 
+html,
 body {
-    font-family: system-ui, sans-serif;
+    height: 100%;
 }
 
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The signature: a faint engineering grid under a vignette, so the surface
+ * reads as a panel rather than a page. Costs two gradients and no assets.
+ */
 .app {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
     min-height: 100vh;
-    padding: 16px;
-    background: var(--bg);
-    color: var(--text);
+    padding: 22px 24px 40px;
+    background:
+        radial-gradient(120% 80% at 50% -10%, rgb(240 167 66 / 6%), transparent 60%), repeating-linear-gradient(var(--line) 0 1px, transparent 1px 56px),
+        repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 56px), var(--bg);
 }
+
+/* ─── chrome ─────────────────────────────────────────────────────── */
 
 .app-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+}
+
+.app-header::before {
+    content: "kanban";
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
 }
 
 .header-actions {
@@ -49,82 +119,166 @@ body {
 }
 
 button,
-.search,
-.card-input,
-.palette-input {
+input {
     font: inherit;
     color: inherit;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--surface);
-    padding: 6px 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 7px 11px;
+    transition:
+        border-color var(--fast) var(--ease),
+        background var(--fast) var(--ease),
+        transform var(--fast) var(--ease),
+        color var(--fast) var(--ease);
 }
 
 button {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
     cursor: pointer;
 }
 
+button:hover {
+    border-color: var(--line-bright);
+    background: var(--raised);
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+button[aria-pressed="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 .search {
-    width: min(320px, 50vw);
+    width: min(340px, 46vw);
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.search::placeholder {
+    color: var(--faint);
+}
+
+.search:focus {
+    border-color: var(--accent);
 }
 
 .loading {
-    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--dim);
 }
+
+/* ─── board ──────────────────────────────────────────────────────── */
 
 .columns {
     display: flex;
-    gap: 12px;
+    gap: 14px;
     align-items: flex-start;
     overflow-x: auto;
+    padding-bottom: 8px;
 }
 
 .column {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    flex: 0 0 280px;
-    padding: 10px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    gap: 10px;
+    flex: 0 0 288px;
+    padding: 12px;
+    background: color-mix(in srgb, var(--panel) 84%, transparent);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    backdrop-filter: blur(6px);
+    animation: panel-in var(--slow) var(--ease) backwards;
+    animation-delay: calc(var(--col, 0) * 60ms);
 }
 
 .column-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--line);
 }
 
 .column-header h2 {
-    font-size: 13px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
+    color: var(--dim);
 }
 
 .count {
-    font-size: 12px;
-    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
 }
 
 .column-body {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    min-height: 60px;
+    gap: 7px;
+    min-height: 72px;
 }
 
+/* ─── cards ──────────────────────────────────────────────────────── */
+
 .card {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--surface);
+    padding: 10px 11px;
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
     cursor: grab;
+    transition:
+        border-color var(--fast) var(--ease),
+        transform var(--fast) var(--ease),
+        box-shadow var(--fast) var(--ease);
+    animation: card-in var(--base) var(--ease) backwards;
+    animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+/* A hairline of accent on the leading edge, revealed on hover. */
+.card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 2px;
+    border-radius: var(--r) 0 0 var(--r);
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity var(--fast) var(--ease);
+}
+
+.card:hover {
+    border-color: var(--line-bright);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px -12px rgb(0 0 0 / 80%);
+}
+
+.card:hover::before {
+    opacity: 1;
+}
+
+.card:active {
+    cursor: grabbing;
 }
 
 .card-title {
@@ -133,58 +287,109 @@ button {
     border: none;
     background: none;
     padding: 0;
+    font-family: var(--sans);
+    font-size: 13px;
+    letter-spacing: 0;
+}
+
+.card-title:hover {
+    background: none;
 }
 
 .card-delete {
     border: none;
     background: none;
-    padding: 0 4px;
-    color: var(--muted);
+    padding: 0 3px;
+    color: var(--faint);
+    font-size: 15px;
+    line-height: 1;
+    opacity: 0;
+    transition:
+        opacity var(--fast) var(--ease),
+        color var(--fast) var(--ease);
+}
+
+.card:hover .card-delete,
+.card-delete:focus-visible {
+    opacity: 1;
+}
+
+.card-delete:hover {
+    color: var(--danger);
+    background: none;
 }
 
 .card-input {
     width: 100%;
+    font-size: 13px;
 }
 
+.card-input:focus {
+    border-color: var(--accent);
+}
+
+/*
+ * The one place motion does real work: this has to read instantly, at a glance,
+ * while a card is in flight.
+ */
 .drop-indicator {
     height: 2px;
-    margin: 2px 0;
+    margin: 1px 0;
     border-radius: 2px;
     background: var(--accent);
+    box-shadow: 0 0 12px var(--accent);
+    animation: drop-pulse 900ms var(--ease) infinite;
 }
 
 .add-card {
-    border: none;
+    border: 1px dashed var(--line);
     background: none;
     text-align: left;
-    color: var(--muted);
+    color: var(--faint);
 }
 
+.add-card:hover {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+    background: none;
+}
+
+/* ─── command palette ────────────────────────────────────────────── */
+
 .palette {
-    width: min(480px, 90vw);
-    margin-top: 15vh;
+    width: min(520px, 92vw);
+    margin: 14vh auto auto;
     padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--surface);
+    background: var(--panel);
+    border: 1px solid var(--line-bright);
+    border-radius: var(--r-lg);
     color: var(--text);
     overflow: hidden;
+    box-shadow: 0 32px 80px -24px rgb(0 0 0 / 90%);
+    animation: dialog-in var(--base) var(--ease);
 }
 
 .palette::backdrop {
-    background: rgb(0 0 0 / 40%);
+    background: rgb(4 5 7 / 62%);
+    backdrop-filter: blur(3px);
+    animation: fade-in var(--base) var(--ease);
 }
 
 .palette-input {
     width: 100%;
     border: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--line);
     border-radius: 0;
-    padding: 12px;
+    padding: 14px 16px;
+    background: none;
+    font-family: var(--mono);
+    font-size: 13px;
 }
 
 .palette-list {
     list-style: none;
+    max-height: 46vh;
+    overflow-y: auto;
 }
 
 .palette-item {
@@ -195,10 +400,71 @@ button {
     border: none;
     border-radius: 0;
     background: none;
-    padding: 10px 12px;
+    padding: 11px 16px;
     text-align: left;
+    font-family: var(--sans);
+    font-size: 13px;
 }
 
 .palette-item:hover {
-    background: var(--bg);
+    background: var(--raised);
+    color: var(--accent);
+}
+
+kbd {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+}
+
+/* ─── motion ─────────────────────────────────────────────────────── */
+
+@keyframes card-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+@keyframes panel-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+}
+
+@keyframes dialog-in {
+    from {
+        opacity: 0;
+        transform: translateY(-6px) scale(0.985);
+    }
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+}
+
+@keyframes drop-pulse {
+    50% {
+        opacity: 0.45;
+    }
+}
+
+/*
+ * Motion here is decoration, never information — the drop indicator still reads
+ * as a solid accent line without its pulse — so all of it goes.
+ */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+    }
 }

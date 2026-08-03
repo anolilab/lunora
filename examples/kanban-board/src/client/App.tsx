@@ -66,7 +66,7 @@ export const App = (): ReactElement => {
     });
 
     const [search, setSearch] = useState("");
-    const [dark, setDark] = useState(false);
+    const [light, setLight] = useState(false);
     const [showArchived, setShowArchived] = useState(false);
     const [paletteOpen, setPaletteOpen] = useState(false);
     const searchRef = useRef<HTMLInputElement>(null);
@@ -123,10 +123,10 @@ export const App = (): ReactElement => {
             id: "theme",
             run: () => {
                 setPaletteOpen(false);
-                setDark((previous) => !previous);
+                setLight((previous) => !previous);
             },
             shortcut: "",
-            title: dark ? "Switch to light mode" : "Switch to dark mode",
+            title: light ? "Switch to dark mode" : "Switch to light mode",
         },
     ];
 
@@ -148,7 +148,7 @@ export const App = (): ReactElement => {
     };
 
     return (
-        <div className={dark ? "app dark" : "app"}>
+        <div className={light ? "app light" : "app"}>
             <header className="app-header">
                 <input
                     ref={searchRef}
@@ -167,8 +167,8 @@ export const App = (): ReactElement => {
                     <button aria-pressed={showArchived} onClick={() => setShowArchived((previous) => !previous)} title="⌘A" type="button">
                         Archived
                     </button>
-                    <button aria-pressed={dark} onClick={() => setDark((previous) => !previous)} type="button">
-                        {dark ? "Light" : "Dark"}
+                    <button aria-pressed={light} onClick={() => setLight((previous) => !previous)} type="button">
+                        {light ? "Dark" : "Light"}
                     </button>
                 </div>
             </header>
@@ -177,9 +177,10 @@ export const App = (): ReactElement => {
                 <p className="loading">Connecting…</p>
             ) : (
                 <div className="columns">
-                    {visibleColumns.map((status) => (
+                    {visibleColumns.map((status, columnIndex) => (
                         <Column
                             key={status}
+                            columnIndex={columnIndex}
                             draggable={!filtering}
                             onCreate={(column, title) => void create({ status: column, title })}
                             onDelete={(task) => void remove({ id: task._id })}

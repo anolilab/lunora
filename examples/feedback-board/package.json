@@ -10,7 +10,8 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:types": "tsc --noEmit"
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
     },
     "dependencies": {
         "@lunora/ai": "workspace:*",
@@ -24,6 +25,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/testing": "workspace:*",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",

@@ -1,4 +1,4 @@
-import type { DragEvent, ReactElement } from "react";
+import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { useState } from "react";
 
 import type { Status, Task } from "./types.js";
@@ -29,6 +29,8 @@ const dropIndexAt = (list: HTMLElement, clientY: number): number => {
 };
 
 interface ColumnProperties {
+    /** Feeds the CSS entrance stagger, so columns arrive left to right. */
+    columnIndex: number;
     /** `false` while a search filters the column, when a drop index would not map to the real order. */
     draggable: boolean;
     onCreate: (status: Status, title: string) => void;
@@ -40,7 +42,7 @@ interface ColumnProperties {
     tasks: Task[];
 }
 
-export const Column = ({ draggable, onCreate, onDelete, onDragStart, onDrop, onRename, status, tasks }: ColumnProperties): ReactElement => {
+export const Column = ({ columnIndex, draggable, onCreate, onDelete, onDragStart, onDrop, onRename, status, tasks }: ColumnProperties): ReactElement => {
     const [dropIndex, setDropIndex] = useState<number | null>(null);
     const [composing, setComposing] = useState(false);
     const [editing, setEditing] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export const Column = ({ draggable, onCreate, onDelete, onDragStart, onDrop, onR
     };
 
     return (
-        <section className="column" aria-label={LABELS[status]}>
+        <section className="column" style={{ "--col": columnIndex } as CSSProperties} aria-label={LABELS[status]}>
             <header className="column-header">
                 <h2>{LABELS[status]}</h2>
                 <span className="count">{tasks.length}</span>
@@ -73,7 +75,7 @@ export const Column = ({ draggable, onCreate, onDelete, onDragStart, onDrop, onR
 
             <div className="column-body" onDragLeave={() => setDropIndex(null)} onDragOver={onDragOver} onDrop={onDropCard}>
                 {tasks.map((task, index) => (
-                    <div key={task._id}>
+                    <div key={task._id} style={{ "--i": index } as CSSProperties}>
                         {dropIndex === index && <div className="drop-indicator" />}
                         <article
                             className="card"

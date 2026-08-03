@@ -1547,6 +1547,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260724.1
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -1678,6 +1681,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260724.1
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -1721,6 +1727,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260724.1
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -1945,6 +1954,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260724.1
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
@@ -2009,6 +2021,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260724.1
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: catalog:types
         version: 26.1.1

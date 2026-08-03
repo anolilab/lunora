@@ -10,7 +10,8 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "vite build && wrangler deploy -c dist/server/wrangler.json",
         "dev": "vite",
-        "lint:types": "tsc --noEmit"
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
     },
     "dependencies": {
         "@lunora/ratelimit": "workspace:*",
@@ -25,6 +26,7 @@
     "devDependencies": {
         "@cloudflare/vite-plugin": "catalog:vite",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/testing": "workspace:*",
         "@lunora/vite": "workspace:*",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
