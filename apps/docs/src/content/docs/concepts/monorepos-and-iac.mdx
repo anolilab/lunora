@@ -97,13 +97,49 @@ the backend's `package.json`:
 Consumers then import `@acme/backend/api` rather than reaching across the repo
 by path, which keeps the generated file an implementation detail.
 
+`api.ts` and `dataModel.ts` carry **no server dependency** — `dataModel.ts` has
+no imports at all, and the query-DSL bindings that need `@lunora/server` live in
+`server.ts`. So a consumer that only wants `Doc`/`Id` and the typed `api` needs
+`@lunora/client` and nothing else; only a package importing `./server` pulls the
+server surface in.
+
 <Callout type="warn">
-    These entries point at **raw TypeScript**, not built output, so every consumer compiles it and therefore needs the `@lunora/*` types resolvable. That is
-    fine inside one workspace and awkward across published package boundaries — if you publish the backend, build the generated files into your `dist` and point
-    the `exports` there instead.
+    These entries point at **raw TypeScript**, not built output, so every consumer compiles it. That is fine inside one workspace and awkward across published
+    package boundaries — if you publish the backend, build the generated files into your `dist` and point the `exports` there instead.
 </Callout>
 
-For a sibling **Worker** calling the backend, there is no typed service-binding
-client yet: `ctx.run*` covers intra-app calls only, so worker→worker traffic
-goes over HTTP with your own authentication. Importing `./api` at least keeps
-the argument and return types shared.
+## Calling the backend from a sibling Worker
+
+`ctx.run*` covers calls **within** one Lunora app. For another Worker in the
+same account, bind it and use `@lunora/client/service`:
+
+```jsonc
+// services/llm-gateway/wrangler.jsonc
+{
+    "services": [{ "binding": "BACKEND", "service": "acme-backend" }],
+}
+```
+
+```ts
+import { createServiceClient } from "@lunora/client/service";
+import { api } from "@acme/backend/api";
+
+const backend = createServiceClient(env.BACKEND);
+
+const threads = await backend.query(api.threads.list, { userId });
+```
+
+The call is typed against the same `api` the browser uses, so a renamed function
+or a changed argument is a compile error rather than a runtime 404. Arguments and
+results go through the same wire codec as the HTTP path, so a `bigint` or byte
+array survives the hop, and a thrown `LunoraError` arrives with its `code` and
+`data` intact.
+
+<Callout type="info">
+    Prefer this to calling the backend's public URL. A service binding incurs no request fee, never leaves the edge, and is authenticated by construction — the
+    binding *is* the capability, so the callee needs no public route and you need no shared secret. Only **public** functions are reachable: an `internal*`
+    procedure is absent from `api` and refused by the callee, because a binding is a boundary between deployments rather than the intra-app `ctx.run*` seam.
+</Callout>
+
+Pass `{ shardKey }` as the third argument for a sharded app — without it the
+callee routes to its default shard, exactly as the HTTP path does.
