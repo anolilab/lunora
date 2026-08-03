@@ -1,0 +1,26 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "tasks": {
+            "fields": {
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "order": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_status_and_order": {
+                    "fields": ["status", "order"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

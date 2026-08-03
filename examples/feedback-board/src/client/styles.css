@@ -1,0 +1,394 @@
+/*
+ * feedback-board — "technical instrument"
+ *
+ * Shared chassis across the Lunora examples: layered near-black surfaces,
+ * hairline rules, mono-forward chrome, one saturated accent per app. Every font
+ * already ships on a developer's machine, so nothing is fetched over the network
+ * and the example works offline in Miniflare.
+ *
+ * Accent: violet (ideas, ranking, synthesis).
+ */
+
+:root {
+    --bg: #0b0d11;
+    --panel: #11141a;
+    --raised: #171b23;
+    --line: #232833;
+    --line-bright: #323947;
+
+    --text: #e6e9ef;
+    --dim: #8f98a8;
+    --faint: #5d6675;
+
+    --accent: #9d8cff;
+    --accent-soft: #2b2545;
+    --danger: #ff6b6b;
+    --ok: #4ec9a5;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+
+    --r-sm: 3px;
+    --r: 6px;
+    --r-lg: 10px;
+
+    /* Mechanical motion: fast, decisive, no bounce. */
+    --ease: cubic-bezier(0.2, 0, 0, 1);
+    --fast: 120ms;
+    --base: 200ms;
+    --slow: 340ms;
+
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    background:
+        radial-gradient(110% 70% at 50% -8%, rgb(157 140 255 / 7%), transparent 62%), repeating-linear-gradient(var(--line) 0 1px, transparent 1px 56px),
+        repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 56px), var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 7px 11px;
+    transition:
+        border-color var(--fast) var(--ease),
+        background var(--fast) var(--ease),
+        transform var(--fast) var(--ease),
+        color var(--fast) var(--ease);
+}
+
+button {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+}
+
+button:hover {
+    border-color: var(--line-bright);
+    background: var(--raised);
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button[aria-pressed="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--faint);
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0a0b0e;
+    font-weight: 600;
+}
+
+.primary:hover {
+    background: var(--accent);
+    filter: brightness(1.1);
+}
+
+.link {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--dim);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.link:hover {
+    background: none;
+    color: var(--accent);
+}
+
+.muted {
+    color: var(--dim);
+    font-size: 13px;
+}
+
+.error {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--danger);
+}
+
+h1 {
+    font-size: 19px;
+    letter-spacing: -0.01em;
+}
+
+h2 {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--dim);
+}
+
+@keyframes rise {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+}
+
+@keyframes dialog-in {
+    from {
+        opacity: 0;
+        transform: translateY(-6px) scale(0.985);
+    }
+}
+
+@keyframes live-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+/* Motion is decoration here, never information, so all of it can go. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+    }
+}
+
+/* ─── page ───────────────────────────────────────────────────────── */
+
+.page {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 28px 20px 64px;
+    animation: fade-in var(--slow) var(--ease);
+}
+
+.page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.toolbar {
+    justify-content: space-between;
+}
+
+.tabs {
+    display: flex;
+    gap: 6px;
+}
+
+.card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 15px;
+    animation: rise var(--base) var(--ease) backwards;
+}
+
+.compose input,
+.compose textarea,
+form textarea {
+    width: 100%;
+}
+
+.list {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    list-style: none;
+}
+
+/* ─── posts ──────────────────────────────────────────────────────── */
+
+.post {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 13px;
+    transition:
+        border-color var(--fast) var(--ease),
+        transform var(--fast) var(--ease);
+}
+
+.post:hover {
+    border-color: var(--line-bright);
+    transform: translateY(-1px);
+}
+
+/* The vote control is the primary action, so it gets the only strong affordance. */
+.vote {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    min-width: 54px;
+    padding: 8px 6px;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+}
+
+.vote span {
+    font-size: 13px;
+}
+
+.vote.voted {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.vote.voted:hover {
+    background: var(--accent-soft);
+}
+
+.post-body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
+    border: none;
+    background: none;
+    padding: 0;
+    text-align: left;
+    font-family: var(--sans);
+    font-size: 14px;
+    letter-spacing: 0;
+}
+
+.post-body:hover {
+    background: none;
+}
+
+.post-title {
+    font-weight: 600;
+}
+
+.summary pre {
+    white-space: pre-wrap;
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--dim);
+    max-height: 340px;
+    overflow-y: auto;
+}
+
+.comment {
+    border-top: 1px solid var(--line);
+    padding-top: 9px;
+}
+
+.badge {
+    display: inline-block;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 1px 9px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+}
+
+.badge-open,
+.badge-planned {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.badge-completed,
+.badge-official {
+    border-color: var(--ok);
+    color: var(--ok);
+}
+
+label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    align-items: flex-start;
+}

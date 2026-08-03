@@ -1,0 +1,198 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "games": {
+            "fields": {
+                "status": {
+                    "kind": "union",
+                    "optional": false
+                },
+                "whiteId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "blackId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "position": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "result": {
+                    "kind": "union",
+                    "optional": true
+                },
+                "winnerId": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "moveCount": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "startedAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "endedAt": {
+                    "kind": "number",
+                    "optional": true
+                },
+                "drawOfferedBy": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_black": {
+                    "fields": ["blackId"],
+                    "unique": false
+                },
+                "by_white": {
+                    "fields": ["whiteId"],
+                    "unique": false
+                },
+                "by_status": {
+                    "fields": ["status"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "lobbies": {
+            "fields": {
+                "hostId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "guestId": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "isPrivate": {
+                    "kind": "boolean",
+                    "optional": false
+                },
+                "isOpen": {
+                    "kind": "boolean",
+                    "optional": false
+                },
+                "inviteCode": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "gameId": {
+                    "kind": "id",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_open_public": {
+                    "fields": ["isPrivate", "isOpen", "createdAt"],
+                    "unique": false
+                },
+                "by_invite_code": {
+                    "fields": ["inviteCode"],
+                    "unique": false
+                },
+                "by_guest": {
+                    "fields": ["guestId"],
+                    "unique": false
+                },
+                "by_host": {
+                    "fields": ["hostId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "moves": {
+            "fields": {
+                "gameId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "playerId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "turnNumber": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "notation": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "from": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "to": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "captured": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "special": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_game_turn": {
+                    "fields": ["gameId", "turnNumber"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "profiles": {
+            "fields": {
+                "userId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "displayName": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "rating": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "gamesPlayed": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "gamesWon": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_rating": {
+                    "fields": ["rating"],
+                    "unique": false
+                },
+                "by_user": {
+                    "fields": ["userId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

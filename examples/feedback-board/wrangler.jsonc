@@ -1,0 +1,16 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-feedback-board",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Workers AI backs `ctx.ai` in `lunora/summaries.ts`. `wrangler dev` proxies
+    // this binding to Cloudflare, so summarising needs an authenticated account
+    // even locally — everything else in the demo runs fully offline.
+    "ai": { "binding": "AI" },
+}

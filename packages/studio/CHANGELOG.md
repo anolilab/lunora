@@ -1,3 +1,5 @@
+## @lunora/studio [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/%40lunora%2Fstudio%401.0.0-alpha.87...%40lunora%2Fstudio%401.0.0-alpha.88) (2026-08-03)
+
 ## @lunora/studio [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/%40lunora%2Fstudio%401.0.0-alpha.86...%40lunora%2Fstudio%401.0.0-alpha.87) (2026-08-02)
 
 
