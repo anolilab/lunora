@@ -86,6 +86,11 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  *
  * - `boolean`: 1/0 → true/false (SQLite has no boolean type).
  * - `bigint`: decimal string → `BigInt`.
+ * - `bytes`: normalizes any driver return shape to a genuine `ArrayBuffer` — a
+ *   view (`Uint8Array`/`Buffer`/…) is sliced to its own byte window, a plain
+ *   `ArrayBuffer` passes through. Required because `v.bytes()` validates
+ *   `value instanceof ArrayBuffer` and different backends return different BLOB
+ *   shapes (workerd D1 `ArrayBuffer`, node:sqlite `Uint8Array`, pg/mysql2 `Buffer`).
  * - `object`/`array`/`record`: JSON string → parsed value.
  * - `union`/`any`/`from`: parsed back only when the stored string is a JSON
  *   non-scalar (a scalar member round-trips through SQLite's native column type).
@@ -123,6 +128,23 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         }
         case "boolean": {
             return raw === 0 || raw === 1 ? raw === 1 : raw;
+        }
+        case "bytes": {
+            if (raw instanceof ArrayBuffer) {
+                return raw;
+            }
+
+            if (ArrayBuffer.isView(raw)) {
+                // Copy through an owned Uint8Array rather than `raw.buffer.slice(...)`:
+                // both narrow to the view's own window — a Buffer is a view over a
+                // shared pool, so an unsliced `.buffer` would leak unrelated pool
+                // bytes — but `.slice()` on the BUFFER preserves its species, handing
+                // back a SharedArrayBuffer for a shared-memory-backed view. `v.bytes()`
+                // validates `instanceof ArrayBuffer`, so that would still fail.
+                return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength).slice().buffer;
+            }
+
+            return raw;
         }
         default: {
             return raw;

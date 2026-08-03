@@ -197,7 +197,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         it(
             "round-trips bigint, bytes, boolean, object, number and string through MySQL",
             async () => {
-                expect.assertions(6);
+                expect.assertions(7);
 
                 await runSqlGlobalTableMigrations(harness.exec, typesSchema, mysqlDialect);
                 const writer = writerFor(typesSchema);
@@ -218,7 +218,12 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 expect(row?.["n"]).toBe(3.5);
                 expect(row?.["title"]).toBe("hello");
                 expect(row?.["meta"]).toEqual({ a: 1, nested: ["x", "y"] });
-                expect([...(row?.["blob"] as Uint8Array)]).toEqual([1, 2, 3, 250]);
+                // mysql2 hands a BLOB back as a Buffer; the decoder normalizes it to a
+                // genuine ArrayBuffer so `v.bytes()`'s `instanceof ArrayBuffer` check
+                // passes on this driver too — the round-trip is only real if the TYPE
+                // survives as well as the bytes.
+                expect(row?.["blob"]).toBeInstanceOf(ArrayBuffer);
+                expect([...new Uint8Array(row?.["blob"] as ArrayBuffer)]).toEqual([1, 2, 3, 250]);
             },
             TEST_TIMEOUT,
         );
