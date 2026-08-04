@@ -33,7 +33,7 @@ led here.
 
 ## 1. Root cause (verified)
 
-It is a config-shape mismatch, and it is the *opposite* of the obvious guess —
+It is a config-shape mismatch, and it is the _opposite_ of the obvious guess —
 the projects that fail are the ones carrying **more** configuration.
 
 `packages/server/project.json` — one of the 48 that work — declares no targets
@@ -138,15 +138,15 @@ already clean. Verified each now actually runs:
 Fix the package's lint errors, then delete its `targets` block in the same
 commit, so the gate and the cleanup land together:
 
-| Phase | Package     | Errors | Notes                                                                  |
-| ----- | ----------- | ------ | ---------------------------------------------------------------------- |
-| 2     | `container` | 3      | Smallest — do this one first to prove the shape                        |
-| 3     | `auth`      | 7      |                                                                        |
-| 4     | `vue`       | 7      |                                                                        |
-| 5     | `advisor`   | 21     | Needs plan 290 merged first, or the run crashes before reporting       |
-| 6     | `svelte`    | 24     |                                                                        |
-| 7     | `db`        | 40     |                                                                        |
-| 8     | `ai`        | 118    |                                                                        |
+| Phase | Package     | Errors | Notes                                                                                  |
+| ----- | ----------- | ------ | -------------------------------------------------------------------------------------- |
+| 2     | `container` | 3      | Smallest — do this one first to prove the shape                                        |
+| 3     | `auth`      | 7      |                                                                                        |
+| 4     | `vue`       | 7      |                                                                                        |
+| 5     | `advisor`   | 21     | Needs plan 290 merged first, or the run crashes before reporting                       |
+| 6     | `svelte`    | 24     |                                                                                        |
+| 7     | `db`        | 40     |                                                                                        |
+| 8     | `ai`        | 118    |                                                                                        |
 | 9     | `replica`   | 303    | Largest by far; flagged as far back as wave-13 plan 146 ("pre-existing ESLint errors") |
 
 Counts are from `pnpm --filter "@lunora/<pkg>" run lint:eslint` at baseline and
@@ -172,12 +172,12 @@ error count so the shape is proven on small ones. Phase 10 last, once no
 
 ## Commands you will need
 
-| Purpose            | Command                                                        | Expected                          |
-| ------------------ | -------------------------------------------------------------- | --------------------------------- |
-| Per-package lint   | `pnpm --filter "@lunora/<pkg>" run lint:eslint`                | exit 0 before un-skipping         |
-| Prove it runs      | `pnpm exec vis run lint:eslint --query "project=<pkg>"`        | runs; no `No command configured`  |
-| Whole-repo gate    | `pnpm run lint:eslint`                                         | exit 0                            |
-| Re-derive the list | §1 loop                                                        | shrinks by one per phase          |
+| Purpose            | Command                                                 | Expected                         |
+| ------------------ | ------------------------------------------------------- | -------------------------------- |
+| Per-package lint   | `pnpm --filter "@lunora/<pkg>" run lint:eslint`         | exit 0 before un-skipping        |
+| Prove it runs      | `pnpm exec vis run lint:eslint --query "project=<pkg>"` | runs; no `No command configured` |
+| Whole-repo gate    | `pnpm run lint:eslint`                                  | exit 0                           |
+| Re-derive the list | §1 loop                                                 | shrinks by one per phase         |
 
 ## Scope
 
@@ -196,15 +196,13 @@ package's own lint pass.
 ## Test plan
 
 Per phase: the package's lint exits 0 **and** `vis run lint:eslint` for it
-prints no `No command configured` line **and** the whole-repo lint still exits
-0. The middle one is the load-bearing check — without it a phase could "pass"
+prints no `No command configured` line **and** the whole-repo lint still exits 0. The middle one is the load-bearing check — without it a phase could "pass"
 by still being skipped.
 
 ## Done criteria
 
 - [ ] The §1 derivation loop prints nothing
-- [ ] `pnpm run lint:eslint` exits 0 with no `No command configured for
-      <project>:lint:eslint` line for any project
+- [ ] `pnpm run lint:eslint` exits 0 with no `No command configured for <project>:lint:eslint` line for any project
 - [ ] Each of the ten packages verified to actually run under vis
 - [ ] Phase 10 check in place and failing on a reintroduced `executor` block
 - [ ] No ESLint rule disabled to reach green
