@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
+import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -218,31 +218,50 @@ const checkAdminToken = (findings: Finding[]): void => {
 };
 
 /**
- * Each declared container must be exported by the worker entry — wrangler
- * rejects a `containers[].class_name` the worker doesn't export. Inference
- * already computes the export status, so surface it proactively here (the
- * generator auto-wires it, but a hand-declared container or an unrecognized
- * entry can still miss it). Skips cleanly when no containers are declared.
+ * Every declared container, workflow and agent must be exported by the worker
+ * entry — wrangler rejects a `class_name` the worker doesn't export, so the
+ * failure lands at deploy, on a project where `tsc`, codegen and the tests are
+ * all green. Inference already computes the status for all three kinds; this
+ * surfaces it proactively (the generators auto-wire it, but a hand-declared
+ * entry can still miss it). Skips cleanly when nothing is declared.
+ *
+ * Containers used to be the only kind checked here, which made the omission
+ * invisible: a project could pass `doctor` and still deploy three workflows with
+ * no workflow to run. `collectExportGaps` covers all three from one place, so a
+ * fourth kind cannot be added to inference and silently skipped here.
  */
-const checkContainers = async (cwd: string, findings: Finding[]): Promise<void> => {
-    let containers: Awaited<ReturnType<typeof inferLunoraBindings>>["containers"];
+const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<void> => {
+    let inferred: Awaited<ReturnType<typeof inferLunoraBindings>>;
 
     try {
-        ({ containers } = await inferLunoraBindings({ projectRoot: cwd }));
+        inferred = await inferLunoraBindings({ projectRoot: cwd });
     } catch {
         return; // inference is best-effort; other checks own the real failures.
     }
 
-    for (const container of containers) {
-        if (container.exported) {
-            findings.push({ level: "pass", message: `container "${container.exportName}" is exported by the worker entry.` });
-        } else {
-            findings.push({
-                fix: 'Add `export * from "./lunora/_generated/containers"` to your worker entry (or re-run `vis generate lunora-container`).',
-                level: "fail",
-                message: `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry.`,
-            });
-        }
+    const gaps = collectExportGaps(inferred);
+    const declared = [
+        ...inferred.containers.map((entry) => {
+            return { ...entry, kind: "container" };
+        }),
+        ...inferred.workflows.map((entry) => {
+            return { ...entry, kind: "workflow" };
+        }),
+        ...inferred.agents.map((entry) => {
+            return { ...entry, kind: "agent" };
+        }),
+    ];
+
+    for (const entry of declared.filter((candidate) => candidate.exported)) {
+        findings.push({ level: "pass", message: `${entry.kind} "${entry.exportName}" is exported by the worker entry.` });
+    }
+
+    for (const gap of gaps) {
+        findings.push({
+            fix: `Add \`export * from "./lunora/_generated/${gap.module}"\` to your worker entry (or re-run \`vis generate lunora-${gap.kind}\`).`,
+            level: "fail",
+            message: `${gap.kind} "${gap.exportName}" is declared but ${gap.className} is not exported by the worker entry.`,
+        });
     }
 };
 
@@ -392,7 +411,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkAdminToken(findings);
     checkVersionSkew(cwd, findings);
     checkVectorMetadataIndexes(cwd, findings);
-    await checkContainers(cwd, findings);
+    await checkDeclaredExports(cwd, findings);
 
     const code = findings.some((finding) => finding.level === "fail") ? 1 : 0;
 

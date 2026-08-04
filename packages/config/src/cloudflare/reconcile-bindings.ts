@@ -144,6 +144,12 @@ interface ReconcileBindingsResult {
  * {@link ExportGap}s. The same gaps `collectWarnings` renders into prose — kept
  * here as data so the Vite plugin can raise them in the error overlay with a
  * precise remediation, rather than re-parsing the warning strings.
+ *
+ * Exported because reconciliation is not the only caller that needs the answer:
+ * `lunora codegen` and `lunora doctor` both want the gaps WITHOUT rewriting
+ * `wrangler.jsonc`, which is the rest of what {@link reconcileWranglerBindings}
+ * does. Deriving them again from `inferred.{containers,workflows,agents}` at each
+ * call site is how one kind ends up silently uncovered.
  */
 const collectExportGaps = (inferred: InferredBindings): ExportGap[] => {
     const gaps: ExportGap[] = [];
@@ -838,4 +844,4 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 };
 
 export type { ExportGap, ReconcileBindingsResult };
-export { reconcileWranglerBindings };
+export { collectExportGaps, reconcileWranglerBindings };

@@ -214,6 +214,55 @@ describe("runDoctor", () => {
     });
 
     /**
+     * Workflows and agents fail exactly the way containers do — wrangler rejects a
+     * `class_name` the worker doesn't export — but only containers were checked
+     * here, so a project could pass `doctor` and still deploy a workflow with
+     * nothing to run. That is the failure the reporter hit on deploy day.
+     */
+    const seedWorkflowProject = (entry: string): void => {
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "2026-04-07",
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                main: "src/server.ts",
+                name: "demo",
+            }),
+        );
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "src", "server.ts"), entry, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "workflows.ts"),
+            'import { defineWorkflow } from "@lunora/workflow";\nexport const orderPipeline = defineWorkflow({ run: async () => undefined });\n',
+            "utf8",
+        );
+    };
+
+    it("fails when a declared workflow is not exported by the worker entry", async () => {
+        expect.assertions(2);
+
+        seedWorkflowProject('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.level === "fail" && /workflow "orderPipeline" is declared but/u.test(finding.message))).toBe(true);
+    });
+
+    it("passes when the declared workflow is exported by the worker entry", async () => {
+        expect.assertions(1);
+
+        seedWorkflowProject(
+            'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.findings.some((finding) => finding.level === "pass" && /workflow "orderPipeline" is exported/u.test(finding.message))).toBe(true);
+    });
+
+    /**
      * Nothing in an app's manifest tells the adopter which combination of the
      * independently-versioned `@lunora/*` packages is coherent, so a partial
      * `pnpm update` produces a set that looks fine and behaves like a framework bug.
