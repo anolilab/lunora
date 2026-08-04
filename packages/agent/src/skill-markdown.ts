@@ -49,8 +49,15 @@ const splitFrontmatter = (markdown: string): { body: string; data: Record<string
     const rest = markdown.slice(open[0].length);
     const close = FRONTMATTER_CLOSE.exec(rest);
 
+    // Opened but never closed is a broken block, not an absent one. Falling back
+    // to "no frontmatter" here reports a missing `name` for a file that plainly
+    // has one — the same wrong-line misdirection the invalid-YAML branch below
+    // exists to avoid.
     if (!close) {
-        return { body: markdown.trim(), data: {} };
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/agent: the skill markdown opens with `---` but never closes the frontmatter block. Add a closing `---` on its own line.",
+        );
     }
 
     let data: unknown;
@@ -76,7 +83,8 @@ const splitFrontmatter = (markdown: string): { body: string; data: Record<string
  *
  * ```ts
  * import triage from "./skills/triage/SKILL.md?raw";
- * import { functionTool, skillFromMarkdown } from "@lunora/agent";
+ * import { functionTool } from "@lunora/agent";
+ * import { skillFromMarkdown } from "@lunora/agent/skill-markdown";
  *
  * export const triageSkill = skillFromMarkdown(triage, {
  *     tools: { searchCode: functionTool(api.code.search, { ... }) },

@@ -6,6 +6,7 @@ const NO_FRONTMATTER_NAME_PATTERN = /no `name` in the markdown frontmatter/u;
 const INVALID_YAML_PATTERN = /invalid YAML frontmatter/u;
 const NAME_TYPE_PATTERN = /`name` must be a string/u;
 const NO_BODY_PATTERN = /has no body/u;
+const UNTERMINATED_PATTERN = /never closes the frontmatter block/u;
 const SKILL_NAME_SHAPE_PATTERN = /requires a `name` that is a valid identifier/u;
 const RESERVED_NAME_PATTERN = /reserved/u;
 
@@ -68,6 +69,14 @@ describe(skillFromMarkdown, () => {
         expect.assertions(1);
 
         expect(() => skillFromMarkdown("---\nname: triage\n---\n")).toThrow(NO_BODY_PATTERN);
+    });
+
+    it("reports an unterminated frontmatter block as unterminated", () => {
+        expect.assertions(1);
+
+        // The `name` is right there, so "found no `name`" would send the author
+        // looking for the wrong thing.
+        expect(() => skillFromMarkdown("---\nname: triage\nBody with no closing fence.\n")).toThrow(UNTERMINATED_PATTERN);
     });
 
     it("treats a comments-only frontmatter block as carrying no name", () => {

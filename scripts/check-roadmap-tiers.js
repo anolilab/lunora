@@ -68,7 +68,16 @@ const bulletText = (roadmap, lead) => {
 
     const next = roadmap.indexOf("\n    - **", start + lead.length);
 
-    return roadmap.slice(start, next === -1 ? roadmap.indexOf("\n- **", start) : next);
+    if (next !== -1) {
+        return roadmap.slice(start, next);
+    }
+
+    // The last tier bullet has no sibling after it, and `indexOf` returning -1
+    // would make `slice` drop the final character — i.e. silently lose the last
+    // package in the list it is checking.
+    const afterBullets = roadmap.indexOf("\n- **", start);
+
+    return roadmap.slice(start, afterBullets === -1 ? roadmap.length : afterBullets);
 };
 
 const roadmap = readFileSync(join(rootDir, "ROADMAP.md"), "utf8");
