@@ -1,6 +1,6 @@
 {
     "name": "@lunora/workflow",
-    "version": "1.0.0-alpha.19",
+    "version": "1.0.0-alpha.20",
     "description": "Durable workflows for Lunora: defineWorkflow over Cloudflare Workflows, generated WorkflowEntrypoint classes, and the ctx.workflows surface",
     "keywords": [
         "cloudflare",
@@ -63,7 +63,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.13",
-        "@lunora/values": "1.0.0-alpha.17"
+        "@lunora/values": "1.0.0-alpha.18"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
