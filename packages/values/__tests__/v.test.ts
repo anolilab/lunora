@@ -3,12 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
 import { isOrWrapsFromValidator, v, ValidationError } from "../src/index";
-
-type Assert<T extends true> = T;
-// The canonical type-equality idiom: the single-use `<T>()` params are
-// load-bearing (they force structural comparison), so the rule is disabled here.
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+import type { Assert, Equal } from "./__helpers__/type-assert";
 
 const assertOk: (condition: unknown, message: string) => asserts condition = (condition, message) => {
     if (!condition) {

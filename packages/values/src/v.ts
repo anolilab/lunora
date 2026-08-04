@@ -1073,7 +1073,7 @@ const any = (): ColumnValidator<unknown, unknown> => asColumn(createValidator<un
  *
  * Defer to the spec's own helper rather than matching `~standard.types`: the spec
  * declares that property optional (it is a phantom that never exists at runtime),
- * so every real library types it as `Types<I, O> | undefined`, and a hand-written
+ * so every real library types it as a union with `undefined`, and a hand-written
  * `extends { output: infer O }` misses all of them. A schema that declares no
  * `types` still resolves through the constraint to `unknown`.
  */

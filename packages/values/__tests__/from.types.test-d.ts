@@ -11,12 +11,7 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 import type { InferInsert, InferSelect, v } from "../src/index";
-
-type Assert<T extends true> = T;
-// The canonical type-equality idiom: the single-use `<T>()` params are
-// load-bearing (they force structural comparison), so the rule is disabled here.
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+import type { Assert, Equal } from "./__helpers__/type-assert";
 
 /**
  * Shaped exactly like a zod/valibot/arktype schema: `~standard.types` is declared
