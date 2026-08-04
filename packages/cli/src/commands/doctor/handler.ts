@@ -241,9 +241,15 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
 
     const gaps = collectExportGaps(inferred);
     const declared = [
-        ...inferred.containers.map((entry) => {return { ...entry, kind: "container" }}),
-        ...inferred.workflows.map((entry) => {return { ...entry, kind: "workflow" }}),
-        ...inferred.agents.map((entry) => {return { ...entry, kind: "agent" }}),
+        ...inferred.containers.map((entry) => {
+            return { ...entry, kind: "container" };
+        }),
+        ...inferred.workflows.map((entry) => {
+            return { ...entry, kind: "workflow" };
+        }),
+        ...inferred.agents.map((entry) => {
+            return { ...entry, kind: "agent" };
+        }),
     ];
 
     for (const entry of declared.filter((candidate) => candidate.exported)) {
