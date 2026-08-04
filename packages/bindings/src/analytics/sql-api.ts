@@ -4,7 +4,7 @@
  * AE has no binding-side read path — data is queried out-of-band through
  * Cloudflare's REST SQL endpoint:
  * `POST https://api.cloudflare.com/client/v4/accounts/{accountId}/analytics_engine/sql`
- * — body: SQL text (plain text, not JSON); headers: `Authorization: Bearer &lt;token>`.
+ * — body: SQL text (plain text, not JSON); headers: `Authorization: Bearer <token>`.
  *
  * The token is an **account-scoped API token with Analytics Engine read** — a
  * secret*, never a binding and never auto-scaffolded with a real value. The

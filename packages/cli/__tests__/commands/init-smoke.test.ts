@@ -6,7 +6,7 @@
  * and `validateWranglerProject` asserts bindings line up with the schema.
  *
  * If any step throws, the scaffold is broken — exactly the failure a fresh
- * `lunora init &amp;& lunora dev` would hit on a clean machine.
+ * `lunora init && lunora dev` would hit on a clean machine.
  *
  * The unit suite must work offline, so we use `--from` to point at the local
  * templates root rather than hitting GitHub through giget. The remote-fetch

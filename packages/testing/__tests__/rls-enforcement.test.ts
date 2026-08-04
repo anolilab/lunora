@@ -36,7 +36,7 @@ const insertUnguarded = mutation.input({ body: v.string() }).mutation(async ({ a
  * outside of codegen's generated, per-project facade types. `@lunora/server`'s
  * own RLS tests (`__tests__/rls.test.ts`, `rls-secure-by-default.test.ts`) pin
  * a permissive cast once for exactly this reason — mirrored here rather than
- * scattering `as unknown as Middleware&lt;…>` at every call site.
+ * scattering `as unknown as Middleware<…>` at every call site.
  */
 const rlsForTest = <Context>(policies: ReadonlyArray<Policy<Context>>): Middleware<any, any> =>
     (rls as unknown as (p: ReadonlyArray<Policy<Context>>) => Middleware<any, any>)(policies);

@@ -29,7 +29,7 @@
  *
  * # Lunora integration with `@lunora/server` plugins
  *
- * To surface a better-auth plugin's API under `ctx.auth.&lt;key>` in
+ * To surface a better-auth plugin's API under `ctx.auth.<key>` in
  * Lunora procedures, wrap it as a `definePlugin` middleware:
  *
  * ```ts

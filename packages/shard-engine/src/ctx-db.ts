@@ -244,7 +244,7 @@ interface CtxDbOptions {
      * it, cross-backend cascades throw — same behaviour as v1.
      *
      * Generated `shard.ts` passes the same D1-backed writer it uses for
-     * `ctx.db.&lt;globalTable>` reads/writes, so cascades and direct writes share
+     * `ctx.db.<globalTable>` reads/writes, so cascades and direct writes share
      * one D1 round-trip path. Non-transactional across backends: the local
      * delete commits before the global cascade fires, so a failure on the
      * global side leaves the local row gone — document at the call site.
@@ -1038,7 +1038,7 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
     return strategy;
 };
 
-/** Drizzle ORDER BY for the DO: each key as `&lt;jsonPath> ASC|DESC`, with an `id ASC` tiebreak unless an id field is already ordered (keeps paging deterministic). The drizzle twin of `compileOrderBy`. */
+/** Drizzle ORDER BY for the DO: each key as `<jsonPath> ASC|DESC`, with an `id ASC` tiebreak unless an id field is already ordered (keeps paging deterministic). The drizzle twin of `compileOrderBy`. */
 const compileOrderBySql = (keys: OrderKey[]): SQL => {
     const parts = keys.map((key) => dsql`${jsonPathSql(key.field)} ${dsql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
@@ -1785,7 +1785,7 @@ const runGuardedWrite = (sql: SqlExec, table: string, query: SQL): void => {
  * SQL so the two paths can never drift.
  *
  * `serializedSortValues[i]` must be the already-{@link serializeSqlValue}d
- * value for the i-th sort key — i.e. the exact bytes stored in `__sort_k&lt;i>__`
+ * value for the i-th sort key — i.e. the exact bytes stored in `__sort_k<i>__`
  * by `syncRankIndexEntry` (in `./ctx-db-companions`) — so the per-key comparison
  * matches the companion's BLOB column regardless of which shard supplied the value.
  *
@@ -1794,7 +1794,7 @@ const runGuardedWrite = (sql: SqlExec, table: string, query: SQL): void => {
  * (k0 < v0)
  * OR (k0 = v0 AND k1 < v1)
  * OR (k0 = v0 AND k1 = v1 AND __id__ < rowId)
- * where `&lt;` flips to `>` for desc keys.
+ * where `<` flips to `>` for desc keys.
  */
 const countRankBefore = (
     sql: SqlExec,
@@ -2042,14 +2042,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * Route a *table-name-addressed* op (`insert`/`query`/`findMany`/`count`/…)
      * to the backend that owns the table. A `.global()` table lives in D1, so
-     * its generic `ctx.db.&lt;op&gt;("&lt;table&gt;", …)` call must reach the D1-backed
+     * its generic `ctx.db.<op>("<table>", …)` call must reach the D1-backed
      * `globalDb` writer — where the table is provisioned and read-your-writes
      * apply — instead of this DO's local SQLite, which has no such table.
      *
      * Returns `undefined` for shard-local tables so the caller runs its normal
      * local path; throws a clear wiring error if a global table is reached
      * without a `globalDb` (mirroring {@link routeBackend}). This is the generic
-     * twin of the property-style `ctx.db.&lt;globalTable&gt;` facade: both land global
+     * twin of the property-style `ctx.db.<globalTable>` facade: both land global
      * access on D1, so `ctx.db.insert("t", …)` and `ctx.db.t.insert(…)` agree.
      * @returns the global D1 writer for the table, or `undefined` for shard-local tables
      */

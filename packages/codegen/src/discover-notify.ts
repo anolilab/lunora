@@ -10,10 +10,10 @@ import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from
 /** The only file a `@lunora/notify` provider may be declared in — mirrors `lunora/flags.ts`. */
 const NOTIFY_FILENAME = "notify.ts";
 
-/** `ctx.notify.&lt;method>` sends the `notify_send_outside_action` lint records (single-channel + multi-channel senders). */
+/** `ctx.notify.<method>` sends the `notify_send_outside_action` lint records (single-channel + multi-channel senders). */
 const NOTIFY_SEND_METHODS = new Set(["chat", "inApp", "send", "webhook"]);
 
-/** `ctx.push.&lt;method>` sends the lint records — the two device-push delivery calls (register/list/unregister are store ops, not sends). */
+/** `ctx.push.<method>` sends the lint records — the two device-push delivery calls (register/list/unregister are store ops, not sends). */
 const PUSH_SEND_METHODS = new Set(["broadcast", "send"]);
 
 /**

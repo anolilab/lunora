@@ -55,7 +55,7 @@ const PATH_UNSAFE = /[^\w-]/g;
 
 /**
  * Characters `JSON.stringify` leaves raw that are still unsafe once the emitted
- * source travels: `&lt;` / `>` / `/` can close a host `&lt;/script>` if the file is
+ * source travels: `<` / `>` / `/` can close a host `</script>` if the file is
  * ever inlined into HTML (a code viewer, a docs page), and U+2028 / U+2029 are
  * line terminators that older tooling treats as breaking the literal. Their
  * escaped forms denote the identical string, so this costs nothing.

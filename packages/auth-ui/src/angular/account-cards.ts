@@ -118,7 +118,7 @@ class LinkedAccountsCardComponent {
 /**
  * Avatar upload. Rendered only when the app configured an `avatar.upload`
  * handler — without one there is nowhere to put the bytes, and
- * `&lt;lunora-profile-card>`'s URL field is the honest fallback.
+ * `<lunora-profile-card>`'s URL field is the honest fallback.
  */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,

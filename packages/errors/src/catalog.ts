@@ -696,7 +696,7 @@ const hasStandaloneNumber = (haystack: string, code: string): boolean => {
 };
 
 /**
- * True when `haystack` carries Cloudflare's own `Error &lt;code>` / `Error: &lt;code>`
+ * True when `haystack` carries Cloudflare's own `Error <code>` / `Error: <code>`
  * phrasing for `code`, with `code` a whole token.
  *
  * The trailing-digit check matters as much here as in the loose matcher. Without
@@ -747,12 +747,12 @@ const cloudflarePlatformSolution = (entry: CloudflarePlatformError): Solution =>
 /**
  * Recognize a Cloudflare platform-error {@link CloudflarePlatformError} in a raw
  * error message, conservatively: the message must carry Cloudflare's own
- * `Error &lt;code>` phrasing, or mention `cloudflare` alongside the standalone
+ * `Error <code>` phrasing, or mention `cloudflare` alongside the standalone
  * code. That keeps a bare number (`expected 520 items`) from false-matching a 5xx
  * code, at the cost of missing a context-free code — the safe trade for a
  * grounded hint. Returns the matched code's {@link Solution}, or `undefined`.
  *
- * Matching runs in two passes, strongest first: Cloudflare's own `Error &lt;code>`
+ * Matching runs in two passes, strongest first: Cloudflare's own `Error <code>`
  * phrasing is unambiguous, so it must win over the weaker "mentions cloudflare
  * near some number" heuristic regardless of table order. A single pass let a weak
  * match on an earlier entry beat an explicit match on a later one — `"Cloudflare

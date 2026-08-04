@@ -3,7 +3,7 @@ import type { Lint } from "../../types";
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
- * Flags a `ctx.containers.&lt;exportName>.get(name, …)` call whose instance key
+ * Flags a `ctx.containers.<exportName>.get(name, …)` call whose instance key
  * is derived from the handler's `args` with no server-side scoping — a
  * cross-tenant container IDOR.
  *

@@ -3,9 +3,9 @@ import type { Category, Facing, Finding, Level, Lint, LintContext } from "../typ
 
 /**
  * Static metadata + per-occurrence templates for one "arg-derived sink" lint —
- * a lint that flags a `ctx.&lt;binding>` call whose key/URL/namespace argument is
+ * a lint that flags a `ctx.<binding>` call whose key/URL/namespace argument is
  * derived from the handler's `args` with no server-side scoping. Every such
- * lint shares one shape: read one `context.&lt;x>Accesses` evidence array (`undefined`
+ * lint shares one shape: read one `context.<x>Accesses` evidence array (`undefined`
  * means "no static evidence, flag nothing"), then emit one {@link Finding} per
  * row via {@link emit}.
  */

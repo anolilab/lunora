@@ -1,5 +1,5 @@
 /**
- * One `ctx.flags.boolean("key", &lt;boolean-literal>)` read — the
+ * One `ctx.flags.boolean("key", <boolean-literal>)` read — the
  * `flag_gates_security_with_unsafe_default` lint input. OpenFeature returns the
  * `defaultValue` when the provider errors, so a fail-open default on a
  * security-shaped key (an `enforce`/`rls`/`gate`/`lockdown` protection
@@ -12,7 +12,7 @@
 export interface AdvisorFlagSecurityDefault {
     /** The boolean-literal default returned on a provider outage (fail-open value). */
     defaultValue: boolean;
-    /** The exported binding name of the procedure performing the flag read, or `"&lt;module>"` at file scope. */
+    /** The exported binding name of the procedure performing the flag read, or `"<module>"` at file scope. */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;

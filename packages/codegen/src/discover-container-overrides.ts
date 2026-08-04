@@ -5,7 +5,7 @@ import { enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { ContainerOverrideIR } from "./ir";
 
-/** Runtime egress-firewall mutators on a `&lt;handle>.egress` control surface — the `egress_relaxation` sink set. */
+/** Runtime egress-firewall mutators on a `<handle>.egress` control surface — the `egress_relaxation` sink set. */
 const EGRESS_MUTATING_METHODS = new Set(["allow", "deny", "setAllowed"]);
 
 /** True when `call`'s first argument is an object literal with an explicit `enableInternet: true` property. */
@@ -21,7 +21,7 @@ const hasEnableInternetTrue = (call: CallExpression): boolean => {
     return property !== undefined && Node.isPropertyAssignment(property) && Node.isTrueLiteral(property.getInitializerOrThrow());
 };
 
-/** The IR row for a `&lt;x>.start({ enableInternet: true, … })` launch override, or `undefined`. */
+/** The IR row for a `<x>.start({ enableInternet: true, … })` launch override, or `undefined`. */
 const enableInternetOverrideInCall = (call: CallExpression, relativePath: string): ContainerOverrideIR | undefined => {
     const callee = call.getExpression();
 
@@ -38,7 +38,7 @@ const enableInternetOverrideInCall = (call: CallExpression, relativePath: string
     };
 };
 
-/** The IR row for a `&lt;x>.egress.&lt;method>(...)` runtime firewall mutation, or `undefined`. */
+/** The IR row for a `<x>.egress.<method>(...)` runtime firewall mutation, or `undefined`. */
 const egressRelaxationInCall = (call: CallExpression, relativePath: string): ContainerOverrideIR | undefined => {
     const callee = call.getExpression();
 
@@ -83,7 +83,7 @@ const containerOverridesInSourceFile = (sourceFile: SourceFile, relativePath: st
 /**
  * Discover every runtime container-override call in `lunora/` source: a
  * `.start({ enableInternet: true, … })` launch override, or a
- * `.egress.&lt;method>(...)` runtime firewall mutation (`allow` / `deny` /
+ * `.egress.<method>(...)` runtime firewall mutation (`allow` / `deny` /
  * `setAllowed`). Matched structurally by call shape — the receiver's type is
  * never resolved, so this also works before `pnpm install` has linked
  * `@lunora/container`.

@@ -7,7 +7,7 @@
  * cursor logic is identical to the DO path: it reuses the shared keyset/order
  * helpers from `@lunora/do`, but compiles `WHERE` through the drizzle-emitting
  * `compileWhereSql` with a `WhereSqlStrategy` (column refs + value
- * serialization) so the generated `ctx.db.&lt;table>` facade (1.2.7) is
+ * serialization) so the generated `ctx.db.<table>` facade (1.2.7) is
  * backend-agnostic.
  */
 /* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @lunora/do's "ctx-db.ts" twin. Renaming would break those importers. */
@@ -109,8 +109,8 @@ const ID_ORDER_FIELDS = new Set(["_id", "id"]);
 
 /**
  * NULL-safe equality for a bound value, rendered per engine: SQLite `IS`,
- * Postgres `IS NOT DISTINCT FROM`, MySQL's `&lt;=>` null-safe-equal operator. A bare
- * `col IS &lt;literal>` is SQLite-only — it is a syntax error on Postgres/MySQL — so
+ * Postgres `IS NOT DISTINCT FROM`, MySQL's `<=>` null-safe-equal operator. A bare
+ * `col IS <literal>` is SQLite-only — it is a syntax error on Postgres/MySQL — so
  * every cross-dialect equality predicate (the OCC guard and the rank seek/before
  * builders) must route through this rather than emitting `IS` directly.
  */
@@ -128,7 +128,7 @@ const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: un
 
 /**
  * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
- * `compileOrderBy`: each key as `&lt;col> ASC|DESC`, with an `id ASC` tiebreak
+ * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id ASC` tiebreak
  * appended unless an id field is already ordered (keeps paging deterministic).
  */
 const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string }>): SQL => {
@@ -707,7 +707,7 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
 };
 
 /**
- * Materialize the `__agg_&lt;index>` companion tables for every declared
+ * Materialize the `__agg_<index>` companion tables for every declared
  * `aggregateIndex` on a global table. Global tables in Lunora ship their own
  * DDL — counter tables are opt-in so production hosts can decide where they
  * live. Tests and dev hosts can call this once after their schema migration to
@@ -801,7 +801,7 @@ const rankSortColumnDefs = (dialect: SqlDialect, index: RankIndexDefinitionLike,
     });
 
 /**
- * Materialize the `__rank_&lt;index>` companion tables for every declared
+ * Materialize the `__rank_<index>` companion tables for every declared
  * `rankIndex` on a global table. Mirrors `runSqlAggregateMigrations` — same
  * opt-in pattern so production hosts decide whether to spend the DDL.
  *
@@ -956,10 +956,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const nullSafeEquals = (reference: SQL, value: unknown): SQL => nullSafeEqualsSql(dialect.name, reference, value);
 
     /**
-     * Build an `INSERT … VALUES … &lt;conflict clause>` upsert as a drizzle SQL for
-     * the aggregate counters. SQLite/Postgres emit `ON CONFLICT(&lt;key>) DO UPDATE
+     * Build an `INSERT … VALUES … <conflict clause>` upsert as a drizzle SQL for
+     * the aggregate counters. SQLite/Postgres emit `ON CONFLICT(<key>) DO UPDATE
      * SET …`; MySQL emits `ON DUPLICATE KEY UPDATE …` (keyed off `dialect.name`).
-     * The `set` callback returns `{ &lt;unquoted column>: &lt;update expression> }`
+     * The `set` callback returns `{ <unquoted column>: <update expression> }`
      * pairs, building expressions from `excluded(col)` (the proposed row) and
      * `current(col)` (the existing row — qualified with the table name on Postgres,
      * where a bare reference is ambiguous between the target and `excluded`).
@@ -1095,7 +1095,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const backfilled = new Map<string, boolean>();
 
     /**
-     * Whether `table` has a corresponding `__agg_&lt;index>` companion table on
+     * Whether `table` has a corresponding `__agg_<index>` companion table on
      * the D1 binding. Global tables ship with their own DDL — counter tables
      * are opt-in: if the user hasn't defined one, we silently fall back to a
      * SCAN-based count. The same opt-in shape is what `runSqlAggregateMigrations`
@@ -1752,7 +1752,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * Run an optimistic-concurrency-guarded write — the D1 twin of the DO
      * dialect's `runGuardedWrite`. D1 stores rows as real columns (no `__doc__`
      * blob) and `SqlCtxExec.run` returns no rows-affected count, so the CAS is
-     * expressed as `WHERE "id" IS ? AND "&lt;col>" IS ? ... RETURNING "id"` run via
+     * expressed as `WHERE "id" IS ? AND "<col>" IS ? ... RETURNING "id"` run via
      * `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound values
      * are the RAW column values captured at read time ({@link rawRow}) so the
      * comparison is faithful; `IS` gives NULL-safe equality. An empty RETURNING

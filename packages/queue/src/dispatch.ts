@@ -23,7 +23,7 @@ interface QueueRegistryEntry {
      * The `defineQueue` result (carries the push handler). The body type is
      * erased to `any` here because the registry is heterogeneous — different
      * queues carry different message bodies, and the handler param is
-     * contravariant, so a precise `QueueDefinition&lt;Body>` would not be assignable
+     * contravariant, so a precise `QueueDefinition<Body>` would not be assignable
      * to a shared `unknown`-bodied slot. Runtime dispatch passes the delivered
      * batch straight through, so the erasure is type-only.
      */

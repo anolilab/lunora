@@ -1,5 +1,5 @@
 /**
- * One `ctx.storage.&lt;bucket>.&lt;method>(key, …)` call whose R2 object key is derived
+ * One `ctx.storage.<bucket>.<method>(key, …)` call whose R2 object key is derived
  * from the handler's `args` with no server-side scoping — the input the
  * `storage_key_from_user_args` lint consumes. An object key taken straight from
  * request input lets any caller read, overwrite, or delete another user's object

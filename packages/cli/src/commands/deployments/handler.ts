@@ -32,7 +32,7 @@ interface DeploymentsCommandResult {
     error?: string;
 }
 
-/** Append `--env &lt;env>` when an environment was given. */
+/** Append `--env <env>` when an environment was given. */
 const withEnv = (args: string[], env: string | undefined): string[] => {
     if (env !== undefined) {
         args.push("--env", env);
@@ -136,7 +136,7 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
 const isDeploymentsSubcommand = (value: unknown): value is DeploymentsSubcommand =>
     value === "list" || value === "inspect" || value === "rollback" || value === "promote";
 
-/** `lunora deployments &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora deployments <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 

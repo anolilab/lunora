@@ -29,7 +29,7 @@ import { UserViewComponent } from "./user-button";
 /**
  * The accounts signed in on *this device*, with switch and sign-out-just-this.
  *
- * Not `&lt;lunora-sessions-card>`, which lists this account's sessions across every
+ * Not `<lunora-sessions-card>`, which lists this account's sessions across every
  * device. The two are a keystroke apart in better-auth's API and mean opposite
  * things.
  */

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSqlExec } from "../src/node-sqlite";
 
 /**
- * The per-table facade's soft-delete surface (`ctx.db.&lt;table>.delete()` →
+ * The per-table facade's soft-delete surface (`ctx.db.<table>.delete()` →
  * soft, `.restore()`, `.hardDelete()`, `findMany({ includeDeleted })`) over the
  * REAL `@lunora/do` writer — proving `bindTableFacade` wires `delete`'s `hard`
  * option and `restore` end to end.

@@ -25,7 +25,7 @@ import type { WorkflowDefinition, WorkflowStepLike } from "../types";
  *
  * ```ts
  * export class OrderPipelineWorkflow extends LunoraWorkflow {
- *     constructor(ctx: ExecutionContext, env: Record&lt;string, unknown>) {
+ *     constructor(ctx: ExecutionContext, env: Record<string, unknown>) {
  *         super(ctx, env, orderPipeline, "orderPipeline");
  *     }
  * }

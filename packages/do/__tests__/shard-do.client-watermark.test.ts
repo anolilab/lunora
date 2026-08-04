@@ -10,7 +10,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * End-to-end custom-mutator ordering over the real dispatch path. A push that
  * carries a `clientId` + numeric `clientSeq` on a registered mutator is
  * classified against `__client_watermark` BEFORE the handler runs:
- * - `seq &lt;= watermark` → already processed (ack, handler not re-run);
+ * - `seq <= watermark` → already processed (ack, handler not re-run);
  * - `seq == watermark + 1` → run authoritatively + advance the watermark;
  * - `seq > watermark + 1` → out-of-order halt (409, handler not run).
  *

@@ -34,14 +34,14 @@ import { ADMIN_FUNCTION_PREFIX, tableFromDepKey } from "@lunora/shard-engine";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { decodeIdentityHeader } from "../../../shared/identity-header";
 
-/** Recovers the process exit code embedded in a container `stop` message as `(exit &lt;n>)`. */
+/** Recovers the process exit code embedded in a container `stop` message as `(exit <n>)`. */
 const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
 
 /**
  * The mapped {@link LogEntry} one container lifecycle event becomes once parsed.
- * `functionPath` is the synthetic `container:&lt;name>` source so the Studio Logs
+ * `functionPath` is the synthetic `container:<name>` source so the Studio Logs
  * panel renders the row alongside `ctx.log` lines; `level` is folded to the
- * buffer's level set; `message` is a compact `&lt;event>` / `&lt;event>: &lt;detail>`.
+ * buffer's level set; `message` is a compact `<event>` / `<event>: <detail>`.
  */
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
@@ -185,7 +185,7 @@ interface RunShardRankPageArgs {
 }
 
 /**
- * The trailing `,"cursor":&lt;n>,"epoch":"&lt;e>"` fragment appended to a
+ * The trailing `,"cursor":<n>,"epoch":"<e>"` fragment appended to a
  * `data`/`delta`/`resume` frame so a client can persist a resume position it can
  * prove still belongs to this shard's timeline (see `evaluateResume`). Each part
  * is omitted when absent, keeping the wire byte-identical to the pre-cursor /
@@ -521,7 +521,7 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
  * `reportContainerLifecycle`). The reserved op carries the same envelope
  * `emitContainerLifecycle` prints to the dev terminal under `args.event`, so the
  * terminal and the Studio Logs panel never diverge. Maps it to a {@link LogEntry}
- * with `functionPath: "container:&lt;name>"`. A malformed envelope throws a 400
+ * with `functionPath: "container:<name>"`. A malformed envelope throws a 400
  * `LunoraError`, matching the other admin write parsers.
  */
 const parseRecordContainerEventArgs = (args: Record<string, unknown>): ContainerLogEntry => {
@@ -908,7 +908,7 @@ const badRequest = (message: string): never => {
     throw new LunoraError("BAD_REQUEST", message);
 };
 
-/** Narrow a required non-empty string admin arg or 400 with `&lt;field> is required`. */
+/** Narrow a required non-empty string admin arg or 400 with `<field> is required`. */
 const requireNonEmptyString = (value: unknown, field: string): string => {
     if (typeof value !== "string" || value.trim() === "") {
         badRequest(`rankPage: \`${field}\` is required`);

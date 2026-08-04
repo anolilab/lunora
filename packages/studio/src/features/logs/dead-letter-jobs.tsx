@@ -34,7 +34,7 @@ const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? 
  * change only on the infrequent retry-exhaustion event), so this polls on the
  * shared auto-refresh interval and refetches after each operator action.
  *
- * Works out of the box under `&lt;LunoraProvider>` via the client's dead-letter
+ * Works out of the box under `<LunoraProvider>` via the client's dead-letter
  * admin methods; pass the props to override the transport (e.g. a read-only
  * view supplies only `loadJobs`).
  */

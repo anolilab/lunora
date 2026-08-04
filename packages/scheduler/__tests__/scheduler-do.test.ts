@@ -304,7 +304,7 @@ describe("schedulerDO — live subscriptions", () => {
 });
 
 describe("schedulerDO — bounded listing", () => {
-    /** Directly seed `id:&lt;prefix>-NNNN` headers, bypassing /schedule for speed with large counts. */
+    /** Directly seed `id:<prefix>-NNNN` headers, bypassing /schedule for speed with large counts. */
     const seedHeaders = (state: ReturnType<typeof createFakeState>, count: number, options: { pool?: string; prefix?: string } = {}): void => {
         const prefix = options.prefix ?? "job";
 

@@ -3,7 +3,7 @@
  * input the `geo_index_unused` lint cross-references against the declared geo
  * indexes in the lint context's schema. Produced by the codegen feeder, which
  * walks the lunora source for `ctx.db.query("t").withGeoIndex(name, …)` /
- * `ctx.db.&lt;table>.withGeoIndex(name, …)` reads and records each referenced index
+ * `ctx.db.<table>.withGeoIndex(name, …)` reads and records each referenced index
  * name. Runtime callers don't supply it, so the lint finds nothing there.
  *
  * A `.geoIndex(name, { field })` maintains a geohash companion column on every

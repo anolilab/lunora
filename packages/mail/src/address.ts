@@ -39,7 +39,7 @@ const assertSafeHeaderValue = (label: string, value: string): void => {
     }
 };
 
-/** Validate the bracketed `name &lt;email>` form captured by `ADDRESS_PATTERN`. */
+/** Validate the bracketed `name <email>` form captured by `ADDRESS_PATTERN`. */
 const toBracketedAddress = (name: string, email: string): { email: string; name?: string } => {
     if (name.length > MAX_NAME_LENGTH) {
         throw new LunoraError("INTERNAL", `@lunora/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);

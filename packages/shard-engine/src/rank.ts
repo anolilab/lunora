@@ -17,7 +17,7 @@
  *
  * Storage layout (per declared rankIndex):
  *
- * T__rank_&lt;name> (
+ * T__rank_<name> (
  * __id__         TEXT PRIMARY KEY,
  * __partition__  TEXT NOT NULL,   -- canonical-JSON tuple of partitionBy keys (or "")
  * __sort_k0__    BLOB,            -- one column per sortBy key (typeless)
@@ -25,8 +25,8 @@
  * ...
  * );
  *
- * CREATE INDEX T__rank_&lt;name>__btree
- * ON T__rank_&lt;name> (__partition__, __sort_k0__ &lt;dir0>, ..., __id__ ASC);
+ * CREATE INDEX T__rank_<name>__btree
+ * ON T__rank_<name> (__partition__, __sort_k0__ <dir0>, ..., __id__ ASC);
  *
  * Auto-backfill: a rank companion is **lazily** populated on the first read
  * or write that targets an empty companion, by scanning the source table
@@ -195,7 +195,7 @@ const rankTableName = (table: string, indexName: string): string => `${table}__r
  * The values mirror what the trigger seam (`syncRankIndexEntry`) stores:
  *
  * - `partitionKey` === `encodePartitionKey(index.partitionBy ?? [], doc)`, the same canonical-JSON tuple filed in `__partition__`.
- * - `sortValues[i]` === `serializeSqlValue(doc[index.sortBy[i].field])` — the same transform `syncRankIndexEntry` applies to the stored `__sort_k&lt;i>__` column, so the comparison is byte-for-byte (and JSON-safe for the cross-shard wire) regardless of which shard owns the row. `rankBefore` re-applies it idempotently, so a direct caller passing raw values still works.
+ * - `sortValues[i]` === `serializeSqlValue(doc[index.sortBy[i].field])` — the same transform `syncRankIndexEntry` applies to the stored `__sort_k<i>__` column, so the comparison is byte-for-byte (and JSON-safe for the cross-shard wire) regardless of which shard owns the row. `rankBefore` re-applies it idempotently, so a direct caller passing raw values still works.
  * - `rowId` === `doc._id`, the `__id__` tiebreak.
  */
 const rankKeyFromDocument = (

@@ -78,7 +78,7 @@ const isFilterClause = (entry: unknown): entry is FilterClause => {
     return typeof candidate.column === "string" && typeof candidate.operator === "string" && VALID_OPERATORS.has(candidate.operator as FilterOperator);
 };
 
-/** Read the structured filters out of a `?filters=&lt;json>` param, tolerating absence/garbage. */
+/** Read the structured filters out of a `?filters=<json>` param, tolerating absence/garbage. */
 const parseFilters = (raw: unknown): FilterClause[] => {
     if (typeof raw !== "string" || raw === "") {
         return [];
@@ -93,7 +93,7 @@ const parseFilters = (raw: unknown): FilterClause[] => {
     }
 };
 
-/** Read the `?order=&lt;column>:&lt;asc|desc>` param into an `orderBy`, or `undefined` when absent/malformed. */
+/** Read the `?order=<column>:<asc|desc>` param into an `orderBy`, or `undefined` when absent/malformed. */
 const parseOrder = (raw: unknown): DataView["orderBy"] => {
     if (typeof raw !== "string" || raw === "") {
         return undefined;

@@ -30,9 +30,9 @@ const matchesColumnType = (value: unknown, type: EventStoreColumnType): boolean 
 };
 
 /**
- * Runtime guard behind `send()`. `EventStoreRecord&lt;Schema>` narrows the call
+ * Runtime guard behind `send()`. `EventStoreRecord<Schema>` narrows the call
  * site at compile time, but Pipelines' own binding takes untyped
- * `Record&lt;string, unknown>[]` and enforces nothing server-side — so the type
+ * `Record<string, unknown>[]` and enforces nothing server-side — so the type
  * alone is a promise a plain-JS caller, a stale build, or an `as` cast can
  * break silently. This is the actual enforcement: a record with a
  * wrong-typed field, a missing field, or a field the schema doesn't declare
@@ -57,7 +57,7 @@ const assertMatchesSchema = (schema: EventStoreSchema, record: Record<string, un
  * read path over the same Iceberg table — modeled on `defineRag`
  * (`@lunora/ai/rag`), which couples `ctx.ai` + `ctx.vectors` under one schema
  * the same way. `send()` is runtime-validated against `schema`; `query()` is
- * `r2sql.from&lt;Row>(table)` with `Row` inferred from the same `schema`, so a
+ * `r2sql.from<Row>(table)` with `Row` inferred from the same `schema`, so a
  * column can't drift between the two halves the way two hand-declared
  * column-type lists can.
  *

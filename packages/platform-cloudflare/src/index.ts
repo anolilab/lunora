@@ -5,7 +5,7 @@
  * `@lunora/platform` says what a host must provide; this says how Cloudflare
  * provides it, over `DurableObjectState`, hibernatable WebSockets, and a
  * `DurableObjectNamespace`. A second target ships the same surface from its own
- * `@lunora/platform-&lt;target>` package, so adding one is a sibling rather than a
+ * `@lunora/platform-<target>` package, so adding one is a sibling rather than a
  * refactor of `@lunora/do`.
  *
  * # Why this depends on nothing but the contracts

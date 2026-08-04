@@ -5,7 +5,7 @@ import type { EmbeddingModelInput, LunoraAi } from "../types";
 /**
  * `(text) => vector` — the embedder shape `ctx.vectors` accepts on both its
  * write (`upsert`) and read (`query`) inputs. Matches `@lunora/server`'s
- * `VectorEmbedder` and `@lunora/bindings/vectors`' `EmbedFunction&lt;string>`.
+ * `VectorEmbedder` and `@lunora/bindings/vectors`' `EmbedFunction<string>`.
  * @experimental
  */
 export type RagEmbedder = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
@@ -467,7 +467,7 @@ export interface RagSource {
 export interface RetrieveResult {
     /** Ranked chunks (best first). */
     chunks: ReadonlyArray<RetrievedChunk>;
-    /** Ready-to-inject prompt context: chunks joined under `[source:&lt;id>#&lt;n>]` headers. */
+    /** Ready-to-inject prompt context: chunks joined under `[source:<id>#<n>]` headers. */
     context: string;
     /** Deduped source references, in first-seen (best) order. */
     sources: ReadonlyArray<RagSource>;

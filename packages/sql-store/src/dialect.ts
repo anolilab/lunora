@@ -117,7 +117,7 @@ export interface SqlDialect {
     /**
      * Optional: the key-prefix length an indexed column of this `kind` needs.
      * MySQL/InnoDB can't index a `TEXT`/`LONGTEXT`/`BLOB` column without a prefix
-     * (the store appends `(&lt;n>)` to the column reference); SQLite/Postgres index
+     * (the store appends `(<n>)` to the column reference); SQLite/Postgres index
      * text columns directly and omit this hook (or return `undefined`). `kind` is
      * the column's effective validator kind.
      */

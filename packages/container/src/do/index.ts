@@ -125,7 +125,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
-     * Proxy entry for every `ctx.containers.&lt;name>` fetch. Resolves the
+     * Proxy entry for every `ctx.containers.<name>` fetch. Resolves the
      * `secretsStore` bindings into `envVars` before delegating, so the values
      * are present when the base implicitly starts the container for this
      * request — a no-op when `secretsStore` is unset.
@@ -137,7 +137,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
-     * Explicit start (`ctx.containers.&lt;name>.get(id).start()`). Resolves the
+     * Explicit start (`ctx.containers.<name>.get(id).start()`). Resolves the
      * `secretsStore` bindings into `envVars` first, mirroring
      * {@link containerFetch}. A per-instance `start({ envVars })` replaces the
      * env set wholesale (base behavior), so the injected values only apply to a

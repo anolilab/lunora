@@ -18,7 +18,7 @@ export interface PushBroadcastJob {
     type: "lunora.push.broadcast";
 }
 
-/** The structural slice of a `@lunora/queue` producer (`ctx.queues.&lt;name>`) used here. */
+/** The structural slice of a `@lunora/queue` producer (`ctx.queues.<name>`) used here. */
 export interface QueueProducerLike {
     send: (body: PushBroadcastJob) => Promise<void>;
 }

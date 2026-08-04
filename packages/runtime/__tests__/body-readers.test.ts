@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readJsonBodyWithLimit } from "../src/body-readers";
 
 /**
- * `readJsonBodyWithLimit` promised `Record&lt;string, unknown>` but only checked
+ * `readJsonBodyWithLimit` promised `Record<string, unknown>` but only checked
  * that the body was valid JSON — `null`, `[1, 2]`, and a bare scalar all parse
  * cleanly and used to satisfy the `as` cast, so a caller that dereferenced a
  * property on the "object" (every admin route does) would 500 on what should

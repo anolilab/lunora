@@ -10,14 +10,14 @@ import type { FlagsIR } from "./ir";
 /** The only file a feature-flag provider may be declared in — mirrors `lunora/queues.ts`. */
 const FLAGS_FILENAME = "flags.ts";
 
-/** The four typed flag reads `ctx.flags.&lt;type>(…)` / `ctx.flags.details.&lt;type>(…)` expose. */
+/** The four typed flag reads `ctx.flags.<type>(…)` / `ctx.flags.details.<type>(…)` expose. */
 const FLAG_TYPES = new Set(["boolean", "number", "object", "string"]);
 
-/** One statically-discovered flag read: the key plus the value type its `ctx.flags.&lt;type>` call implies. */
+/** One statically-discovered flag read: the key plus the value type its `ctx.flags.<type>` call implies. */
 interface FlagKey {
-    /** The flag key — the first (string-literal) argument of the `ctx.flags.&lt;type>(…)` read. */
+    /** The flag key — the first (string-literal) argument of the `ctx.flags.<type>(…)` read. */
     key: string;
-    /** The value type, derived from which `ctx.flags.&lt;type>` method read it. */
+    /** The value type, derived from which `ctx.flags.<type>` method read it. */
     type: "boolean" | "number" | "object" | "string";
 }
 
@@ -169,7 +169,7 @@ const discoverFlags = (project: Project, lunoraDirectory: string): FlagsIR | und
 const isContextIdentifier = (node: TsNode): boolean => Node.isIdentifier(node) && node.getText() === "ctx";
 
 /**
- * Decide whether `access` is a `ctx.flags.&lt;type>` or `ctx.flags.details.&lt;type>`
+ * Decide whether `access` is a `ctx.flags.<type>` or `ctx.flags.details.<type>`
  * property access and, if so, return the value type. Anchored on a literal `ctx`
  * identifier (the destructured `const { flags } = ctx` form isn't matched — like
  * the studio nav probe, a bare `flags.boolean(...)` is too ambiguous to claim).
@@ -209,7 +209,7 @@ const flagTypeFromAccess = (access: PropertyAccessExpression): FlagKey["type"] |
 
 /**
  * Statically discover every feature flag the app's `lunora/` handlers read, by
- * scanning for `ctx.flags.&lt;type>("key", …)` (and `ctx.flags.details.&lt;type>(…)`)
+ * scanning for `ctx.flags.<type>("key", …)` (and `ctx.flags.details.<type>(…)`)
  * calls whose first argument is a string literal. Powers the studio's read-only
  * Flags page (`__lunora_admin__:listFlags`) and the generated `evaluateFlags`
  * override, which evaluates each discovered key through the configured provider.
@@ -219,7 +219,7 @@ const flagTypeFromAccess = (access: PropertyAccessExpression): FlagKey["type"] |
  * won't list it). Keys are de-duplicated (first read wins on a type clash) and
  * returned sorted by key for deterministic codegen output.
  */
-/** Extract the `{ key, type }` of a single `ctx.flags.&lt;type>("key", …)` read, or `undefined` when the call isn't one. */
+/** Extract the `{ key, type }` of a single `ctx.flags.<type>("key", …)` read, or `undefined` when the call isn't one. */
 const flagKeyFromCall = (call: CallExpression): FlagKey | undefined => {
     const callee = call.getExpression();
 

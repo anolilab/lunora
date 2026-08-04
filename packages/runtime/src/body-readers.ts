@@ -142,7 +142,7 @@ const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY
  * slip past the cap) and maps a 413 through unchanged while turning any other
  * parse failure into a 400. Returns `{}` for an empty body.
  *
- * The return type promises `Record&lt;string, unknown>`, but `JSON.parse` alone
+ * The return type promises `Record<string, unknown>`, but `JSON.parse` alone
  * cannot deliver that — `null`, `[1, 2]`, and a bare scalar all parse cleanly
  * and would previously satisfy the `as` cast, letting a caller downstream
  * dereference a property on a value that was never an object (a 500, not the

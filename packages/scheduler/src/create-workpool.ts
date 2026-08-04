@@ -8,7 +8,7 @@ import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptio
  * `@convex-dev/workpool`. Mirrors `createScheduler`'s `namespace` /
  * `originUrl` / `instanceName` options and is built on the SAME `SchedulerDO`:
  * a workpool is just a NAMED logical pool inside that DO (concurrency counter
- * keyed by {@link WorkpoolOptions.name} under the `pool:&lt;name>` storage key).
+ * keyed by {@link WorkpoolOptions.name} under the `pool:<name>` storage key).
  * It needs no extra Durable Object or wrangler binding beyond the SchedulerDO
  * the scheduler already uses.
  *

@@ -177,7 +177,7 @@ interface ImportGlobalArgs {
     /**
      * Optional direct exec handle to the same D1 database the writer targets.
      * When supplied, the conflict pre-probe issues a single
-     * `SELECT 1 FROM &lt;table> WHERE id = ? LIMIT 1` against the row's declared
+     * `SELECT 1 FROM <table> WHERE id = ? LIMIT 1` against the row's declared
      * table instead of falling back to `writer.get(id)`, which scans every
      * global table looking for the id. Strongly recommended for large schemas
      * — the writer-fallback is O(N tables) per row.

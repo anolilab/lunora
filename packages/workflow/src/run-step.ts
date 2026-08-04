@@ -26,7 +26,7 @@ import type {
 
 /**
  * Validate a step's args through its validator map, prefixing any
- * `ValidationError` with `step args.&lt;key>` so the failure points at the
+ * `ValidationError` with `step args.<key>` so the failure points at the
  * offending field. Delegates to `@lunora/values`' shared {@link parseValidatorMap}
  * — the same parser the procedure builder and HTTP routes use — so the
  * optional-skip and error-prefix semantics stay in lockstep across the framework.

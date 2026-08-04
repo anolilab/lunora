@@ -116,14 +116,14 @@ interface DeployCommandOptions {
     /**
      * Confirm a production data migration triggered via `--migrate` (the
      * `migrate up --prod` confirmation the standalone command requires). Without
-     * it a `--migrate --migrate-url &lt;prod>` deploy refuses to run the migration.
+     * it a `--migrate --migrate-url <prod>` deploy refuses to run the migration.
      */
     migrateYes?: boolean;
 
     /**
      * Emit the bundled worker to this directory via `wrangler deploy --outdir`
      * (paired with `dryRun` by `lunora build`). Also writes esbuild metadata to
-     * `&lt;outDir>/bundle-meta.json`. When unset, no artifact is written.
+     * `<outDir>/bundle-meta.json`. When unset, no artifact is written.
      */
     outDir?: string;
 
@@ -186,7 +186,7 @@ interface DeployCommandResult {
      * The `.dev.vars`-shaped filename (never a full path, never a value) a
      * secret minted during this run was recorded into, when the missing-
      * secret gate minted one — `.dev.vars` for the default environment, or a
-     * `.dev.vars.&lt;env>` sibling for an explicit `--env`. `undefined` when
+     * `.dev.vars.<env>` sibling for an explicit `--env`. `undefined` when
      * nothing was minted this run.
      */
     mintedSecretsFile?: string;
@@ -528,7 +528,7 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
 };
 
 /**
- * `wrangler secret put &lt;name>` is Cloudflare's write-only channel — the
+ * `wrangler secret put <name>` is Cloudflare's write-only channel — the
  * value never comes back. A previous version of this function minted a fresh
  * value for every key and piped it straight to `secret put`, without binding
  * it to anything the caller could see: the only trace was a key-name log
@@ -547,7 +547,7 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
  * missing key, even a non-placeholder one — an earlier version of this
  * function did, on the theory that a real local value needs no fresh
  * disclosure. That reasoning doesn't hold: `isPlaceholderValue` is a marker
- * heuristic (empty / `&lt;…>` / `changeme` / `todo` / …), not a strength check,
+ * heuristic (empty / `<…>` / `changeme` / `todo` / …), not a strength check,
  * so a real-but-weak shared dev secret (`AUTH_SECRET="devsecret"`) would
  * silently become the value protecting `--env production`, and the confirm
  * prompt never named which keys were about to be promoted that way. Minting
@@ -606,7 +606,7 @@ const pushMintableSecrets = async (
 
 /**
  * Plain-identifier check before `options.env` is spliced into a filename
- * (`.dev.vars.&lt;env>`) — defense-in-depth; a `--env &lt;name>` naming no
+ * (`.dev.vars.<env>`) — defense-in-depth; a `--env <name>` naming no
  * declared `wrangler.jsonc` environment is already blocked earlier in the
  * deploy pipeline (`validateWrangler`), so this should be unreachable in
  * practice.
@@ -625,7 +625,7 @@ const SAFE_ENV_NAME = /^[\w-]+$/u;
  *
  * Which file depends on `options.env`:
  * - No explicit `--env`: the deploy targets the account's one default environment — the same one `.dev.vars`/`lunora dev`/a plain `lunora env push` already treat as authoritative — so the minted value goes into `.dev.vars` itself, same as `env set`/`env generate --set` would.
- * - An explicit `--env &lt;name>`: a DIFFERENT, named environment. Writing that secret into the bare, environment-agnostic `.dev.vars` would silently share it with local dev and with a later no-`--env` `env push` — the exact cross-environment leak an `--env`-scoped deploy is supposed to avoid. So it goes into a sibling `.dev.vars.&lt;name>` instead (already covered by this repo's `.gitignore` `.dev.vars.*` pattern). No other command reads `.dev.vars.&lt;name>` today — it exists purely as this deploy's own recoverable record of a value `wrangler secret put` can never return; open it by hand to retrieve the value.
+ * - An explicit `--env <name>`: a DIFFERENT, named environment. Writing that secret into the bare, environment-agnostic `.dev.vars` would silently share it with local dev and with a later no-`--env` `env push` — the exact cross-environment leak an `--env`-scoped deploy is supposed to avoid. So it goes into a sibling `.dev.vars.<name>` instead (already covered by this repo's `.gitignore` `.dev.vars.*` pattern). No other command reads `.dev.vars.<name>` today — it exists purely as this deploy's own recoverable record of a value `wrangler secret put` can never return; open it by hand to retrieve the value.
  *
  * Returns the (relative) filename written, or `undefined` when nothing was
  * recorded — the caller threads this through the deploy result so the

@@ -283,7 +283,7 @@ export interface FunctionIR {
     /**
      * Set by the `.expose({ rest: true })` builder modifier (plan 167). When
      * `rest` is `true` the function is published on the public REST surface, so the
-     * OpenAPI emitter describes it as a real `/_lunora/rest/&lt;namespace>/&lt;fn>` path
+     * OpenAPI emitter describes it as a real `/_lunora/rest/<namespace>/<fn>` path
      * (the single source of truth the runtime router also derives from). Absent →
      * RPC-only (the default; not on the REST surface).
      *
@@ -293,7 +293,7 @@ export interface FunctionIR {
      * computed value is simply absent (the spec under-documents rather than lies).
      */
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
-    /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "messages". */
+    /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
 
@@ -317,7 +317,7 @@ export interface FunctionIR {
     output?: ValidatorIR;
 
     /**
-     * Serialized TS source for the handler's return type, with `Promise&lt;T>`
+     * Serialized TS source for the handler's return type, with `Promise<T>`
      * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
      * ts-morph cannot resolve the type (typically because the consuming
      * project lacks a tsconfig that can reach `@lunora/server`).
@@ -341,7 +341,7 @@ export interface FunctionIR {
 export interface MigrationIR {
     /** Export binding name, used to reference the module member in generated imports. */
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "migrations". */
+    /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "migrations". */
     filePath: string;
     /** Stable migration id — the registry key and per-shard run-state key. */
     id: string;
@@ -361,12 +361,12 @@ export interface ShapeIR {
     /**
      * The shape's `args` validator map — its partition selector. Lifted so
      * `_generated/collections.ts` can type the selector a caller passes instead of
-     * widening it to `Record&lt;string, unknown>`. `{}` for a parameterless shape.
+     * widening it to `Record<string, unknown>`. `{}` for a parameterless shape.
      */
     args: Record<string, ValidatorIR>;
     /** Export binding name — the shape's registry key and import member. */
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"shapes"`. */
+    /** Path relative to `<projectRoot>/lunora/` without extension — always `"shapes"`. */
     filePath: string;
 
     /**
@@ -416,19 +416,19 @@ export interface EnvIR {
 export interface MutatorIR {
     /**
      * The mutator's `args` validator map, parsed exactly as a procedure's is, so
-     * the emitted `api.mutators.&lt;name>` reference carries the arg type a client
+     * the emitted `api.mutators.<name>` reference carries the arg type a client
      * `defineMutator` infers instead of restating. `{}` for a parameterless
      * mutator (or one whose `args` isn't an inline object literal).
      */
     args: Record<string, ValidatorIR>;
     /** Export binding name — the mutator's registry key and import member. */
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"mutators"`. */
+    /** Path relative to `<projectRoot>/lunora/` without extension — always `"mutators"`. */
     filePath: string;
 
     /**
      * Serialized TS source for the authoritative `server` impl's return type,
-     * `Promise&lt;T>` unwrapped. `"unknown"` when ts-morph can't resolve it — same
+     * `Promise<T>` unwrapped. `"unknown"` when ts-morph can't resolve it — same
      * contract as {@link FunctionIR.returnType}.
      */
     returnType: string;
@@ -708,7 +708,7 @@ export interface FlagsIR {
 export interface WorkflowCallIR {
     /** Export binding name of the function performing the call, e.g. `create`. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension (the api namespace). */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
     /** 1-based line of the `get(...)` call. */
     line: number;
@@ -725,7 +725,7 @@ export interface WorkflowCallIR {
 export interface QueryReadIR {
     /** Exported procedure the read sits in, or `""` at module scope. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
 
     /**
@@ -746,7 +746,7 @@ export interface QueryReadIR {
 }
 
 /**
- * A `ctx.authApi.&lt;method>(...)` call discovered in a function body, attributed
+ * A `ctx.authApi.<method>(...)` call discovered in a function body, attributed
  * to the exported function (and its file = api namespace) that performs it.
  * Structurally identical to `AdvisorAuthApiCall` so it passes straight through
  * to the advisor lint without conversion, exactly as `InsertWriteIR` does for
@@ -755,7 +755,7 @@ export interface QueryReadIR {
 export interface AuthApiCallIR {
     /** Export binding name of the function performing the call, e.g. "createOrg". */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** True when the call's argument object includes a `headers` property. */
     hasHeaders: boolean;
@@ -775,7 +775,7 @@ export interface AuthApiCallIR {
 export interface InsertWriteIR {
     /** Export binding name of the function performing the insert, e.g. "send". */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension (the api namespace). */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
     /** 1-based line of the `insert(...)` call. */
     line: number;
@@ -797,7 +797,7 @@ export interface NondeterministicCallIR {
     callee: string;
     /** Export binding name of the function performing the call, e.g. `sendMessage`. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension (the api namespace). */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
     /** Which procedure kind the call lives in — only `query`/`mutation` handlers are recorded. */
     kind: "mutation" | "query";
@@ -836,7 +836,7 @@ export interface R2sqlCallIR {
 export interface RlsProcedureIR {
     /** Export binding name of the procedure (e.g. `listDocuments`). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
 
     /**
@@ -864,7 +864,7 @@ export interface RlsProcedureIR {
 export interface MaskProcedureIR {
     /** Export binding name of the procedure (e.g. `listUsers`). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
 
     /**
@@ -926,9 +926,9 @@ export interface MaskMetadataIR {
 export interface MaskStrategyIR {
     /** Masked column name. */
     column: string;
-    /** Export binding name of the procedure whose `.use(mask(...))` chain declared this column, or `"&lt;module>"` when declared at file scope. */
+    /** Export binding name of the procedure whose `.use(mask(...))` chain declared this column, or `"<module>"` when declared at file scope. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the masked column's strategy property. */
     line: number;
@@ -1009,7 +1009,7 @@ export interface StorageRulesMetadataIR {
 }
 
 /**
- * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
+ * A typed REST route declared with the `httpRoute.<verb>("/path")…` builder in
  * `@lunora/server` and mounted on `httpRouter()`. Captured statically from the
  * builder chain so the OpenAPI emitter can render a real `paths` entry: the verb
  * + path become the operation's method + URL, and the accumulated validator maps
@@ -1024,13 +1024,13 @@ export interface HttpRouteIR {
      * handler yields — inferred from the handler via the type checker. Present
      * only when {@link HttpRouteIR.stream} is `true`; `"unknown"` when the
      * checker can't resolve enough context. Feeds the emitted
-     * `HttpStreamRef&lt;Chunk, …>` so the chunk type flows to the client.
+     * `HttpStreamRef<Chunk, …>` so the chunk type flows to the client.
      * @experimental Part of the HTTP-SSE stream surface (the `httpStreams.*` emission).
      */
     chunkType?: string;
     /** Export binding name of the route handler (used only for diagnostics / dedupe). */
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "http". */
+    /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "http". */
     filePath: string;
     /** HTTP verb the route binds to (uppercased), e.g. `"GET"`. */
     method: string;
@@ -1038,7 +1038,7 @@ export interface HttpRouteIR {
     output?: ValidatorIR;
     /** `v.*` validators decoding the hono path params (`.params({...})`), keyed by `:name`. */
     params: Record<string, ValidatorIR>;
-    /** The route path passed to `httpRoute.&lt;verb>(path)`, e.g. `/api/todos/:id`. */
+    /** The route path passed to `httpRoute.<verb>(path)`, e.g. `/api/todos/:id`. */
     path: string;
     /** `v.*` validators decoding the URL query string (`.searchParams({...})`), keyed by name. */
     searchParams: Record<string, ValidatorIR>;
@@ -1081,7 +1081,7 @@ export interface ProcedureMiddlewareIR {
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. `undefined` when `analyzableBody` is `false`. */
     fanOut?: boolean;
 
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** `true` when the handler wraps work in `try`/`catch`. */
     handlesErrors?: boolean;
@@ -1137,7 +1137,7 @@ export interface ArgumentValidatorIR {
     anyArgs: string[];
     /** Export binding name of the procedure (e.g. `updateProfile`). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the registration call, or `0` when unknown. */
     line: number;
@@ -1157,7 +1157,7 @@ export interface ConfigCallIR {
     analyzable: boolean;
     /** The factory function or constructor name at the call site, e.g. `createPayment` / `RateLimiter`. */
     callee: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the call site, or `0` when unknown. */
     line: number;
@@ -1174,7 +1174,7 @@ export interface ConfigCallIR {
  * Structurally identical to `AdvisorSecretLiteral`.
  */
 export interface SecretLiteralIR {
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Heuristic that matched, e.g. `stripe_live_key` / `aws_access_key` / `pem_private_key` / `high_entropy`. */
     kind: string;
@@ -1196,7 +1196,7 @@ export interface SecretLiteralIR {
 export interface SqlInterpolationIR {
     /** Export binding name of the procedure performing the `ctx.sql` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the interpolation, or `0` when unknown. */
     line: number;
@@ -1214,14 +1214,14 @@ export interface SqlInterpolationIR {
 export interface ArgumentDerivedFetchIR {
     /** Export binding name of the action performing the `ctx.fetch` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.fetch` call, or `0` when unknown. */
     line: number;
 }
 
 /**
- * One `ctx.kv.&lt;method>(key, …)` call whose namespace key is derived from the
+ * One `ctx.kv.<method>(key, …)` call whose namespace key is derived from the
  * handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
  * lint input. Workers KV is a single flat namespace, so a key taken straight from
  * request input lets any caller read, overwrite, or delete another user's entry
@@ -1233,7 +1233,7 @@ export interface ArgumentDerivedFetchIR {
 export interface KvKeyAccessIR {
     /** Export binding name of the procedure performing the `ctx.kv` access. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.kv` call, or `0` when unknown. */
     line: number;
@@ -1262,7 +1262,7 @@ export interface KvKeyAccessIR {
 export interface UnrestrictedWhereBranchIR {
     /** Export binding name of the shape / policy the predicate belongs to. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Which unrestricted form was returned. */
     form: "empty-object" | "undefined";
@@ -1279,7 +1279,7 @@ export interface OwnerFieldWriteIR {
     exportName: string;
     /** The identity column being written from `args` (e.g. `userId`). */
     field: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.db` write call, or `0` when unknown. */
     line: number;
@@ -1297,7 +1297,7 @@ export interface OwnerFieldWriteIR {
 }
 
 /**
- * One `ctx.storage.&lt;bucket>.&lt;method>(key, …)` call whose R2 object key is derived
+ * One `ctx.storage.<bucket>.<method>(key, …)` call whose R2 object key is derived
  * from the handler's `args` with no server-side scoping — the
  * `storage_key_from_user_args` lint input. The bucket read/write/URL/delete methods
  * key by their first argument, so an object key taken straight from request input is
@@ -1309,7 +1309,7 @@ export interface OwnerFieldWriteIR {
 export interface StorageKeyAccessIR {
     /** Export binding name of the procedure performing the storage call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the storage call, or `0` when unknown. */
     line: number;
@@ -1327,7 +1327,7 @@ export interface StorageKeyAccessIR {
 }
 
 /**
- * One `ctx.containers.&lt;exportName>.get(name, …)` call whose instance key is derived
+ * One `ctx.containers.<exportName>.get(name, …)` call whose instance key is derived
  * from the handler's `args` with no server-side scoping — the
  * `container_instance_key_from_user_input` lint input. Each container definition's
  * `.get(name)` accessor routes to one instance per `name`, so a key taken straight from
@@ -1340,7 +1340,7 @@ export interface StorageKeyAccessIR {
 export interface ContainerKeyAccessIR {
     /** Export binding name of the procedure performing the `ctx.containers` access. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.containers.*.get` call, or `0` when unknown. */
     line: number;
@@ -1361,14 +1361,14 @@ export interface ContainerKeyAccessIR {
 export interface AiRawRunIR {
     /** Export binding name of the procedure performing the `ctx.ai.run` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.ai.run` call, or `0` when unknown. */
     line: number;
 }
 
 /**
- * One `ctx.vectors.&lt;method>(indexName, input)` call whose `input.namespace` is derived
+ * One `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is derived
  * from the handler's `args` with no server-side scoping — the
  * `vectors_namespace_from_user_input` lint input. A Vectorize namespace partitions one
  * index into isolated sub-collections, so a namespace taken straight from request input
@@ -1380,7 +1380,7 @@ export interface AiRawRunIR {
 export interface VectorNamespaceAccessIR {
     /** Export binding name of the procedure performing the `ctx.vectors` access. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
     line: number;
@@ -1401,7 +1401,7 @@ export interface VectorNamespaceAccessIR {
 export interface MailRecipientAccessIR {
     /** Export binding name of the procedure performing the `ctx.mail`/`ctx.email` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.mail`/`ctx.email` call, or `0` when unknown. */
     line: number;
@@ -1410,7 +1410,7 @@ export interface MailRecipientAccessIR {
 }
 
 /**
- * One `ctx.browser.&lt;method>(url, …)` call whose navigation URL (`arguments[0]`)
+ * One `ctx.browser.<method>(url, …)` call whose navigation URL (`arguments[0]`)
  * is derived from the handler's `args` with no server-side scoping — the
  * `browser_user_url_without_allowlist` lint input. The lint additionally
  * cross-references `createBrowser` config-call evidence to suppress findings
@@ -1420,7 +1420,7 @@ export interface MailRecipientAccessIR {
 export interface BrowserUrlAccessIR {
     /** Export binding name of the procedure performing the `ctx.browser` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.browser` call, or `0` when unknown. */
     line: number;
@@ -1429,8 +1429,8 @@ export interface BrowserUrlAccessIR {
 }
 
 /**
- * One runtime container-override call: a `&lt;handle>.start({ enableInternet: true, … })`
- * launch override, or a `&lt;handle>.egress.&lt;method>(...)` runtime firewall mutation
+ * One runtime container-override call: a `<handle>.start({ enableInternet: true, … })`
+ * launch override, or a `<handle>.egress.<method>(...)` runtime firewall mutation
  * (`allow` / `deny` / `setAllowed`) — the `container_start_enable_internet_override`
  * and `container_runtime_egress_relaxation` lint input. Both shapes re-open network
  * access the static `defineContainer` declaration (and its `container_public_internet`
@@ -1442,7 +1442,7 @@ export interface ContainerOverrideIR {
     detail: string;
     /** Export binding name of the procedure performing the call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Which override shape matched. */
     kind: "egress_relaxation" | "enable_internet";
@@ -1466,7 +1466,7 @@ export interface ContainerOverrideIR {
 export interface ImageDeliveryUrlAccessIR {
     /** Export binding name of the procedure performing the `buildImageDeliveryUrl` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `buildImageDeliveryUrl` call, or `0` when unknown. */
     line: number;
@@ -1493,7 +1493,7 @@ export interface AuthConfigIR {
     emailPasswordEnabled: boolean;
     /** Export binding name enclosing the `createAuth(...)` call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `createAuth(...)` call, or `0` when unknown. */
     line: number;
@@ -1527,7 +1527,7 @@ export interface RatelimitKeySelectorIR {
     callee: string;
     /** Export binding name of the procedure whose `.use(...)` chain carries the call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The rate limit's `name` argument (the second positional argument), or `""` when not a string literal. */
     limitName: string;
@@ -1549,7 +1549,7 @@ export interface RatelimitKeySelectorIR {
 export interface PrivilegedDispatchIR {
     /** `"queue"` for a `defineQueue` handler, `"workflow"` for a `defineWorkflow` handler. */
     dispatchKind: "queue" | "workflow";
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Export binding name of the handler performing the dispatch. */
     handlerExport: string;
@@ -1562,7 +1562,7 @@ export interface PrivilegedDispatchIR {
 }
 
 /**
- * One discovered `httpRoute.&lt;verb>("/admin/…")` route on an admin/privileged-looking
+ * One discovered `httpRoute.<verb>("/admin/…")` route on an admin/privileged-looking
  * path, with whether its builder chain references an auth/admin guard — the
  * `admin_route_without_guard` lint input. Structurally identical to
  * `AdvisorAdminRoute`.
@@ -1570,7 +1570,7 @@ export interface PrivilegedDispatchIR {
 export interface AdminRouteIR {
     /** Export binding name of the route handler. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** HTTP verb the route binds to (uppercased), e.g. `"POST"`. */
     method: string;
@@ -1581,7 +1581,7 @@ export interface AdminRouteIR {
 }
 
 /**
- * One tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing call — the
+ * One tracked `ctx.storage.<bucket>.<method>(...)` upload/signing call — the
  * shared input for the storage config-hygiene security lints
  * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
  * `storage_generate_upload_url_no_content_type_pin`, `storage_presigned_url_for_private_content`).
@@ -1599,7 +1599,7 @@ export interface StorageUploadIR {
     expiresInSeconds?: number;
     /** Export binding name of the procedure performing the call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the call, or `0` when unknown. */
     line: number;
@@ -1621,9 +1621,9 @@ export interface StorageUploadIR {
  * `AdvisorHttpActionGuard`.
  */
 export interface HttpActionGuardIR {
-    /** Export binding name of the handler (or `"&lt;module>"` when mounted inline / not a named binding). */
+    /** Export binding name of the handler (or `"<module>"` when mounted inline / not a named binding). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Which HTTP surface the handler is: a raw `httpAction` or a typed `httpRoute` route. */
     kind: "httpAction" | "httpRoute";
@@ -1633,7 +1633,7 @@ export interface HttpActionGuardIR {
     method?: string;
     /** `true` when the handler reads `ctx.auth` (a direct member access or a `const { auth } = ctx` destructure). */
     readsAuth: boolean;
-    /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.&lt;method>`. */
+    /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.<method>`. */
     sideEffect: string;
 }
 
@@ -1652,9 +1652,9 @@ export interface HttpActionGuardIR {
  * identical to `AdvisorHttpHeaderWrite`.
  */
 export interface HttpHeaderWriteIR {
-    /** Export binding name of the enclosing handler, or `"&lt;module>"` when mounted inline. */
+    /** Export binding name of the enclosing handler, or `"<module>"` when mounted inline. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The header name being written (`"location"`), or `""` when the key is not a string literal. */
     headerName: string;
@@ -1678,11 +1678,11 @@ export interface HttpHeaderWriteIR {
 export interface FailOpenGuardIR {
     /** The middleware factory at the call site: `rateLimit` / `dbRateLimit` / `verifyTurnstileMiddleware`. */
     callee: string;
-    /** Export binding name of the procedure the guard is attached to, or `"&lt;module>"` at file scope. */
+    /** Export binding name of the procedure the guard is attached to, or `"<module>"` at file scope. */
     exportName: string;
     /** `true` only when the options literal set `failOpen: true` as a boolean literal; a non-literal or absent option is treated as fail-closed. */
     failOpen: boolean;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The rate-limit `name` (second string argument) for `rateLimit`/`dbRateLimit`; `""` for `verifyTurnstileMiddleware`. */
     limitName: string;
@@ -1693,7 +1693,7 @@ export interface FailOpenGuardIR {
 /* eslint-disable no-secrets/no-secrets -- the referenced advisor evidence type name in the doc comment, not a credential */
 
 /**
- * One `ctx.flags.boolean("key", &lt;boolean-literal>)` read in `lunora/` — the
+ * One `ctx.flags.boolean("key", <boolean-literal>)` read in `lunora/` — the
  * `flag_gates_security_with_unsafe_default` lint input. OpenFeature returns the
  * `defaultValue` when the provider errors, so a fail-open default on a
  * security-shaped key silently opens access during an outage. Only reads with a
@@ -1704,9 +1704,9 @@ export interface FailOpenGuardIR {
 export interface FlagSecurityDefaultIR {
     /** The boolean-literal default returned on a provider outage (fail-open value). */
     defaultValue: boolean;
-    /** Export binding name of the procedure performing the flag read, or `"&lt;module>"` at file scope. */
+    /** Export binding name of the procedure performing the flag read, or `"<module>"` at file scope. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The flag key — the first string-literal argument of `ctx.flags.boolean`. */
     key: string;
@@ -1727,7 +1727,7 @@ export interface FlagSecurityDefaultIR {
 export interface AiToolSideEffectIR {
     /** Export binding name of the procedure performing the call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the generation call, or `0` when unknown. */
     line: number;
@@ -1740,9 +1740,9 @@ export interface AiToolSideEffectIR {
 }
 
 /**
- * One `&lt;receiver>.identity.&lt;key>` claim read in `lunora/`, where `&lt;receiver>` is
+ * One `<receiver>.identity.<key>` claim read in `lunora/`, where `<receiver>` is
  * an RLS/mask policy `auth` (or `ctx.auth`/`context.auth`). `declared` records
- * whether `&lt;key>` is in the app's `defineIdentity({ ... })` contract (or the
+ * whether `<key>` is in the app's `defineIdentity({ ... })` contract (or the
  * always-present `userId`); the `identity_undeclared_claim_trusted` lint fires on
  * the undeclared reads. Emitted only when a resolvable identity contract exists.
  * Structurally identical to `AdvisorIdentityClaimRead`.
@@ -1750,9 +1750,9 @@ export interface AiToolSideEffectIR {
 export interface IdentityClaimReadIR {
     /** `true` when `key` is a declared claim (in the `defineIdentity` contract, or the always-present `userId`). */
     declared: boolean;
-    /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    /** Export binding name of the enclosing declaration (`<module>` at file scope). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The claim key read off the identity bag. */
     key: string;
@@ -1771,9 +1771,9 @@ export interface IdentityClaimReadIR {
 export interface PaymentWebhookIR {
     /** The adapter factory invoked. */
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    /** Export binding name of the enclosing declaration (`<module>` at file scope). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the construction, or `0` when unknown. */
     line: number;
@@ -1782,7 +1782,7 @@ export interface PaymentWebhookIR {
 }
 
 /**
- * One `ctx.db.&lt;table>.findMany({ includeDeleted })` list read whose
+ * One `ctx.db.<table>.findMany({ includeDeleted })` list read whose
  * `includeDeleted` is either a hardcoded `true` or derived from the handler's
  * `args` — the `soft_delete_include_deleted_from_args` lint input. The lint joins
  * `table` against the schema's soft-delete tables and `visibility` against
@@ -1792,7 +1792,7 @@ export interface PaymentWebhookIR {
 export interface SoftDeleteReadIR {
     /** Export binding name of the procedure performing the read. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** `true` when `includeDeleted` was derived from the handler's `args` (any caller can flip it). */
     fromArgs: boolean;
@@ -1807,7 +1807,7 @@ export interface SoftDeleteReadIR {
 }
 
 /**
- * One `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list read
+ * One `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating list read
  * — the `masked_relation_leak_via_with` lint input. Column masking does not
  * descend into `with`-hydrated relations, so a masked table surfaced only through
  * a `with` on an unprotected parent read is returned in the clear. The lint
@@ -1818,7 +1818,7 @@ export interface SoftDeleteReadIR {
 export interface RelationLoadIR {
     /** Export binding name of the procedure performing the read. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the read call. */
     line: number;
@@ -1834,8 +1834,8 @@ export interface RelationLoadIR {
 
 /**
  * One `query` handler whose `return` hands back the raw rows of a table — the
- * result of a `ctx.db.&lt;table>.findMany()` / `.findFirst()` / `.get()` read, or a
- * `ctx.db.query("&lt;table>")…collect()` fluent chain — returned directly (or through
+ * result of a `ctx.db.<table>.findMany()` / `.findFirst()` / `.get()` read, or a
+ * `ctx.db.query("<table>")…collect()` fluent chain — returned directly (or through
  * one local `const` hop) with no hand-built projection. The
  * `output_projection_missing_on_public_read` lint keeps only `visibility ===
  * "public"` rows with no `.output(...)` / `.use(mask(...))` on the chain, then
@@ -1846,7 +1846,7 @@ export interface RelationLoadIR {
 export interface RawRowReturnIR {
     /** Export binding name of the query returning the raw rows. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `return` (or concise-body) expression. */
     line: number;
@@ -1878,7 +1878,7 @@ export interface RawRowReturnIR {
 export interface NormalizeIdAuthorizationIR {
     /** Export binding name of the procedure performing the normalize-then-access. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.db.normalizeId(...)` call the access is gated on. */
     line: number;
@@ -1919,7 +1919,7 @@ export interface WranglerVariableIR {
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;
-    /** Typed REST routes discovered from `httpRoute.&lt;verb>(...)` builder chains. */
+    /** Typed REST routes discovered from `httpRoute.<verb>(...)` builder chains. */
     httpRoutes: ReadonlyArray<HttpRouteIR>;
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;

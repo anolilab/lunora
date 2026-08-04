@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseValidatorMap } from "../src/functions";
 import { clampLimit, defineListArgs } from "../src/list-args";
 
-/** Stand-in for a generated `Doc&lt;"messages">`; binding it is what makes typos compile errors. */
+/** Stand-in for a generated `Doc<"messages">`; binding it is what makes typos compile errors. */
 interface Message {
     _creationTime: number;
     authorId: string;

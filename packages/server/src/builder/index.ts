@@ -95,7 +95,7 @@ const makeHandler =
 
 /**
  * Wrap a streaming user handler in the same arg-validation + middleware shell
- * as `makeHandler`, but return the user's `AsyncIterable&lt;R>` directly so the
+ * as `makeHandler`, but return the user's `AsyncIterable<R>` directly so the
  * runtime can drive it frame-by-frame. The handler receives an `AbortSignal`
  * the caller flips when they unsubscribe; it's the user's responsibility to
  * honour it (or to wire it into any awaited I/O).
@@ -303,7 +303,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
 };
 
 /**
- * Entry point for the procedure builder. `dataModel&lt;DM>()` binds the generated
+ * Entry point for the procedure builder. `dataModel<DM>()` binds the generated
  * `DataModel` (phantom for now), and `.create()` yields the public root builders
  * plus their `internal*` counterparts.
  */

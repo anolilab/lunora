@@ -10,7 +10,7 @@ import createSqliteExec from "../__tests__/_helpers/node-sqlite";
  * - **sequential** — one `SELECT ... WHERE id = ?` per table, stopping at the
  * first hit (the prior implementation). Worst case is T statements on a
  * T-table schema when the row lives in the last-probed table.
- * - **union** — one `SELECT '&lt;t>' AS __t__, ... UNION ALL ... LIMIT 1` that
+ * - **union** — one `SELECT '<t>' AS __t__, ... UNION ALL ... LIMIT 1` that
  * locates the row regardless of table count in a single round-trip (the new
  * implementation).
  *

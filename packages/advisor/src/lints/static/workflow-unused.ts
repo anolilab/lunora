@@ -5,7 +5,7 @@ import type { Lint } from "../../types";
  * Flags a declared workflow that nothing starts.
  *
  * Cross-references every `defineWorkflow` export against the set of workflow
- * names some function references via `ctx.workflows.get("&lt;name>")`. A workflow
+ * names some function references via `ctx.workflows.get("<name>")`. A workflow
  * with no such call is either dead code (declared, deployed as a billable
  * `WorkflowEntrypoint`, never triggered) or is started through a path the static
  * analysis can't see — the Cloudflare REST API, a `wrangler` invocation, or a

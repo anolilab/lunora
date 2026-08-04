@@ -1,7 +1,7 @@
 /**
  * Per-shard durable function-call metrics.
  *
- * A reserved table that accumulates per-`&lt;file>:&lt;function>` call counters and
+ * A reserved table that accumulates per-`<file>:<function>` call counters and
  * latency aggregates so they survive DO hibernation/restart — the in-memory
  * `metrics`/`functionStats` on `ShardDO` reset on every cold start, which is
  * fine for a "since this instance woke" readout but loses the lifetime picture
@@ -182,7 +182,7 @@ interface RecordFunctionMetricInput {
      * dispatch used no declared index, keeping the hot path unchanged.
      */
     indexHits?: ReadonlyArray<IndexHit>;
-    /** The `&lt;file>:&lt;function>` identifier. */
+    /** The `<file>:<function>` identifier. */
     path: string;
 
     /**

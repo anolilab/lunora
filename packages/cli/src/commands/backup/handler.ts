@@ -4,7 +4,7 @@
  *
  * `create` exports every table to a timestamped NDJSON file under a backup
  * directory and records it in a `manifest.json`; `list` prints the manifest;
- * `restore &lt;id|file>` imports a chosen snapshot back through the import
+ * `restore <id|file>` imports a chosen snapshot back through the import
  * endpoint. Schedule `create` (CI cron, or a cron-triggered action) for
  * automated backups — this is the off-platform / portable / >30-day tier.
  *
@@ -222,7 +222,7 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
 /**
  * `lunora backup pitr` — native Durable-Object point-in-time recovery (the
  * in-place ≤30-day tier). With no flags it reads the shard's current bookmark;
- * `--at &lt;time>` previews the bookmark nearest that moment. `--restore` arms a
+ * `--at <time>` previews the bookmark nearest that moment. `--restore` arms a
  * restore (to `--bookmark`, or the one nearest `--at`) and returns an undo
  * bookmark; `--restart` applies it immediately. Hits the admin-gated
  * `/_lunora/admin/pitr` endpoint, which forwards the op to one shard.
@@ -360,7 +360,7 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */
 const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
 
-/** `lunora backup &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 

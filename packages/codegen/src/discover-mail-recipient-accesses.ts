@@ -12,7 +12,7 @@ const MAIL_METHODS = new Set(["queue", "send"]);
 const RECIPIENT_FIELDS = new Set(["bcc", "cc", "to"]);
 
 /**
- * The `ctx.mail`/`ctx.email` `&lt;method>` invoked by `node`, or `undefined` when
+ * The `ctx.mail`/`ctx.email` `<method>` invoked by `node`, or `undefined` when
  * `node` is not a mailer send/queue call. Matched by shape (a property access
  * whose name is `send`/`queue` and whose receiver text is exactly `ctx.mail` or
  * `ctx.email`) — the same `import`-agnostic, fail-closed convention the other
@@ -37,7 +37,7 @@ const mailRecipientMethod = (node: TsNode): string | undefined => {
 /**
  * True when the options object literal `argument` carries a `to`/`cc`/`bcc`
  * recipient property whose value is derived from the handler's `args` with no
- * server-side scoping — inspecting both `to: &lt;expr>` assignments and `{ to }`
+ * server-side scoping — inspecting both `to: <expr>` assignments and `{ to }`
  * shorthand (which references a same-named binding, followed one `const` hop).
  * Only a direct object-literal argument is inspected; a non-literal
  * (spread/variable) options argument is skipped, fail-closed.
@@ -65,7 +65,7 @@ const hasUnscopedArgumentDerivedRecipient = (argument: TsNode): boolean => {
     });
 };
 
-/** The IR row for a `ctx.mail.&lt;method>({ to/cc/bcc, … })` call with an arg-derived, unscoped recipient, or `undefined`. */
+/** The IR row for a `ctx.mail.<method>({ to/cc/bcc, … })` call with an arg-derived, unscoped recipient, or `undefined`. */
 const mailAccessInCall = (call: CallExpression, relativePath: string): MailRecipientAccessIR | undefined => {
     const method = mailRecipientMethod(call.getExpression());
 

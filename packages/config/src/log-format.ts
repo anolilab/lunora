@@ -55,7 +55,7 @@ interface LunoraEvent {
     error?: unknown;
     /** `type: "container"` — the lifecycle transition (`start`/`stop`/`error`). */
     event?: unknown;
-    /** `type: "log"` — structured fields from `ctx.log.&lt;level>(msg, fields)` / `ctx.log.with(fields)`. */
+    /** `type: "log"` — structured fields from `ctx.log.<level>(msg, fields)` / `ctx.log.with(fields)`. */
     fields?: unknown;
     function?: unknown;
     /** `type: "container"` — the per-instance id (Durable Object id). */
@@ -165,7 +165,7 @@ const formatRequest = (event: LunoraEvent, functionPath: string): LunoraFormatte
 };
 
 /**
- * Format a `type: "container"` lifecycle event: `container:&lt;name>#&lt;short-id> &lt;event> &lt;detail>`.
+ * Format a `type: "container"` lifecycle event: `container:<name>#<short-id> <event> <detail>`.
  * The instance id is truncated to keep the line readable — it's a correlation
  * hint, not a value to copy. Errors surface on the `error` channel.
  */

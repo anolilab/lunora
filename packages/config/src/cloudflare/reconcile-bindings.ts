@@ -698,16 +698,16 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
  * config already satisfies the inferred needs.
  *
  * `environment`, when passed, does NOT change where this writes — every step
- * below still only touches the TOP-LEVEL config; wrangler's `env.&lt;name>`
+ * below still only touches the TOP-LEVEL config; wrangler's `env.<name>`
  * blocks have no auto-provisioning path today. It is used only to emit an
  * advisory warning, because bindings (`durable_objects`, `d1_databases`, …)
  * are non-inheritable (see `wrangler-validator.ts`'s `NON_INHERITABLE_KEYS`):
  * a `--env production` deploy needs its OWN copy of each one, and silently
  * writing only to the top level would leave that gap unmentioned. Extending
- * the JSONC writer itself to target `env.&lt;name>.*` idempotently for every
+ * the JSONC writer itself to target `env.<name>.*` idempotently for every
  * binding kind here is a separate, larger change (each of the ~10 pipeline
  * steps below reads AND writes the top-level path) that this fix does not
- * attempt — `lunora deploy --env &lt;name>` now VALIDATES the env-scoped view
+ * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
  */
 const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings, environment?: string): ReconcileBindingsResult => {

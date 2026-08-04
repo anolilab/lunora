@@ -114,7 +114,7 @@ interface UseAgentChatOptions {
 
     /**
      * Optional app mutation over the agent's cancel path
-     * (`ctx.agents.&lt;name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
+     * (`ctx.agents.<name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
      * When omitted (or no run is in flight) {@link UseAgentChatResult.cancel} is a
      * no-op.
      */
@@ -124,7 +124,7 @@ interface UseAgentChatOptions {
 
     /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
-     * `ctx.agents.&lt;name>.run(...)`. Called with `{ threadKey, input }` merged with
+     * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link UseAgentChatOptions.sendArgs} and the per-call args.
      */
     send: FunctionReference<"mutation">;

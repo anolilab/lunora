@@ -12,7 +12,7 @@
  * there.
  */
 export interface AdvisorHttpActionGuard {
-    /** The exported binding name of the handler (or `"&lt;module>"` when mounted inline / not a named binding). */
+    /** The exported binding name of the handler (or `"<module>"` when mounted inline / not a named binding). */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
@@ -24,6 +24,6 @@ export interface AdvisorHttpActionGuard {
     method?: string;
     /** `true` when the handler reads `ctx.auth` (a direct member access or a `const { auth } = ctx` destructure). */
     readsAuth: boolean;
-    /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.&lt;method>`. */
+    /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.<method>`. */
     sideEffect: string;
 }

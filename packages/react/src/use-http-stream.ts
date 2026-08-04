@@ -66,7 +66,7 @@ const reducer = function <T>(state: State<T>, action: Action<T>): State<T> {
 };
 
 /**
- * Consume an **HTTP-SSE route stream** (`httpRoute.&lt;verb>(path).stream()`) via
+ * Consume an **HTTP-SSE route stream** (`httpRoute.<verb>(path).stream()`) via
  * `client.httpStream`. Distinct from `useStream`, which consumes the WS
  * procedure stream (`kind: "stream"`). Returns the chunks received so far plus
  * a lifecycle status and a cancel function. Changing the route or the

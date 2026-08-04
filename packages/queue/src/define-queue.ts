@@ -24,7 +24,7 @@ const queueDefaultName = (exportName: string): string => exportName.replaceAll(/
 
 /**
  * Declare a Cloudflare Queue deployed alongside the app. Pure validation +
- * branding: codegen discovers the export, emits the typed `ctx.queues.&lt;name>`
+ * branding: codegen discovers the export, emits the typed `ctx.queues.<name>`
  * producer and (for push consumers) the worker `queue()` dispatch; the config
  * layer reconciles the wrangler `queues.producers[]` / `queues.consumers[]`
  * entries from the same definition.
@@ -34,7 +34,7 @@ const queueDefaultName = (exportName: string): string => exportName.replaceAll(/
  * import { defineQueue } from "@lunora/queue";
  * import { api } from "./_generated/api";
  *
- * export const emailQueue = defineQueue&lt;{ to: string }>({
+ * export const emailQueue = defineQueue<{ to: string }>({
  *     handler: async (ctx, batch) => {
  *         for (const message of batch.messages) {
  *             await ctx.run(api.email.send, { to: message.body.to });

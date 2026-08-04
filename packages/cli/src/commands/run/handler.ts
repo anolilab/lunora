@@ -223,7 +223,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     };
 };
 
-/** `lunora run &lt;functionPath>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora run <functionPath>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, logger, options }) => {
     const functionPath = argument[0];
 

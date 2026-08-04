@@ -111,7 +111,7 @@ const compareById = (a: { id: string }, b: { id: string }): number => {
 /**
  * A minimal functional fake of the D1 slice the subscription store uses. Branches
  * on the statement text (CREATE/INSERT…ON CONFLICT/SELECT/DELETE/UPDATE) against
- * an in-memory row map — enough to exercise the store's row&lt;->object mapping,
+ * an in-memory row map — enough to exercise the store's row<->object mapping,
  * upsert-preserves-createdAt, and filtered listing.
  */
 /** Options for {@link fakeD1}. `failOn` injects a store error on the matching SQL verb. */

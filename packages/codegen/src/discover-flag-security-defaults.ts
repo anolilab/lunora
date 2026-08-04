@@ -40,7 +40,7 @@ const booleanLiteralValue = (node: TsNode | undefined): boolean | undefined => {
 };
 
 /**
- * The IR row for a `ctx.flags.boolean("key", &lt;boolean-literal>)` read, or
+ * The IR row for a `ctx.flags.boolean("key", <boolean-literal>)` read, or
  * `undefined` when the callee isn't `ctx.flags.boolean`, the key isn't a string
  * literal, or the default isn't a boolean literal (the lint's security judgment
  * needs both statically).

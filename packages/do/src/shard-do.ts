@@ -782,7 +782,7 @@ abstract class ShardDO {
     /**
      * Upper bound on a `.global()`-shape's materialized membership. Each global
      * shape keeps its ENTIRE current membership as a per-socket snapshot
-     * (`Map&lt;rowKey, hash&gt;`) so the poll loop can diff it; that snapshot — and the
+     * (`Map<rowKey, hash>`) so the poll loop can diff it; that snapshot — and the
      * read buffer feeding it — scale with the membership size, multiplied by every
      * subscribed socket. An unbounded membership (a global table with no narrowing
      * shape predicate or RLS read scope) would grow them without limit and evict
@@ -1237,7 +1237,7 @@ abstract class ShardDO {
 
     /**
      * Per-function execution counters surfaced by the
-     * `__lunora_admin__:getFunctionStats` RPC, keyed by `&lt;file>:&lt;function>`
+     * `__lunora_admin__:getFunctionStats` RPC, keyed by `<file>:<function>`
      * path. Shares the `metrics` lifecycle: in-memory, reset on
      * hibernation/restart. The map is naturally bounded by the app's registered
      * function count (a finite set), so no eviction is needed. Maintained by
@@ -2113,7 +2113,7 @@ abstract class ShardDO {
      * Evaluate every statically-discovered feature flag under `context` for the
      * studio's read-only Flags page (`__lunora_admin__:listFlags`). The flag keys
      * + value types are discovered by `@lunora/codegen` from the app's
-     * `ctx.flags.&lt;type>("key", …)` reads and evaluated through the configured
+     * `ctx.flags.<type>("key", …)` reads and evaluated through the configured
      * `@lunora/flags` provider — work only the codegen subclass can do, so it
      * overrides this. The base class wires no provider and reports
      * `configured: false` with zero flags (an un-generated `ShardDO` has none).
@@ -2560,7 +2560,7 @@ abstract class ShardDO {
      * high-watermark for `currentRequestClientId`. The watermark is the highest
      * per-client sequence the DO has applied, so the push is exactly one of:
      *
-     * - `"already"` — `seq &lt;= watermark`: a replay of a confirmed (or in-flight,
+     * - `"already"` — `seq <= watermark`: a replay of a confirmed (or in-flight,
      * now-resent) mutation. The handler must NOT re-run; the dispatch path returns
      * a benign ack so the client drops the pending overlay.
      * - `"next"` — `seq == watermark + 1`: the next mutation in order. Run the
@@ -3206,14 +3206,16 @@ abstract class ShardDO {
         this.recordShapeError(`source:${table}`, error);
     }
 
+    /* eslint-disable no-secrets/no-secrets -- JSDoc names the `AsyncIterable<unknown>` type, not a credential */
+
     /**
      * Look up a streaming-query function and return a thunk that produces the
-     * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
+     * `AsyncIterable<unknown>` when handed an {@link AbortSignal}. The codegen
      * subclass overrides this to dispatch via `LUNORA_FUNCTIONS`; the base
      * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
      * to the client.
      *
-     * The deferred-iterator shape (`(signal) => AsyncIterable&lt;unknown>`) keeps
+     * The deferred-iterator shape (`(signal) => AsyncIterable<unknown>`) keeps
      * the cancel signal pluggable per-call without coupling this signature to
      * the wire-frame loop in `handleStream`.
      */
@@ -3222,6 +3224,8 @@ abstract class ShardDO {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such streaming function"; the codegen subclass overrides and also returns null
         return null;
     }
+
+    /* eslint-enable no-secrets/no-secrets */
 
     /**
      * Wrap a query handler in the reactive cache. The subclass passes the
@@ -5753,7 +5757,7 @@ abstract class ShardDO {
      * surfaces in the Studio Logs panel — not just the dev terminal. The
      * Container DO pushes this best-effort (its `console` print stays the source
      * of truth), so a missing/garbage envelope is rejected up front (400) rather
-     * than corrupting the buffer. Mapped to `functionPath: "container:&lt;name>"` so
+     * than corrupting the buffer. Mapped to `functionPath: "container:<name>"` so
      * the panel renders it alongside `ctx.log` lines. Admin-gated by
      * `handleAdminRpc`'s caller (the same `LUNORA_ADMIN_TOKEN` bearer as every
      * other admin write).
@@ -6314,7 +6318,7 @@ abstract class ShardDO {
     /**
      * Append one structured entry to the durable request log (`request-log.ts`)
      * for a `/rpc` dispatch that just completed — the per-request readout
-     * (`&lt;file>:&lt;function>`, shard key, acting user/identity, redacted args,
+     * (`<file>:<function>`, shard key, acting user/identity, redacted args,
      * outcome, duration, tables read/written, cache hit) that Cloudflare cannot
      * attribute (PLAN3 §1.1). When `LUNORA_REQUEST_LOG_EMIT` is set, the same
      * entry is ALSO emitted as a structured console event for CF Workers Logs /
@@ -8740,8 +8744,8 @@ abstract class ShardDO {
      * not suitable for production.
      * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
      * must present a matching token. We accept either an
-     * `Authorization: Bearer &lt;token>` header (preferred) or a
-     * `?token=&lt;token>` query parameter (the only escape hatch for
+     * `Authorization: Bearer <token>` header (preferred) or a
+     * `?token=<token>` query parameter (the only escape hatch for
      * browsers, which can't customise headers on the WebSocket
      * constructor). The match runs in constant time to avoid leaking
      * the token via response-timing differences.

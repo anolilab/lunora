@@ -56,8 +56,8 @@ type BarAnimationType = "none" | "left-to-right" | "right-to-left" | "center-out
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Shared state for every part of the chart. Lifted into &lt;EvilBarChart /> so that
- * &lt;Bar />, &lt;XAxis />, &lt;Legend />, and friends can read it without prop drilling.
+ * Shared state for every part of the chart. Lifted into <EvilBarChart /> so that
+ * <Bar />, <XAxis />, <Legend />, and friends can read it without prop drilling.
  * Sub-components are composed freely — the provider is the single source of truth.
  */
 type BarChartContextValue = {
@@ -257,7 +257,7 @@ type BarProps = {
 };
 
 /**
- * A single bar series. Each &lt;Bar /> is fully self-contained: it generates its
+ * A single bar series. Each <Bar /> is fully self-contained: it generates its
  * own gradient/pattern definitions under a unique id, so any number of bars —
  * each with its own variant, radius, glow, and clickability — can live in one
  * chart without style collisions.
@@ -468,7 +468,7 @@ type LegendProps = {
 
 /**
  * The series legend. When `isClickable` is set, each entry toggles selection of
- * its series, driving the shared selection state read by every &lt;Bar />.
+ * its series, driving the shared selection state read by every <Bar />.
  */
 export const Legend = ({ variant, align = "right", verticalAlign = "top", isClickable = false }: LegendProps): React.ReactElement => {
     const { selectedDataKey, selectDataKey } = useBarChart();
@@ -520,7 +520,7 @@ type CustomBarProps = BarShapeProps & {
 };
 
 /**
- * Custom bar shape. Renders the visible bar painted by the owning &lt;Bar />'s
+ * Custom bar shape. Renders the visible bar painted by the owning <Bar />'s
  * variant pattern, with an invisible full-height rectangle behind it to keep
  * the whole column hoverable and clickable.
  */

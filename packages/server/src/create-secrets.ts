@@ -12,7 +12,7 @@ import type { Secrets, SecretsStoreSecretLike } from "./types";
 
 /**
  * Methods that disambiguate a *non*-Secrets-Store binding from a Secrets Store
- * one. A `SecretsStoreSecret`'s entire surface is `get(): Promise&lt;string>`, but
+ * one. A `SecretsStoreSecret`'s entire surface is `get(): Promise<string>`, but
  * `.get` is NOT unique to it — a KV namespace (`get(key)`), an R2 bucket
  * (`get(key)`), a Durable Object namespace (`get(id)`), a Queue producer, and an
  * Analytics dataset all expose `.get` or other methods. So a bare `{ get }`
@@ -38,7 +38,7 @@ const NON_SECRET_BINDING_METHODS = [
     "createBatch", // Workflows binding
 ] as const;
 
-/** True when a value structurally matches a Secrets Store binding (`{ get(): Promise&lt;string> }`) and not another `.get`-bearing binding. */
+/** True when a value structurally matches a Secrets Store binding (`{ get(): Promise<string> }`) and not another `.get`-bearing binding. */
 const isSecretBinding = (value: unknown): value is SecretsStoreSecretLike => {
     if (typeof value !== "object" || value === null) {
         return false;

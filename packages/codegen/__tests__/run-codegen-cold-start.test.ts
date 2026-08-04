@@ -2,7 +2,7 @@
  * Issue #283: `lunora codegen` was not reproducible from a cold `_generated/`.
  *
  * Pass 1 inferred every handler's return type against a ts-morph `Project` that
- * did not yet include the generated declarations (`Doc&lt;…>` chief among them,
+ * did not yet include the generated declarations (`Doc<…>` chief among them,
  * for a handler whose return type is annotated against it) — so on a fresh
  * clone, CI, or after `rm -rf lunora/_generated`, that inference collapsed to
  * `unknown` and codegen WROTE the collapsed type into `api.ts`/`functions.ts`.

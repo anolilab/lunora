@@ -250,7 +250,7 @@ const readLogWindow = (path: string): string | undefined => {
     }
 };
 
-/** Read the last `count` lines of a log file (all lines when `count` &lt;= 0, bounded by {@link LOG_TAIL_MAX_BYTES}); `[]` when unreadable. */
+/** Read the last `count` lines of a log file (all lines when `count` <= 0, bounded by {@link LOG_TAIL_MAX_BYTES}); `[]` when unreadable. */
 const readLogTail = (path: string, count: number): string[] => {
     const text = readLogWindow(path);
 
@@ -866,7 +866,7 @@ const runDevLogs = (options: LogsCommandOptions): { code: number } => {
 };
 
 /**
- * Route a `lunora dev &lt;subcommand>` positional to its lifecycle command.
+ * Route a `lunora dev <subcommand>` positional to its lifecycle command.
  * Returns `undefined` when no subcommand was given (→ the caller runs the
  * start path), a `{ code: 1 }` error for an unknown one.
  */

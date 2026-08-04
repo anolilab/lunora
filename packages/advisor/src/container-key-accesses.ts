@@ -1,5 +1,5 @@
 /**
- * One `ctx.containers.&lt;exportName>.get(name, …)` call whose instance key is
+ * One `ctx.containers.<exportName>.get(name, …)` call whose instance key is
  * derived from the handler's `args` with no server-side scoping — the input
  * the `container_instance_key_from_user_input` lint consumes. A container
  * definition's `.get(name)` accessor routes to one instance per `name`, so a

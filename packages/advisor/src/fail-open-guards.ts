@@ -12,7 +12,7 @@
 export interface AdvisorFailOpenGuard {
     /** The middleware factory at the call site: `rateLimit` / `dbRateLimit` / `verifyTurnstileMiddleware`. */
     callee: string;
-    /** The exported binding name of the procedure the guard is attached to, or `"&lt;module>"` at file scope. */
+    /** The exported binding name of the procedure the guard is attached to, or `"<module>"` at file scope. */
     exportName: string;
     /** `true` only when the options literal set `failOpen: true` as a boolean literal; a non-literal or absent option is treated as fail-closed. */
     failOpen: boolean;

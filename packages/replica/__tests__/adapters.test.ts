@@ -33,7 +33,7 @@ const makeBetterSqlite3 = (): SqliteAdapter => createBetterSqlite3Adapter(new Da
  *
  * REPLICA-01 STOP: this fixture matches the DOCUMENTED real `oo1.DB` wire
  * shape — `exec({ returnValue: "resultRows", rowMode: "object" })` returns
- * rows directly (`Record&lt;string, unknown>[]`, NOT sql.js's
+ * rows directly (`Record<string, unknown>[]`, NOT sql.js's
  * `{ columns, values }[]`), and `selectValue()` returns a single scalar — but
  * it is backed by a REAL sql.js engine underneath (every statement is still
  * parsed/executed by real SQLite), with a thin re-shaping layer translating

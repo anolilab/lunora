@@ -2,7 +2,7 @@
  * Stream a project's local dev container logs into the dev terminal.
  *
  * During `lunora dev` / `vite dev`, wrangler builds and runs each declared
- * container locally via Docker, naming the image `cloudflare-dev/&lt;class>:&lt;id>`
+ * container locally via Docker, naming the image `cloudflare-dev/<class>:<id>`
  * (the lowercased Durable Object class name — see wrangler's
  * `getDevContainerImageName`). Wrangler forwards the *worker's* console output,
  * but never the container process's own stdout/stderr, so a developer can't see
@@ -19,7 +19,7 @@
 import { Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 
-/** Prefix of every image wrangler builds for a local dev container (`cloudflare-dev/&lt;class>:&lt;id>`). */
+/** Prefix of every image wrangler builds for a local dev container (`cloudflare-dev/<class>:<id>`). */
 const DEV_CONTAINER_IMAGE_PREFIX = "cloudflare-dev/";
 
 /** How often to poll Docker for newly-started (or replaced) dev containers, in ms. */
@@ -30,7 +30,7 @@ type ContainerLogLevel = "error" | "info";
 
 /** One declared container to follow, identified by the names codegen lifts from `defineContainer`. */
 interface ContainerLogSource {
-    /** Generated Durable Object class name, e.g. `TranscoderContainer`. Wrangler's dev image is `cloudflare-dev/&lt;lowercased>`. */
+    /** Generated Durable Object class name, e.g. `TranscoderContainer`. Wrangler's dev image is `cloudflare-dev/<lowercased>`. */
     className: string;
     /** The `lunora/containers.ts` export name, e.g. `transcoder` — used as the display tag. */
     exportName: string;
@@ -87,7 +87,7 @@ const createDefaultDocker = async (): Promise<DockerLike> => {
     return new Dockerode() as unknown as DockerLike;
 };
 
-/** Extract the lowercased class segment from a `cloudflare-dev/&lt;class>:&lt;id>` image, or `undefined` for any other image. */
+/** Extract the lowercased class segment from a `cloudflare-dev/<class>:<id>` image, or `undefined` for any other image. */
 const classFromImage = (image: string): string | undefined => {
     if (!image.startsWith(DEV_CONTAINER_IMAGE_PREFIX)) {
         return undefined;

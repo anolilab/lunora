@@ -5,8 +5,8 @@ import { runImportCommand } from "../data-transfer";
 import type { ImportOptions } from "./index";
 
 /**
- * `lunora import &lt;path>` handler. The positional is either an NDJSON file or a
- * `npx convex export --path &lt;dir>` directory; {@link runImportCommand} detects
+ * `lunora import <path>` handler. The positional is either an NDJSON file or a
+ * `npx convex export --path <dir>` directory; {@link runImportCommand} detects
  * which and bulk-inserts either way.
  */
 const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ argument, cwd, logger, options }) => {

@@ -11,7 +11,7 @@ import type { SqliteAdapter } from "./types";
  * IMPORTANT (REPLICA-01): the real `oo1.DB.exec()` does NOT return sql.js's
  * `{ columns, values }[]` result shape — with `rowMode: "object"` and
  * `returnValue: "resultRows"` it returns the rows directly, as
- * `Record&lt;string, unknown>[]`. This adapter is written against that real
+ * `Record<string, unknown>[]`. This adapter is written against that real
  * shape; `lastInsertRowId` uses the driver's `selectValue()` convenience
  * method (a single-scalar query helper) rather than parsing a result-row
  * array.
@@ -19,7 +19,7 @@ import type { SqliteAdapter } from "./types";
  * @param database.close Tear down the database connection.
  * @param database.exec Execute SQL with optional bind params. With
  * `{ returnValue: "resultRows", rowMode: "object" }` it returns the matched
- * rows directly (`Record&lt;string, unknown>[]`); otherwise (DDL/DML/BEGIN/
+ * rows directly (`Record<string, unknown>[]`); otherwise (DDL/DML/BEGIN/
  * COMMIT/ROLLBACK) its return value is unused here.
  * @param database.selectValue Run a query and return the first column of the
  * first row as a single scalar — used for `SELECT last_insert_rowid()`.

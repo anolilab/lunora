@@ -2,7 +2,7 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * Flags a `ctx.authApi.&lt;method>(...)` call whose argument object omits `headers`.
+ * Flags a `ctx.authApi.<method>(...)` call whose argument object omits `headers`.
  *
  * `@lunora/auth`'s `withAuthPlugins` middleware attaches the full privileged
  * better-auth API to `ctx.authApi` — `banUser`, `setRole`, impersonation,

@@ -8,7 +8,7 @@ import { AGENT_RULES_DIR, AGENT_RULES_HINT_ENV, claimAgentRulesHint, detectAgent
 
 let workdir: string;
 
-/** Write `&lt;workdir>/.agents/skills/&lt;name>/SKILL.md`. */
+/** Write `<workdir>/.agents/skills/<name>/SKILL.md`. */
 const installSkill = (name: string): void => {
     const directory = join(workdir, AGENT_RULES_DIR, name);
 

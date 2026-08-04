@@ -147,7 +147,7 @@ const MYSQL_TYPES: Record<string, string> = {
 
 /**
  * Map one column onto the `v.*` expression that represents it, including array
- * nesting and nullability. A foreign key becomes `v.id("&lt;target table>")` so the
+ * nesting and nullability. A foreign key becomes `v.id("<target table>")` so the
  * generated schema states the relationship in Lunora's own vocabulary instead of
  * leaving a bare string.
  *

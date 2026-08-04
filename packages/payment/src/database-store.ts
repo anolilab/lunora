@@ -5,7 +5,7 @@
  * `paymentTables` are merged into the app schema and this store reads/writes them through a small
  * `PaymentDb` port that `ctx.db` satisfies. That inherits Lunora's OCC, reactivity, sharding, and
  * `.global()`/D1 read path for free. The codecs below are the single source of truth for the
- * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider&lt;Thing>Id`).
+ * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider<Thing>Id`).
  */
 import { money } from "./money";
 import type { PaymentStore } from "./store";

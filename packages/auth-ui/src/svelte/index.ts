@@ -10,15 +10,15 @@ export * from "../core";
  * Usage after `lunora add auth-ui`:
  *
  * ```svelte
- * &lt;script lang="ts">
+ * <script lang="ts">
  *     import { AuthUIProvider, SignInCard } from "./lunora/auth-ui/svelte";
  *     import { authClient } from "./lunora/auth-ui/client";
  *     import "./lunora/auth-ui/styles.css";
- * &lt;/script>
+ * </script>
  *
- * &lt;AuthUIProvider {authClient}>
- *     &lt;SignInCard />
- * &lt;/AuthUIProvider>
+ * <AuthUIProvider {authClient}>
+ *     <SignInCard />
+ * </AuthUIProvider>
  * ```
  */
 

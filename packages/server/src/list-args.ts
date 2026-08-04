@@ -144,7 +144,7 @@ interface ListArgsSpec<TDocument, F, O extends string> {
      * `limit` clamped into `[1, maxLimit]`, `orderBy` reshaped from
      * `{ field, direction }[]` into `ctx.db`'s `{ column: direction }[]`.
      *
-     * Returns `QueryArgs&lt;Doc>` — bound to the table, not free — so a mismatch
+     * Returns `QueryArgs<Doc>` — bound to the table, not free — so a mismatch
      * between what this helper declares and what the table actually holds is a
      * compile error at the `findMany` call site.
      */
@@ -260,10 +260,10 @@ const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<s
 
 /**
  * Declare the filter / sort / page arguments for a list endpoint, plus the
- * translation into `ctx.db.&lt;table>.findMany(...)` options. See the module docs
+ * translation into `ctx.db.<table>.findMany(...)` options. See the module docs
  * for the shape and the reasoning behind it.
  *
- * Curried on the document type: `defineListArgs&lt;Doc&lt;"messages">>()({ … })`. The
+ * Curried on the document type: `defineListArgs<Doc<"messages">>()({ … })`. The
  * extra `()` buys the thing that matters — with `Doc` bound, `filter` keys and
  * `orderBy` entries are checked against the table's real columns, so a typo or a
  * column renamed out from under the endpoint is a COMPILE error instead of a

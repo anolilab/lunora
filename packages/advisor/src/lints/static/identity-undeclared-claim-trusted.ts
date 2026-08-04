@@ -9,8 +9,8 @@ import type { Lint } from "../../types";
  * `defineIdentity` is the trust boundary for `ctx.auth.identity`: the worker
  * validates a resolver's returned claims against the *declared* validators, but
  * — by design — forwards any **undeclared** claims through verbatim, unchecked.
- * So a policy predicate or authorize hook that reads `auth.identity.&lt;key>` for a
- * `&lt;key>` the contract never declares is trusting a value the runtime never
+ * So a policy predicate or authorize hook that reads `auth.identity.<key>` for a
+ * `<key>` the contract never declares is trusting a value the runtime never
  * validated — a claim an attacker's token can carry with an arbitrary value.
  * Reading `userId` (always declared) or any declared claim is fine.
  *

@@ -6,8 +6,8 @@ import type { Lint } from "../../types";
  * Flags a public procedure whose handler fans work out to a privileged,
  * cost-bearing dispatch surface without a rate-limit guard.
  *
- * `ctx.scheduler.runAfter` / `runAt`, a `ctx.queues.&lt;name>` producer send, and
- * `ctx.workflows.&lt;name>.create` all enqueue work that runs later under the
+ * `ctx.scheduler.runAfter` / `runAt`, a `ctx.queues.<name>` producer send, and
+ * `ctx.workflows.<name>.create` all enqueue work that runs later under the
  * system identity (RLS disabled) and bills against the account. Triggered from a
  * `.public()` procedure with no rate limit, an anonymous caller can drive that
  * dispatch in a loop — a cost-amplification / denial-of-wallet vector, and a way

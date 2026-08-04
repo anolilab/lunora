@@ -77,7 +77,7 @@ const resolveDeclaredClaims = (project: Project, lunoraDirectory: string): Set<s
 /**
  * When `node` is a `.identity` property access sitting on an identity receiver
  * (`auth` / `ctx.auth` / `context.auth`), return it — the intermediate access a
- * claim read (`auth.identity.&lt;key>`) or bracket read (`auth.identity["&lt;key>"]`)
+ * claim read (`auth.identity.<key>`) or bracket read (`auth.identity["<key>"]`)
  * is built on. Otherwise `undefined`.
  */
 const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
@@ -88,7 +88,7 @@ const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
     return IDENTITY_RECEIVERS.has(node.getExpression().getText()) ? node : undefined;
 };
 
-/** The claim key a node reads off the identity bag — a `.identity.&lt;key>` property name, or a `.identity["&lt;key>"]` string-literal index. `undefined` when the node is neither. */
+/** The claim key a node reads off the identity bag — a `.identity.<key>` property name, or a `.identity["<key>"]` string-literal index. `undefined` when the node is neither. */
 const claimKeyRead = (node: TsNode): string | undefined => {
     if (Node.isPropertyAccessExpression(node) && identityBagAccess(node.getExpression()) !== undefined) {
         return node.getName();
@@ -103,7 +103,7 @@ const claimKeyRead = (node: TsNode): string | undefined => {
     return undefined;
 };
 
-/** Every `auth.identity.&lt;key>` / `ctx.auth.identity.&lt;key>` claim read in one source file, tagged with whether the key is in the declared allow-list. */
+/** Every `auth.identity.<key>` / `ctx.auth.identity.<key>` claim read in one source file, tagged with whether the key is in the declared allow-list. */
 const claimReadsInSourceFile = (sourceFile: SourceFile, relativePath: string, declared: Set<string>): IdentityClaimReadIR[] => {
     const found: IdentityClaimReadIR[] = [];
 
@@ -127,7 +127,7 @@ const claimReadsInSourceFile = (sourceFile: SourceFile, relativePath: string, de
 };
 
 /**
- * Discover `ctx.auth.identity.&lt;key>` / `auth.identity.&lt;key>` claim reads in
+ * Discover `ctx.auth.identity.<key>` / `auth.identity.<key>` claim reads in
  * `lunora/` — the `identity_undeclared_claim_trusted` lint input. `defineIdentity`
  * validates only its *declared* claims at the trust boundary and forwards
  * undeclared claims verbatim, so an authorization decision that reads a claim
@@ -139,7 +139,7 @@ const claimReadsInSourceFile = (sourceFile: SourceFile, relativePath: string, de
  * returns `[]`, so a project with no typed identity contract is never flagged.
  * Each read is tagged `declared` (in the contract, or the always-present
  * `userId`) so the lint flags only the undeclared reads. Deliberately narrow:
- * only the direct `&lt;receiver>.identity.&lt;key>` member/bracket chains are tracked
+ * only the direct `<receiver>.identity.<key>` member/bracket chains are tracked
  * (not a `const bag = auth.identity; bag.x` hop or a `getIdentity()` result), to
  * keep the false-positive rate low.
  */

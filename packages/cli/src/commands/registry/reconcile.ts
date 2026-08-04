@@ -3,7 +3,7 @@
  * `create-or-skip` 3-way upgrade (base = last-written hash, yours = on-disk,
  * theirs = incoming). `--diff` previews; `--overwrite` force-takes theirs.
  *
- * Also handles `entrypointReexports` — injecting `export * from "./lunora/&lt;module&gt;"`
+ * Also handles `entrypointReexports` — injecting `export * from "./lunora/<module>"`
  * into the class-B/C worker entry file.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -288,8 +288,8 @@ const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string
 
 /**
  * Compute the relative import specifier from a worker entry file to
- * `lunora/&lt;module&gt;`. E.g. for `src/server/index.ts` the result is
- * `../../lunora/&lt;module&gt;`.
+ * `lunora/<module>`. E.g. for `src/server/index.ts` the result is
+ * `../../lunora/<module>`.
  */
 const computeRelativeSpecifier = (entryPath: string, projectRoot: string, moduleName: string): string => {
     const importPath = relative(dirname(entryPath), join(projectRoot, "lunora", moduleName)).replaceAll("\\", "/");
@@ -343,7 +343,7 @@ const buildReexportLines = (entrypointReexports: ReadonlyArray<EntrypointReexpor
 
 /**
  * Apply an item's declared entrypoint re-exports: inject `export * from
- * "./lunora/&lt;module&gt;"` lines into the class-B/C worker entry (the file that
+ * "./lunora/<module>"` lines into the class-B/C worker entry (the file that
  * calls `createShardDO`). For class-A (Vite plugin / no such file), log a
  * post-add instruction instead. Idempotent — skips a module whose re-export
  * already exists.

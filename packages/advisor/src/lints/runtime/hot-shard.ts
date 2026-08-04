@@ -41,7 +41,7 @@ type ShardTraffic = NonNullable<Parameters<NonNullable<Lint["run"]>>[0]["shardTr
 /**
  * Bucket shards by their `.shardBy(...)` group. `undefined` and `""` (both
  * "ungrouped / whole deployment") collapse into one bucket so they neither
- * split nor collide on the `hot_shard:&lt;group>:&lt;shardKey>` cacheKey.
+ * split nor collide on the `hot_shard:<group>:<shardKey>` cacheKey.
  */
 const groupByShardGroup = (active: ShardTraffic): Map<string, ShardTraffic> => {
     const byGroup = new Map<string, ShardTraffic>();
@@ -121,7 +121,7 @@ const hotShard: Lint = {
         // single-shard groups each look like ~33%) and lets the active-count gate
         // be met by shards from unrelated groups. `undefined` and `""` (both
         // "ungrouped / whole deployment") collapse to one bucket so they neither
-        // split nor collide on the `hot_shard:&lt;group>:&lt;shardKey>` cacheKey.
+        // split nor collide on the `hot_shard:<group>:<shardKey>` cacheKey.
         return [...groupByShardGroup(active)].flatMap(([groupKey, groupShards]) => hotShardsInGroup(hotShard, groupKey, groupShards));
     },
     source: "runtime",

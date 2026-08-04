@@ -347,7 +347,7 @@ const resolveCreateTable = async (cwd: string, options: MigrateCreateCommandOpti
 };
 
 /**
- * `lunora migrate create &lt;name>` — scaffold a `defineMigration({...})` block in
+ * `lunora migrate create <name>` — scaffold a `defineMigration({...})` block in
  * `lunora/migrations.ts`, appending to the file (and creating it with the
  * import) when it already exists. Refuses to clobber an existing migration of
  * the same id or export name. The target table comes from `--table`, or from
@@ -578,7 +578,7 @@ const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, un
 };
 
 /**
- * `lunora migrate up|down|status &lt;id>` — drive the cross-shard data-migration
+ * `lunora migrate up|down|status <id>` — drive the cross-shard data-migration
  * orchestrator. Resolves the migration's table locally, then POSTs a migration
  * admin RPC to the Worker's `/_lunora/migrate` endpoint, which fans it out to
  * every live shard of that table and rolls up the per-shard outcomes.
@@ -726,7 +726,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     }
 };
 
-/** `lunora migrate &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora migrate <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 

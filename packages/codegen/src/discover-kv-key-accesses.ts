@@ -12,7 +12,7 @@ import type { KvKeyAccessIR } from "./ir";
 const KV_KEY_METHODS = new Set(["delete", "get", "getRaw", "getWithMetadata", "put"]);
 
 /**
- * Discover `ctx.kv.&lt;method>(key, …)` calls in `lunora/` whose key is derived from
+ * Discover `ctx.kv.<method>(key, …)` calls in `lunora/` whose key is derived from
  * the handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
  * lint input. Workers KV is a single flat namespace, so a key taken straight from
  * request input lets any caller read, overwrite, or delete another user's entry

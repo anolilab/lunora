@@ -75,7 +75,7 @@ const resolveRankSeekTuple = (options: { after?: RankPageRowKey; cursor?: null |
 /**
  * Build the lexicographic strict-after seek branch + its bound params from a
  * decoded `[partitionKey, ...sortValues, id]` tuple, honoring each sort key's
- * direction (`&lt;` for desc, `>` for asc; `__partition__` and the `__id__`
+ * direction (`<` for desc, `>` for asc; `__partition__` and the `__id__`
  * tiebreak are always ascending). Returns `undefined` when there's no cursor or
  * the tuple's arity doesn't match the index (a malformed cursor pages from the
  * start, matching the shard-local reader).
@@ -141,7 +141,7 @@ const buildRankContinueCursor = (last: Record<string, unknown> | undefined, sort
 
 /**
  * Project a shard-local rank-companion slice into `{ doc, key }` rows. Each
- * key forwards the stored `__partition__` / `__sort_k&lt;i>__` columns verbatim
+ * key forwards the stored `__partition__` / `__sort_k<i>__` columns verbatim
  * (byte-identical to what the cross-shard coordinator's comparator orders on),
  * with the hydrated doc looked up from `byId`. Rows whose doc didn't hydrate
  * (a torn read) are skipped.
@@ -243,7 +243,7 @@ const hydrateDocsById = (deps: RankPageDeps, tableName: string, ids: ReadonlyArr
  * Shared shard-local ranked-page reader behind both the user-facing
  * `rankPage()` (which projects only `{ page, continueCursor, isDone }`) and
  * the cross-shard `rankPageRows()` (which additionally attaches each row's
- * rank-key tuple). Walks the rank companion in `(__partition__, __sort_k&lt;i>__,
+ * rank-key tuple). Walks the rank companion in `(__partition__, __sort_k<i>__,
  * __id__)` order, keyset-paginates with the opaque `cursor`, hydrates the
  * page's docs in one `IN (...)` query, and returns the keyed rows so the
  * query coordinator's k-way merge can order rows across shards without

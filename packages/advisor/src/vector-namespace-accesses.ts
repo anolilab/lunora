@@ -1,5 +1,5 @@
 /**
- * One `ctx.vectors.&lt;method>(indexName, input)` call whose `input.namespace` is
+ * One `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is
  * derived from the handler's `args` with no server-side scoping — the input the
  * `vectors_namespace_from_user_input` lint consumes. A Vectorize namespace
  * partitions one index into isolated sub-collections, so a namespace taken

@@ -5,7 +5,7 @@ import type { ShardNamespaceLike } from "../src/resolve-shard";
 import { argsFromQuery } from "../src/rest-routes";
 
 /**
- * The public REST surface (`/_lunora/rest/&lt;namespace>/&lt;fn>`, plan 167) — RUNTIME-02
+ * The public REST surface (`/_lunora/rest/<namespace>/<fn>`, plan 167) — RUNTIME-02
  * (advisor 226). REST skipped the `args`-shape guard `/_lunora/rpc` enforces via
  * `parseEnvelope`, and `argsFromQuery` assigned into a plain `{}` so a `__proto__`
  * query key could reparent the args object. Both are now the same

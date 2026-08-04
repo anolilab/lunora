@@ -9,7 +9,7 @@
  * and a controller factory that re-reads it on rebuild. That is what these
  * assert, for the gate (`v-if`) and for the auto-load that rides along with it,
  * under both provider forms: the reactive read is what makes `createAuthUI`
- * (which has no subtree to re-create) behave identically to `&lt;AuthUIProvider>`.
+ * (which has no subtree to re-create) behave identically to `<AuthUIProvider>`.
  *
  * Lives in its own file so the module-level request cache in `core/discovery.ts`
  * cannot leak into `cards.test.ts`, which deliberately runs against a deployment

@@ -137,13 +137,13 @@ interface InitCommandOptions {
     name?: string;
 
     /**
-     * Local directory holding create-vite bases (one `template-&lt;id>/` subdir per
+     * Local directory holding create-vite bases (one `template-<id>/` subdir per
      * framework). When set with `vite`, the overlay copies the base from disk
      * instead of fetching `create-vite` over the network — offline mode + tests.
      */
     overlayBaseFrom?: string;
 
-    /** Probe for which package managers are installed (tests). Defaults to a real `&lt;pm> --version` check. */
+    /** Probe for which package managers are installed (tests). Defaults to a real `<pm> --version` check. */
     packageManagerProbe?: PackageManagerProbe;
 
     /**
@@ -167,7 +167,7 @@ interface InitCommandOptions {
 
     /**
      * Override the remote source giget downloads from. Default:
-     * `gh:anolilab/lunora/templates/&lt;templateType>#&lt;ref>`, where `&lt;ref>` is
+     * `gh:anolilab/lunora/templates/<templateType>#<ref>`, where `<ref>` is
      * the `ref` option when set, else derived from the CLI version (pre-release
      * channels → their branch, stable → `main`). Tests typically use `from`
      * instead to skip the network.

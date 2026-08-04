@@ -4,7 +4,7 @@ import { discoverArgumentDerivedAccesses } from "./discover-argument-derived-acc
 import type { BrowserUrlAccessIR } from "./ir";
 
 /**
- * The `ctx.browser.&lt;method>(url, …)` navigation methods whose first argument is
+ * The `ctx.browser.<method>(url, …)` navigation methods whose first argument is
  * the URL to fetch. All four take the target URL as `arguments[0]`; the
  * page-driving `page.goto(url)` low-level method has a different receiver (a
  * page handle, not `ctx.browser`) and is not matched here.
@@ -12,7 +12,7 @@ import type { BrowserUrlAccessIR } from "./ir";
 const BROWSER_URL_METHODS = new Set(["content", "pdf", "scrape", "screenshot"]);
 
 /**
- * Discover `ctx.browser.&lt;method>(url, …)` calls in `lunora/` whose navigation
+ * Discover `ctx.browser.<method>(url, …)` calls in `lunora/` whose navigation
  * URL is derived from the handler's `args` with no server-side scoping — the
  * `browser_user_url_without_allowlist` lint input. `@lunora/browser` blocks
  * private/internal targets by default, but a request-supplied *public* URL can

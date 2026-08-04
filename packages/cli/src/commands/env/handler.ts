@@ -34,7 +34,7 @@ interface EnvCommandOptions {
     cwd?: string;
 
     /**
-     * Cloudflare environment name for `push`/`diff` (`wrangler … --env &lt;name>`).
+     * Cloudflare environment name for `push`/`diff` (`wrangler … --env <name>`).
      * `prod` is a boolean-only alias for `env: "production"` kept for backward
      * compatibility — when both are set, `env` wins.
      */
@@ -131,7 +131,7 @@ interface EnvContext {
 
 /**
  * The Cloudflare environment `push`/`diff` should target: the explicit
- * `--env &lt;name>` wins; `--prod` is kept as a boolean-only alias for
+ * `--env <name>` wins; `--prod` is kept as a boolean-only alias for
  * `--env production`; otherwise `undefined` (top-level config).
  */
 const resolveEnvironment = (options: EnvCommandOptions): string | undefined => options.env ?? (options.prod === true ? "production" : undefined);
@@ -566,7 +566,7 @@ const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
     value === "doctor" ||
     value === "generate";
 
-/** `lunora env &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora env <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 

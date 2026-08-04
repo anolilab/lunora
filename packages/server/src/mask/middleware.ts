@@ -75,7 +75,7 @@
  * 5. **Fail closed** — a `MaskFn` that throws redacts the cell to `null` rather
  * than leak the raw value.
  *
- * Signature-compatible with the builder's `Middleware&lt;>`, so `.use(mask(...))`
+ * Signature-compatible with the builder's `Middleware<>`, so `.use(mask(...))`
  * slots in like any other middleware. Composes with `rls()` in either order:
  * each wraps `ctx.db` and forwards it via `next({ ctx: { db } })`, so
  * `.use(rls(...)).use(mask(...))` yields rows that are both row-filtered and
@@ -708,7 +708,7 @@ const wrapDatabase = <Context>(
      * rank oracle across pages. Fail closed when an `orderBy` entry references a
      * masked column, mirroring `assertWhereAllowed` and the index-reader guard
      * (`order()` over a masked `withIndex` already throws). `orderBy` is a
-     * `Partial&lt;Record&lt;column, "asc" | "desc">>[]`, so each entry's keys are the
+     * `Partial<Record<column, "asc" | "desc">>[]`, so each entry's keys are the
      * ordered columns.
      */
     const assertOrderByAllowed = (tableName: string, orderBy: unknown, method: string): void => {

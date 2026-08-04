@@ -268,8 +268,8 @@ const renderArgsType = (args: Record<string, ValidatorIR>): string => {
 const isOptionalOnInsert = (validator: ValidatorIR): boolean => validator.kind === "optional" || Boolean(validator.column?.hasDefault);
 
 /**
- * Render an `Insert_&lt;table>` interface: the document shape as accepted by
- * `ctx.db.&lt;table>.insert(...)`. System fields (`_id`, `_creationTime`) are
+ * Render an `Insert_<table>` interface: the document shape as accepted by
+ * `ctx.db.<table>.insert(...)`. System fields (`_id`, `_creationTime`) are
  * always optional (minted by the runtime); user fields follow
  * {@link isOptionalOnInsert}.
  */
@@ -298,7 +298,7 @@ const renderInsertInterface = (table: TableIR): string => {
  */
 const SCHEMA_MODULE_PATH = "schema";
 
-/** Emit `_generated/dataModel.ts` — `Doc&lt;"name">` + `Id&lt;"name">` for every table. */
+/** Emit `_generated/dataModel.ts` — `Doc<"name">` + `Id<"name">` for every table. */
 const emitDataModel = (schema: SchemaIR): string => {
     for (const table of schema.tables) {
         assertIdentifier(table.name, "table name");
@@ -654,10 +654,10 @@ const rebaseRelativeQualifiers = (rendered: string, filePath: string): string =>
 const UMBRELLA_BASE_PACKAGES = ["client", "do", "errors", "flags", "observability", "platform", "ratelimit", "runtime", "server", "values"] as const;
 
 /**
- * An `import("@lunora/&lt;base>")` qualifier the type checker rendered into a
+ * An `import("@lunora/<base>")` qualifier the type checker rendered into a
  * function's args/return type — e.g. a mutator whose `server` impl returns
- * `ctx.db.insert(...)`'s `Id&lt;"messages">` from a file that never imports `Id`, so
- * ts-morph fully qualifies it as `import("@lunora/values").Id&lt;"messages">`.
+ * `ctx.db.insert(...)`'s `Id<"messages">` from a file that never imports `Id`, so
+ * ts-morph fully qualifies it as `import("@lunora/values").Id<"messages">`.
  *
  * Only the BASE packages the `lunorash` umbrella re-exports are listed
  * (derived from {@link UMBRELLA_BASE_PACKAGES}, not hand-maintained — this
@@ -673,8 +673,8 @@ const UMBRELLA_QUALIFIER_RE = new RegExp(String.raw`import\("@lunora/(?<pkg>${UM
 
 /**
  * Deep-subpath forwarding is only safe for a package whose umbrella subpaths
- * mirror its own subpath exports 1:1 (the umbrella re-exports `&lt;pkg>/&lt;sub>`
- * for every `&lt;sub>` the package itself exports) — true for every one of the
+ * mirror its own subpath exports 1:1 (the umbrella re-exports `<pkg>/<sub>`
+ * for every `<sub>` the package itself exports) — true for every one of the
  * five ORIGINAL base packages (`client`'s `/query|/auth|/pagination|/ssr|/upload`,
  * `server`'s `/types|/drizzle|/data-model|/rls/testing|/otel`; `do`, `runtime`,
  * `values` have no subpaths at all). Two of the five newly-covered packages
@@ -809,10 +809,10 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
  * import line + the type/value) — the typed `workflows.*` and/or `agents.*`
  * reference objects, whichever the project declares.
  *
- * Each `lunora/workflows.ts` export becomes a `workflows.&lt;name>` reference
+ * Each `lunora/workflows.ts` export becomes a `workflows.<name>` reference
  * carrying its `WORKFLOW_*` binding and — via the definition's phantom
  * `__params` — its `params` type, so a `cronJobs()` registration that targets it
- * infers the args. Each `lunora/agents.ts` export becomes an `agents.&lt;name>`
+ * infers the args. Each `lunora/agents.ts` export becomes an `agents.<name>`
  * reference carrying its `AGENT_*` binding (an agent compiles onto a Cloudflare
  * Workflow, so it IS a workflow reference structurally) typed with the flat
  * `AgentRunInput`, so `crons.daily("sweep", …, agents.support, { input,
@@ -1134,7 +1134,7 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
 
 /**
  * Synthetic `FunctionIR` entries for the project's custom mutators, so
- * `api.mutators.&lt;name>` exists as a typed reference and a client
+ * `api.mutators.<name>` exists as a typed reference and a client
  * `defineMutator({ serverRef: api.mutators.insertSibling })` binds the dispatch
  * path at COMPILE time — a rename, a typo, or a moved file becomes a type error
  * instead of a push that fails at runtime — while inferring its `args` from the
@@ -1171,7 +1171,7 @@ const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functi
 
 /**
  * Render the `httpStreams.*` typed-reference block for `_generated/api.ts` —
- * one entry per `httpRoute.&lt;verb>(path).stream()` SSE route, grouped by source
+ * one entry per `httpRoute.<verb>(path).stream()` SSE route, grouped by source
  * file the way `api.*` is. Each reference carries the verb + path at runtime
  * (what the client needs to open the endpoint) and the chunk / searchParams /
  * params types via `HttpStreamRef`'s phantom parameter, so
@@ -1361,19 +1361,19 @@ export const createSeedClient = (options?: SeedClientOptions): SeedClient<Insert
  *
  * Each shape emits **two** entry points.
  *
- * `&lt;shape>CollectionOptions(options)` is the composable form: it returns the full
+ * `<shape>CollectionOptions(options)` is the composable form: it returns the full
  * `LunoraCollectionOptions` — `config` for `createCollection`, plus `checkpoints`
  * (which `bindMutators` gates optimistic overlays on) and `scope`. This is what an app
  * with custom mutators needs, and what the old single-factory form made impossible: it
  * built the collection internally and dropped `checkpoints` on the floor, so there was
  * no way to wire mutators to the collection codegen produced.
  *
- * `&lt;shape>Collection(options)` is the convenience form for a read-only collection: it
+ * `<shape>Collection(options)` is the convenience form for a read-only collection: it
  * returns `{ checkpoints, collection, scope }` rather than a bare `Collection`, so the
  * sync controls stay reachable even from the short path.
  *
  * Both are typed: `args` comes from the shape's own validators (a parameterless
- * shape takes none), rows resolve to `Doc&lt;"table">` when the shape names its table
+ * shape takes none), rows resolve to `Doc<"table">` when the shape names its table
  * with a literal, and `shardKey` / `getKey` / `load` / `onError` / `checkpoints` are
  * all threadable — a sharded table needs `shardKey` for its watermark to land in the
  * right bucket, and a server-minted `_id` that differs from the app's natural key
@@ -1636,7 +1636,7 @@ const renderFunctionRegistry = (
  * set of functions, both grouped by namespace. The caller surfaces **every**
  * registered function — public *and* internal — because server-to-server calls
  * legitimately reach internal functions (mirroring `ctx.run*`). Each leaf is
- * `(args) => Promise&lt;Return>`; `args` is optional only when the function takes
+ * `(args) => Promise<Return>`; `args` is optional only when the function takes
  * none. The runtime leaves dispatch through `callRegistered`, which infers the
  * return type from the interface's contextual type.
  */
@@ -3050,7 +3050,7 @@ const emitAccessFragments = (hasAccessFacade: boolean): HelperFragments => {
 /**
  * The studio + reactive feature-flag fragments woven into the generated ShardDO,
  * or empty strings when the project wires no flags:
- * - `constant`: `LUNORA_FLAG_KEYS`, the statically-discovered `ctx.flags.&lt;type>` reads (key + value type) the overrides iterate.
+ * - `constant`: `LUNORA_FLAG_KEYS`, the statically-discovered `ctx.flags.<type>` reads (key + value type) the overrides iterate.
  * - `evaluateOverride`: the `evaluateFlags()` override backing `__lunora_admin__:listFlags` — evaluates every discovered key under the studio's editable targeting context and returns full `EvaluationDetails`.
  * - `subscriptionOverride`: the reactive override backing the React client's `useFlag`/`useFlags` over the reserved `__lunora_flags__:` channel — evaluates one flag under the socket's own verified identity.
  *
@@ -4032,7 +4032,7 @@ interface EmitShardOptions {
     containers?: ReadonlyArray<ContainerIR>;
     /** The single `defineEnv(...)` contract declared in `lunora/env.ts` — applies the accessor to the worker `env` to populate `ctx.env`. */
     env?: EnvIR;
-    /** Statically-discovered `ctx.flags.&lt;type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
+    /** Statically-discovered `ctx.flags.<type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
     flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
     /** A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access facade onto every ctx. */
     hasAccessFacade?: boolean;
@@ -5619,7 +5619,7 @@ interface DrizzleColumn {
     mode?: "bigint" | "boolean" | "buffer" | "json";
     /** Tracks whether the column should carry `.notNull()`. */
     notNull: boolean;
-    /** `.$type&lt;…>()` annotation rendered after the constructor. */
+    /** `.$type<…>()` annotation rendered after the constructor. */
     typeAnnotation?: string;
 }
 
@@ -5794,13 +5794,13 @@ interface DrizzleImports {
     indexes: string[];
     /** True when any column emits a `.references()` FK, which is return-annotated. */
     needsAnyColumn: boolean;
-    /** True when any `.$type&lt;…>()` annotation spells an `Id&lt;"table">`. */
+    /** True when any `.$type<…>()` annotation spells an `Id<"table">`. */
     needsId: boolean;
 }
 
 /**
- * `.$type&lt;…>()` inlines the rendered TS type, and `validatorToType` spells a
- * nested `v.id()` as `Id&lt;"table">` — so a `v.object` / `v.union` column
+ * `.$type<…>()` inlines the rendered TS type, and `validatorToType` spells a
+ * nested `v.id()` as `Id<"table">` — so a `v.object` / `v.union` column
  * carrying an id makes the file reference `Id` even though no column is an id
  * at the top level.
  */

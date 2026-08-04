@@ -8,7 +8,7 @@ const CONTAINER_ACCESSOR_PREFIX = "ctx.containers.";
 
 /**
  * `true` when `receiver` is a *single* container accessor
- * (`ctx.containers.&lt;exportName>`, with nothing past the export segment) — the
+ * (`ctx.containers.<exportName>`, with nothing past the export segment) — the
  * `.get(name)` receiver shape. `.any()`/`.pool()` take no key and carry a
  * different method name, so they never reach this predicate.
  */
@@ -23,7 +23,7 @@ const isContainerInstanceReceiver = (receiver: string): boolean => {
 };
 
 /**
- * Discover `ctx.containers.&lt;exportName>.get(name, …)` calls in `lunora/` whose
+ * Discover `ctx.containers.<exportName>.get(name, …)` calls in `lunora/` whose
  * instance key is derived from the handler's `args` with no server-side
  * scoping — the `container_instance_key_from_user_input` lint input. Each
  * container definition's `.get(name)` accessor routes to one instance per

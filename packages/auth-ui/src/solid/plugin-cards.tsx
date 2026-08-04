@@ -24,7 +24,7 @@ const onSubmit =
 /**
  * The accounts signed in on *this device*, with switch and sign-out-just-this.
  *
- * Not `&lt;SessionsCard>`, which lists this account's sessions across every device.
+ * Not `<SessionsCard>`, which lists this account's sessions across every device.
  * The two are a keystroke apart in better-auth's API and mean opposite things.
  */
 const MultiSessionCard = (): JSX.Element => {

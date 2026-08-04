@@ -269,7 +269,7 @@ interface ImportCommandOptions {
     prod?: boolean;
 
     /**
-     * Wrap each line as `{table:&lt;name>,doc:&lt;line>}`. Use when the source NDJSON
+     * Wrap each line as `{table:<name>,doc:<line>}`. Use when the source NDJSON
      * is bare docs from a single table — Convex's `convex import --table users`
      * shape.
      */
@@ -363,7 +363,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
 const CONVEX_STORAGE_TABLE = "_storage";
 
 /**
- * The `&lt;table>/documents.jsonl` files in a `npx convex export --path &lt;dir>`
+ * The `<table>/documents.jsonl` files in a `npx convex export --path <dir>`
  * directory, sorted for deterministic output.
  *
  * Returns `undefined` when `path` is not such a directory, which is how the
@@ -506,7 +506,7 @@ const reportImportOutcome = (
 };
 
 /**
- * Stream an NDJSON file — or a `npx convex export --path &lt;dir>` directory — in
+ * Stream an NDJSON file — or a `npx convex export --path <dir>` directory — in
  * chunks, POSTing each batch to `/_lunora/admin/import`. The line buffer stays
  * bounded by `batchSize`, so a multi-GiB source imports without buffering
  * everything in memory.

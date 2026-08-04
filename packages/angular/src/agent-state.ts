@@ -59,7 +59,7 @@ interface AgentStateResult<T> {
  * only on a real `setState`. The Angular counterpart to React's `useAgentState`,
  * re-expressed with signals.
  *
- * Generic over the app's state shape (`agentState&lt;SupportState>(...)`, itself a
+ * Generic over the app's state shape (`agentState<SupportState>(...)`, itself a
  * record) — the reference is typed as an optional record because codegen cannot see
  * the per-agent state type; the generic casts to `T`. The `extends` bound (not a
  * bare unbounded type parameter) is required: this `.ts` file is parsed JSX-aware by

@@ -68,7 +68,7 @@ interface LunoraMcpServerOptions {
     agents?: ReadonlyArray<McpAgentExposure>;
 
     /**
-     * Expose the per-agent tools (`agent_&lt;name>` + the generic
+     * Expose the per-agent tools (`agent_<name>` + the generic
      * `lunora_agent_status`). Defaults to `false`, mirroring `allowWrites`:
      * starting a durable agent run is a side effect, so the agent tools are
      * omitted from the advertised list AND refused at dispatch unless explicitly

@@ -10,7 +10,7 @@
  * `createAnalyticsSqlClient` in `@lunora/bindings/analytics`.
  *
  * Surfaces: `query(sql)` / `explain(sql)` (raw escape hatches, typed rows);
- * `from&lt;Row>(table)` (the chainable {@link SelectBuilder} — window functions,
+ * `from<Row>(table)` (the chainable {@link SelectBuilder} — window functions,
  * `DISTINCT`, `QUALIFY`, set operations); and `showDatabases()` /
  * `showTables(ns)` / `describe(table)` (Iceberg schema-discovery, the same
  * surface Studio uses to render tables).

@@ -9,7 +9,7 @@ import createSqliteExec from "../__tests__/_helpers/node-sqlite";
  * pagination walks `offset + limit` rows. Apples-to-apples across the same
  * `findMany` API:
  *
- * - **keyset** — second page with `cursor: &lt;seq=4999, _id=t04999>` and
+ * - **keyset** — second page with `cursor: <seq=4999, _id=t04999>` and
  * `limit: 50`. SQLite walks ~50 rows via the SEEK predicate the keyset
  * helper compiles (`(seq, _id) > (?, ?)`).
  * - **offset-style** — same depth modelled as `limit: 5050` without a

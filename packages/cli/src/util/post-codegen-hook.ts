@@ -5,7 +5,7 @@
  * to the project's own `codegen` script, which is faster and avoids depending on
  * a script existing — but it also means anything a project chained onto codegen
  * was silently skipped. A project that wraps codegen (`"codegen": "lunora
- * codegen &amp;& pnpm --filter … run patch"`) would see `prepare` revert its
+ * codegen && pnpm --filter … run patch"`) would see `prepare` revert its
  * post-step, and — the part that matters — **`lunora deploy` would ship the
  * unpatched output**, since a deploy pipeline has no reason to run the project's
  * codegen script first.

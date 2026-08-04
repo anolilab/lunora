@@ -39,7 +39,7 @@
  * - `count()` is intercepted only on tables with an active read policy —
  * unrelated tables count freely.
  *
- * The middleware is signature-compatible with the builder's `Middleware&lt;>`,
+ * The middleware is signature-compatible with the builder's `Middleware<>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
 import type { Middleware } from "../builder/types";

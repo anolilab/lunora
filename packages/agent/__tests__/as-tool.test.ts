@@ -18,7 +18,7 @@ const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
 const QUOTA_EXCEEDED = /quota exceeded/u;
 
 /**
- * A mock `AGENT_&lt;NAME>` Workflow binding: `create` records the params + id, and
+ * A mock `AGENT_<NAME>` Workflow binding: `create` records the params + id, and
  * `get(id)` returns an instance whose `status()` walks a scripted sequence
  * (models a run progressing to a terminal state) and whose thread the caller
  * seeds via `finalMessages`.
@@ -47,7 +47,7 @@ const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBinding
 };
 
 /**
- * A mock `AGENT_&lt;NAME>` Workflow binding whose `create` always rejects with the
+ * A mock `AGENT_<NAME>` Workflow binding whose `create` always rejects with the
  * given error (a duplicate-instance-id rejection, or any other failure); `get`
  * still resolves to a normal instance walking the scripted status sequence.
  */

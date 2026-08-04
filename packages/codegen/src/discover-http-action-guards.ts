@@ -5,7 +5,7 @@ import { enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { HttpActionGuardIR } from "./ir";
 
-/** The `httpRoute.&lt;verb>(...)` factory verbs — the root of a typed-REST-route builder chain. */
+/** The `httpRoute.<verb>(...)` factory verbs — the root of a typed-REST-route builder chain. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);
 
 /** The terminal steps that close a `httpRoute` builder chain into a mountable handler. */
@@ -14,7 +14,7 @@ const TERMINAL_STEPS = new Set(["handler", "stream"]);
 /** `ctx.run*` forwarders that perform a write through the owning shard — a side effect from the HTTP edge. */
 const RUN_SIDE_EFFECTS = new Set(["runAction", "runMutation"]);
 
-/** `ctx.db.&lt;method>` mutating writes. (`insertManyUnsafe` bypasses per-row validation.) */
+/** `ctx.db.<method>` mutating writes. (`insertManyUnsafe` bypasses per-row validation.) */
 const DB_WRITE_METHODS = new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]);
 
 /** A function whose body we can inspect — an inline arrow or function expression handler. */
@@ -32,7 +32,7 @@ const inlineHandler = (argument: TsNode | undefined): InspectableHandler | undef
  * `undefined` when it can't be resolved (so the caller skips — fail-safe under-report).
  *
  * A raw `httpAction((ctx, request) => …)` binds `ctx` as the first positional parameter; a destructured first parameter (`({ auth }) => …`) is not resolved.
- * A typed `httpRoute.&lt;verb>(…).handler(({ ctx, body }) => …)` receives one options object, so the `ctx` binding is its destructured `ctx` element (honoring an alias `{ ctx: c }`); a non-destructured options parameter is not resolved.
+ * A typed `httpRoute.<verb>(…).handler(({ ctx, body }) => …)` receives one options object, so the `ctx` binding is its destructured `ctx` element (honoring an alias `{ ctx: c }`); a non-destructured options parameter is not resolved.
  */
 const contextBinding = (handler: InspectableHandler, isHttpAction: boolean): string | undefined => {
     const parameter = handler.getParameters()[0];
@@ -67,7 +67,7 @@ const contextBinding = (handler: InspectableHandler, isHttpAction: boolean): str
 
 /**
  * The first side-effecting call in `handler` reached through the `ctx` binding —
- * a `ctx.runMutation` / `ctx.runAction` forward, or a `ctx.db.&lt;write>` mutation —
+ * a `ctx.runMutation` / `ctx.runAction` forward, or a `ctx.db.<write>` mutation —
  * as a stable label (`runMutation`, `db.insert`, …), or `undefined` when the
  * handler only reads. Descendants are walked in document order, so the earliest
  * side effect is reported deterministically.
@@ -144,7 +144,7 @@ const readsContextAuth = (handler: InspectableHandler, contextName: string): boo
     return false;
 };
 
-/** The uppercased `httpRoute.&lt;verb>` this `.handler(...)` / `.stream(...)` terminal roots at, or `undefined` when it isn't a Lunora REST route. */
+/** The uppercased `httpRoute.<verb>` this `.handler(...)` / `.stream(...)` terminal roots at, or `undefined` when it isn't a Lunora REST route. */
 const httpRouteVerbOfTerminal = (terminalCall: CallExpression): string | undefined => {
     const terminalCallee = terminalCall.getExpression();
 

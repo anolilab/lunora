@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { foldContainerInstances, parseContainerMessage } from "../../../src/features/containers/fold-container-instances";
 import type { LogEntry } from "../../../src/lib/admin";
 
-/** Build a `container:&lt;name>` log entry the ShardDO emits for one lifecycle transition. */
+/** Build a `container:<name>` log entry the ShardDO emits for one lifecycle transition. */
 const containerEntry = (name: string, message: string, timestamp: number, level: LogEntry["level"] = "info"): LogEntry => {
     return {
         functionPath: `container:${name}`,

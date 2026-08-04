@@ -2,7 +2,7 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * Flags a `ctx.storage.&lt;bucket>.&lt;method>(key, …)` whose R2 object key is derived
+ * Flags a `ctx.storage.<bucket>.<method>(key, …)` whose R2 object key is derived
  * from the handler's `args` with no server-side scoping — an object-level IDOR.
  *
  * The bucket read/write/URL/delete methods (`get`, `put`, `delete`, `download`,

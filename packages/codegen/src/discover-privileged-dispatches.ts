@@ -17,7 +17,7 @@ const HANDLER_FACTORIES = new Set(["defineQueue", "defineWorkflow"]);
 /** The dispatch methods on the handler's context param that call back into a Lunora function. */
 const DISPATCH_METHODS = new Set(["run", "runAction", "runMutation", "runQuery"]);
 
-/** The `FunctionReference` root namespaces codegen emits (`api.&lt;file>.&lt;export>` / `internal.&lt;file>.&lt;export>`). */
+/** The `FunctionReference` root namespaces codegen emits (`api.<file>.<export>` / `internal.<file>.<export>`). */
 const REFERENCE_ROOTS = new Set(["api", "internal"]);
 
 type HandlerFunction = ArrowFunction | FunctionExpression;
@@ -134,9 +134,9 @@ const declaredNames = (declaration: TsNode): string[] => {
 };
 
 /**
- * The payload access-path prefixes for a queue handler — `&lt;batch>.messages`
- * (the batch param at index 1) plus `&lt;message>.body` for each `message`
- * bound by a `for (… of &lt;batch>.messages)` loop. Empty when the handler
+ * The payload access-path prefixes for a queue handler — `<batch>.messages`
+ * (the batch param at index 1) plus `<message>.body` for each `message`
+ * bound by a `for (… of <batch>.messages)` loop. Empty when the handler
  * declares no batch parameter.
  */
 const queuePayloadPrefixes = (handler: HandlerFunction): string[] => {
@@ -167,9 +167,9 @@ const queuePayloadPrefixes = (handler: HandlerFunction): string[] => {
 /**
  * Collect the payload access paths and locally-bound payload names for one
  * handler. The *payload* is the untrusted external input a privileged handler
- * receives — `&lt;context>.params` for a workflow (set by the mutation/action
+ * receives — `<context>.params` for a workflow (set by the mutation/action
  * that called `.create({ params })`, which may embed `args.*`), or a
- * `&lt;message>.body` for a queue (see {@link queuePayloadPrefixes}).
+ * `<message>.body` for a queue (see {@link queuePayloadPrefixes}).
  *
  * A `const` (or destructuring) whose initializer is already payload-derived
  * contributes its bound name(s), so `const { channelId } = context.params; …
@@ -211,8 +211,8 @@ const argumentsReferencePayload = (argsNode: TsNode, payload: { names: Set<strin
 };
 
 /**
- * Resolve a `FunctionReference` argument (`api.&lt;file>.&lt;export>` /
- * `internal.&lt;dir>.&lt;file>.&lt;export>`) to its `{ file, exportName }`, or
+ * Resolve a `FunctionReference` argument (`api.<file>.<export>` /
+ * `internal.<dir>.<file>.<export>`) to its `{ file, exportName }`, or
  * `undefined` when the target is not a static `api`/`internal` member chain
  * (a variable or computed target can't be joined to RLS evidence, so it is
  * skipped fail-closed).

@@ -151,7 +151,7 @@ const parseJudgeScore = (raw: string): ScoreResult => {
 };
 
 /**
- * An LLM-as-judge scorer. `judge` is INJECTED — a `(prompt) => Promise&lt;string>`
+ * An LLM-as-judge scorer. `judge` is INJECTED — a `(prompt) => Promise<string>`
  * you wire to your model (e.g. via `ctx.ai` / `generateText`), so this module
  * stays model-agnostic and the judge is mockable in tests. It returns the model's
  * numeric verdict (`[0, 1]`) plus its reason.

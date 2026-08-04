@@ -36,7 +36,7 @@ const capOutput = (output: unknown): unknown => {
 interface ToolScriptStep {
     /** A stable name later steps reference the output by. */
     id: string;
-    /** The tool's input; values may embed `{ "$from": "&lt;stepId>", "$path": "a.b" }` refs. */
+    /** The tool's input; values may embed `{ "$from": "<stepId>", "$path": "a.b" }` refs. */
     input?: Record<string, unknown>;
     /** The tool to call — one of the tools handed to {@link codeTool}. */
     tool: string;
@@ -100,7 +100,7 @@ const getPath = (value: unknown, path: string): unknown => {
 };
 
 /**
- * Resolve `{ "$from": "&lt;stepId>", "$path"?: "a.b" }` references in a step's input
+ * Resolve `{ "$from": "<stepId>", "$path"?: "a.b" }` references in a step's input
  * against earlier step results, recursing through nested objects and arrays. An
  * unknown `$from` throws — a forward/typo reference is a hard error, not a silent
  * `undefined`. Pure and deterministic (no I/O), so it's unit-testable alone.

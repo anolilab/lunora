@@ -51,7 +51,7 @@ interface UseAgentOptions {
 
     /**
      * Optional app mutation over the agent's cancel path
-     * (`ctx.agents.&lt;name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
+     * (`ctx.agents.<name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
      * When omitted (or no run is in flight) {@link UseAgentResult.cancel} is a
      * no-op.
      */
@@ -59,7 +59,7 @@ interface UseAgentOptions {
 
     /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
-     * `ctx.agents.&lt;name>.run(...)`. Called with `{ threadKey, input }` merged with
+     * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link UseAgentOptions.runArgs} and the per-call args.
      */
     run: FunctionReference<"mutation">;
@@ -101,7 +101,7 @@ const NO_MUTATION_REF: FunctionReference<"mutation"> = { __lunoraRef: "" };
  * `useAgentChat`.
  *
  * `run` and `cancel` stay generic over the app-defined mutations that wrap
- * `ctx.agents.&lt;name>.run` / `.cancel`, so the hook hard-codes no function names
+ * `ctx.agents.<name>.run` / `.cancel`, so the hook hard-codes no function names
  * beyond the `agents:*` surface.
  */
 const useAgent = (options: UseAgentOptions): UseAgentResult => {

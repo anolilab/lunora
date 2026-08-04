@@ -73,7 +73,7 @@ const installCompiledValidatorMap = (validators: object, compiled: CompiledValid
 
 /**
  * Validate each declared field of `source` through its validator, re-wrapping
- * any {@link ValidationError} with a `label.&lt;key>:` prefix and the rebuilt path
+ * any {@link ValidationError} with a `label.<key>:` prefix and the rebuilt path
  * `[key, ...error.path]` so the failure points at the offending field. Optional
  * fields absent from the source are skipped (so `v.optional` passes and a
  * required validator fails on `undefined`).

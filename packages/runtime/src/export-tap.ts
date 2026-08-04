@@ -317,7 +317,7 @@ interface R2PutLike {
 
 /**
  * Built-in R2 sink: write each shard's changes as an NDJSON object under
- * `&lt;prefix>/&lt;shardKey>/&lt;cursor>.ndjson`. The cursor in the key makes each object
+ * `<prefix>/<shardKey>/<cursor>.ndjson`. The cursor in the key makes each object
  * content-addressed by watermark, so an at-least-once replay overwrites the same
  * key rather than duplicating (idempotent at the object level). A `put` rejection
  * propagates so the tap retries.
@@ -363,7 +363,7 @@ interface KvLike {
 
 /**
  * KV-backed durable cursor store. The watermark key mirrors the CDC-in
- * convention (`__lunora_source_cursor`): `__lunora_source_cursor:export:&lt;sink>`.
+ * convention (`__lunora_source_cursor`): `__lunora_source_cursor:export:<sink>`.
  * A missing / malformed value reads as the empty map (drain from the beginning),
  * so a fresh sink or a corrupted key can never crash the pass.
  */

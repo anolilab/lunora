@@ -70,7 +70,7 @@ export interface WorkflowBindingLike<Params = Record<string, unknown>> {
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
 
-/** The `event` argument a workflow `run` receives. Mirrors `WorkflowEvent&lt;T>`. */
+/** The `event` argument a workflow `run` receives. Mirrors `WorkflowEvent<T>`. */
 export interface WorkflowEventLike<Params = Record<string, unknown>> {
     readonly instanceId: string;
     readonly payload: Readonly<Params>;
@@ -130,10 +130,10 @@ export interface WorkflowStepRollbackOptionsLike<T = unknown> {
  * `do`'s two overloads mirror Cloudflare's: an optional leading `config` and an
  * optional trailing `rollback` (compensation run when a later step fails).
  *
- * Known mirror gap: Cloudflare constrains `do&lt;T extends Rpc.Serializable&lt;T>>` so
+ * Known mirror gap: Cloudflare constrains `do<T extends Rpc.Serializable<T>>` so
  * a non-serializable step result (a function, `Map`, class instance, …) is a
  * compile error there. `Rpc.Serializable` lives in `@cloudflare/workers-types`
- * and is not Node-importable, so this Node-safe mirror uses a bare `&lt;T>` and
+ * and is not Node-importable, so this Node-safe mirror uses a bare `<T>` and
  * cannot enforce that — a non-serializable result type-checks here but fails at
  * runtime on the platform. Keep step results JSON-serialisable.
  */
@@ -330,7 +330,7 @@ export interface WorkflowBranch<Output = unknown> {
  * ordinary declared workflow, so it can `ctx.runStep(...)` its own undo logic.
  */
 export interface BranchCompensationParams {
-    /** Index signature: this is a workflow `params` bag, so it is a valid `Record&lt;string, unknown>` payload. */
+    /** Index signature: this is a workflow `params` bag, so it is a valid `Record<string, unknown>` payload. */
     [key: string]: unknown;
     /** The export name of the completed branch being compensated. */
     branch: string;

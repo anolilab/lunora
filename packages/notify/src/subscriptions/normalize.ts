@@ -23,7 +23,7 @@ const MAX_METADATA_BYTES = 4096;
  * Validate a `register()` input's `metadata` (NOTIFY-02) before it is
  * STORED: must be a plain object (not an array, class instance, or
  * primitive — those are legal `typeof "object"` values a client could send
- * despite the `Record&lt;string, unknown&gt;` type, since the input crosses an RPC
+ * despite the `Record<string, unknown>` type, since the input crosses an RPC
  * boundary untyped at runtime), must be JSON-serialisable (a circular
  * reference or a `BigInt` value makes `JSON.stringify` throw), and its
  * serialised form must not exceed {@link MAX_METADATA_BYTES}.

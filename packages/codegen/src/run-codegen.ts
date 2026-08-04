@@ -118,7 +118,7 @@ const writeIfChanged = (filePath: string, content: string): void => {
  * "not applicable") the feature is not in use, so any file left at `filePath`
  * from a prior run — when the feature WAS in use — is removed. Without this, a
  * removed feature (last container/workflow/queue deleted, `@lunora/db` /
- * `@lunora/seed` uninstalled) would leave a lingering `_generated/&lt;feature>.ts`
+ * `@lunora/seed` uninstalled) would leave a lingering `_generated/<feature>.ts`
  * that imports a now-absent package and breaks the build. `force: true` no-ops
  * when the file never existed. Only ever called for the known conditional set
  * (containers/workflows/queues/seed/collections and the openapi/openrpc spec
@@ -395,8 +395,8 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
 };
 
 /**
- * Top-level codegen entry. Parses `&lt;projectRoot>/lunora/schema.ts` and every
- * function file under `&lt;projectRoot>/lunora/`, then writes
+ * Top-level codegen entry. Parses `<projectRoot>/lunora/schema.ts` and every
+ * function file under `<projectRoot>/lunora/`, then writes
  * `_generated/{api,server,dataModel}.ts` next to them.
  *
  * When `LUNORA_CODEGEN_TIMING` is set (truthy), a single diagnostic summary

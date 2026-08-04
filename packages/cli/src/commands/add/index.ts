@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `lunora add &lt;feature>` — add a feature or registry item to an existing
+ * `lunora add <feature>` — add a feature or registry item to an existing
  * project. A thin, discoverable front door over `lunora registry add`: the
  * friendly aliases (`auth` asks which provider, `email`/`mail` → the mail item)
  * resolve to registry item(s); any other name is passed straight to the

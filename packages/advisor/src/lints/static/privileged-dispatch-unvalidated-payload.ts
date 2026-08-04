@@ -20,7 +20,7 @@ import type { Lint } from "../../types";
  * id) becomes an act-as-any-user / cross-tenant write.
  *
  * The lint is deliberately narrow to stay false-positive-free: it fires **only**
- * when the resolved target (`api.&lt;file>.&lt;export>`) is found in the
+ * when the resolved target (`api.<file>.<export>`) is found in the
  * RLS-procedure evidence with `usesRls: true`. A dispatch into a function that
  * does its own arg validation and carries no row policy (the common, correct
  * case — e.g. a welcome-message mutation with no `rls`) is not flagged. Runs

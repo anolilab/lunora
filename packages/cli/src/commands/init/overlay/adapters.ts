@@ -32,7 +32,7 @@ interface OverlayFile {
 interface FrameworkAdapter {
     /** The `@lunora/*` client adapter to add as a dependency. */
     adapter: string;
-    /** The `create-vite` template id this overlays, e.g. `react-ts` (`npm create vite -- --template &lt;id>`). */
+    /** The `create-vite` template id this overlays, e.g. `react-ts` (`npm create vite -- --template <id>`). */
     createViteTemplate: string;
     /** Extra runtime deps beyond `lunorash` + the adapter (e.g. none for most). */
     extraDependencies?: Record<string, string>;

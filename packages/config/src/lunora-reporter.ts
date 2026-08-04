@@ -95,7 +95,7 @@ export default class LunoraReporter {
     }
 
     /**
-     * Frame `text` under `badge`: `&lt;badge> &lt;first line>`, with any further lines
+     * Frame `text` under `badge`: `<badge> <first line>`, with any further lines
      * indented to align beneath the message. Without a badge (unknown type) the
      * message is written plain.
      */

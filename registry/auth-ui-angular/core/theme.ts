@@ -38,7 +38,7 @@ interface ThemeTokens {
     success: string;
 }
 
-/** Mirrors the `var(--token, &lt;fallback>)` fallbacks in `styles/auth-ui.css`. */
+/** Mirrors the `var(--token, <fallback>)` fallbacks in `styles/auth-ui.css`. */
 const DEFAULT_THEME_TOKENS: ThemeTokens = {
     background: "hsl(0 0% 100%)",
     border: "hsl(228 16% 88%)",

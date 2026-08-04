@@ -52,7 +52,7 @@ const OWNERSHIP_IDENTIFIER_NAMES = new Set<string>([
 /** `ctx` sub-namespaces whose read implies the handler consults the caller's identity. */
 const IDENTITY_ACCESSORS = new Set<string>(["auth", "identity", "session", "user"]);
 
-/** Equality operators — an equality check against a loaded row's property (`row.ownerId !== viewer.id`) is an ownership comparison; range operators (`&lt;`/`&gt;`) almost never are, so they are excluded to avoid suppressing on an unrelated `arr.length &gt; 0`. */
+/** Equality operators — an equality check against a loaded row's property (`row.ownerId !== viewer.id`) is an ownership comparison; range operators (`<`/`>`) almost never are, so they are excluded to avoid suppressing on an unrelated `arr.length > 0`. */
 const EQUALITY_OPERATORS = new Set<SyntaxKind>([
     SyntaxKind.EqualsEqualsEqualsToken,
     SyntaxKind.EqualsEqualsToken,
@@ -125,7 +125,7 @@ const hasNullGate = (handler: InspectableHandler, name: string): boolean =>
 
 /**
  * The id-first `ctx.db` sink method (`get`/`patch`/`delete`) the handler applies to
- * `name` as its first argument (`ctx.db.get(id)` / `ctx.db.&lt;table>.patch(id, …)`), or
+ * `name` as its first argument (`ctx.db.get(id)` / `ctx.db.<table>.patch(id, …)`), or
  * `undefined` when the normalized id never reaches such a sink.
  */
 const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAuthorizationIR["sinkMethod"] | undefined => {

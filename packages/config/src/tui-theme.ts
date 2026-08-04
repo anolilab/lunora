@@ -6,14 +6,14 @@
  *
  * Framework-free (no React, no pail) — just data plus a `@visulima/colorize`
  * string painter — so any consumer can import it. The CLI's tui prompts read the
- * same `BadgeSpec` colors to render badges as `&lt;Text>` elements on a TTY.
+ * same `BadgeSpec` colors to render badges as `<Text>` elements on a TTY.
  */
 
 import colorize from "@visulima/colorize";
 
 /**
  * A badge: the short colored label that prefixes a line. `bg`/`fg` are hex so the
- * same value drives both colorize's `bgHex().hex()` and the tui `&lt;Text>` props.
+ * same value drives both colorize's `bgHex().hex()` and the tui `<Text>` props.
  */
 interface BadgeSpec {
     bg: `#${string}`;
