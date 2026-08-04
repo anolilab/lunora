@@ -117,9 +117,11 @@ type InferSelect<V> = V extends Validator<infer T> ? T : never;
 ### `InferStandardOutput` (type)
 
 ```ts
-type InferStandardOutput<S extends StandardSchemaV1> = S["~standard"]["types"] extends {
-    output: infer O;
-} ? O : unknown;
+type InferStandardOutput<S extends StandardSchemaV1> = [
+    StandardSchemaV1.InferOutput<S>
+] extends [
+    never
+] ? unknown : StandardSchemaV1.InferOutput<S>;
 ```
 
 ### `InferValidatorMap` (type)
