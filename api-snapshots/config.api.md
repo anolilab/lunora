@@ -1928,6 +1928,12 @@ interface WranglerWorkflowEntry {
 const buildBindingManifest: (config: ManifestConfigShape) => BindingManifest;
 ```
 
+### `collectExportGaps` (const)
+
+```ts
+const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
+```
+
 ### `collectWranglerSecretVariables` (const)
 
 ```ts

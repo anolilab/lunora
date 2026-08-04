@@ -1,6 +1,8 @@
 import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { collectWranglerSecretVariables } from "@lunora/config/cloudflare";
+import { inferLunoraBindings } from "@lunora/config";
+import type { ExportGap } from "@lunora/config/cloudflare";
+import { collectExportGaps, collectWranglerSecretVariables } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
@@ -152,8 +154,47 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     return finalResult;
 };
 
+/**
+ * Warn about declared containers/workflows/agents the worker entry never
+ * re-exports.
+ *
+ * The gap is invisible to everything codegen itself can see: `tsc` is clean,
+ * codegen is clean, the tests pass, and wrangler only rejects the unexported
+ * `class_name` at deploy — so a project can ship workflows that have no workflow
+ * to run. The dev server raises it in the error overlay and `build`/`deploy`
+ * warn, but a project that drives its own dev server and deploys through its own
+ * IaC runs neither, and `lunora codegen` was the one command it does run that
+ * stayed silent.
+ *
+ * A warning rather than a non-zero exit, deliberately: codegen runs on every
+ * file save, and a hard failure between declaring a workflow and wiring the entry
+ * would fail the edit that is halfway through fixing it. `doctor`, `prepare` and
+ * `deploy` all still fail on it, which is where failing is useful.
+ *
+ * Lives in the command wrapper, not in `runCodegenCommand`, because inference is
+ * async and that function is a published sync entry point for exactly the IaC
+ * callers this helps — see `concepts/monorepos-and-iac`.
+ */
+const warnAboutExportGaps = async (projectRoot: string, logger: Logger): Promise<void> => {
+    let gaps: ReadonlyArray<ExportGap>;
+
+    try {
+        gaps = collectExportGaps(await inferLunoraBindings({ projectRoot }));
+    } catch {
+        return; // Best-effort: inference failures are owned by the commands that gate on them.
+    }
+
+    for (const gap of gaps) {
+        logger.warn(
+            `${gap.kind} "${gap.exportName}" is declared but ${gap.className} is not exported by the worker entry — ` +
+                `add \`export * from "./lunora/_generated/${gap.module}"\` so wrangler can provision its binding. ` +
+                `Until then it deploys with nothing to run.`,
+        );
+    }
+};
+
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({ cwd, logger, options }) => {
+const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(async ({ cwd, logger, options }) => {
     const result = runCodegenCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
@@ -162,6 +203,11 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({
         strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
+
+    // After codegen, so the classes it reports on are the ones just emitted. In
+    // `--format json` mode stdout carries only the serialized result, so the
+    // warning goes to the same stderr logger the rest of the run's prose uses.
+    await warnAboutExportGaps(cwd, loggerForFormat(options.format, logger));
 
     return { code: result.error === undefined && result.failedAdvisories === 0 ? 0 : 1 };
 });

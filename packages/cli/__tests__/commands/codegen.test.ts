@@ -1,11 +1,11 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runCodegenCommand } from "../../src/commands/codegen/handler";
+import { execute, runCodegenCommand } from "../../src/commands/codegen/handler";
 import type { Logger } from "../../src/util/logger";
 
 /** Run `body` while capturing everything written to `process.stdout`. */
@@ -236,6 +236,76 @@ describe("lunora codegen", () => {
                 expect(stdout).toBe("");
                 expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
             });
+        });
+    });
+
+    /**
+     * A declared workflow whose generated class the worker entry never re-exports
+     * is invisible to everything codegen can check: `tsc` is clean, codegen is
+     * clean, the tests pass, and wrangler only rejects the `class_name` at deploy.
+     * The dev overlay and `build`/`deploy` warn, but a project driving its own dev
+     * server and deploying through its own IaC runs neither — `lunora codegen` was
+     * the one command it does run that stayed silent.
+     */
+    describe("unexported generated classes", () => {
+        const seedWorkflow = (entry: string): void => {
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    main: "src/server.ts",
+                    name: "demo",
+                }),
+                "utf8",
+            );
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server.ts"), entry, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "workflows.ts"),
+                'import { defineWorkflow } from "@lunora/workflow";\nexport const orderPipeline = defineWorkflow({ run: async () => undefined });\n',
+                "utf8",
+            );
+        };
+
+        /** Drive the real command handler — the warning lives in the `execute` wrapper, not in `runCodegenCommand`. */
+        const runExecute = async (): Promise<string> => {
+            let captured = "";
+            const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+                captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+                return true;
+            });
+
+            try {
+                await execute({
+                    argument: [],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof execute>[0]);
+            } finally {
+                spy.mockRestore();
+            }
+
+            return captured;
+        };
+
+        it("warns when a declared workflow is not exported by the worker entry", async () => {
+            expect.assertions(1);
+
+            seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+
+            await expect(runExecute()).resolves.toMatch(/workflow "orderPipeline" is declared but .* is not exported by the worker entry/u);
+        });
+
+        it("stays quiet when the worker entry re-exports the generated module", async () => {
+            expect.assertions(1);
+
+            seedWorkflow(
+                'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
+            );
+
+            await expect(runExecute()).resolves.not.toMatch(/is not exported by the worker entry/u);
         });
     });
 });
