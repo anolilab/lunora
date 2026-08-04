@@ -90,6 +90,10 @@ catalogs:
     wrangler:
       specifier: ^4.114.0
       version: 4.114.0
+  content:
+    yaml:
+      specifier: ^2.9.0
+      version: 2.9.0
   data:
     '@faker-js/faker':
       specifier: ^10.5.0
@@ -2146,6 +2150,9 @@ importers:
       ai:
         specifier: catalog:ai
         version: 7.0.37(zod@4.4.3)
+      yaml:
+        specifier: catalog:content
+        version: 2.9.0
     devDependencies:
       '@lunora/dispatch':
         specifier: workspace:*
@@ -3097,7 +3104,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.10
+        specifier: 1.0.0-alpha.11
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -3322,7 +3329,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.10
+        specifier: 1.0.0-alpha.11
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -4611,7 +4618,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.10
+        specifier: 1.0.0-alpha.11
         version: link:../observability
       '@types/node':
         specifier: catalog:types

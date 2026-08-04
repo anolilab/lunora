@@ -1,6 +1,6 @@
 {
     "name": "@lunora/agent",
-    "version": "1.0.0-alpha.41",
+    "version": "1.0.0-alpha.42",
     "description": "Durable AI agents for Lunora: defineAgent compiles a replay-safe tool-loop onto Cloudflare Workflows, with DO SQLite threads and live message subscriptions",
     "keywords": [
         "agent",
@@ -62,6 +62,10 @@
             "types": "./dist/naming.d.ts",
             "import": "./dist/naming.mjs"
         },
+        "./skill-markdown": {
+            "types": "./dist/skill-markdown.d.ts",
+            "import": "./dist/skill-markdown.mjs"
+        },
         "./sandbox": {
             "types": "./dist/sandbox.d.ts",
             "import": "./dist/sandbox.mjs"
@@ -94,7 +98,8 @@
         "@lunora/values": "1.0.0-alpha.19",
         "@lunora/workflow": "1.0.0-alpha.21",
         "@modelcontextprotocol/sdk": "catalog:mcp",
-        "ai": "catalog:ai"
+        "ai": "catalog:ai",
+        "yaml": "catalog:content"
     },
     "devDependencies": {
         "@lunora/dispatch": "workspace:*",

@@ -360,6 +360,13 @@ export interface SkillConfig {
 }
 
 /**
+ * The code-side parts of a markdown-authored skill — everything `SKILL.md`
+ * cannot carry. `name` and `instructions` come from the file itself.
+ * @experimental
+ */
+export type SkillMarkdownExtras = Omit<SkillConfig, "instructions" | "name">;
+
+/**
  * A `defineSkill` result — config plus the brand the agent merge checks.
  * @experimental
  */

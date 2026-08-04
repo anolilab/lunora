@@ -1,3 +1,5 @@
+## @lunora/vue [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/%40lunora%2Fvue%401.0.0-alpha.67...%40lunora%2Fvue%401.0.0-alpha.68) (2026-08-04)
+
 ## @lunora/vue [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/%40lunora%2Fvue%401.0.0-alpha.66...%40lunora%2Fvue%401.0.0-alpha.67) (2026-08-04)
 
 

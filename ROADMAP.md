@@ -46,15 +46,17 @@ deliberate, and mostly a set of go/no-go decisions:
 - **Ratify the stability tiers.** Publicly commit each package to a tier so users
   know exactly what the SemVer promise covers:
     - **Core (full SemVer at 1.0):** `server`, `values`, `errors`, `runtime`, `do`,
-      `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, and the
+      `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`,
+      `platform`, `platform-cloudflare`, `shard-engine`, `observability`, and the
       `lunorash` umbrella.
     - **Stable adapters (1.0 if they pass the same gates):** `vue`, `solid`,
-      `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`,
-      `ratelimit`, `seed`, `db`, `studio`, `advisor`, `mcp`, `bindings`,
-      `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`.
+      `svelte`, `astro`, `nuxt`, `auth`, `auth-ui`, `storage`, `scheduler`, `mail`,
+      `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`,
+      `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
+      `fingerprint`, `dispatch`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
       `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`,
-      `container`, `payment`.
+      `container`, `payment`, `platform-node`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
 - **Bake and dogfood.** Run a real application (the playground plus at least one
@@ -77,11 +79,8 @@ deliberate, and mostly a set of go/no-go decisions:
 
 ## Later — post-1.0 direction
 
-- **Promote the experimental tier on published criteria.** Define and publish the
-  bar each experimental package must clear (tests, workerd verification, docs,
-  API stability) to earn a SemVer commitment — then graduate `agent`, `replica`,
-  `x402`, `ai`, `browser`, `container`, `payment`, `react-native`, and `angular`
-  one at a time.
+- **Graduate the experimental tier**, one package at a time, against the bar
+  published under [Experimental → stable](#experimental--stable-the-graduation-bar).
 - **Deferred capability plans** (designs already written in [`plans/`](./plans)):
     - Streaming: port the HTTP-SSE `useHttpStream` surface to Vue/Solid/Svelte,
       plus reconnect / POST-body / OpenAPI follow-ups ([`052`](./plans/052-streaming-hook-design.md), [`033`](./plans/033-stream.md)).
@@ -94,6 +93,54 @@ deliberate, and mostly a set of go/no-go decisions:
   "your own account" isn't limited to one provider.
 - **Open governance.** A public RFC process for surface-changing proposals, a
   contributor guide, and transparent stability-tier and deprecation decisions.
+
+---
+
+## Experimental → stable: the graduation bar
+
+Published here because "experimental" is only a fair label if the way out of it
+is knowable in advance. An adopter whose core loop runs on `agent` + `ai` +
+`browser` + `container` is betting on the tier with the fewest guarantees while
+the least interesting parts of their stack get the strongest ones; they are
+entitled to see what would change that, and to check the progress themselves.
+
+A package graduates to **Stable adapter** — and gains the SemVer commitment the
+Core tier already carries — when all six hold. Two of them (1 and 2) are
+machine-checkable, and you can run the check yourself. The other four are
+maintainer judgement, stated as criteria so the judgement is at least made
+against something written down rather than case by case.
+
+1. **The public surface is snapshotted and has settled.** The package is covered
+   by `pnpm run api:check` (`api-snapshots/<pkg>.api.md`), and its surface has
+   gone one full minor cycle with no unplanned removals or renames. Exports still
+   carrying `@experimental` are the explicit exception list, and graduating means
+   that list is empty or deliberately frozen.
+2. **Behaviour is verified on the runtime it ships to**, not only in Node —
+   `workerd` for anything reaching Cloudflare primitives, and a passing
+   conformance run where a contract exists (`@lunora/platform/conformance`).
+3. **Failure modes are covered, not just happy paths.** Retries, cancellation,
+   partial failure and replay have tests; for anything durable, that includes
+   resuming mid-run.
+4. **The docs answer the first hour.** A task-shaped guide, the capability matrix
+   entry for every target, and the errors the package raises with what to do
+   about each.
+5. **It has been used in anger.** At least one real application, outside this
+   repo, has run it in production shape — with the friction that surfaced either
+   fixed or written down.
+6. **A deprecation path exists.** The package can name what it would do to remove
+   a surface post-1.0, and its errors and config carry the names it intends to
+   keep.
+
+Where the tier stands today:
+
+| Package                     | 1. Snapshotted                     | 2. Verified on workerd |
+| --------------------------- | ---------------------------------- | ---------------------- |
+| `agent`                     | yes — `api-snapshots/agent.api.md` | no                     |
+| `ai`                        | yes — `api-snapshots/ai.api.md`    | no                     |
+| everything else in the tier | not yet                            | —                      |
+
+Ordering is not fixed: a package that clears the bar early graduates early,
+regardless of where it sits in the tier list above.
 
 ---
 
