@@ -393,9 +393,8 @@ Branch `advisor/290-eslint-markdown-crash`, off `alpha` at `ab0afaf00`.
 
 ### Answers to §9
 
-1. **Upstream issue (W3) — DRAFTED, NOT FILED.** Filing against another
-   organisation's repository is outward-facing, so it is left for the operator
-   to send. Draft in §11 below.
+1. **Upstream issue (W3) — FILED**: https://github.com/anolilab/javascript-style-guide/issues/1084
+   (draft kept in §11 for the record).
 2. **Does `eslint-plugin-n` 18.x fix it? NO.** Checked the rule source at tag
    `v18.2.2` — `create(context)` still does
 
