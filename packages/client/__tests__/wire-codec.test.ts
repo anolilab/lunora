@@ -296,4 +296,31 @@ describe("wireCodec round-trips", () => {
         // A normal bigint still round-trips.
         expect(wire(-42n)).toBe(-42n);
     });
+
+    // The decode side has always preserved a literal `__proto__` field (as an own
+    // data property, via `defineProperty`). The encode side did not: a plain
+    // `result[key] = …` fires the prototype SETTER for that key, so the field
+    // vanished. A document read with `JSON.parse` — which makes `__proto__` an
+    // OWN key — therefore lost it on every re-encode, silently.
+    it("round-trips a literal __proto__ field instead of dropping it on encode", () => {
+        expect.assertions(4);
+
+        // `JSON.parse` is how such a document actually arrives; an object literal
+        // would set the prototype rather than create the key.
+        const document = JSON.parse('{"__proto__":{"polluted":true},"amount":7}') as Record<string, unknown>;
+
+        expect(Object.keys(document)).toStrictEqual(["__proto__", "amount"]);
+
+        const encoded = encodeWire(document) as Record<string, unknown>;
+
+        expect(Object.keys(encoded)).toStrictEqual(["__proto__", "amount"]);
+
+        // eslint-disable-next-line unicorn/prefer-structured-clone -- simulating the JSON wire, not cloning: `structuredClone` preserves values JSON drops, which would defeat the round-trip this asserts
+        const decoded = decodeWire(JSON.parse(JSON.stringify(encoded))) as Record<string, unknown>;
+
+        expect(Object.keys(decoded)).toStrictEqual(["__proto__", "amount"]);
+        // And nothing was polluted along the way — the key is an own data
+        // property, so no object in the chain gained a `polluted` member.
+        expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    });
 });
