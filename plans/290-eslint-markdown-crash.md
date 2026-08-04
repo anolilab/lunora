@@ -1,7 +1,7 @@
 # Plan 290 — Stop `eslint-plugin-n` crashing the linter on Markdown files
 
 **Baseline:** `071c6a29c` (2026-08-01)
-**Status:** TODO
+**Status:** DONE — `advisor/290-eslint-markdown-crash` (W1+W2 shipped; W3 drafted below, not filed)
 **Priority:** P2 · **Effort:** S · **Risk:** LOW · **Category:** dx
 
 > **Executor instructions**: follow this plan step by step, run every verification
@@ -384,3 +384,135 @@ ALL must hold:
    body) be hoisted into the preset or a repo-shared fragment? 45+ near-copies
    invited this drift (`cli` fixed, 44 didn't follow). Out of scope here;
    record as a candidate follow-up plan.
+
+---
+
+## 10. Execution record (2026-08-03)
+
+Branch `advisor/290-eslint-markdown-crash`, off `alpha` at `ab0afaf00`.
+
+### Answers to §9
+
+1. **Upstream issue (W3) — FILED**: https://github.com/anolilab/javascript-style-guide/issues/1084
+   (draft kept in §11 for the record).
+2. **Does `eslint-plugin-n` 18.x fix it? NO.** Checked the rule source at tag
+   `v18.2.2` — `create(context)` still does
+
+    ```js
+    const tracker = new ReferenceTracker(/** @type {NonNullable<typeof sourceCode.scopeManager.globalScope>} */ (sourceCode.scopeManager.globalScope));
+    ```
+
+    The `NonNullable<…>` cast is a **type** assertion with no runtime effect, so
+    18.x dereferences `scopeManager` exactly as unguardedly as 17.24.0. The
+    rejected "bump the plugin" alternative in §4 would therefore not have worked
+    at all — worth stating plainly in the upstream issue, since it removes the
+    obvious "just upgrade" answer.
+
+3. **Hoisting the duplicated config body** — still open, still out of scope.
+   This execution is more evidence for it: the fix was a byte-identical edit to
+   47 near-identical files, and all 47 Markdown blocks hashed to the same value
+   beforehand (verified), which is exactly the signature of copy-paste that
+   `cli` diverged from and nobody followed.
+
+### What was done
+
+- **W1 + W2 together.** All 47 vulnerable configs (44 packages + `apps/docs`,
+  `apps/playground`, `apps/studio`) were patched in one scripted pass. It was
+  safe to script because every one of the 47 Markdown blocks was verified
+  byte-identical first (`md5` over the awk-extracted block → a single hash for
+  all 47), and each file contained exactly one occurrence of the anchor, so the
+  replacement could not land ambiguously.
+- The comment is cli's, generalised — it drops the cli-specific `SKILL.md`
+  example and says plainly that the failure is at rule-LOAD time, so one
+  committed `.md` file takes down the whole run.
+- `packages/cli` and the 10 configs without the blanket rule were not touched,
+  per §3.
+
+### Evidence
+
+| Check                                                       | Before                                      | After                            |
+| ----------------------------------------------------------- | ------------------------------------------- | -------------------------------- |
+| `cd packages/advisor && eslint SECURITY_LINT_CANDIDATES.md` | `TypeError … (reading 'globalScope')`       | exit 0, no findings              |
+| `pnpm --filter "@lunora/advisor" run lint:eslint`           | **exit 2** (crash)                          | **exit 1** (real report)         |
+| stdin probe, `packages/server`                              | `TypeError: Error while loading rule 'n/…'` | clean                            |
+| stdin probe, `apps/studio`                                  | `TypeError: Error while loading rule 'n/…'` | clean                            |
+| §5 W2 derivation loop                                       | 47 paths                                    | empty                            |
+| `pnpm run lint:eslint` (whole repo)                         | —                                           | exit 0, 161/161, zero TypeErrors |
+
+The before-column probes were produced by stashing only the relevant config
+(tagged stash, applied back by SHA and dropped by tag — the checkout is shared).
+
+### The finding this uncovered — bigger than the plan
+
+Advisor's package lint went from **exit 2 to exit 1**, not to exit 0: the crash
+had been masking **21 real source-lint errors** in `src/**/*.ts`. None of them
+are in Markdown, so the fix did not create them — an aborted run simply never
+reported them.
+
+Chasing why the whole-repo lint stayed green revealed the actual problem. The
+repo run prints, for ten projects:
+
+```
+> advisor:lint:eslint
+✓  advisor:lint:eslint (13 ms)
+No command configured for advisor:lint:eslint
+```
+
+**vis reports a green tick for a target it never ran.** All ten packages define
+a real `lint:eslint` (`eslint . --max-warnings=0`) in their own manifest, so the
+script exists — the project graph simply does not wire it up. Running each
+directly:
+
+| Package         | `pnpm --filter … run lint:eslint` |
+| --------------- | --------------------------------- |
+| `replica`       | 303 problems                      |
+| `ai`            | 118 problems                      |
+| `db`            | 40 problems                       |
+| `svelte`        | 24 problems                       |
+| `advisor`       | 21 problems                       |
+| `auth`          | 7 problems                        |
+| `vue`           | 7 problems                        |
+| `container`     | 3 problems                        |
+| `platform-node` | clean                             |
+| `ratelimit`     | clean                             |
+
+**523 errors across 8 packages, behind a green checkmark.** Since CI's required
+context is the aggregate lint run, none of it gates anything. This is out of
+scope for plan 290 (which is config-only and must not grow into a 523-error
+cleanup) but should be filed as its own plan — the gate is the bug, the 523
+errors are just what it was hiding.
+
+## 11. Upstream issue draft (W3 — for the operator to file)
+
+**Repo:** `anolilab/javascript-style-guide` (the `@anolilab/eslint-config` home)
+**Title:** `n/no-unsupported-features/*` crash the linter on Markdown under ESLint 10
+
+> **What happens**
+>
+> With `@anolilab/eslint-config` 28.0.1 on ESLint 10.7.0, applying any
+> `n/no-unsupported-features/*` rule in a config entry without a `files` key
+> makes the rule attach to Markdown documents too. ESLint then dies while
+> _loading_ the rule:
+>
+> ```
+> TypeError: Error while loading rule 'n/no-unsupported-features/node-builtins':
+> Cannot read properties of undefined (reading 'globalScope')
+>     at Object.create (…/eslint-plugin-n/lib/rules/no-unsupported-features/node-builtins.js:72:41)
+> ```
+>
+> A Markdown document has no `scopeManager`, and the rule dereferences
+> `sourceCode.scopeManager.globalScope` unconditionally. Because it throws at
+> load time, one committed `.md` file takes down the entire lint run — it is a
+> crash, not a finding, and cannot be fixed in the file.
+>
+> **`eslint-plugin-n` 18.x does not fix this.** The same unguarded dereference
+> is present at `v18.2.2`; the `NonNullable<…>` there is a type assertion with
+> no runtime effect. Upgrading the plugin is not a workaround.
+>
+> **Ask**
+>
+> Scope the preset's `n/` rules with a `files` key (or ship a Markdown-scoped
+> off-block in the preset), so consumers don't each have to discover this. We
+> currently carry a `files: ["**/*.md", "**/*.md/**"]` block turning the three
+> `n/no-unsupported-features/*` rules off in 48 configs; it stays correct and
+> inert after a preset-side fix.
