@@ -315,6 +315,7 @@ describe("wireCodec round-trips", () => {
 
         expect(Object.keys(encoded)).toStrictEqual(["__proto__", "amount"]);
 
+        // eslint-disable-next-line unicorn/prefer-structured-clone -- simulating the JSON wire, not cloning: `structuredClone` preserves values JSON drops, which would defeat the round-trip this asserts
         const decoded = decodeWire(JSON.parse(JSON.stringify(encoded))) as Record<string, unknown>;
 
         expect(Object.keys(decoded)).toStrictEqual(["__proto__", "amount"]);
