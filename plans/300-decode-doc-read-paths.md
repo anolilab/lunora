@@ -1,7 +1,11 @@
 # Plan 300 — Decode wire-tagged doc columns on the three display read paths
 
 **Baseline:** `071c6a29c` (2026-08-01)
-**Status:** TODO
+**Status:** DONE — `advisor/300-decode-doc-read-paths`, stacked on 265.
+
+Outcome, including the two places this plan was wrong (S3's premise, and S2
+being a one-liner) and the answers to §9, is recorded in this plan's row in
+[`README.md`](./README.md).
 
 > **Executor instructions**: follow this plan step by step, run every verification
 > command, and confirm the expected result before moving on. If a STOP condition

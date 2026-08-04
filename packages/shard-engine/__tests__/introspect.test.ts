@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { SqlCursor, SqlExec } from "../src/ctx-db";
 import {
     createFanoutCounters,
@@ -294,6 +295,65 @@ describe("introspect", () => {
             const page = readTablePage(database.sql, { table: "messages" });
 
             expect(page.columns).toEqual(["__id__", "text", "votes"]);
+        });
+
+        /** A canonical doc-stored table holding exactly one row with `doc` as its blob. */
+        const seedDocTable = (name: string, doc: string): void => {
+            database.raw(`CREATE TABLE "${name}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(`INSERT INTO "${name}" VALUES ('r1', 1, '${doc}')`);
+        };
+
+        // The load-bearing invariant for this reader, and the reason it must NOT
+        // decode the wire codec: its result is returned by the admin RPC through
+        // `jsonResponse`, the one DO result path that does not `encodeWire`. A
+        // decoded `v.bigint()` makes `JSON.stringify` THROW (browsing the table
+        // becomes a redacted 500) and a decoded `v.bytes()` flattens to `{}`.
+        // The client decodes the response itself, so the tagged form is what has
+        // to survive this far.
+        it("keeps a wire-tagged doc JSON-serializable, leaving the decode to the client", () => {
+            expect.assertions(3);
+
+            seedDocTable("sessions", `{"amountMinor":["$lunora.wire$","bigint","1000"],"blob":["$lunora.wire$","bytes","AAEC","ArrayBuffer"],"note":"ok"}`);
+
+            const page = readTablePage(database.sql, { table: "sessions" });
+
+            // Serializing is exactly what `jsonResponse` does; it must not throw.
+            expect(() => JSON.stringify(page)).not.toThrow();
+
+            // And what survives is the tagged form the client's `decodeWire`
+            // turns back into a real bigint — verified end-to-end here rather
+            // than assumed, since this reader is one hop from that call.
+            // eslint-disable-next-line unicorn/prefer-structured-clone -- simulating the JSON wire, not cloning: `structuredClone` preserves a bigint and would defeat the assertion
+            const overTheWire = decodeWire(JSON.parse(JSON.stringify(page))) as { rows: { amountMinor: unknown; blob: unknown }[] };
+
+            expect(overTheWire.rows[0]?.amountMinor).toBe(1000n);
+            expect(overTheWire.rows[0]?.blob).toBeInstanceOf(ArrayBuffer);
+        });
+
+        // A tagged blob is still a JSON object, so expansion proceeds normally;
+        // the tag simply rides along as a value.
+        it("expands a wire-tagged doc into columns like any other", () => {
+            expect.assertions(2);
+
+            seedDocTable("tagged", `{"amountMinor":["$lunora.wire$","bigint","1000"],"note":"ok"}`);
+
+            const page = readTablePage(database.sql, { table: "tagged" });
+
+            expect(page.columns).toEqual(["id", "_creationTime", "amountMinor", "note"]);
+            expect((page.rows[0] as { note: unknown }).note).toBe("ok");
+        });
+
+        // Bare `JSON.parse` has no depth cap and no sentinel handling, so a
+        // legacy doc that happens to contain a sentinel-shaped array or deep
+        // nesting is untouched — one more reason the decode does not belong here.
+        it("leaves a legacy doc containing a sentinel-shaped array alone", () => {
+            expect.assertions(1);
+
+            seedDocTable("legacy", `{"tags":["$lunora.wire$","bigint","not-a-number"]}`);
+
+            const page = readTablePage(database.sql, { table: "legacy" });
+
+            expect((page.rows[0] as { tags: unknown }).tags).toEqual(["$lunora.wire$", "bigint", "not-a-number"]);
         });
     });
 

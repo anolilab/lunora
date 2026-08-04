@@ -4,6 +4,7 @@ import { ConfirmButton } from "../../components/confirm-button";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
 import type { TablePage } from "../../lib/admin";
+import { jsonRowReplacer } from "../../lib/internal";
 import { maskRows } from "../../lib/mask-preview";
 import type { SavedQuery } from "../../lib/saved-queries";
 import type { SqlAssistant } from "../sql/hooks/use-sql-assistant";
@@ -316,7 +317,7 @@ const DataBrowserPage = ({
 
         {browser.viewMode === "json" && (
             <pre className="min-h-0 flex-1 overflow-auto border-t border-border bg-muted/30 p-3 text-xs" data-testid="db-json">
-                {JSON.stringify(maskRows(page.rows, preferences.maskView), null, 2)}
+                {JSON.stringify(maskRows(page.rows, preferences.maskView), jsonRowReplacer, 2)}
             </pre>
         )}
 

@@ -121,6 +121,28 @@ const ERROR_CTORS: Record<string, { new (message?: string): Error }> = {
 };
 
 /**
+ * The codec's definition of a plain object: an `Object.prototype` or
+ * null-prototype object. Arrays fail it (their prototype is `Array.prototype`),
+ * as do `Date`, `Map`, `Set`, `ArrayBuffer` and every typed-array view.
+ *
+ * Exported because it is the boundary between "a document" and "a value that
+ * merely decoded to an object". Callers that parse a stored/received blob need
+ * exactly this test, and testing for `!Array.isArray` instead is a trap: it is
+ * sufficient for a bare `JSON.parse` (whose only non-plain root is an array) but
+ * NOT after {@link decodeWire}, which turns a root-level tagged array into a
+ * `Uint8Array`/`Date`/`Map` that passes an array-only check.
+ */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+    if (value === null || typeof value !== "object") {
+        return false;
+    }
+
+    const proto = Object.getPrototypeOf(value) as object | null;
+
+    return proto === null || proto === Object.prototype;
+};
+
+/**
  * Encode `value` into a JSON-safe tree, tagging the leaves JSON cannot represent.
  * Pure and recursive; no I/O. Trees only (no cycle detection — a cyclic input
  * throws via the recursion, same as `JSON.stringify`).
@@ -250,9 +272,7 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
     // branch below would silently encode them to `{}` — corruption a caller can't
     // detect. Only plain objects (`Object.prototype` or a null prototype) fall
     // through. A thrown TypeError surfaces the unsupported value at the send site.
-    const proto = Object.getPrototypeOf(value) as object | null;
-
-    if (proto !== null && proto !== Object.prototype) {
+    if (!isPlainObject(value)) {
         const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
 
         throw new TypeError(
@@ -420,4 +440,27 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
     return result;
 };
 
-export { decodeWire, encodeWire };
+/**
+ * Parse a stored JSON blob back into a document: `JSON.parse`, then
+ * {@link decodeWire}, then {@link isPlainObject}. Returns `undefined` for
+ * anything that is not a document — unparseable text, a malformed tag
+ * (`decodeWire` throws on an over-long bigint or past the nesting cap), or a
+ * root that decodes to a non-plain object.
+ *
+ * Never throws, because its callers are read paths that must degrade rather
+ * than fail: a display surface shows the row unexpanded, an editor falls back
+ * to the row's own columns. A caller that needs to distinguish "bad JSON" from
+ * "not a document" — to report which — should use {@link decodeWire} and
+ * {@link isPlainObject} directly and keep its own `try`.
+ */
+const decodeDocument = (text: string): Record<string, unknown> | undefined => {
+    try {
+        const value = decodeWire(JSON.parse(text));
+
+        return isPlainObject(value) ? value : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+export { decodeDocument, decodeWire, encodeWire, isPlainObject };

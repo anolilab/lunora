@@ -1,7 +1,7 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { dispatchByKind, fireAndForget } from "../../src/lib/internal";
+import { dispatchByKind, fireAndForget, formatCell, jsonRowReplacer } from "../../src/lib/internal";
 
 const REF: FunctionReference = { __lunoraRef: "messages:list" };
 
@@ -80,5 +80,54 @@ describe("fireAndForget", () => {
         await Promise.resolve();
 
         expect(onError).not.toHaveBeenCalled();
+    });
+});
+
+describe("formatCell", () => {
+    // A `v.bytes()` column decodes to an ArrayBuffer or a typed-array view.
+    // `JSON.stringify` renders the former as a bare `{}` and the latter as its
+    // indices (`{"0":1,"1":2,…}`) — neither says anything useful about the cell.
+    it("summarizes byte values by size instead of stringifying them", () => {
+        expect.assertions(4);
+
+        expect(formatCell(new ArrayBuffer(3))).toBe("<bytes: 3 B>");
+        expect(formatCell(new Uint8Array([1, 2, 3, 4]))).toBe("<bytes: 4 B>");
+        // A typed array reports its BYTE length, not its element count.
+        expect(formatCell(new Uint32Array([1, 2]))).toBe("<bytes: 8 B>");
+        // Scaled by the shared `formatBytes`, not a bespoke byte count.
+        expect(formatCell(new ArrayBuffer(2 * 1024 * 1024))).toBe("<bytes: 2.0 MB>");
+    });
+
+    it("leaves every other value formatted exactly as before", () => {
+        expect.assertions(6);
+
+        expect(formatCell(null)).toBe("");
+        expect(formatCell(undefined)).toBe("");
+        expect(formatCell(1000n)).toBe("1000");
+        expect(formatCell("text")).toBe("text");
+        expect(formatCell(false)).toBe("false");
+        expect(formatCell({ a: 1 })).toBe('{"a":1}');
+    });
+});
+
+describe("jsonRowReplacer", () => {
+    // The client decodes the wire codec, so a `v.bigint()` column reaches the
+    // studio as a real bigint — and `JSON.stringify` throws outright on one.
+    // Any row-serializing surface (JSON view, JSON export) dies without this.
+    it("keeps a row with decoded bigint and bytes serializable", () => {
+        expect.assertions(2);
+
+        const row = { amountMinor: 1000n, blob: new ArrayBuffer(3), note: "ok" };
+
+        expect(() => JSON.stringify([row])).toThrow(/BigInt/u);
+        expect(JSON.stringify(row, jsonRowReplacer)).toBe('{"amountMinor":"1000","blob":"<bytes: 3 B>","note":"ok"}');
+    });
+
+    it("leaves every other value untouched", () => {
+        expect.assertions(1);
+
+        const row = { flag: true, nested: { list: [1, "two", null] }, num: 1, text: "x" };
+
+        expect(JSON.stringify(row, jsonRowReplacer)).toBe(JSON.stringify(row));
     });
 });
