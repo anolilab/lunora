@@ -10,8 +10,8 @@ const NAME_PATTERN = /identifier/u;
 const COLLIDES_PATTERN = /collides/u;
 const COLLISION_NAMES_PATTERN = /billing.*lookup|lookup.*billing/u;
 const INVALID_IDENTIFIER_PATTERN = /is not a valid identifier/u;
-const RESERVED_NAME_PATTERN = /reserved/u;
 const DUPLICATE_SKILL_PATTERN = /more than one skill/u;
+const RESERVED_NAME_PATTERN = /reserved/u;
 const DUPLICATE_SKILL_NAME_PATTERN = /billing/u;
 
 /**
