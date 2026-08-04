@@ -114,14 +114,16 @@ type InferInsert<V> = V extends Column<unknown, infer I> ? I : V extends Validat
 type InferSelect<V> = V extends Validator<infer T> ? T : never;
 ```
 
+### `InferStandardInput` (type)
+
+```ts
+type InferStandardInput<S extends StandardSchemaV1> = StandardSchemaV1.InferInput<S>;
+```
+
 ### `InferStandardOutput` (type)
 
 ```ts
-type InferStandardOutput<S extends StandardSchemaV1> = [
-    StandardSchemaV1.InferOutput<S>
-] extends [
-    never
-] ? unknown : StandardSchemaV1.InferOutput<S>;
+type InferStandardOutput<S extends StandardSchemaV1> = StandardSchemaV1.InferOutput<S>;
 ```
 
 ### `InferValidatorMap` (type)
