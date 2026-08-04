@@ -22,7 +22,7 @@ describe("createLunoraAuthClient", () => {
     it("passes the assembled plugin array to the caller's createAuthClient", () => {
         expect.assertions(2);
 
-        const createAuthClient = vi.fn((options: Record<string, unknown>) => options);
+        const createAuthClient = vi.fn<(options: Record<string, unknown>) => Record<string, unknown>>((options) => options);
 
         createLunoraAuthClient(createAuthClient, { plugins: { organization: true, twoFactor: true } });
 
@@ -36,7 +36,7 @@ describe("createLunoraAuthClient", () => {
         expect.assertions(1);
 
         const mine = { id: "mine" } as never;
-        const createAuthClient = vi.fn((options: Record<string, unknown>) => options);
+        const createAuthClient = vi.fn<(options: Record<string, unknown>) => Record<string, unknown>>((options) => options);
 
         createLunoraAuthClient(createAuthClient, { extraPlugins: [mine], plugins: { organization: true } });
 
@@ -48,7 +48,7 @@ describe("createLunoraAuthClient", () => {
     it("forwards unknown options through untouched", () => {
         expect.assertions(2);
 
-        const createAuthClient = vi.fn((options: Record<string, unknown>) => options);
+        const createAuthClient = vi.fn<(options: Record<string, unknown>) => Record<string, unknown>>((options) => options);
 
         createLunoraAuthClient(createAuthClient, { baseURL: "https://example.test", fetchOptions: { credentials: "include" } });
 
@@ -61,7 +61,7 @@ describe("createLunoraAuthClient", () => {
     it("defaults baseURL to the current origin, and to undefined off the browser", () => {
         expect.assertions(2);
 
-        const createAuthClient = vi.fn((options: Record<string, unknown>) => options);
+        const createAuthClient = vi.fn<(options: Record<string, unknown>) => Record<string, unknown>>((options) => options);
 
         // No `location` in this environment — SSR degrades rather than throwing.
         createLunoraAuthClient(createAuthClient, {});

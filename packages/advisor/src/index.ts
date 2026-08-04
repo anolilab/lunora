@@ -110,6 +110,7 @@ import workflowUnused from "./lints/static/workflow-unused";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAdminRoute } from "./admin-routes";
+// eslint-disable-next-line no-secrets/no-secrets -- false positive: a function name referenced in a comment, not a credential
 // `AE_METRIC_EVENTS` / `loadAnalyticsRuntimeMetrics` are QUARANTINED (plan 225 /
 // ADVISOR-01), not re-exported here: no writer in the runtime emits the AE
 // events this module reads, and the one caller that could supply

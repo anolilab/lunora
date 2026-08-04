@@ -381,8 +381,8 @@ describe("lunoraContainer lifecycle logging", () => {
                         // A container that accepted the TCP connection but never
                         // answers: the returned promise only ever settles via the
                         // abort signal, exactly like a real `fetch` would.
-                        fetch: (_url: string, init?: { signal?: AbortSignal }) => {
-                            return new Promise((_resolve, reject) => {
+                        fetch: (_url: string, init?: { signal?: AbortSignal }) =>
+                            new Promise((_resolve, reject) => {
                                 if (init?.signal?.aborted) {
                                     reject(new Error("aborted"));
 
@@ -392,8 +392,7 @@ describe("lunoraContainer lifecycle logging", () => {
                                 init?.signal?.addEventListener("abort", () => {
                                     reject(new Error("aborted"));
                                 });
-                            });
-                        },
+                            }),
                     };
                 },
                 running: false,
@@ -404,6 +403,7 @@ describe("lunoraContainer lifecycle logging", () => {
         const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
 
         try {
+            // eslint-disable-next-line vitest/valid-expect -- deliberately deferred: `onStart()` only settles once the fake timers below advance, so awaiting the assertion here would deadlock. It IS awaited, three lines down.
             const assertion = expect(instance.onStart()).rejects.toThrow("did not return 200 within");
 
             await vi.advanceTimersByTimeAsync(30_000);

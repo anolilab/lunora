@@ -60,7 +60,7 @@ const circularFk: Lint = {
         // circuit search to vertices >= the start vertex, finding every
         // elementary circuit exactly once from its lowest-indexed member. The lex
         // order also makes the lowest-indexed member the canonical smallest start.
-        const order = [...new Set(context.schema.tables.map((table) => table.name))].sort();
+        const order = [...new Set(context.schema.tables.map((table) => table.name))].toSorted((left, right) => left.localeCompare(right));
         const indexOf = new Map(order.map((name, index) => [name, index]));
 
         // Build adjacency map: table → tables it references via `one` relations.
@@ -165,6 +165,27 @@ const circularFk: Lint = {
             }
         };
 
+        /** `vertex`'s neighbors restricted to the current subgraph (index >= `startIndex`). */
+        const subgraphNeighbors = (vertex: string, startIndex: number): string[] =>
+            [...(adjacency.get(vertex) ?? [])].filter((neighbor) => (indexOf.get(neighbor) as number) >= startIndex);
+
+        /**
+         * Record `vertex` as a dependent of each in-subgraph neighbor, so it is
+         * unblocked only when one of them later participates in a circuit.
+         */
+        const blockOnNeighbors = (vertex: string, startIndex: number): void => {
+            for (const neighbor of subgraphNeighbors(vertex, startIndex)) {
+                let dependents = blockMap.get(neighbor);
+
+                if (dependents === undefined) {
+                    dependents = new Set();
+                    blockMap.set(neighbor, dependents);
+                }
+
+                dependents.add(vertex);
+            }
+        };
+
         /**
          * Johnson's `CIRCUIT` procedure over the subgraph induced by vertices with
          * index >= `startIndex`. Returns whether a circuit back to `start` was
@@ -176,14 +197,9 @@ const circularFk: Lint = {
             stack.push(vertex);
             blocked.add(vertex);
 
-            for (const neighbor of adjacency.get(vertex) ?? []) {
+            for (const neighbor of subgraphNeighbors(vertex, startIndex)) {
                 if (capped) {
                     break;
-                }
-
-                // Restrict to the current subgraph (vertices >= start).
-                if ((indexOf.get(neighbor) as number) < startIndex) {
-                    continue;
                 }
 
                 if (neighbor === start) {
@@ -197,23 +213,7 @@ const circularFk: Lint = {
             if (foundCycle) {
                 unblock(vertex);
             } else {
-                // No circuit through `vertex` yet — record it as a dependent of
-                // each in-subgraph neighbor so it is unblocked only when one of
-                // them later participates in a circuit.
-                for (const neighbor of adjacency.get(vertex) ?? []) {
-                    if ((indexOf.get(neighbor) as number) < startIndex) {
-                        continue;
-                    }
-
-                    let dependents = blockMap.get(neighbor);
-
-                    if (dependents === undefined) {
-                        dependents = new Set();
-                        blockMap.set(neighbor, dependents);
-                    }
-
-                    dependents.add(vertex);
-                }
+                blockOnNeighbors(vertex, startIndex);
             }
 
             stack.pop();
@@ -221,6 +221,7 @@ const circularFk: Lint = {
             return foundCycle;
         };
 
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `capped` is set inside the `record` closure, which TS's control-flow analysis cannot see, so it narrows to its initializer here. The guard is the cycle cap; dropping it removes the bound.
         for (let startIndex = 0; startIndex < order.length && !capped; startIndex += 1) {
             // Fresh blocking state per start vertex (the subgraph shrinks each step).
             blocked.clear();

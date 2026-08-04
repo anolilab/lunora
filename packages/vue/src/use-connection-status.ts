@@ -27,6 +27,7 @@ const useConnectionStatus = (): Readonly<Ref<ConnectionStatus>> => {
     if (getCurrentScope()) {
         onScopeDispose(unsubscribe);
     } else if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console -- deliberate dev-only warning: this adapter has no injected logger, and the branch is already gated on NODE_ENV !== "production"
         console.warn(
             "[@lunora/vue] useConnectionStatus called with no active effect scope — its listener will not be cleaned up automatically. " +
                 "Call it inside setup()/an effect scope.",

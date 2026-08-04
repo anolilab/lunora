@@ -117,7 +117,7 @@ describe("hot_shard", () => {
 
         expect(findings).toHaveLength(3);
 
-        const flaggedKeys = findings.map((f) => f.metadata["shardKey"]).toSorted();
+        const flaggedKeys = findings.map((f) => f.metadata["shardKey"]).toSorted((left, right) => String(left).localeCompare(String(right)));
 
         expect(flaggedKeys).toEqual(["chat-1", "feed-1", "room-1"]);
         // Each finding's total is its own group's total (305), never the 915 combined.
@@ -254,7 +254,10 @@ describe("error_rate_outlier", () => {
             ]),
         );
 
-        expect(findings.map((finding) => finding.metadata["path"]).toSorted()).toStrictEqual(["a", "c"]);
+        expect(findings.map((finding) => finding.metadata["path"]).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual([
+            "a",
+            "c",
+        ]);
     });
 });
 

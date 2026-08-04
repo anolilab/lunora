@@ -17,6 +17,7 @@ export interface AdvisorQueryRead {
     exportName?: string;
     /** Source file the read appears in (relative to the lunora dir, no extension). */
     file: string;
+
     /**
      * True when the chain's `.filter()` predicate compares `_id`
      * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`

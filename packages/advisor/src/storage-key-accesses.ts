@@ -17,6 +17,7 @@ export interface AdvisorStorageKeyAccess {
     line: number;
     /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
     method: string;
+
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not
      * reachable by a caller, so the "any caller can read/overwrite/delete

@@ -15,6 +15,7 @@ import type { Finding } from "./types";
  * single-occurrence keys stay stable across runs. Order is preserved. Keys are
  * lint-name-prefixed, so this never merges across lints.
  */
+// eslint-disable-next-line import/prefer-default-export -- named export by repo convention (no default exports)
 export const dedupeCacheKeys = (findings: ReadonlyArray<Finding>): Finding[] => {
     const seen = new Map<string, number>();
 

@@ -40,6 +40,27 @@ describe("filter_without_index storage-tier awareness", () => {
         expect(findings[0]?.detail).not.toContain("loads every row");
     });
 
+    // The tier lookup must be prototype-safe. Built as an object literal it
+    // inherits `Object.prototype`, so a shard kind of `"toString"` resolves to
+    // an inherited FUNCTION — truthy, so the `??` neutral fallback is skipped
+    // and the finding's detail embeds a stringified function. A `Map` has no
+    // such keys. `shardKind` is typed as a union, so this models a value that
+    // slipped past the declared type rather than a supported configuration.
+    it.each(["toString", "constructor", "valueOf", "__proto__"])("falls back to the neutral wording for a %s shard kind", (kind) => {
+        expect.assertions(2);
+
+        const poisoned = schema();
+        const table = poisoned.tables.find((entry) => entry.name === "notes");
+
+        (table as { shardKind?: string }).shardKind = kind;
+
+        const findings = filterWithoutIndex.run({ queries: [read("notes")], schema: poisoned });
+
+        expect(findings[0]?.detail).toContain("loads every row");
+        // Never an inherited member leaking into operator-facing text.
+        expect(findings[0]?.detail).not.toMatch(/function|\[object|native code/u);
+    });
+
     it("keeps a global table at WARN and names the cross-region cost", () => {
         expect.assertions(2);
 

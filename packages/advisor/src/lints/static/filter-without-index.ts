@@ -66,11 +66,19 @@ const filterWithoutIndex: Lint = {
             // cost differs enough to say which one you are paying, and an
             // unrecognised table (an external/unknown tier) gets the neutral
             // wording rather than a claim about storage we cannot make.
-            const scope =
-                {
-                    global: `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`,
-                    root: `it loads every row of "${read.table}" from the root Durable Object's SQLite and filters in memory`,
-                }[shardKind as "global" | "root"] ?? `it loads every row of "${read.table}" and filters in memory`;
+            // A `Map`, not an object literal keyed by `shardKind`. The previous
+            // `{...}[shardKind as "global" | "root"]` asserted away both cases the
+            // fallback exists for — `undefined`, and a kind that isn't one of the
+            // two — which made the `??` look dead to the type checker. An object
+            // would also inherit `Object.prototype`, so a kind of `"toString"` or
+            // `"constructor"` would resolve to an inherited function and skip the
+            // fallback entirely. `Map` has neither problem and needs no undefined
+            // dance; `"shardBy"` has already returned above.
+            const scopeByKind = new Map<string, string>([
+                ["global", `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`],
+                ["root", `it loads every row of "${read.table}" from the root Durable Object's SQLite and filters in memory`],
+            ]);
+            const scope = scopeByKind.get(shardKind ?? "") ?? `it loads every row of "${read.table}" and filters in memory`;
 
             findings.push(
                 emit(filterWithoutIndex, {

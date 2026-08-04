@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+// eslint-disable-next-line import/no-namespace -- enumerating the barrel IS this test: it asserts every exported lint is registered, so it must see the whole namespace rather than a named subset that could drift.
 import * as advisor from "../src";
 
 type Lint = (typeof advisor.ALL_LINTS)[number];
