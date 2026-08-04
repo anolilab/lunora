@@ -732,6 +732,24 @@ export default defineSchema({
         .global()
         .index("by_project_env_name", ["projectId", "environment", "name"], { unique: true }),
 
+    // Per-org BYO Cloudflare billing connection (Billable Usage API). Stores the
+    // org's *own* Cloudflare account id + an AES-256-GCM-encrypted API token with
+    // the Billing Read scope (same edge-encryption path as `secrets`, so only
+    // ciphertext + IV live here — never the token). `cloudflareBilling.summary`
+    // decrypts it at the edge to read that account's real billable usage, so a
+    // BYO-Cloudflare org sees its actual Cloudflare spend by product, not the
+    // control plane's *estimate* (`src/billing/spend.ts`). One row per org.
+    cloudflareBilling: defineTable({
+        cloudflareAccountId: v.string(),
+        ciphertext: v.string(),
+        createdAt: v.number(),
+        iv: v.string(),
+        organizationId: v.id("organizations"),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"], { unique: true }),
+
     // User-defined custom dashboards (Tier 2 observability). A named, per-org
     // collection of saved panels — each panel a saved query over telemetry the
     // console already serves (a metric trend, a single-stat number, or a saved

@@ -28,6 +28,7 @@ import { Route as AuthedOrgsOrganizationIdLogsRouteImport } from './routes/_auth
 import { Route as AuthedOrgsOrganizationIdMembersRouteImport } from './routes/_authed.orgs.$organizationId.members'
 import { Route as AuthedOrgsOrganizationIdMetricsRouteImport } from './routes/_authed.orgs.$organizationId.metrics'
 import { Route as AuthedOrgsOrganizationIdProjectsRouteImport } from './routes/_authed.orgs.$organizationId.projects'
+import { Route as AuthedOrgsOrganizationIdCloudflareCostsRouteImport } from './routes/_authed.orgs.$organizationId.cloudflare-costs'
 import { Route as AuthedOrgsOrganizationIdSecretsRouteImport } from './routes/_authed.orgs.$organizationId.secrets'
 import { Route as AuthedOrgsOrganizationIdSessionsRouteImport } from './routes/_authed.orgs.$organizationId.sessions'
 import { Route as AuthedOrgsOrganizationIdTracesRouteImport } from './routes/_authed.orgs.$organizationId.traces'
@@ -144,6 +145,12 @@ const AuthedOrgsOrganizationIdProjectsRoute =
     path: '/projects',
     getParentRoute: () => AuthedOrgsOrganizationIdRoute,
   } as any)
+const AuthedOrgsOrganizationIdCloudflareCostsRoute =
+  AuthedOrgsOrganizationIdCloudflareCostsRouteImport.update({
+    id: '/cloudflare-costs',
+    path: '/cloudflare-costs',
+    getParentRoute: () => AuthedOrgsOrganizationIdRoute,
+  } as any)
 const AuthedOrgsOrganizationIdSecretsRoute =
   AuthedOrgsOrganizationIdSecretsRouteImport.update({
     id: '/secrets',
@@ -193,6 +200,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationId/members': typeof AuthedOrgsOrganizationIdMembersRoute
   '/orgs/$organizationId/metrics': typeof AuthedOrgsOrganizationIdMetricsRoute
   '/orgs/$organizationId/projects': typeof AuthedOrgsOrganizationIdProjectsRoute
+  '/orgs/$organizationId/cloudflare-costs': typeof AuthedOrgsOrganizationIdCloudflareCostsRoute
   '/orgs/$organizationId/secrets': typeof AuthedOrgsOrganizationIdSecretsRoute
   '/orgs/$organizationId/sessions': typeof AuthedOrgsOrganizationIdSessionsRoute
   '/orgs/$organizationId/traces': typeof AuthedOrgsOrganizationIdTracesRoute
@@ -217,6 +225,7 @@ export interface FileRoutesByTo {
   '/orgs/$organizationId/members': typeof AuthedOrgsOrganizationIdMembersRoute
   '/orgs/$organizationId/metrics': typeof AuthedOrgsOrganizationIdMetricsRoute
   '/orgs/$organizationId/projects': typeof AuthedOrgsOrganizationIdProjectsRoute
+  '/orgs/$organizationId/cloudflare-costs': typeof AuthedOrgsOrganizationIdCloudflareCostsRoute
   '/orgs/$organizationId/secrets': typeof AuthedOrgsOrganizationIdSecretsRoute
   '/orgs/$organizationId/sessions': typeof AuthedOrgsOrganizationIdSessionsRoute
   '/orgs/$organizationId/traces': typeof AuthedOrgsOrganizationIdTracesRoute
@@ -244,6 +253,7 @@ export interface FileRoutesById {
   '/_authed/orgs/$organizationId/members': typeof AuthedOrgsOrganizationIdMembersRoute
   '/_authed/orgs/$organizationId/metrics': typeof AuthedOrgsOrganizationIdMetricsRoute
   '/_authed/orgs/$organizationId/projects': typeof AuthedOrgsOrganizationIdProjectsRoute
+  '/_authed/orgs/$organizationId/cloudflare-costs': typeof AuthedOrgsOrganizationIdCloudflareCostsRoute
   '/_authed/orgs/$organizationId/secrets': typeof AuthedOrgsOrganizationIdSecretsRoute
   '/_authed/orgs/$organizationId/sessions': typeof AuthedOrgsOrganizationIdSessionsRoute
   '/_authed/orgs/$organizationId/traces': typeof AuthedOrgsOrganizationIdTracesRoute
@@ -271,6 +281,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationId/members'
     | '/orgs/$organizationId/metrics'
     | '/orgs/$organizationId/projects'
+    | '/orgs/$organizationId/cloudflare-costs'
     | '/orgs/$organizationId/secrets'
     | '/orgs/$organizationId/sessions'
     | '/orgs/$organizationId/traces'
@@ -295,6 +306,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationId/members'
     | '/orgs/$organizationId/metrics'
     | '/orgs/$organizationId/projects'
+    | '/orgs/$organizationId/cloudflare-costs'
     | '/orgs/$organizationId/secrets'
     | '/orgs/$organizationId/sessions'
     | '/orgs/$organizationId/traces'
@@ -321,6 +333,7 @@ export interface FileRouteTypes {
     | '/_authed/orgs/$organizationId/members'
     | '/_authed/orgs/$organizationId/metrics'
     | '/_authed/orgs/$organizationId/projects'
+    | '/_authed/orgs/$organizationId/cloudflare-costs'
     | '/_authed/orgs/$organizationId/secrets'
     | '/_authed/orgs/$organizationId/sessions'
     | '/_authed/orgs/$organizationId/traces'
@@ -469,6 +482,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedOrgsOrganizationIdProjectsRouteImport
       parentRoute: typeof AuthedOrgsOrganizationIdRoute
     }
+    '/_authed/orgs/$organizationId/cloudflare-costs': {
+      id: '/_authed/orgs/$organizationId/cloudflare-costs'
+      path: '/cloudflare-costs'
+      fullPath: '/orgs/$organizationId/cloudflare-costs'
+      preLoaderRoute: typeof AuthedOrgsOrganizationIdCloudflareCostsRouteImport
+      parentRoute: typeof AuthedOrgsOrganizationIdRoute
+    }
     '/_authed/orgs/$organizationId/secrets': {
       id: '/_authed/orgs/$organizationId/secrets'
       path: '/secrets'
@@ -522,6 +542,7 @@ interface AuthedOrgsOrganizationIdRouteChildren {
   AuthedOrgsOrganizationIdMembersRoute: typeof AuthedOrgsOrganizationIdMembersRoute
   AuthedOrgsOrganizationIdMetricsRoute: typeof AuthedOrgsOrganizationIdMetricsRoute
   AuthedOrgsOrganizationIdProjectsRoute: typeof AuthedOrgsOrganizationIdProjectsRoute
+  AuthedOrgsOrganizationIdCloudflareCostsRoute: typeof AuthedOrgsOrganizationIdCloudflareCostsRoute
   AuthedOrgsOrganizationIdSecretsRoute: typeof AuthedOrgsOrganizationIdSecretsRoute
   AuthedOrgsOrganizationIdSessionsRoute: typeof AuthedOrgsOrganizationIdSessionsRoute
   AuthedOrgsOrganizationIdTracesRoute: typeof AuthedOrgsOrganizationIdTracesRoute
@@ -551,6 +572,8 @@ const AuthedOrgsOrganizationIdRouteChildren: AuthedOrgsOrganizationIdRouteChildr
     AuthedOrgsOrganizationIdMetricsRoute: AuthedOrgsOrganizationIdMetricsRoute,
     AuthedOrgsOrganizationIdProjectsRoute:
       AuthedOrgsOrganizationIdProjectsRoute,
+    AuthedOrgsOrganizationIdCloudflareCostsRoute:
+      AuthedOrgsOrganizationIdCloudflareCostsRoute,
     AuthedOrgsOrganizationIdSecretsRoute: AuthedOrgsOrganizationIdSecretsRoute,
     AuthedOrgsOrganizationIdSessionsRoute:
       AuthedOrgsOrganizationIdSessionsRoute,

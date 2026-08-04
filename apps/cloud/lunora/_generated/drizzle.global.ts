@@ -461,6 +461,19 @@ export const secrets = sqliteTable("secrets", {
     by_project_env_name: uniqueIndex("by_project_env_name").on(t.projectId, t.environment, t.name),
 }));
 
+export const cloudflareBilling = sqliteTable("cloudflareBilling", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    cloudflareAccountId: text("cloudflareAccountId").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    createdAt: real("createdAt").notNull(),
+    iv: text("iv").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: uniqueIndex("by_org").on(t.organizationId),
+}));
+
 export const dashboards = sqliteTable("dashboards", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

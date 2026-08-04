@@ -1,6 +1,6 @@
-import { isLunoraError } from "@lunora/errors";
 import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
+import { isLunoraError } from "@lunora/errors";
 import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
@@ -11,6 +11,7 @@ import { createHttpCloudflareApi } from "../cloudflare/api";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
+import { createMcpRouteHandler } from "../mcp/handler";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import { constantTimeEqual } from "../security/constant-time-equal";
@@ -25,7 +26,6 @@ import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { createMcpRouteHandler } from "../mcp/handler";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -103,6 +103,12 @@ interface EncryptedSecretRow {
     name: string;
 }
 
+interface CloudflareBillingBody {
+    cloudflareAccountId?: string;
+    organizationId?: string;
+    token?: string;
+}
+
 /**
  * `POST /v1/telemetry` body — an OTLP `ExportTraceServiceRequest` (its
  * `resourceSpans`) plus the deploy-key/org fields that authenticate + route it.
@@ -135,7 +141,7 @@ const rejected = (error: unknown, fallback: string): Response => {
         return jsonError(403, message);
     }
 
-    const retryAfter = (error as { retryAfter?: number }).retryAfter;
+    const { retryAfter } = error as { retryAfter?: number };
 
     if (error.status === 429 && typeof retryAfter === "number") {
         return Response.json(
@@ -378,6 +384,55 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
         return Response.json({ ok: true });
     } catch (error) {
         return rejected(error, "set secret failed");
+    }
+};
+
+/**
+ * `POST /v1/cloudflare-billing` — connect a BYO org's own Cloudflare account for
+ * the cost overview. Encrypts the Billing-Read token at the edge (the master key
+ * never reaches the browser or the database in plaintext), exactly like
+ * `/v1/secrets`, then stores ciphertext via `cloudflareBilling.store` under the
+ * caller's session (so its owner/admin `assertMember` gate applies).
+ */
+const handleCloudflareBillingRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    if (!environment.SECRET_ENCRYPTION_KEY) {
+        return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
+    }
+
+    const body = (await request.json().catch(() => null)) as CloudflareBillingBody | null;
+
+    if (!body?.organizationId || !body.cloudflareAccountId || typeof body.token !== "string" || body.token.length === 0) {
+        return jsonError(400, "organizationId, cloudflareAccountId and token are required");
+    }
+
+    // Encryption failure is a server misconfiguration (e.g. a malformed master
+    // key) → 500, kept distinct from the membership 403 the store mutation raises.
+    let ciphertext: string;
+    let iv: string;
+
+    try {
+        ({ ciphertext, iv } = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, body.token));
+    } catch (error) {
+        return jsonError(500, error instanceof Error ? error.message : "token encryption failed");
+    }
+
+    try {
+        await context.runMutation(api.cloudflare_billing.store, {
+            ciphertext,
+            cloudflareAccountId: body.cloudflareAccountId,
+            iv,
+            organizationId: body.organizationId,
+        });
+
+        return Response.json({ ok: true });
+    } catch (error) {
+        return rejected(error, "connect cloudflare billing failed");
     }
 };
 
@@ -641,7 +696,7 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
     }
 };
 
-/** Extract the deploy key from a standard OTLP `Authorization` header (`Bearer <key>` or a bare token). */
+/** Extract the deploy key from a standard OTLP `Authorization` header (`Bearer &lt;key>` or a bare token). */
 const bearerToken = (request: Request): string | undefined => {
     const header = request.headers.get("authorization");
 
@@ -691,7 +746,7 @@ const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise
     }
 
     if (chunks.length === 1) {
-        return chunks[0] as Uint8Array;
+        return chunks[0];
     }
 
     const out = new Uint8Array(total);
@@ -893,14 +948,16 @@ const handleOtlpMetricsRoute = (request: Request, environment: RouterEnv): Promi
         await context.runMutation(api.metrics.ingest, {
             deployKey: auth.key,
             organizationId: auth.organizationId,
-            points: kept.map((point) => ({
-                at: point.at,
-                ...(point.functionPath === undefined ? {} : { functionPath: point.functionPath }),
-                kind: point.kind,
-                name: point.name,
-                ...(point.serviceName === undefined ? {} : { serviceName: point.serviceName }),
-                value: point.value,
-            })),
+            points: kept.map((point) => {
+                return {
+                    at: point.at,
+                    ...(point.functionPath === undefined ? {} : { functionPath: point.functionPath }),
+                    kind: point.kind,
+                    name: point.name,
+                    ...(point.serviceName === undefined ? {} : { serviceName: point.serviceName }),
+                    value: point.value,
+                };
+            }),
         });
 
         // Sampled mirror — AE writes are fire-and-forget; a missing/throwing binding no-ops.
@@ -1054,7 +1111,7 @@ const handleCellRegisterRoute = async (request: Request, environment: RouterEnv)
     let body: { cloudflareAccountId?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown };
 
     try {
-        body = (await request.json()) as typeof body;
+        body = await request.json();
     } catch {
         return jsonError(400, "invalid JSON body");
     }
@@ -1272,6 +1329,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
         { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
+        { handler: handleCloudflareBillingRoute, method: "POST", path: "/v1/cloudflare-billing", spec: { auth: "session" } },
         // webhookHmac — provider signature (Creem / GitHub).
         { handler: handleBillingWebhookRoute, method: "POST", path: "/v1/billing/webhook", spec: { auth: "webhookHmac" } },
         { handler: handleWebhookRoute, method: "POST", path: "/v1/github/webhook", spec: { auth: "webhookHmac" } },
