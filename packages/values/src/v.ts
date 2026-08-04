@@ -1069,11 +1069,24 @@ const optional = <V extends Validator>(inner: V): ColumnValidator<Infer<V> | und
 const any = (): ColumnValidator<unknown, unknown> => asColumn(createValidator<unknown>("any", (value) => value));
 
 /**
- * Infer the output type of a Standard Schema v1 object. When the schema omits
- * `~standard.types` (it is optional in the spec), falls back to `unknown` so
- * callers always get a usable type rather than `never`.
+ * The type a Standard Schema v1 object validates TO — what a read gets back.
+ *
+ * Defer to the spec's own helper rather than matching `~standard.types`: the spec
+ * declares that property optional (it is a phantom that never exists at runtime),
+ * so every real library types it as a union with `undefined`, and a hand-written
+ * `extends { output: infer O }` misses all of them. A schema that declares no
+ * `types` still resolves through the constraint to `unknown`.
  */
-type InferStandardOutput<S extends StandardSchemaV1> = S["~standard"]["types"] extends { output: infer O } ? O : unknown;
+type InferStandardOutput<S extends StandardSchemaV1> = StandardSchemaV1.InferOutput<S>;
+
+/**
+ * The type a Standard Schema v1 object validates FROM — what a write supplies.
+ *
+ * Distinct from {@link InferStandardOutput} only for a transforming schema
+ * (`z.string().transform(…)`, `z.coerce.number()`), where the value handed in is
+ * not the value stored. Identical for everything else.
+ */
+type InferStandardInput<S extends StandardSchemaV1> = StandardSchemaV1.InferInput<S>;
 
 /**
  * Build the issue path from a Standard Schema issue's `path` segments. Each
@@ -1125,8 +1138,15 @@ const standardIssuePath = (path: ReadonlyArray<unknown> | undefined): (number | 
  *
  * **Sync-only.** Standard Schema allows async `validate`; Lunora validation is
  * synchronous and throws when a Promise is returned.
+ *
+ * **Reads and writes can differ.** A write supplies the schema's INPUT and a read
+ * gets its OUTPUT back, because what is stored is `validate()`'s result. The two
+ * coincide for every non-transforming schema; they part for `z.coerce.number()`
+ * and friends, where typing the insert side as the output would demand the
+ * post-transform value from a caller whose value the validator is there to
+ * transform.
  */
-const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>> => {
+const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStandardOutput<S>, InferStandardInput<S>> => {
     // Cast through a loose shape: the static type guarantees `~standard`, but
     // `v.from` is a runtime boundary (callers pass untyped values via `as any`),
     // so the guard below must actually run.
@@ -1158,11 +1178,10 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
             // was rejected above). A spec-compliant validator always returns a
             // result object, but `v.from` is a runtime boundary: a non-object
             // result (null / primitive) is a protocol violation that must surface
-            // as a clear ValidationError rather than an opaque `TypeError` from
-            // the `in` operator below (or a silent `undefined` `.value` read).
-            // The declared `validate` return type promises a result object, but
-            // this is a runtime boundary, so guard via a loose cast (mirroring the
-            // `then` probe above) rather than trusting the static type.
+            // as a clear ValidationError rather than a silent `undefined` `.value`
+            // read. The declared `validate` return type promises a result object,
+            // but this is a runtime boundary, so guard via a loose cast (mirroring
+            // the `then` probe above) rather than trusting the static type.
             const looseResult = result as unknown;
 
             if (looseResult === null || typeof looseResult !== "object") {
@@ -1173,10 +1192,21 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
                 });
             }
 
-            const syncResult: StandardSchemaV1.Result<InferStandardOutput<S>> = result as StandardSchemaV1.Result<InferStandardOutput<S>>;
-            const syncResultObject: Record<string, unknown> = syncResult as unknown as Record<string, unknown>;
+            const syncResult: StandardSchemaV1.Result<InferStandardOutput<S>> = result;
 
-            if ("issues" in syncResultObject && syncResult.issues !== undefined && syncResult.issues.length > 0) {
+            // `issues` is the spec's own discriminant — declared `readonly issues?:
+            // undefined` on the success arm and required on the failure arm — so
+            // this narrows the union on its own. An absent key and a present-but-
+            // undefined one both read as `undefined`, which is why no `in` probe is
+            // needed to tell them apart.
+            //
+            // ANY defined `issues` is a failure, empty array included. The spec's
+            // rule is that a FALSY `issues` means success, and `[]` is truthy, so a
+            // validator returning `{ issues: [] }` is reporting failure — badly, but
+            // reporting it. Letting an empty array through would fall to the success
+            // path and return a `FailureResult`'s absent `value`, handing the caller
+            // `undefined` as though it had validated.
+            if (syncResult.issues !== undefined) {
                 const first = syncResult.issues[0];
                 const message = first?.message ?? "Standard Schema validation failed";
 
@@ -1187,7 +1217,7 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
                 });
             }
 
-            return (syncResult as { value: InferStandardOutput<S> }).value;
+            return syncResult.value;
         }),
     );
 };
@@ -1309,6 +1339,7 @@ export type {
     Infer,
     InferInsert,
     InferSelect,
+    InferStandardInput,
     InferStandardOutput,
     InsertShape,
     JsonSchemaFragment,

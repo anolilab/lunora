@@ -14,6 +14,7 @@ export type {
     Infer,
     InferInsert,
     InferSelect,
+    InferStandardInput,
     InferStandardOutput,
     InsertShape,
     JsonSchemaFragment,

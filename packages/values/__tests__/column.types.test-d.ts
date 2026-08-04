@@ -5,14 +5,7 @@
  */
 import type { ColumnValidator, Id, InferInsert, InferSelect, InsertShape, SelectShape, TimestampColumnValidator } from "../src/index";
 import { v } from "../src/index";
-
-type Assert<T extends true> = T;
-// The canonical type-equality idiom: the single-use `<T>()` params are
-// load-bearing (they force structural comparison), so the rule is disabled here.
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
-type OptionalKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? K : never }[keyof T];
-type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T];
+import type { Assert, Equal, OptionalKeys, RequiredKeys } from "./__helpers__/type-assert";
 
 // --- scalar modifiers ---------------------------------------------------------
 

@@ -7991,6 +7991,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `InferStandardInput` (type)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `InferStandardOutput` (type)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
