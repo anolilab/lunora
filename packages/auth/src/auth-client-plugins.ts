@@ -75,21 +75,25 @@ interface LunoraAuthPluginToggles {
 // `createAuthClient({ plugins })` expects at the call site.
 type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 
-/** Toggle → client-plugin factory. Plugin order in the assembled array is not significant to better-auth. */
+/**
+ * Toggle → client-plugin factory. Key order is the legacy toggle-check order
+ * (not alphabetical) — the assembled plugin array is observable, and keeping
+ * the historical sequence preserves behavior for consumers that read it.
+ */
 const PLUGIN_FACTORIES: Record<keyof LunoraAuthPluginToggles, () => LunoraAuthClientPlugin> = {
+    organization: organizationClient,
+    twoFactor: twoFactorClient,
+    passkey: passkeyClient,
+    magicLink: magicLinkClient,
+    emailOtp: emailOTPClient,
     admin: adminClient,
+    username: usernameClient,
+    phoneNumber: phoneNumberClient,
+    multiSession: multiSessionClient,
     anonymous: anonymousClient,
     deviceAuthorization: deviceAuthorizationClient,
-    emailOtp: emailOTPClient,
     lastLoginMethod: lastLoginMethodClient,
-    magicLink: magicLinkClient,
-    multiSession: multiSessionClient,
     oauthProvider: oauthProviderClient,
-    organization: organizationClient,
-    passkey: passkeyClient,
-    phoneNumber: phoneNumberClient,
-    twoFactor: twoFactorClient,
-    username: usernameClient,
 };
 
 const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthClientPlugin[] => {

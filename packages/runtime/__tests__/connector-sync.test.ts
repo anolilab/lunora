@@ -272,6 +272,24 @@ describe("toFivetranResponse", () => {
 
         expect(out.schema["invoices"]).toEqual({ primary_key: ["id"] });
     });
+
+    it("routes an out-of-union change op to insert instead of throwing", () => {
+        expect.assertions(2);
+
+        // A connector that has drifted from the schema must not 500 the whole
+        // sync — the row lands on the upsert-on-PK insert bucket like a bare
+        // insert, so Fivetran still ingests it.
+        const page: ConnectorSyncPage = {
+            changes: [{ doc: { _id: "x" }, op: "moved" as ConnectorSyncPage["changes"][number]["op"], table: "users" }],
+            hasMore: false,
+            nextCursor: "T",
+        };
+
+        const out = toFivetranResponse(page);
+
+        expect(out.insert["users"]).toEqual([{ _id: "x" }]);
+        expect(out.delete["users"]).toBeUndefined();
+    });
 });
 
 describe("toAirbyteMessages", () => {

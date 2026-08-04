@@ -104,30 +104,46 @@ const mergeStrategyForAggregate = (
         return { kind: "sum" };
     }
 
-    const opForKind: Record<"count" | "max" | "min" | "sum", "max" | "min" | "sum"> = { count: "sum", max: "max", min: "min", sum: "sum" };
-
     if (input.kind === "scalar") {
-        if (input.op === "avg") {
-            // avg requires (sum, count) — see jsdoc on MergeStrategy.
-            throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
-                code: "BAD_REQUEST",
-                status: 400,
-            });
+        if (input.op === "count" || input.op === "sum") {
+            return { kind: "sum" };
         }
 
-        return { kind: opForKind[input.op] };
-    }
+        if (input.op === "max") {
+            return { kind: "max" };
+        }
 
-    const op = input.agg?.op ?? "count";
+        if (input.op === "min") {
+            return { kind: "min" };
+        }
 
-    if (op === "avg") {
-        throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
+        // avg (or any op the union does not yet list) must fail loudly — a
+        // silent default would mis-merge per-shard aggregate results across the
+        // fan-out.
+        throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
             code: "BAD_REQUEST",
             status: 400,
         });
     }
 
-    return { kind: "groupBy", op: opForKind[op] };
+    const op = input.agg?.op ?? "count";
+
+    if (op === "count" || op === "sum") {
+        return { kind: "groupBy", op: "sum" };
+    }
+
+    if (op === "max") {
+        return { kind: "groupBy", op: "max" };
+    }
+
+    if (op === "min") {
+        return { kind: "groupBy", op: "min" };
+    }
+
+    throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
+        code: "BAD_REQUEST",
+        status: 400,
+    });
 };
 
 interface FanOutSpec {
@@ -1292,8 +1308,30 @@ type GroupByMergeOp = "max" | "min" | "sum";
 
 type GroupByMergedValue = null | number;
 
-const combineGroupByValue = (current: number, incoming: number, op: GroupByMergeOp): number =>
-    op === "sum" ? current + incoming : Math[op](current, incoming);
+const combineGroupByValue = (current: number, incoming: number, op: GroupByMergeOp): number => {
+    switch (op) {
+        case "max": {
+            return Math.max(current, incoming);
+        }
+
+        case "min": {
+            return Math.min(current, incoming);
+        }
+
+        case "sum": {
+            return current + incoming;
+        }
+
+        default: {
+            // Compile-time exhaustiveness guard; an op outside the union can
+            // only arrive via untyped input, and `mergeStrategyForAggregate`
+            // already rejected it upstream — never evaluate `Math[op]` on it.
+            op satisfies never;
+
+            return current;
+        }
+    }
+};
 
 const accumulateGroupByEntry = (merged: Map<string, { key: Record<string, unknown>; value: GroupByMergedValue }>, entry: unknown, op: GroupByMergeOp): void => {
     if (entry === null || typeof entry !== "object") {

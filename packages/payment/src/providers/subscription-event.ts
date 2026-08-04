@@ -16,7 +16,15 @@ const EVENT_TYPE_BY_STATE: Record<SubscriptionState, WebhookActionType> = {
     trialing: "subscription.active",
 };
 
-const stateToEventType = (state: SubscriptionState | undefined): WebhookActionType =>
-    state === undefined ? "subscription.updated" : EVENT_TYPE_BY_STATE[state];
+const stateToEventType = (state: SubscriptionState | undefined): WebhookActionType => {
+    if (state === undefined) {
+        return "subscription.updated";
+    }
+
+    // A state outside the union (a drifted/third-party adapter value the map
+    // does not know yet) must degrade to the generic `subscription.updated`,
+    // never to `undefined` — an `undefined` action breaks webhook sync routing.
+    return (EVENT_TYPE_BY_STATE as Record<string, WebhookActionType | undefined>)[state] ?? "subscription.updated";
+};
 
 export default stateToEventType;

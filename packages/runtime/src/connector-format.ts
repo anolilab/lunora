@@ -91,23 +91,45 @@ const DEFAULT_PRIMARY_KEY = "_id";
  * map to override per table, used to fill the `schema` block.
  */
 const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, string> | string = DEFAULT_PRIMARY_KEY): FivetranResponse => {
-    const insert: Record<string, Record<string, unknown>[]> = {};
-    const update: Record<string, Record<string, unknown>[]> = {};
-    const remove: Record<string, Record<string, unknown>[]> = {};
-    const schema: Record<string, { primary_key: string[] }> = {};
+    // Null-prototype accumulators: `change.table` is connector input, so a
+    // proto-string table name (`__proto__`, `constructor`) must not reach
+    // Object.prototype's setters — write it as an own property instead.
+    const insert = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const update = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const remove = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const schema = Object.create(null) as Record<string, { primary_key: string[] }>;
 
     const pkFor = (table: string): string => (typeof primaryKey === "string" ? primaryKey : (primaryKey[table] ?? DEFAULT_PRIMARY_KEY));
 
-    // `insert` and `upsert` both map to Fivetran's upsert-on-PK `insert`.
-    const buckets = { delete: remove, insert, update, upsert: insert };
+    const bucketFor = (target: Record<string, Record<string, unknown>[]>, table: string): Record<string, unknown>[] => {
+        const existing = target[table];
+
+        if (existing) {
+            return existing;
+        }
+
+        const created: Record<string, unknown>[] = [];
+
+        // eslint-disable-next-line no-param-reassign -- `target` is one of the local accumulator maps owned by this function; mutating it in place is the intent
+        target[table] = created;
+
+        return created;
+    };
 
     for (const change of page.changes) {
         schema[change.table] ??= { primary_key: [pkFor(change.table)] };
 
-        const bucket = buckets[change.op][change.table] ?? [];
-
-        buckets[change.op][change.table] = bucket;
-        bucket.push(change.doc);
+        if (change.op === "delete") {
+            bucketFor(remove, change.table).push(change.doc);
+        } else if (change.op === "update") {
+            bucketFor(update, change.table).push(change.doc);
+        } else {
+            // `insert`, `upsert`, and any op outside the Fivetran verbs (a
+            // connector that has drifted from the schema) all land in `insert` —
+            // Fivetran upserts on primary key, so the row still lands and a sync
+            // never hard-fails on one unknown op.
+            bucketFor(insert, change.table).push(change.doc);
+        }
     }
 
     return { delete: remove, hasMore: page.hasMore, insert, schema, state: { cursor: page.nextCursor }, update };

@@ -115,8 +115,20 @@ interface HealthRouteDeps {
 }
 
 /** Map a {@link HealthProbeKind} to the `@visulima/health-check` checker `type` set (always an array for a single consistent return type). */
-const toCheckerType = (kind: HealthProbeKind | undefined): ("liveness" | "readiness")[] =>
-    kind === undefined || kind === "both" ? ["liveness", "readiness"] : [kind];
+const toCheckerType = (kind: HealthProbeKind | undefined): ("liveness" | "readiness")[] => {
+    if (kind === "liveness") {
+        return ["liveness"];
+    }
+
+    if (kind === "readiness") {
+        return ["readiness"];
+    }
+
+    // `undefined`, `"both"`, and any value outside the union (untyped config)
+    // all run both checkers — an unknown kind must not be handed raw to the
+    // health-check library as a checker type it does not know.
+    return ["liveness", "readiness"];
+};
 
 /** A single check's normalised result — `{ health }`, keyed by name in a {@link HealthReport}. */
 type CheckerResult = { health: { healthy: boolean; message?: string } };
