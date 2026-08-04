@@ -151,10 +151,23 @@ export default defineConfig({
                 // api-snapshots exclude below. Scoped to the exact secret text the rule
                 // extracted, not the file, so it can't shadow an unrelated real finding
                 // anywhere else in the tree.
-                allowlist: {
-                    description: "Angular translation-key binding misread as a generic secret by kingfisher.generic.5",
-                    regexes: ["^t\\.resetPasswordOtpDescription$"],
-                },
+                allowlists: [
+                    {
+                        description: "Angular translation-key binding misread as a generic secret by kingfisher.generic.5",
+                        regexes: ["^t\\.resetPasswordOtpDescription$"],
+                    },
+                    // The collapsed single-line JSX in auth-ui cards puts
+                    // `autoComplete="new-password"` and `field="confirmPassword"` (or
+                    // `field="currentPassword"`) on one line; kingfisher.generic.5
+                    // extracts the field-name binding as the "secret" — it is a prop
+                    // name, not a credential value. Scoped to the exact extracted
+                    // text so it can't mask a real secret elsewhere.
+                    {
+                        // secret-scanner:allow -- regex matches credential-shaped prop names
+                        description: "Form field name misread as a generic secret by kingfisher.generic.5",
+                        regexes: ["^confirmPassword$", "^currentPassword$", "^newPassword$"], // secret-scanner:allow
+                    },
+                ],
             },
         },
         walk: {
