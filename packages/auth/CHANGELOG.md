@@ -1,3 +1,5 @@
+## @lunora/auth [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.68...%40lunora%2Fauth%401.0.0-alpha.69) (2026-08-04)
+
 ## @lunora/auth [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.67...%40lunora%2Fauth%401.0.0-alpha.68) (2026-08-04)
 
 
