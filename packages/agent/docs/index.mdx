@@ -471,6 +471,7 @@ retrieval verbatim.
 
 ```ts
 import { defineAgent, defineSkill, functionTool } from "@lunora/agent";
+import { jsonSchema } from "@lunora/ai";
 
 import { api } from "./_generated/api";
 
@@ -534,6 +535,7 @@ Reproduce the report before proposing a cause. Cite the failing test.
 ```ts title="lunora/agents.ts"
 import { functionTool } from "@lunora/agent";
 import { skillFromMarkdown } from "@lunora/agent/skill-markdown";
+import { jsonSchema } from "@lunora/ai";
 
 import triage from "../skills/triage/SKILL.md?raw";
 import { api } from "./_generated/api";
