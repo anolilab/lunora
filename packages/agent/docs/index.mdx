@@ -532,7 +532,8 @@ Reproduce the report before proposing a cause. Cite the failing test.
 ```
 
 ```ts title="lunora/agents.ts"
-import { functionTool, skillFromMarkdown } from "@lunora/agent";
+import { functionTool } from "@lunora/agent";
+import { skillFromMarkdown } from "@lunora/agent/skill-markdown";
 
 import triage from "../skills/triage/SKILL.md?raw";
 import { api } from "./_generated/api";
@@ -546,6 +547,11 @@ const triageSkill = skillFromMarkdown(triage, {
     },
 });
 ```
+
+`skillFromMarkdown` lives at its own subpath deliberately: it is the only part
+of this package that needs a YAML parser, and the root export is reached by
+every app that calls `defineAgent`. Behind the subpath, only apps that author a
+skill in markdown pay for it.
 
 The `name` travels **with** the file, so a skill moves between projects without a
 matching TypeScript wrapper. Tools and `knowledge` stay in the second argument,

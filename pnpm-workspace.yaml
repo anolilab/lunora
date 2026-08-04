@@ -280,8 +280,18 @@ catalogs:
   data:
     "@faker-js/faker": ^10.5.0
   content:
-    # Frontmatter parsing for markdown-authored agent skills. Pure ESM, no Node
-    # built-ins, so it survives the Workers runtime the agent package ships to.
+    # Frontmatter parsing for markdown-authored agent skills
+    # (`@lunora/agent/skill-markdown`, a subpath so only apps that use it pay).
+    #
+    # It is dual CJS/ESM, NOT pure ESM: its `node` condition resolves a CommonJS
+    # build that does `require("process")`. What makes it workerd-safe is the
+    # resolver, not the package — the Cloudflare Vite plugin's worker conditions
+    # (workerd/worker/module/browser) match none of yaml's, so it falls through
+    # to `default`, which is the Node-free browser ESM build. An app that adds
+    # "node" to its worker `resolve.conditions` would get the CJS one.
+    #
+    # The tree also carries js-yaml (transitively, via a patched gray-matter in
+    # apps/docs). That one is docs tooling; this is the declared runtime dep.
     yaml: ^2.9.0
   i18n:
     "@lingui/core": ^6.6.0

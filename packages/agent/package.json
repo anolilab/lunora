@@ -62,6 +62,10 @@
             "types": "./dist/naming.d.ts",
             "import": "./dist/naming.mjs"
         },
+        "./skill-markdown": {
+            "types": "./dist/skill-markdown.d.ts",
+            "import": "./dist/skill-markdown.mjs"
+        },
         "./sandbox": {
             "types": "./dist/sandbox.d.ts",
             "import": "./dist/sandbox.mjs"
