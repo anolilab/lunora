@@ -4,6 +4,10 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same codec
+// the shard writer stores `__doc__` with, so the test asserts against the real
+// stored form rather than a hand-written copy of it.
+import { encodeWire } from "../../../../../shared/wire-codec";
 import type { DataBrowserProps } from "../../../src/features/data/data-browser";
 import { DataBrowser } from "../../../src/features/data/data-browser";
 import { useMirroredRef } from "../../../src/hooks/use-mirrored-ref";
@@ -2142,5 +2146,154 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
         // (b) the staged inline edit survives. A spurious re-seed wipes it via
         // `stagedEdits.clear()` / `setEditingCell(null)`.
         expect(screen.getByTestId("db-staged").textContent).toContain("edited");
+    });
+});
+
+/**
+ * Plan 265 made `v.bigint()` / `v.bytes()` storable by routing `__doc__` through
+ * the wire codec, so a decoded row now reaches the browser carrying real
+ * `bigint` and `ArrayBuffer` values rather than JSON-safe stand-ins. The JSON
+ * editor is the one surface where that is dangerous: `JSON.stringify` throws
+ * outright on a bigint and flattens an ArrayBuffer to `{}`, so the prefill has
+ * to be the ENCODED document and the save has to decode it back.
+ */
+describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
+    const MONEY_DOC: Record<string, unknown> = { amountMinor: 1000n, blob: new Uint8Array([0, 1, 2]).buffer, note: "ok" };
+
+    /** Exactly what `encodeDocJson` stores for {@link MONEY_DOC} on the shard. */
+    const STORED_DOC_JSON = JSON.stringify(encodeWire(MONEY_DOC));
+
+    const createMoneyClient = (): MockClientHooks =>
+        createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "paymentSessions", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.writeRow) {
+                    const { id, op } = args as { id?: string; op: string };
+
+                    return { id: id ?? null, op };
+                }
+
+                // The server-side expansion already decoded the doc, so the row
+                // arrives with real bigint / ArrayBuffer values.
+                return { columns: ["__id__", "amountMinor", "blob", "note"], rows: [{ __id__: "s1", ...MONEY_DOC }], total: 1 };
+            },
+        });
+
+    const openSessions = async (mock: MockClientHooks): Promise<void> => {
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ControlledDataBrowser editable pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-paymentSessions"));
+        await screen.findByTestId("db-page");
+    };
+
+    it("renders the decoded amount and a byte summary, not a raw tag or an empty object", async () => {
+        expect.assertions(2);
+
+        await openSessions(createMoneyClient());
+
+        // `1000`, not `["$lunora.wire$","bigint","1000"]`.
+        expect(screen.getByTestId("db-cell-s1-amountMinor").textContent).toBe("1000");
+        // A byte summary, not `{}` (what `JSON.stringify` gives an ArrayBuffer).
+        expect(screen.getByTestId("db-cell-s1-blob").textContent).toBe("<bytes: 3 B>");
+    });
+
+    it("round-trips an untouched save byte-identically to what the shard stored", async () => {
+        expect.assertions(3);
+
+        const mock = createMoneyClient();
+
+        await openSessions(mock);
+
+        fireEvent.click(screen.getByTestId("db-edit-s1"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
+
+        // The editor is seeded with the stored (encoded) form — the only text
+        // that can express a bigint and survive `JSON.parse` on the way back.
+        const editor = screen.getByTestId<HTMLTextAreaElement>("db-editor-doc");
+
+        expect(JSON.parse(editor.value)).toEqual(JSON.parse(STORED_DOC_JSON));
+
+        // Save without editing a character.
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
+        });
+
+        const write = mock.query.mock.calls.find((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [
+            unknown,
+            { doc: Record<string, unknown> },
+            unknown,
+        ];
+
+        // A real bigint reaches the writer — a `v.bigint()` validator rejects
+        // anything else, and a number would silently lose precision.
+        expect(write[1].doc["amountMinor"]).toBe(1000n);
+
+        // The byte-identity the plan turns on: re-encoding what we sent yields
+        // exactly the string the shard had stored, so an untouched save is a
+        // no-op on disk rather than a silent migration of the row.
+        expect(JSON.stringify(encodeWire(write[1].doc))).toBe(STORED_DOC_JSON);
+    });
+
+    // Valid JSON that is not a DOCUMENT. `[1,2]` was always rejectable by the
+    // old `!Array.isArray` check, but a root-level tag parses as an array and
+    // DECODES to a Uint8Array/Date — neither an array nor null — so an
+    // array-only check would let it through and the writer would persist junk
+    // fields. The guard is by prototype, so both are refused before the write.
+    it.each([
+        ["a bare array", "[1, 2, 3]"],
+        ["a root-level bytes tag", '["$lunora.wire$", "bytes", "AAEC", "ArrayBuffer"]'],
+        ["a root-level date tag", '["$lunora.wire$", "date", 0]'],
+    ])("refuses to write %s as a document", async (_label, text) => {
+        expect.assertions(2);
+
+        const mock = createMoneyClient();
+
+        await openSessions(mock);
+
+        fireEvent.click(screen.getByTestId("db-edit-s1"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
+        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: text } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        const writeError = await screen.findByTestId("db-write-error");
+
+        expect(writeError.textContent).toContain("must be a JSON object");
+        expect(mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+    });
+
+    it("leaves a plain-JSON row's editor text unchanged", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown =>
+                reference === ADMIN_FUNCTIONS.listTables ? TABLES : { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], total: 1 },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ControlledDataBrowser editable pageSize={10} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-edit-m1"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
+
+        // No tagged leaves → the encode is identity, so the editor shows the
+        // same plain document it always did.
+        expect(JSON.parse(screen.getByTestId<HTMLTextAreaElement>("db-editor-doc").value)).toEqual({ text: "hello" });
     });
 });

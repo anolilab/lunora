@@ -842,7 +842,23 @@ const MAX_FACET_LIMIT = 200;
 const DOC_COLUMN = "__doc__";
 
 /**
- * JSON-parse to a plain object, or `undefined` when the text isn't a JSON object.
+ * JSON-parse a stored `__doc__` blob to a plain object, or `undefined` when the
+ * text isn't a JSON object.
+ *
+ * **Deliberately does NOT decode the wire codec.** A `v.bigint()` / `v.bytes()`
+ * column is stored tagged (`["$lunora.wire$","bigint","1000"]`), and it is
+ * tempting to decode it here so the value reaches display "already correct".
+ * That breaks the read outright: this function feeds `readTablePage`, whose
+ * result is returned by the admin RPC through `jsonResponse` — the one DO result
+ * path that does **not** `encodeWire` (contrast the user dispatch and the WS
+ * push, which both do). `JSON.stringify` throws on a bigint and flattens an
+ * `ArrayBuffer` to `{}`, so decoding here turns browsing any bigint table into
+ * a redacted 500.
+ *
+ * It is also unnecessary. `LunoraClient` decodes the whole response
+ * (`decodeWire(body.result)`), so the tagged array becomes a real bigint on the
+ * client, before the grid ever sees it. The rows must stay JSON-safe from here
+ * to that call. The `readTablePage` test asserts exactly that.
  * @returns the parsed object, or `undefined` when parsing fails or the result is not a plain object
  */
 const safeParseObject = (text: string): Record<string, unknown> | undefined => {

@@ -1,5 +1,7 @@
 import type { ReactElement } from "react";
 
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules).
+import { decodeDocument } from "../../../../../shared/wire-codec";
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -34,6 +36,11 @@ const ALERT_STATES = new Set(["past_due", "unpaid"]);
 /**
  * Read a field whether the row exposes it as a column (global/D1 tables) or
  * nested in the shard row's `__doc__` JSON blob — mirrors the data browser.
+ *
+ * Goes through the shared {@link decodeDocument}, so this reader can't disagree
+ * with the writer about what a stored value means. No visible change today —
+ * the payment schema's only `v.bigint()` columns are on `paymentSessions`, which
+ * this panel never reads — but it keeps the surface honest if it ever does.
  */
 const readField = (row: Row, key: string): unknown => {
     if (row[key] !== undefined) {
@@ -42,19 +49,7 @@ const readField = (row: Row, key: string): unknown => {
 
     const raw = row["__doc__"];
 
-    if (typeof raw === "string") {
-        try {
-            const parsed = JSON.parse(raw) as unknown;
-
-            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-                return (parsed as Row)[key];
-            }
-        } catch {
-            // fall through
-        }
-    }
-
-    return undefined;
+    return typeof raw === "string" ? decodeDocument(raw)?.[key] : undefined;
 };
 
 const text = (value: unknown): string => {

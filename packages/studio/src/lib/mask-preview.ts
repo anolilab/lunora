@@ -128,6 +128,13 @@ export const maskValue = (value: unknown, strategy: MaskStrategy): unknown => {
                 return value;
             }
 
+            // `JSON.stringify` throws on a decoded `v.bigint()`, which would fail
+            // the mask closed to the sentinel instead of hashing. Only bigint is
+            // special-cased, so every other value's hash is unchanged.
+            if (typeof value === "bigint") {
+                return fnv1aHex(value.toString());
+            }
+
             return fnv1aHex(typeof value === "string" ? value : JSON.stringify(value));
         }
 

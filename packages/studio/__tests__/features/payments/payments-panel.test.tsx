@@ -101,4 +101,40 @@ describe("paymentsPanel", () => {
 
         expect(unconfigured.dataset["testid"]).toBe("payments-unconfigured");
     });
+
+    // `readField` falls back to parsing the shard row's `__doc__` blob, and that
+    // parse now routes through the wire codec so this reader cannot disagree
+    // with the writer that stores the blob. Two properties, in this order: an
+    // ordinary (untagged) doc renders exactly as before, and a tagged leaf in a
+    // rendered position decodes instead of vanishing.
+    //
+    // `referenceId` carries the tagged value only because it is one of the few
+    // fields this panel actually renders — the point under test is the codec
+    // agreement, not that a reference id would really be a bigint.
+    it("reads fields out of an unexpanded __doc__ blob, decoding tagged leaves", async () => {
+        expect.assertions(3);
+
+        const docRow = {
+            __doc__: JSON.stringify({
+                priceId: "price_pro",
+                provider: "stripe",
+                providerSubscriptionId: "sub_doc",
+                referenceId: ["$lunora.wire$", "bigint", "42"],
+                state: "active",
+            }),
+        };
+
+        render(renderPanel(createClient([docRow], [])));
+
+        const row = await screen.findByTestId("payment-subscription-row");
+
+        // Untagged siblings are unaffected by the decode.
+        expect(row.textContent).toContain("price_pro");
+        // Decoded: `text()` stringifies a real bigint. Undecoded, `readField`
+        // hands `text()` an array, which it renders as the empty string — the
+        // value silently disappears from the panel.
+        expect(row.textContent).toContain("42");
+        // And the sentinel itself never reaches the DOM either way.
+        expect(row.textContent).not.toContain("$lunora.wire$");
+    });
 });

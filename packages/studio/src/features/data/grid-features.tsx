@@ -15,7 +15,7 @@ import {
 } from "../../components/ui/dropdown-menu";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
-import { copyToClipboard, formatCell } from "../../lib/internal";
+import { copyToClipboard, formatCell, jsonRowReplacer } from "../../lib/internal";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
@@ -68,7 +68,7 @@ const toCsv = (columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>): st
 };
 
 /** Serialize the given rows to a pretty-printed JSON array string. */
-const toJson = (rows: ReadonlyArray<GridRow>): string => JSON.stringify(rows, null, 2);
+const toJson = (rows: ReadonlyArray<GridRow>): string => JSON.stringify(rows, jsonRowReplacer, 2);
 
 /** Rows per generated `INSERT` statement — chunked so a large export stays valid under statement-size limits and stays diff-friendly. */
 const SQL_INSERT_BATCH = 500;
