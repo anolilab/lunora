@@ -1,3 +1,5 @@
+## @lunora/config [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.118...%40lunora%2Fconfig%401.0.0-alpha.119) (2026-08-04)
+
 ## @lunora/config [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.117...%40lunora%2Fconfig%401.0.0-alpha.118) (2026-08-04)
 
 
