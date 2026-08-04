@@ -46,15 +46,17 @@ deliberate, and mostly a set of go/no-go decisions:
 - **Ratify the stability tiers.** Publicly commit each package to a tier so users
   know exactly what the SemVer promise covers:
     - **Core (full SemVer at 1.0):** `server`, `values`, `errors`, `runtime`, `do`,
-      `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, and the
+      `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`,
+      `platform`, `platform-cloudflare`, `shard-engine`, `observability`, and the
       `lunorash` umbrella.
     - **Stable adapters (1.0 if they pass the same gates):** `vue`, `solid`,
-      `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`,
-      `ratelimit`, `seed`, `db`, `studio`, `advisor`, `mcp`, `bindings`,
-      `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`.
+      `svelte`, `astro`, `nuxt`, `auth`, `auth-ui`, `storage`, `scheduler`, `mail`,
+      `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`,
+      `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
+      `fingerprint`, `dispatch`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
       `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`,
-      `container`, `payment`.
+      `container`, `payment`, `platform-node`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
 - **Bake and dogfood.** Run a real application (the playground plus at least one
@@ -103,9 +105,10 @@ the least interesting parts of their stack get the strongest ones; they are
 entitled to see what would change that, and to check the progress themselves.
 
 A package graduates to **Stable adapter** — and gains the SemVer commitment the
-Core tier already carries — when all six hold. Each is observable from outside
-the repo, deliberately: none of them is a judgement call only a maintainer can
-make.
+Core tier already carries — when all six hold. Two of them (1 and 2) are
+machine-checkable, and you can run the check yourself. The other four are
+maintainer judgement, stated as criteria so the judgement is at least made
+against something written down rather than case by case.
 
 1. **The public surface is snapshotted and has settled.** The package is covered
    by `pnpm run api:check` (`api-snapshots/<pkg>.api.md`), and its surface has
@@ -128,15 +131,16 @@ make.
    a surface post-1.0, and its errors and config carry the names it intends to
    keep.
 
-Snapshot coverage (1) is a leading indicator, not the promise itself: a package
-is snapshotted so drift becomes visible long before the decision, which is why
-`agent` and `ai` are covered today at `Tier: experimental` while carrying no
-stability commitment at all.
+Where the tier stands today:
 
-The bar is deliberately reachable. Two of the six — snapshotting and worked
-docs — are ordinary work that can start immediately, and the tier's ordering is
-not fixed: a package that clears the bar early graduates early, regardless of
-where it sits in the list above.
+| Package                     | 1. Snapshotted                     | 2. Verified on workerd |
+| --------------------------- | ---------------------------------- | ---------------------- |
+| `agent`                     | yes — `api-snapshots/agent.api.md` | no                     |
+| `ai`                        | yes — `api-snapshots/ai.api.md`    | no                     |
+| everything else in the tier | not yet                            | —                      |
+
+Ordering is not fixed: a package that clears the bar early graduates early,
+regardless of where it sits in the tier list above.
 
 ---
 
