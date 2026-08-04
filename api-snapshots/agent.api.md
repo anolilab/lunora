@@ -299,6 +299,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `SkillMarkdownExtras` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ToolScript` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -460,6 +464,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `runVoiceTurn` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `skillFromMarkdown` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

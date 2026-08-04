@@ -94,7 +94,8 @@
         "@lunora/values": "1.0.0-alpha.19",
         "@lunora/workflow": "1.0.0-alpha.21",
         "@modelcontextprotocol/sdk": "catalog:mcp",
-        "ai": "catalog:ai"
+        "ai": "catalog:ai",
+        "yaml": "catalog:content"
     },
     "devDependencies": {
         "@lunora/dispatch": "workspace:*",

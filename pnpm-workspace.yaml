@@ -279,6 +279,10 @@ catalogs:
     vite: ^8.1.5
   data:
     "@faker-js/faker": ^10.5.0
+  content:
+    # Frontmatter parsing for markdown-authored agent skills. Pure ESM, no Node
+    # built-ins, so it survives the Workers runtime the agent package ships to.
+    yaml: ^2.9.0
   i18n:
     "@lingui/core": ^6.6.0
     "@lingui/message-utils": ^6.6.0

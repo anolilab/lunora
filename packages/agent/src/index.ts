@@ -19,7 +19,7 @@ export { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, v
 export { AGENT_MODULE, DEFAULT_AGENT_FUNCTION_PATHS, SANDBOX_INVOKE_PATH, SANDBOX_MODULE, toFunctionReference } from "./paths";
 export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions } from "./sandbox";
 export { browserTool, containerTool, fsTool } from "./sandbox";
-export { defineSkill, isSkillDefinition } from "./skill";
+export { defineSkill, isSkillDefinition, skillFromMarkdown } from "./skill";
 export type {
     AgentApprovalContext,
     AgentAsToolOptions,
@@ -69,6 +69,7 @@ export type {
     AnyAgentTool,
     SkillConfig,
     SkillDefinition,
+    SkillMarkdownExtras,
 } from "./types";
 export { default as VoiceSessionDO } from "./voice-do";
 export type {
