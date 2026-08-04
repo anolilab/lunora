@@ -45,6 +45,7 @@ const storageKeyFromUserArgs: Lint = {
             // it is only reachable server-side (`ctx.scheduler.runAfter`,
             // `ctx.run*`), never by an external request — so "any caller can
             // read/overwrite/delete another user's object" is false there.
+            // eslint-disable-next-line no-secrets/no-secrets -- false positive: this lint's own rule name quoted in prose, not a credential
             // Mirrors `owner_field_from_args_not_auth`'s identical visibility
             // split: two real-world hits were both `internalAction`s receiving
             // a content-addressed storage id minted server-side (issue #284).

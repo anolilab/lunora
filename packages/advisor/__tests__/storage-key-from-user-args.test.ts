@@ -39,6 +39,7 @@ describe("storage_key_from_user_args", () => {
     // receiving a content-addressed storage id minted server-side. An
     // `internal*` procedure has no untrusted caller by construction, so the
     // "any caller can read/overwrite/delete another user's object" premise is
+    // eslint-disable-next-line no-secrets/no-secrets -- false positive: a lint NAME quoted in prose, not a credential
     // false there — mirrors `owner_field_from_args_not_auth`'s visibility split.
     it("drops an internal procedure's access to INFO and redirects it at the public callers", () => {
         expect.assertions(5);

@@ -66,11 +66,16 @@ const filterWithoutIndex: Lint = {
             // cost differs enough to say which one you are paying, and an
             // unrecognised table (an external/unknown tier) gets the neutral
             // wording rather than a claim about storage we cannot make.
-            const scope =
-                {
-                    global: `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`,
-                    root: `it loads every row of "${read.table}" from the root Durable Object's SQLite and filters in memory`,
-                }[shardKind as "global" | "root"] ?? `it loads every row of "${read.table}" and filters in memory`;
+            // Typed `Record<string, string>` rather than cast to the two known
+            // keys. The cast claimed `shardKind` is always one of them, which
+            // made the `??` fallback look dead to the type checker — while the
+            // comment above documents the unrecognised-tier case it exists for,
+            // and `shardKind` can in fact be `undefined` outright.
+            const scopeByKind: Record<string, string> = {
+                global: `it scans the whole D1 table "${read.table}" — unbounded, and the cost is a cross-region round trip`,
+                root: `it loads every row of "${read.table}" from the root Durable Object's SQLite and filters in memory`,
+            };
+            const scope = (shardKind === undefined ? undefined : scopeByKind[shardKind]) ?? `it loads every row of "${read.table}" and filters in memory`;
 
             findings.push(
                 emit(filterWithoutIndex, {

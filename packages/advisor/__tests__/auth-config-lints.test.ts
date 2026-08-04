@@ -169,7 +169,7 @@ describe("authScimWithoutTransactions", () => {
     it("flags scim() on an adapter with no native transactions", async () => {
         expect.assertions(2);
 
-        const findings = await authScimWithoutTransactions.run({ authConfigs: [authConfig({ scimOnNonTransactionalAdapter: true })], ...schema() } as never);
+        const findings = authScimWithoutTransactions.run({ authConfigs: [authConfig({ scimOnNonTransactionalAdapter: true })], ...schema() } as never);
 
         // This exact pairing shipped in documentation once and throws on the first SCIM
         // request; there is no reason for build time not to say so.
@@ -180,7 +180,7 @@ describe("authScimWithoutTransactions", () => {
     it("stays quiet when the adapter does have transactions", async () => {
         expect.assertions(1);
 
-        const findings = await authScimWithoutTransactions.run({ authConfigs: [authConfig()], ...schema() } as never);
+        const findings = authScimWithoutTransactions.run({ authConfigs: [authConfig()], ...schema() } as never);
 
         expect(findings).toStrictEqual([]);
     });
@@ -188,7 +188,7 @@ describe("authScimWithoutTransactions", () => {
     it("skips an opaque config rather than guessing at its database", async () => {
         expect.assertions(1);
 
-        const findings = await authScimWithoutTransactions.run({
+        const findings = authScimWithoutTransactions.run({
             authConfigs: [authConfig({ analyzable: false, scimOnNonTransactionalAdapter: true })],
             ...schema(),
         } as never);

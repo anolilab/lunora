@@ -1,3 +1,5 @@
+/* eslint-disable no-secrets/no-secrets -- false positive: `loadAnalyticsRuntimeMetrics` is a function name in prose, not a credential */
+
 /**
  * Analytics-Engine-derived feed for the runtime lints — QUARANTINED design note,
  * **not exported** from `@lunora/advisor`'s package root (plan 225 / ADVISOR-01).

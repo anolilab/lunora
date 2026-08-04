@@ -21,6 +21,7 @@ export interface AdvisorOwnerFieldWrite {
     line: number;
     /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
     method: string;
+
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not
      * reachable by a caller, so the "any caller can act as any user" premise

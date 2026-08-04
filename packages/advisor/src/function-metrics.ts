@@ -25,6 +25,6 @@ export interface AdvisorFunctionMetrics {
     errors: number;
     /** Slowest single dispatch, ms, over the same window. */
     maxDurationMs: number;
-    /** The function's registered path (`<file>:<exportName>`). */
+    /** The function's registered path (`&lt;file>:&lt;exportName>`). */
     path: string;
 }
