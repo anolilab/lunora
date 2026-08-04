@@ -1,6 +1,6 @@
 {
     "name": "@lunora/browser",
-    "version": "1.0.0-alpha.18",
+    "version": "1.0.0-alpha.19",
     "description": "Cloudflare Browser Rendering for Lunora: ctx.browser screenshots, PDF, and scraping in actions",
     "keywords": [
         "browser-rendering",
@@ -60,7 +60,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.13"
+        "@lunora/errors": "1.0.0-alpha.14"
     },
     "devDependencies": {
         "@cloudflare/playwright": "catalog:cloudflare",
