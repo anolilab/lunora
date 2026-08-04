@@ -1,7 +1,4 @@
 {
     "name": "auth",
-    "tags": [
-        "type:package",
-        "category:add-on"
-    ]
+    "tags": ["type:package", "category:add-on"]
 }

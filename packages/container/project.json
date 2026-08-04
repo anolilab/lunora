@@ -1,7 +1,4 @@
 {
     "name": "container",
-    "tags": [
-        "type:package",
-        "category:add-on"
-    ]
+    "tags": ["type:package", "category:add-on"]
 }

@@ -1,7 +1,4 @@
 {
     "name": "vue",
-    "tags": [
-        "type:package",
-        "category:client"
-    ]
+    "tags": ["type:package", "category:client"]
 }

@@ -254,7 +254,10 @@ describe("error_rate_outlier", () => {
             ]),
         );
 
-        expect(findings.map((finding) => finding.metadata["path"]).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual(["a", "c"]);
+        expect(findings.map((finding) => finding.metadata["path"]).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual([
+            "a",
+            "c",
+        ]);
     });
 });
 

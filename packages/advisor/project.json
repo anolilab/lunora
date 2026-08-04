@@ -1,7 +1,4 @@
 {
     "name": "advisor",
-    "tags": [
-        "type:package",
-        "category:advisor"
-    ]
+    "tags": ["type:package", "category:advisor"]
 }
