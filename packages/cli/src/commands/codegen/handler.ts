@@ -207,7 +207,16 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(as
     // After codegen, so the classes it reports on are the ones just emitted. In
     // `--format json` mode stdout carries only the serialized result, so the
     // warning goes to the same stderr logger the rest of the run's prose uses.
-    await warnAboutExportGaps(cwd, loggerForFormat(options.format, logger));
+    //
+    // Only when generation actually ran. `runCodegenCommand` returns early with
+    // an empty `outputDirectory` for an invalid `--format` or an unresolved
+    // `--target`, and scanning then stacks export-gap warnings on top of the
+    // real error — about a codegen that never happened. `outputDirectory` is the
+    // signal rather than `result.error`, which is also set for a platform
+    // diagnostic raised AFTER a successful emit, where the warning still applies.
+    if (result.outputDirectory !== "") {
+        await warnAboutExportGaps(cwd, loggerForFormat(options.format, logger));
+    }
 
     return { code: result.error === undefined && result.failedAdvisories === 0 ? 0 : 1 };
 });

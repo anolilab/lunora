@@ -269,7 +269,7 @@ describe("lunora codegen", () => {
         };
 
         /** Drive the real command handler — the warning lives in the `execute` wrapper, not in `runCodegenCommand`. */
-        const runExecute = async (): Promise<string> => {
+        const runExecute = async (options: Record<string, string> = {}): Promise<string> => {
             let captured = "";
             const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
                 captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -280,7 +280,7 @@ describe("lunora codegen", () => {
             try {
                 await execute({
                     argument: [],
-                    options: { format: "json" },
+                    options: { format: "json", ...options },
                     process: { cwd: workdir, exit: () => {} },
                 } as unknown as Parameters<typeof execute>[0]);
             } finally {
@@ -296,6 +296,27 @@ describe("lunora codegen", () => {
             seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
 
             await expect(runExecute()).resolves.toMatch(/workflow "orderPipeline" is declared but .* is not exported by the worker entry/u);
+        });
+
+        // `runCodegenCommand` returns before generation for an invalid `--format`
+        // or an unresolved `--target`. Scanning anyway stacks export-gap warnings
+        // on top of the real error, about a codegen that never ran — and the
+        // classes it would name are whatever a previous run happened to leave on
+        // disk. The seed here WOULD warn on a successful run, so these fail if the
+        // scan is not gated.
+        it.each([
+            ["an invalid --format", { format: "nope" }],
+            ["an unresolved --target", { target: "not-a-registered-target" }],
+        ])("does not scan for export gaps after %s", async (_label, overrides) => {
+            expect.assertions(2);
+
+            seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+
+            const output = await runExecute(overrides);
+
+            expect(output).not.toMatch(/is not exported by the worker entry/u);
+            // …and the actual validation error is still reported.
+            expect(output).not.toBe("");
         });
 
         it("stays quiet when the worker entry re-exports the generated module", async () => {
