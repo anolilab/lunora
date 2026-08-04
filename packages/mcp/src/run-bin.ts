@@ -9,7 +9,7 @@ import { connectStdio } from "./server";
  * - `LUNORA_URL` (required) — base URL of the deployed Worker.
  * - `LUNORA_ADMIN_TOKEN` (optional, but effectively required to be the admin bearer) — bearer token sent on every RPC. It must be the deployment's admin token: every tool depends on admin-gated introspection (`/_lunora/admin/*`), so a scoped/app token 403s (`ADMIN_FORBIDDEN`) on the first call. The read-only guarantee is enforced in-process via `LUNORA_MCP_ALLOW_WRITES` defaulting off — NOT by the token's scope.
  * - `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose the mutation/action tools. Default: read-only (writes disabled).
- * - `LUNORA_MCP_ALLOW_AGENTS` (optional) — set to `1`/`true`/`yes`/`on` to expose the `agent_&lt;name>` tools. Default: agent tools disabled.
+ * - `LUNORA_MCP_ALLOW_AGENTS` (optional) — set to `1`/`true`/`yes`/`on` to expose the `agent_<name>` tools. Default: agent tools disabled.
  * - `LUNORA_MCP_AGENTS` (optional) — `;`-separated `name:description` pairs (e.g. `"support:Support questions;billing:Billing help"`) selecting which agents to expose.
  * - `LUNORA_MCP_AGENT_TIMEOUT_MS` (optional) — wall-clock budget a single agent tool call awaits before returning a pending result.
  */

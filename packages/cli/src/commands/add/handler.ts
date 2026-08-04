@@ -37,7 +37,7 @@ interface AddFeatureOptions {
     cwd?: string;
     /** auth: D1 database name to use without prompting. */
     db?: string;
-    /** The raw `&lt;feature>` argument: an alias (`auth` | `email` | `mail`) or a bare registry item name. */
+    /** The raw `<feature>` argument: an alias (`auth` | `email` | `mail`) or a bare registry item name. */
     feature?: string;
     /** Local registry root (offline / tests). */
     from?: string;
@@ -263,7 +263,7 @@ const syncLintIgnores = (cwd: string, logger: Logger): void => {
 };
 
 /**
- * `lunora add &lt;feature>`: validate we're in a Lunora project, resolve the
+ * `lunora add <feature>`: validate we're in a Lunora project, resolve the
  * feature to its registry item(s) (prompting for the auth provider when
  * interactive), and apply via `runAddCommand`. Returns the applied items so
  * tests/callers can assert without re-reading the filesystem.
@@ -364,7 +364,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     return { code: result.code, items };
 };
 
-/** `lunora add &lt;feature>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora add <feature>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, logger, options }) => {
     const formatError = validateOutputFormat("add", options.format);
 

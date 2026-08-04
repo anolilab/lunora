@@ -12,7 +12,7 @@
  * to `HttpHeaderWriteIR`.
  */
 export interface AdvisorHttpHeaderWrite {
-    /** The exported binding name of the enclosing handler, or `"&lt;module>"` when mounted inline. */
+    /** The exported binding name of the enclosing handler, or `"<module>"` when mounted inline. */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;

@@ -14,7 +14,7 @@ interface ShardCall {
  * A fake shard that serves a fixed list of rank rows (already in local rank
  * order), honoring the coordinator's `take` and `after` resume key the same way
  * the real shard-do `rankPage` reader does: it walks past the `after` key with
- * the byte-identical `(__partition__, __sort_k&lt;i>__, __id__)` comparison and
+ * the byte-identical `(__partition__, __sort_k<i>__, __id__)` comparison and
  * returns up to `take` rows plus a `hasMore` flag. This is the structural
  * contract `__lunora_admin__:rankPage` fulfills server-side.
  */

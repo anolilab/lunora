@@ -2,7 +2,7 @@
  * Username sign-in, and setting a username from account settings.
  *
  * The `username` plugin doesn't replace email sign-in, it adds a second door, so
- * `&lt;SignInCard>` keeps its email field and this is a separate card rather than a
+ * `<SignInCard>` keeps its email field and this is a separate card rather than a
  * mode switch inside it. Which one an app shows is an app decision.
  */
 import type { ControllerContext } from "./config";

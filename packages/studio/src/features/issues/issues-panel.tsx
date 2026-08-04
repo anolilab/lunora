@@ -402,7 +402,7 @@ const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps)
 /**
  * The Issues observability page — grouped error triage over the durable request
  * log, now with a triage workflow (resolve / ignore / reopen, assignee, and
- * severity). Every `error`-outcome row (a Worker throw or a `container:&lt;name>`
+ * severity). Every `error`-outcome row (a Worker throw or a `container:<name>`
  * crash) that shares a fingerprint (`functionPath :: bucket(message)`) folds into
  * a single Issue: title, culprit, event count, first/last-seen, plus the
  * persisted triage state joined in server-side. The same grouping hash a cloud

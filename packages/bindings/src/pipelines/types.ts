@@ -10,7 +10,7 @@
 export type PipelineRecord = Record<string, unknown>;
 
 /**
- * Minimal structural projection of workers-types' `Pipeline&lt;T>` binding. The
+ * Minimal structural projection of workers-types' `Pipeline<T>` binding. The
  * real binding's `send` takes an array of records and resolves once accepted.
  */
 export interface PipelineBindingLike<T extends PipelineRecord = PipelineRecord> {

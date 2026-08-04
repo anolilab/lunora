@@ -35,13 +35,13 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): ReturnType<
 /** Auto-provision the schema's `.global()` tables in D1 (idempotent `CREATE TABLE IF NOT EXISTS`). */
 const runD1GlobalTableMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlGlobalTableMigrations(exec, schema, sqliteDialect);
 
-/** Materialize the `__agg_&lt;index>` companion tables for the schema's aggregate indexes. */
+/** Materialize the `__agg_<index>` companion tables for the schema's aggregate indexes. */
 const runD1AggregateMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlAggregateMigrations(exec, schema, sqliteDialect);
 
-/** Materialize the `__rank_&lt;index>` companion tables for the schema's rank indexes. */
+/** Materialize the `__rank_<index>` companion tables for the schema's rank indexes. */
 const runD1RankMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlRankMigrations(exec, schema, sqliteDialect);
 
-/** Materialize (and backfill) the `__fts_&lt;index>` fts5 shadow tables for the schema's search indexes. */
+/** Materialize (and backfill) the `__fts_<index>` fts5 shadow tables for the schema's search indexes. */
 const runD1SearchMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlSearchMigrations(exec, schema, sqliteDialect);
 
 /** Index existing rows into every search companion, including the `staged: true` ones migrations leave empty. */

@@ -11,7 +11,7 @@
 export interface AdvisorMaskStrategy {
     /** Masked column name. */
     column: string;
-    /** The exported binding name of the procedure whose `.use(mask(...))` chain declared this column, or `"&lt;module>"` when declared at file scope. */
+    /** The exported binding name of the procedure whose `.use(mask(...))` chain declared this column, or `"<module>"` when declared at file scope. */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;

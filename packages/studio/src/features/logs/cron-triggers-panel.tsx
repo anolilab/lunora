@@ -16,7 +16,7 @@ interface CronTriggersPanelProps {
     /**
      * Load the code-defined cron triggers. Defaults to `client.getCronJobs`,
      * which hits the worker's admin-gated `/_lunora/admin/cron-jobs` endpoint —
-     * so the panel works out of the box under `&lt;LunoraProvider>`, provided the
+     * so the panel works out of the box under `<LunoraProvider>`, provided the
      * worker is built with a `cronJobs` map and `adminToken`. Override it to
      * source triggers from elsewhere (e.g. tests).
      */

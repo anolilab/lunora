@@ -110,7 +110,7 @@ const isProcessAlive = (pid: number): boolean => {
 const START_TIME_SKEW_MS = 10_000;
 
 /**
- * Kernel clock-tick rate backing `/proc/&lt;pid>/stat`'s `starttime` field.
+ * Kernel clock-tick rate backing `/proc/<pid>/stat`'s `starttime` field.
  * Linux fixes `USER_HZ` at 100 for userspace on every mainstream platform,
  * independent of the kernel's internal HZ.
  */
@@ -119,7 +119,7 @@ const LINUX_CLOCK_TICKS_PER_SECOND = 100;
 /**
  * Wall-clock start time of `pid` in epoch ms, or `undefined` where the
  * platform doesn't expose it cheaply (non-Linux) or the read fails. Combines
- * `/proc/&lt;pid>/stat` field 22 (`starttime`, in clock ticks since boot) with
+ * `/proc/<pid>/stat` field 22 (`starttime`, in clock ticks since boot) with
  * `/proc/stat`'s `btime` (boot time, epoch seconds).
  */
 const processStartTimeMs = (pid: number): number | undefined => {

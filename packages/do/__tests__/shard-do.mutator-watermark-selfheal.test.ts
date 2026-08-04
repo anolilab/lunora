@@ -12,8 +12,8 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * Core invariants exercised:
  *
  * 1. A handler that throws does NOT advance `__client_watermark` — the sequence is not consumed; the retry re-runs.
- * 2. A succeeded write is idempotent: a re-sent push with seq &lt;= watermark is ack'd without re-running the handler.
- * 3. Out-of-order pushes (seq &gt; watermark + 1) are halted before the handler runs.
+ * 2. A succeeded write is idempotent: a re-sent push with seq <= watermark is ack'd without re-running the handler.
+ * 3. Out-of-order pushes (seq > watermark + 1) are halted before the handler runs.
  * 4. Advance-gap self-heal: if the dedup row committed but the watermark is stale, a retry re-advances via the idempotency cache.
  *
  * These tests drive the full dispatch path through a real in-memory SQLite engine.

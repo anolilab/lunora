@@ -27,7 +27,7 @@ export interface FunctionArgumentDescriptor {
 export interface FunctionDescriptor {
     args?: FunctionArgumentDescriptor[];
     kind: FunctionKind;
-    /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
+    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
     path: string;
 }
 

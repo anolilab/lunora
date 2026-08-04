@@ -19,7 +19,7 @@ const DEFAULT_SOURCE_BASE = "gh:anolilab/lunora/registry";
 /**
  * A registry item name is a single path segment / identifier. It becomes a
  * filesystem path segment (`join(--from, name)`), a remote giget subpath
- * (`&lt;base>/&lt;name>#&lt;ref>`), and — for schema-extension items — an import
+ * (`<base>/<name>#<ref>`), and — for schema-extension items — an import
  * specifier and identifier spliced into `lunora/schema.ts`. Allow only
  * letters/digits/`-`/`_`, no leading dot, so a name can never traverse out of
  * the registry root (`../../etc`), inject a path separator, or smuggle code

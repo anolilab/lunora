@@ -113,10 +113,10 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
 };
 
 /**
- * Build the worker via `wrangler deploy --dry-run --outdir &lt;tmp>` and report
+ * Build the worker via `wrangler deploy --dry-run --outdir <tmp>` and report
  * total size, top modules, and the `_generated/` footprint.
  *
- * Tests inject `inspectOnly: &lt;path>` to skip the wrangler invocation and
+ * Tests inject `inspectOnly: <path>` to skip the wrangler invocation and
  * walk a pre-built directory directly.
  */
 const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<AnalyzeCommandResult> => {

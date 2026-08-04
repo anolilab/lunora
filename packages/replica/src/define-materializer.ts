@@ -110,9 +110,9 @@ const defineMaterializer = <S>(definition: MaterializerDef<S>): Materializer<S> 
  * A materializer of any state shape. The {@link MaterializerRuntime} holds a
  * heterogeneous collection and only ever calls `apply(entry)` / `setState(...)`
  * (with cast values) / reads `def.name` — it never needs the concrete state
- * type. `Materializer&lt;unknown>` won't do: `setState(state: S)` makes
- * `Materializer&lt;S>` invariant in `S`, so `Materializer&lt;number>` isn't assignable
- * to `Materializer&lt;unknown>`. Erasing the type param is the idiomatic fix.
+ * type. `Materializer<unknown>` won't do: `setState(state: S)` makes
+ * `Materializer<S>` invariant in `S`, so `Materializer<number>` isn't assignable
+ * to `Materializer<unknown>`. Erasing the type param is the idiomatic fix.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional type erasure for a heterogeneous store; see above.
 type AnyMaterializer = Materializer<any>;

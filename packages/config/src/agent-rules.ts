@@ -61,10 +61,10 @@ interface AgentRulesStatus {
      * still counts as installed and isn't nagged.
      */
     readonly installed: boolean;
-    /** Skill names with no `SKILL.md` under `&lt;root>/.agents/skills/&lt;name>/`. */
+    /** Skill names with no `SKILL.md` under `<root>/.agents/skills/<name>/`. */
     readonly missing: ReadonlyArray<string>;
 
-    /** Skill names found under `&lt;root>/.agents/skills/&lt;name>/SKILL.md`. */
+    /** Skill names found under `<root>/.agents/skills/<name>/SKILL.md`. */
     readonly present: ReadonlyArray<string>;
 }
 

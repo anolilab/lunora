@@ -61,7 +61,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
  * older worker reports `WORKFLOWS_NOT_CONFIGURED` instead) and this renders a
  * "set credentials" state while the workflows keep running.
  *
- * Works under `&lt;LunoraProvider>` via the client's workflow methods; pass the
+ * Works under `<LunoraProvider>` via the client's workflow methods; pass the
  * loader props to override the transport (a custom `loadInstances` ⇒ read-only).
  */
 export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, runAction, workflowName }: WorkflowInstanceHistoryProps): ReactElement => {

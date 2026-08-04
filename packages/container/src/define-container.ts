@@ -26,7 +26,7 @@ const DURATION_UNIT_SECONDS: Readonly<Record<string, number>> = { h: 3600, m: 60
 
 /**
  * Parse a `sleepAfter`/`hardTimeout` duration into whole seconds. A `number` is
- * treated as seconds (floored); a string follows the `&lt;digits>&lt;s|m|h>` grammar
+ * treated as seconds (floored); a string follows the `<digits><s|m|h>` grammar
  * {@link SLEEP_AFTER_PATTERN} enforces. Shared by the runtime DO so the wire
  * value the container sees is derived from the exact same logic that validates
  * it. Throws on an unparseable string (already rejected by `defineContainer`).
@@ -68,7 +68,7 @@ const dirname = (path: string): string => {
  * A local-path string whose basename starts with `Dockerfile` (so
  * `Dockerfile.dev` also counts) is used as-is with its directory as the build
  * context; any other path is treated as the build-context directory and the
- * Dockerfile is expected at `&lt;dir>/Dockerfile`.
+ * Dockerfile is expected at `<dir>/Dockerfile`.
  * @experimental
  */
 const normalizeContainerImage = (image: ContainerImageSource): NormalizedContainerImage => {

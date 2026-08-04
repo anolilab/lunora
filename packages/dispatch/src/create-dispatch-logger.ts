@@ -1,7 +1,7 @@
 /**
  * `createDispatchLogger` — a console-backed logger prefixed for correlation,
- * shared by the dispatch consumers (`@lunora/workflow` → `[workflow:&lt;name>]`,
- * `@lunora/queue` → `[queue:&lt;name>]`). The runtime routes the console output to
+ * shared by the dispatch consumers (`@lunora/workflow` → `[workflow:<name>]`,
+ * `@lunora/queue` → `[queue:<name>]`). The runtime routes the console output to
  * wrangler tail / Studio.
  */
 import type { DispatchLogger } from "./types";

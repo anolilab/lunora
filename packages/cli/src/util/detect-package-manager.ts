@@ -25,7 +25,7 @@ const KNOWN_PACKAGE_MANAGERS: ReadonlySet<string> = new Set<PackageManager>(["bu
  */
 const isKnownPackageManager = (name: string): name is PackageManager => KNOWN_PACKAGE_MANAGERS.has(name);
 
-/** True when `manager` is on PATH — probed by running `&lt;manager> --version`. Injectable for tests. */
+/** True when `manager` is on PATH — probed by running `<manager> --version`. Injectable for tests. */
 type PackageManagerProbe = (manager: PackageManager) => boolean;
 
 const isManagerInstalled: PackageManagerProbe = (manager) => {
@@ -44,7 +44,7 @@ const isManagerInstalled: PackageManagerProbe = (manager) => {
  */
 const detectInstalledManagers = (probe: PackageManagerProbe = isManagerInstalled): PackageManager[] => INSTALL_PREFERENCE.filter((manager) => probe(manager));
 
-/** The argv that installs a project's dependencies with `manager` (`&lt;manager> install`). */
+/** The argv that installs a project's dependencies with `manager` (`<manager> install`). */
 const installArgsFor = (manager: PackageManager): { args: string[]; command: string } => {
     return { args: ["install"], command: manager };
 };
@@ -146,10 +146,10 @@ const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArr
  * The argv that runs a project SCRIPT with `manager` — the counterpart to
  * {@link execArgsFor}, which runs a BINARY.
  *
- * All four managers accept `&lt;manager> run &lt;script>`, so this is uniform. It is a
+ * All four managers accept `<manager> run <script>`, so this is uniform. It is a
  * separate function because reaching for `execArgsFor(manager, "run", [script])`
- * silently produces something else entirely: `pnpm exec run &lt;script>` fails with
- * `Command "run" not found`, and `npx -- run &lt;script>` resolves the registry
+ * silently produces something else entirely: `pnpm exec run <script>` fails with
+ * `Command "run" not found`, and `npx -- run <script>` resolves the registry
  * PACKAGE named `run` and executes it.
  */
 const runScriptArgsFor = (manager: PackageManager, script: string): { args: string[]; command: string } => {

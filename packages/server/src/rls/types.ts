@@ -53,7 +53,7 @@ export type PolicyDecision = WhereInput | boolean | undefined;
  * generated `DataModel` (`DM`) + `Relations` (`REL`) maps and a table `T`. A
  * read policy may now return a Prisma-style relation predicate (the
  * `@lunora/do` pre-resolver resolves it via a semijoin), so the typed
- * authoring surface accepts `WhereOf&lt;DM, REL, T>` — column predicates **and**
+ * authoring surface accepts `WhereOf<DM, REL, T>` — column predicates **and**
  * `is`/`isNot`/`some`/`none`/`every` over `T`'s declared relations — in
  * addition to the `boolean`/`undefined` decisions. Used by the project-bound
  * `definePolicy` from `createPolicyDsl`.

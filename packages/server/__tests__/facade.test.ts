@@ -6,7 +6,7 @@ import { bindTableFacade } from "../src/facade";
 
 /**
  * `bindTableFacade` pins a `tableName` on the structural writer so the per-table
- * accessor (`ctx.db.&lt;table>.*`) forwards it as `expectedTable` on by-id calls —
+ * accessor (`ctx.db.<table>.*`) forwards it as `expectedTable` on by-id calls —
  * the IDOR guard. These tests assert the batch forms (added alongside `insertMany`)
  * forward the bound table, and that `patchMany` maps the facade's `values` payload
  * onto the writer's `{ id, patch }` shape.

@@ -27,7 +27,7 @@ export class CodegenDiagnosticError extends LunoraError {
  * location and whose `file`/`line`/`column` properties are set from the
  * ts-morph `Node`'s position in its source file.
  *
- * Message format: `@lunora/codegen: &lt;detail> (&lt;file>:&lt;line>:&lt;column>)`
+ * Message format: `@lunora/codegen: <detail> (<file>:<line>:<column>)`
  *
  * `meta` is merged onto the returned error for callers that also carry the
  * project-wide `LunoraError` envelope (`code`/`name`/`status`) — it never

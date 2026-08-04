@@ -2,8 +2,8 @@
 
 /**
  * One `query` handler whose `return` hands back the raw rows of a table — the
- * result of a `ctx.db.&lt;table>.findMany()` / `.findFirst()` / `.get()` read, or a
- * `ctx.db.query("&lt;table>")…collect()` fluent chain — returned directly (or through
+ * result of a `ctx.db.<table>.findMany()` / `.findFirst()` / `.get()` read, or a
+ * `ctx.db.query("<table>")…collect()` fluent chain — returned directly (or through
  * one local `const` hop) with no hand-built projection. The shared input for the
  * `output_projection_missing_on_public_read` lint, which keeps only `visibility
  * === "public"` rows with no `.output(...)` / `.use(mask(...))` on the chain and

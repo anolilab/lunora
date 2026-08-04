@@ -162,7 +162,7 @@ interface StudioProps {
     /**
      * App-owned top-bar + sidebar-footer chrome (theme toggle, admin-token
      * popover, rules banner). The batteries-included `StudioApp` supplies
-     * this; composing `&lt;Studio>` bare omits those affordances. See {@link StudioChrome}.
+     * this; composing `<Studio>` bare omits those affordances. See {@link StudioChrome}.
      */
     readonly chrome?: StudioChrome;
 
@@ -253,7 +253,7 @@ type StudioShellProps = Omit<StudioProps, "i18n" | "locale">;
  * token state, the rules banner) but which renders *inside* the router-owned
  * {@link StudioLayout} (the header and sidebar footer). The layout is a route
  * component with no props, so it reads this from context rather than threading
- * it through the router. Absent (composing `&lt;Studio>` bare) the layout simply
+ * it through the router. Absent (composing `<Studio>` bare) the layout simply
  * omits those affordances.
  */
 interface StudioChrome {
@@ -588,7 +588,7 @@ const CollapsedGroupNav = ({
 
 /**
  * The bottom-pinned profile / connection card. Without app-owned `chrome`
- * (composing `&lt;Studio>` bare) it's a static avatar; with it, it's the trigger
+ * (composing `<Studio>` bare) it's a static avatar; with it, it's the trigger
  * for the admin-token popover. Extracted from {@link StudioSidebar} to keep that
  * component's branching shallow.
  */
@@ -666,7 +666,7 @@ const SidebarFooterProfile = ({
  * presentation: **expanded** shows the full labelled nav (each row's one-line
  * description as a hover tooltip); **collapsed** shows one icon per domain, each
  * opening a hover flyout of that domain's pages — so every page stays reachable
- * from the narrow icon rail. Rendered inside `&lt;SidebarProvider>` so it can call
+ * from the narrow icon rail. Rendered inside `<SidebarProvider>` so it can call
  * {@link useSidebar}.
  */
 const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectTab, tabDescription, tabLabel }: StudioSidebarProps): ReactElement => {
@@ -765,7 +765,7 @@ const RoutePending = (): ReactElement => (
 
 /**
  * Persistent shell rendered by the router's root route: the grouped sidebar
- * ({@link StudioSidebar}) and the routed panel area (`&lt;Outlet />`). The active
+ * ({@link StudioSidebar}) and the routed panel area (`<Outlet />`). The active
  * tab is derived from the URL, so deep links and the browser back/forward
  * buttons drive which panel shows.
  */
@@ -922,7 +922,7 @@ const StudioLayout = (): ReactElement => (
 );
 
 /**
- * Schema tab wrapper that lifts the optional `?table=&lt;name>` search param off
+ * Schema tab wrapper that lifts the optional `?table=<name>` search param off
  * the URL and forwards it to {@link SchemaViewer} as `initialTable`. This is the
  * landing target of the Insights "add the index" deep-link: navigating to
  * `/schema?table=posts` auto-expands `posts`'s index list. Read with

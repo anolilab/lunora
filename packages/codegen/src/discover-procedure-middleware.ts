@@ -263,14 +263,14 @@ const isUserTableInsert = (call: CallExpression): boolean => {
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */
 const FANOUT_METHODS = new Set(["create", "runAfter", "runAt", "send", "sendBatch"]);
 
-/** `ctx.&lt;surface>` accessors those fan-out methods dispatch through. */
+/** `ctx.<surface>` accessors those fan-out methods dispatch through. */
 const FANOUT_SURFACES = new Set(["queues", "scheduler", "workflows"]);
 
 /**
  * True when `call` is a privileged fan-out dispatch — a {@link FANOUT_METHODS}
  * call whose receiver chain roots at `ctx.scheduler` / `ctx.queues` /
- * `ctx.workflows` (`ctx.scheduler.runAfter(...)`, `ctx.queues.&lt;name>.send(...)`,
- * `ctx.workflows.&lt;name>.create(...)`). Anchoring to the `ctx.&lt;surface>` root — not
+ * `ctx.workflows` (`ctx.scheduler.runAfter(...)`, `ctx.queues.<name>.send(...)`,
+ * `ctx.workflows.<name>.create(...)`). Anchoring to the `ctx.<surface>` root — not
  * just the method name — keeps generic `.create`/`.send` calls on unrelated
  * objects from matching.
  */
@@ -364,7 +364,7 @@ const MAIL_MEMBERS: ReadonlySet<string> = new Set(["email", "mail"]);
 /** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
 const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
 
-/** True when any `ctx.&lt;member>` in `declaration` is one of `members`. */
+/** True when any `ctx.<member>` in `declaration` is one of `members`. */
 const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
     declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
         if (!members.has(access.getName())) {
@@ -503,7 +503,7 @@ const isCatchGuarded = (call: CallExpression): boolean => {
 };
 
 /**
- * Resolve `access` (a `ctx.&lt;member>` property access) to the call expression it
+ * Resolve `access` (a `ctx.<member>` property access) to the call expression it
  * is directly invoked through — `ctx.fetch(...)` resolves `ctx.fetch` itself;
  * `ctx.mail.send(...)` resolves `ctx.mail` by walking the fluent chain one more
  * property-access hop. Returns `undefined` when `access` is referenced without
@@ -526,7 +526,7 @@ const outboundCallSite = (access: TsNode): CallExpression | undefined => {
 
 /**
  * Per-outbound-call-site error-handling facts: `reachesOutbound` is `true` when
- * `declaration` invokes at least one `ctx.&lt;OUTBOUND_MEMBERS>` surface;
+ * `declaration` invokes at least one `ctx.<OUTBOUND_MEMBERS>` surface;
  * `handlesErrors` is `true` only when EVERY such call site is guarded — wrapped in
  * a `try` within the same function, or the receiver of a `.catch(...)`.
  *

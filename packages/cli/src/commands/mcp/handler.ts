@@ -8,7 +8,7 @@ import { runMcpServe } from "./serve";
 import { runMcpUninstall } from "./uninstall";
 
 /**
- * `lunora mcp &lt;install|serve>` handler (lazy-loaded via the command's `loader`).
+ * `lunora mcp <install|serve>` handler (lazy-loaded via the command's `loader`).
  *
  * `serve` never returns while the client holds the connection open: the stdio
  * transport keeps the process alive, so the `{ code: 0 }` below is reached only

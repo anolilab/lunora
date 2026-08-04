@@ -62,7 +62,7 @@ interface TableListSidebarProps {
     /** Optional reload control rendered in the sidebar header. */
     readonly onReload?: () => void;
     readonly onSelect: (name: string) => void;
-    /** Scopes `data-testid`s: `{prefix}-table-list`, `{prefix}-table-&lt;name>`, `{prefix}-load-tables`. */
+    /** Scopes `data-testid`s: `{prefix}-table-list`, `{prefix}-table-<name>`, `{prefix}-load-tables`. */
     readonly prefix: string;
     readonly reloadLabel?: string;
     readonly selected: null | string;

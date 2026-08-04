@@ -7,20 +7,20 @@
  * # Why these live here and not beside the cards
  *
  * They are rendered by the **Worker**, not by the UI: `sendAuthEmail` in
- * `lunora/auth/index.ts` calls `renderEmail(&lt;VerifyEmail … />)` from
+ * `lunora/auth/index.ts` calls `renderEmail(<VerifyEmail … />)` from
  * `@lunora/mail`. That makes them framework-agnostic in the way that matters —
  * a Vue or Svelte app sends exactly the same mail — even though they are written
  * in TSX, because `@react-email/render` is what turns them into HTML + text.
  *
  * They ship as the separate `auth-emails` registry item rather than inside
- * `auth-ui-&lt;framework>`, so a project only takes on `react` +
+ * `auth-ui-<framework>`, so a project only takes on `react` +
  * `@react-email/render` when it actually wants styled mail. Without the item,
  * the base `auth` item's plain-text bodies still work.
  *
  * # Styling
  *
  * Inline styles only, and a table-free single-column layout. Every serious mail
- * client strips `&lt;style>` blocks and most ignore flexbox and grid; `@media` is
+ * client strips `<style>` blocks and most ignore flexbox and grid; `@media` is
  * unreliable. This is the subset that renders the same in Gmail, Outlook and
  * Apple Mail, so resist moving it to a stylesheet.
  */

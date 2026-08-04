@@ -129,7 +129,7 @@ interface AgentOptions {
 
     /**
      * Optional app mutation over the agent's cancel path
-     * (`ctx.agents.&lt;name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
+     * (`ctx.agents.<name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
      * When omitted (or no run is in flight) {@link AgentResult.cancel} is a no-op.
      */
     cancel?: FunctionReference<"mutation">;
@@ -145,7 +145,7 @@ interface AgentOptions {
 
     /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
-     * `ctx.agents.&lt;name>.run(...)`. Called with `{ threadKey, input }` merged with
+     * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link AgentOptions.runArgs} and the per-call args.
      */
     run: FunctionReference<"mutation">;
@@ -183,7 +183,7 @@ interface AgentResult {
  * conversation surface (durable history + streaming + approvals) use `agentChat`.
  *
  * `run` and `cancel` stay generic over the app-defined mutations that wrap
- * `ctx.agents.&lt;name>.run` / `.cancel`, so the primitive hard-codes no function
+ * `ctx.agents.<name>.run` / `.cancel`, so the primitive hard-codes no function
  * names beyond the `agents:*` surface.
  *
  * Call from an injection context (component/service field or constructor); pass an

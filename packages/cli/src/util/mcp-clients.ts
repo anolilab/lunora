@@ -178,7 +178,7 @@ const claudeDesktopPaths = ({ home, platform }: McpPathContext): Partial<Record<
 };
 
 /**
- * Render the `[mcp_servers.&lt;name>]` table Codex reads.
+ * Render the `[mcp_servers.<name>]` table Codex reads.
  *
  * Serialized by `smol-toml` rather than by hand: TOML has real rules about
  * which keys may be bare (a dot in a server name silently becomes table

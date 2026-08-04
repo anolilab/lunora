@@ -112,7 +112,7 @@ export interface DefineEventsOptions {
     /**
      * Optional version prefix for all event types.
      *
-     * When set, every qualified event type is prefixed with `"v&lt;N>."`, enabling
+     * When set, every qualified event type is prefixed with `"v<N>."`, enabling
      * versioned event naming like `"v1.chat.messageSent"` or `"v2.chat.messageSent"`.
      * This allows materializers to evolve their handling logic based on the event
      * version without breaking backward compatibility.

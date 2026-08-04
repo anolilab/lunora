@@ -10,7 +10,7 @@
  * is read-only by default — the write tools are exposed only when `allowWrites`
  * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
  * allowlisted against the deployment's discovered public functions. It can also
- * front durable `@lunora/agent` runs as `agent_&lt;name>` tools when `allowAgents`
+ * front durable `@lunora/agent` runs as `agent_<name>` tools when `allowAgents`
  * (or `LUNORA_MCP_ALLOW_AGENTS` + `LUNORA_MCP_AGENTS`) is set. Run the
  * `lunora-mcp` binary (configured via the `LUNORA_URL`, `LUNORA_ADMIN_TOKEN`,
  * and `LUNORA_MCP_ALLOW_WRITES` env vars) for the stdio transport, serve the

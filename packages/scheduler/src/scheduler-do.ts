@@ -42,7 +42,7 @@ interface SchedulerEnv {
     /**
      * Fallback bearer token attached to the dispatch when
      * {@link SchedulerEnv.LUNORA_SCHEDULER_SECRET} is not configured. Sent as
-     * `authorization: Bearer &lt;token>`.
+     * `authorization: Bearer <token>`.
      */
     /* eslint-enable no-secrets/no-secrets */
     LUNORA_ADMIN_TOKEN?: string;
@@ -138,7 +138,7 @@ interface ScheduleRequestBody {
 
     /**
      * Workpool concurrency cap, sent alongside `pool` by `Workpool.enqueue`.
-     * Persisted on the pool's `pool:&lt;name>` storage row so the alarm-time
+     * Persisted on the pool's `pool:<name>` storage row so the alarm-time
      * concurrency gate has a value even if the in-memory client is gone.
      */
     maxConcurrency?: number;
@@ -166,7 +166,7 @@ interface ScheduleRequestBody {
     workflow?: string;
 }
 
-/** Durable per-pool state stored under `pool:&lt;name>`. */
+/** Durable per-pool state stored under `pool:<name>`. */
 interface PoolState {
     /** Jobs currently dispatched-but-not-yet-completed. The concurrency semaphore. */
     inFlight: number;
@@ -194,7 +194,7 @@ interface SchedulerPoolStatus {
     inFlight: number;
     /** The pool's concurrency cap. */
     maxConcurrency: number;
-    /** The logical workpool name (the `pool:&lt;name>` suffix). */
+    /** The logical workpool name (the `pool:<name>` suffix). */
     name: string;
     /** Pending jobs routed to this pool but not yet dispatched. */
     queued: number;
@@ -210,7 +210,7 @@ interface SchedulerStatus {
     backlog: number;
     /** Sum of every pool's `inFlight` count — the total held concurrency slots. */
     inFlight: number;
-    /** Per-pool backlog breakdown, one entry per `pool:&lt;name>` record. */
+    /** Per-pool backlog breakdown, one entry per `pool:<name>` record. */
     pools: SchedulerPoolStatus[];
 }
 
@@ -221,7 +221,7 @@ interface CancelRequestBody {
 /**
  * Durable Object that stores pending scheduled invocations sorted by their
  * `scheduledFor` time and fires them via HTTP on alarm. Storage layout:
- * `id:&lt;id>` maps to {@link ScheduleRecord}; `t:&lt;paddedTime>:&lt;id>` maps to the
+ * `id:<id>` maps to {@link ScheduleRecord}; `t:<paddedTime>:<id>` maps to the
  * id (used as a sorted index).
  *
  * On every mutation the DO recomputes the earliest pending task and updates
@@ -913,7 +913,7 @@ class SchedulerDO {
         await this.state.storage.put(SchedulerDO.indexKey(nextScheduledFor, record.id), record.id);
     }
 
-    /** Read the durable `pool:&lt;name>` row, defaulting to a fresh `inFlight: 0` pool. */
+    /** Read the durable `pool:<name>` row, defaulting to a fresh `inFlight: 0` pool. */
     private async loadPool(name: string, maxConcurrencyHint?: number): Promise<PoolState> {
         const stored = await this.state.storage.get<PoolState>(`${POOL_PREFIX}${name}`);
 
@@ -1005,7 +1005,7 @@ class SchedulerDO {
 
     /**
      * `GET /status` — the app-level backlog signal that powers the studio's
-     * SLO view. Enumerates every durable `pool:&lt;name>` row for its `inFlight`/
+     * SLO view. Enumerates every durable `pool:<name>` row for its `inFlight`/
      * `maxConcurrency` semaphore, counts the pending (not-yet-dispatched) jobs
      * routed to each pool with the same single-pass scan {@link handlePoolStatus}
      * uses, and rolls those up into app-wide `backlog` (sum of `queued`) and
@@ -1014,7 +1014,7 @@ class SchedulerDO {
      * Pools that have rows but no queued jobs still appear (with `queued: 0`) so
      * a saturated-but-idle pool stays visible; a pool that only ever existed as
      * queued jobs without a persisted row is unreachable here (the schedule path
-     * always writes a `pool:&lt;name>` row before the job's header), so a single
+     * always writes a `pool:<name>` row before the job's header), so a single
      * scan over `pool:` plus a cursor loop over `id:` is sufficient.
      */
     private async handleStatus(): Promise<Response> {
@@ -1173,7 +1173,7 @@ class SchedulerDO {
 
     /**
      * `GET /dead` — list the dead-letter records: jobs that exhausted their
-     * retry budget ({@link recordRetry}) and were parked under `dead:&lt;id>`
+     * retry budget ({@link recordRetry}) and were parked under `dead:<id>`
      * instead of being silently dropped. These never appear in `/list` (their
      * `id:` header is deleted on park), so this is the ONLY way the studio can
      * surface — and recover — a permanently-failed job.
@@ -1238,7 +1238,7 @@ class SchedulerDO {
     }
 
     /**
-     * Resolve a single pending job by id via a direct `id:&lt;id>` storage read —
+     * Resolve a single pending job by id via a direct `id:<id>` storage read —
      * O(1), versus scanning the whole `/list` view. Responds `{ record }` on a
      * hit and `{}` on a miss (an absent `record` field — JSON has no `undefined`
      * — which the client reads back as `null`).

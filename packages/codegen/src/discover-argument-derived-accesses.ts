@@ -5,7 +5,7 @@ import { enclosingExportName, isArgumentDerived, isScopedByContext, isUnmodified
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 
 /**
- * The sink method name when `node` is a `&lt;receiver>.&lt;method>` property access
+ * The sink method name when `node` is a `<receiver>.<method>` property access
  * satisfying `config` (name in `config.methods`, receiver text accepted by
  * `config.matchReceiver`), else `undefined`. Matched by shape — the same
  * `import`-agnostic, fail-closed convention every argument-derived-access
@@ -83,7 +83,7 @@ const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, conf
 export interface ArgumentDerivedAccessIR {
     /** Export binding name of the procedure performing the sink call. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the sink call, or `0` when unknown. */
     line: number;
@@ -93,7 +93,7 @@ export interface ArgumentDerivedAccessIR {
 
 /**
  * Per-binding configuration for {@link discoverArgumentDerivedAccesses}: which
- * `&lt;receiver>.&lt;method>(...)` property-access calls count as this binding's
+ * `<receiver>.<method>(...)` property-access calls count as this binding's
  * sink, and which call argument carries the potentially-tainted value.
  */
 export interface ArgumentDerivedAccessConfig {
@@ -118,7 +118,7 @@ export interface ArgumentDerivedAccessConfig {
 /**
  * Shared AST walk behind the argument-derived property-access sink feeders
  * (`ctx.kv`, `ctx.containers.*.get`, `ctx.storage.*`, `ctx.browser`): one IR row
- * per call in `lunora/` whose callee is a `&lt;receiver>.&lt;method>` property access
+ * per call in `lunora/` whose callee is a `<receiver>.<method>` property access
  * matching `config` and whose `config.argIndex` argument is derived from the
  * handler's `args` (directly, or through one local `const` hop) with no
  * server-side scoping. A fixed literal, or a value scoped by a server-trusted

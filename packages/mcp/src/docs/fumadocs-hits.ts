@@ -28,7 +28,7 @@ interface FumadocsSearchResult {
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 /**
- * Strip the `&lt;mark>` highlight tags fumadocs wraps around matched terms. They
+ * Strip the `<mark>` highlight tags fumadocs wraps around matched terms. They
  * are UI markup; leaving them in makes the model treat them as content (and
  * sometimes echo them back into generated code).
  */

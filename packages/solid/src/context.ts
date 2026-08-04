@@ -7,7 +7,7 @@ import { createContext, useContext } from "solid-js";
  * Solid context carrying the framework-neutral {@link LunoraClient}. Every
  * reactive primitive in this adapter (`createQuery`, `createMutation`,
  * `hydratePreloaded`) reads the client from here, so a single
- * `&lt;LunoraProvider client={…}>` at the root of the tree wires the whole app.
+ * `<LunoraProvider client={…}>` at the root of the tree wires the whole app.
  *
  * Defaults to `undefined` so {@link useLunora} can throw a helpful error when a
  * primitive is used outside a provider rather than dereferencing it.
@@ -15,7 +15,7 @@ import { createContext, useContext } from "solid-js";
 export const LunoraContext: Context<LunoraClient | undefined> = createContext<LunoraClient | undefined>();
 
 /**
- * Read the {@link LunoraClient} from the nearest `&lt;LunoraProvider>`.
+ * Read the {@link LunoraClient} from the nearest `<LunoraProvider>`.
  *
  * Throws when called outside a provider — the client is required to open the
  * HTTP/WS transport, so there is no sensible fallback. The React adapter's

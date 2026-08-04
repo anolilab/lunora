@@ -8,9 +8,9 @@
  * 1. `cdcEnabled()` — the `__cdc_log` table exists (CDC was on when the shard was migrated)
  * 2. `shape.sinceSeq !== undefined` — the client supplied a checkpoint hint
  * 3. `shape.sinceEpoch === epoch` — both sides are on the same CDC timeline
- * 4. `shape.sinceSeq &lt;= cursor` — the client is not ahead of the server
+ * 4. `shape.sinceSeq <= cursor` — the client is not ahead of the server
  * 5a. `shape.sinceSeq === cursor` — trivial: already at cursor, nothing missed; OR
- * 5b. `floor !== undefined &amp;&amp; floor &lt;= shape.sinceSeq + 1` — the oldest retained op still covers the client's gap
+ * 5b. `floor !== undefined && floor <= shape.sinceSeq + 1` — the oldest retained op still covers the client's gap
  *
  * **Observable distinction (wire protocol):**
  * - **Resume** — `pokeStart.baseCheckpoint` is a number (`=== shape.sinceSeq`); `rowsPatch` holds only the diff ops for `(sinceSeq, cursor]`.

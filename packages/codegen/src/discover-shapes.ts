@@ -112,7 +112,7 @@ const tableLiteralFrom = (call: CallExpression): string | undefined => {
 /**
  * Read the `args` validator map from a `defineShape({ args: { … } })` config, so
  * `_generated/collections.ts` can type a shape's partition selector instead of
- * widening it to `Record&lt;string, unknown>`. Returns `{}` for a parameterless shape
+ * widening it to `Record<string, unknown>`. Returns `{}` for a parameterless shape
  * (or one whose `args` isn't a plain object literal — the runtime object stays
  * authoritative either way).
  */

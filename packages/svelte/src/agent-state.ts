@@ -43,7 +43,7 @@ interface AgentStateHandle<T> {
  * `state` updates only on a real `setState`. The Svelte counterpart to React's
  * `useAgentState`, re-expressed as stores you read with `$`.
  *
- * Generic over the app's state shape (`agentState&lt;SupportState>(...)`, itself a
+ * Generic over the app's state shape (`agentState<SupportState>(...)`, itself a
  * record) — the reference is typed as an optional record because codegen cannot
  * see the per-agent state type; the generic casts to `T`. The `state`/`error`
  * stores are lazy, so the subscription opens on the first subscriber to `state`

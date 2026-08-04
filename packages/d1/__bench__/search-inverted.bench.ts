@@ -54,7 +54,7 @@ const searchSchema: SchemaLike = {
 
 /**
  * A corpus where term frequency is deliberately skewed: every document carries
- * `common`, one in ten carries `frequent`, and each has a unique `rare&lt;n>` —
+ * `common`, one in ten carries `frequent`, and each has a unique `rare<n>` —
  * so one query can touch the whole index and another exactly one row.
  *
  * The rare token is **zero-padded to a fixed width** on purpose. A query's final

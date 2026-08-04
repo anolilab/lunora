@@ -159,7 +159,7 @@ interface SessionData {
 }
 
 /**
- * What a consumer actually passes to `&lt;AuthUIProvider>`.
+ * What a consumer actually passes to `<AuthUIProvider>`.
  *
  * Deliberately almost-empty. A real better-auth client's type contains only the
  * plugins it was built with — a client without `adminClient()` has no

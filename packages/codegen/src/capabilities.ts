@@ -51,7 +51,7 @@ interface CapabilityDescriptor {
     appMethod?: AppMethodFacet;
     /** Generated `ctx.*` helper name (the usage probe + the destructure detector); omitted when the feature has no ctx surface (`mail`). */
     contextProperty?: string;
-    /** The capability id — equal to its `FeatureUsage` key and its `ctx.&lt;key>` helper (except where `contextProperty` differs, e.g. `hyperdrive` → `ctx.sql`). */
+    /** The capability id — equal to its `FeatureUsage` key and its `ctx.<key>` helper (except where `contextProperty` differs, e.g. `hyperdrive` → `ctx.sql`). */
     key: string;
     /** The `@lunora/*` package whose import flips the usage probe. */
     moduleSpecifier: string;
@@ -242,7 +242,7 @@ type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];
 /**
  * The subset of {@link CapabilityKey} for capabilities that expose a fluent
  * `defineApp` builder method (an `appMethod` facet). `emit-app.ts` derives each
- * one's `has&lt;Capitalized>` option key off this union, so the derivation is
+ * one's `has<Capitalized>` option key off this union, so the derivation is
  * checked against `EmitAppOptions` at compile time (a capability whose flag is
  * missing from `EmitAppOptions` is a type error, not a silent no-op).
  */
@@ -274,7 +274,7 @@ const SERVER_CTX_FIELDS: ReadonlyMap<CapabilityKey, ServerContextFieldFacet> = n
  * The long-tail `defineApp` builder capabilities, in emit order — for
  * `emit-app.ts`, which turns each into a fluent method setting `configKey` on the
  * `createShardDO` config. Each pairs the capability's `has*` option key
- * (`has&lt;Capitalized-key>`) with its {@link AppMethodFacet}.
+ * (`has<Capitalized-key>`) with its {@link AppMethodFacet}.
  */
 const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: AppMethodKey }> = CAPABILITY_ROWS.flatMap((capability) =>
     "appMethod" in capability ? [{ appMethod: capability.appMethod, key: capability.key }] : [],

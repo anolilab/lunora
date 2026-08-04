@@ -16,7 +16,7 @@
  * ```
  *
  * A job's target may be a function reference (a one-shot dispatch, above) or a
- * durable workflow — passing the generated `workflows.&lt;name>` reference starts a
+ * durable workflow — passing the generated `workflows.<name>` reference starts a
  * fresh, multi-step, retried workflow INSTANCE on each fire, and the args are
  * type-checked against the workflow's `params`:
  *
@@ -303,20 +303,20 @@ interface CronJobsBuilder {
     /**
      * Raw cron expression escape hatch (5- or 6-field, full cron-parser grammar).
      * The target may be a function (`internal.file.fn`) or a durable workflow
-     * (`workflows.&lt;name>`); a workflow's `args` are inferred from its `params`.
+     * (`workflows.<name>`); a workflow's `args` are inferred from its `params`.
      */
     cron: <T extends CronTarget>(name: string, cronExpr: string, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
-    /** Daily at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    /** Daily at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.<name>`). */
     daily: <T extends CronTarget>(name: string, schedule: DailySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
-    /** Hourly at `minuteUTC` past the hour. The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    /** Hourly at `minuteUTC` past the hour. The target may be a function or a durable workflow (`workflows.<name>`). */
     hourly: <T extends CronTarget>(name: string, schedule: HourlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
-    /** Every `{ seconds | minutes | hours }`. The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    /** Every `{ seconds | minutes | hours }`. The target may be a function or a durable workflow (`workflows.<name>`). */
     interval: <T extends CronTarget>(name: string, schedule: IntervalSchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Snapshot of the registered jobs, in declaration order. */
     jobs: () => ReadonlyArray<CronJob>;
-    /** Monthly on `day` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    /** Monthly on `day` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.<name>`). */
     monthly: <T extends CronTarget>(name: string, schedule: MonthlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
-    /** Weekly on `dayOfWeek` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    /** Weekly on `dayOfWeek` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.<name>`). */
     weekly: <T extends CronTarget>(name: string, schedule: WeeklySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
 }
 

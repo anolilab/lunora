@@ -408,16 +408,16 @@ export interface MessageSendRequestLike<Body = unknown> {
 }
 
 /**
- * Minimal structural projection of workers-types' `Queue&lt;Body>` (the producer
+ * Minimal structural projection of workers-types' `Queue<Body>` (the producer
  * binding). The real binding's `send`/`sendBatch` resolve to a metadata object;
- * we widen the return to `Promise&lt;unknown>` so a plain-object fake satisfies it.
+ * we widen the return to `Promise<unknown>` so a plain-object fake satisfies it.
  */
 export interface QueueBindingLike<Body = unknown> {
     send: (message: Body, options?: QueueSendOptions) => Promise<unknown>;
     sendBatch: (messages: Iterable<MessageSendRequestLike<Body>>, options?: QueueSendBatchOptions) => Promise<unknown>;
 }
 
-/** Structural mirror of workers-types' `Message&lt;Body>` (one delivered message). */
+/** Structural mirror of workers-types' `Message<Body>` (one delivered message). */
 export interface MessageLike<Body = unknown> {
     /** Acknowledge this message so it is not redelivered. */
     ack: () => void;
@@ -429,7 +429,7 @@ export interface MessageLike<Body = unknown> {
     readonly timestamp: Date;
 }
 
-/** Structural mirror of workers-types' `MessageBatch&lt;Body>` handed to a consumer. */
+/** Structural mirror of workers-types' `MessageBatch<Body>` handed to a consumer. */
 export interface MessageBatchLike<Body = unknown> {
     /** Acknowledge every message in the batch. */
     ackAll: () => void;

@@ -1,5 +1,5 @@
 /**
- * One `ctx.authApi.&lt;method>(...)` call discovered in a function body — the input
+ * One `ctx.authApi.<method>(...)` call discovered in a function body — the input
  * the `auth_api_call_without_headers` lint consumes. Produced by the codegen
  * feeder; runtime callers don't supply it, so the lint finds nothing there.
  */

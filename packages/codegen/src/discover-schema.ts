@@ -26,7 +26,7 @@ const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 /**
  * Table names that collide with members of `ctx.db` (the typed reader/writer the
  * generated `_generated/server.ts` widens with the per-table facade). A table so
- * named would shadow the corresponding `ctx.db.&lt;member>` and silently corrupt
+ * named would shadow the corresponding `ctx.db.<member>` and silently corrupt
  * the emitted type, so codegen rejects it up front with a clear diagnostic.
  */
 const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", "patch", "query", "replace", "system"]);
@@ -673,7 +673,7 @@ const FTS5_SHADOW_SUFFIXES = ["__vocab", "_config", "_content", "_data", "_docsi
  * Reject two search indexes on one table whose generated FTS5 table names
  * collide through a shadow-table suffix.
  *
- * `ftsTableName` renders `&lt;table>__fts_&lt;indexName>`, so `search_prompts` and
+ * `ftsTableName` renders `<table>__fts_<indexName>`, so `search_prompts` and
  * `search_prompts_content` on the same table produce `prompts__fts_search_prompts`
  * and `prompts__fts_search_prompts_content` — and the FIRST index already
  * reserved the second name as its own `_content` shadow. Creating the second
@@ -1260,7 +1260,7 @@ const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
 };
 
 /**
- * Walk the builder chain wrapping `defineSchemaCall` for a `.&lt;methodName>("literal")`
+ * Walk the builder chain wrapping `defineSchemaCall` for a `.<methodName>("literal")`
  * link and return its validated string-literal argument, or `undefined` when the
  * method is absent from the chain (found regardless of where it sits, e.g.
  * `defineSchema(...).rls("required").jurisdiction("us").extend(...)`). Shared by
@@ -1397,7 +1397,7 @@ const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[], pr
 };
 
 /**
- * Load `&lt;projectRoot>/lunora/schema.ts`, find `defineSchema({...})`, and
+ * Load `<projectRoot>/lunora/schema.ts`, find `defineSchema({...})`, and
  * return a structural IR. Throws if the file or call cannot be found.
  */
 const discoverSchema = (project: Project, schemaPath: string, projectRoot?: string): SchemaIR => {

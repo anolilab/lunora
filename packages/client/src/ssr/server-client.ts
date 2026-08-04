@@ -11,7 +11,7 @@ export interface ServerClientOptions {
     fetch?: typeof fetch;
 
     /**
-     * Bearer token sent as `Authorization: Bearer &lt;token>` on every RPC. In an
+     * Bearer token sent as `Authorization: Bearer <token>` on every RPC. In an
      * SSR loader you typically read this from the request (e.g. the session
      * resolved by `getServerSession`) and pass it here so the server-side
      * load runs as the signed-in user — and so the client subscription that

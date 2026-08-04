@@ -72,7 +72,7 @@ export const columnRef = (field: string): string => {
     return quoteIdentifier(field);
 };
 
-/** Physical index identifier — `&lt;table>_&lt;name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
+/** Physical index identifier — `<table>_<name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
 export const physicalIndexName = (tableName: string, indexName: string): string => quoteIdentifier(`${tableName}_${indexName}`);
 
 export { quoteIdentifier } from "../../../shared/quote-identifier";

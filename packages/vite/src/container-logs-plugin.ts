@@ -10,11 +10,11 @@ import type { ResolvedLunoraPluginOptions } from "./types";
  * Vite terminal.
  *
  * `@cloudflare/vite-plugin` builds and runs each declared container locally via
- * Docker (image `cloudflare-dev/&lt;class>:&lt;id>`) but only forwards the *worker's*
+ * Docker (image `cloudflare-dev/<class>:<id>`) but only forwards the *worker's*
  * console — the container process's own output is otherwise invisible. This
  * plugin attaches to those Docker log streams (via `@lunora/config`'s
  * `streamContainerLogs`, which lazy-loads `dockerode`) and prints each line
- * through Vite's logger, branded and tagged `container:&lt;name>`.
+ * through Vite's logger, branded and tagged `container:<name>`.
  *
  * A no-op when the project declares no containers (the common case): discovery
  * returns an empty list, so `dockerode` is never imported and no Docker work

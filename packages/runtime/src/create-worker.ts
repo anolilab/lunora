@@ -60,7 +60,7 @@ import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
 /**
  * Wire-format RPC envelope. Posted to `POST /_lunora/rpc`.
  *
- * `functionPath` is the `&lt;file>:&lt;function>` identifier emitted by codegen,
+ * `functionPath` is the `<file>:<function>` identifier emitted by codegen,
  * e.g. `"messages:list"`. `shardKey` is optional — when omitted the runtime
  * routes to {@link WorkerOptions.defaultShardKey} (default `"__root__"`).
  *
@@ -233,7 +233,7 @@ interface FunctionDescriptor {
     /** The function's declared argument schema, derived from its `v.*` validators. */
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
-    /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
+    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
     path: string;
     /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
     visibility?: "internal" | "public";
@@ -247,7 +247,7 @@ interface FunctionRegistryEntry {
     /**
      * Opt-in public-surface tag set by the `.expose({ rest: true })` builder
      * modifier (plan 167). Present only on procedures deliberately published over
-     * REST; the runtime builds a `/_lunora/rest/&lt;namespace>/&lt;fn>` route for each,
+     * REST; the runtime builds a `/_lunora/rest/<namespace>/<fn>` route for each,
      * routing THROUGH the procedure so auth/RLS/validators are enforced. Rides
      * along on the registered function's identity (like `fn.x402` / `fn.rls`), so
      * reading it needs no change to the generated registry shape.
@@ -533,7 +533,7 @@ interface BackupStore {
 
 /**
  * Manifest sidecar written next to each scheduled backup's NDJSON object (at
- * `&lt;file>.manifest.json`). Mirrors the manifest entry the CLI records for local
+ * `<file>.manifest.json`). Mirrors the manifest entry the CLI records for local
  * backups so both backup planes describe a snapshot the same way;
  * `cron`/`scheduledTime` additionally record which trigger produced it.
  */
@@ -791,7 +791,7 @@ interface WorkerOptions {
 
     /**
      * Key prefix the scheduled backup writes under (default `"backups/"`). The
-     * NDJSON object lands at `&lt;prefix>lunora-backup-&lt;id>.ndjson` and its manifest
+     * NDJSON object lands at `<prefix>lunora-backup-<id>.ndjson` and its manifest
      * at the same key plus `.manifest.json`.
      */
     backupPrefix?: string;
@@ -1261,7 +1261,7 @@ interface WorkerOptions {
      * Voice-session Durable Object namespaces, keyed by the agent's
      * `lunora/agents.ts` export name (e.g. `{ support: env.VOICE_SUPPORT }`).
      * Codegen wires this for every voice-enabled agent. When set, the worker
-     * exposes `/_lunora/voice/&lt;agentExportName>` — a WebSocket upgrade that
+     * exposes `/_lunora/voice/<agentExportName>` — a WebSocket upgrade that
      * resolves the caller's identity, forwards it on the server-minted
      * `x-lunora-userid` / `x-lunora-identity` headers, and hands the socket to
      * the agent's `VoiceSessionDO`. Omit it (voice-free apps) and the route does
@@ -1390,7 +1390,7 @@ const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
         userAgent,
     };
 };
-/** Prefix for a voice-enabled agent's real-time session upgrade — `/_lunora/voice/&lt;agentExportName>` (dynamic, so matched by prefix not the exact-path table). */
+/** Prefix for a voice-enabled agent's real-time session upgrade — `/_lunora/voice/<agentExportName>` (dynamic, so matched by prefix not the exact-path table). */
 const VOICE_PATH_PREFIX = "/_lunora/voice/";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
@@ -2540,7 +2540,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
      * in the `x-lunora-scheduler-signature` header (secret in
      * `env.LUNORA_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
-     * the scheduler — an `authorization: Bearer &lt;admin token>` fallback. An
+     * the scheduler — an `authorization: Bearer <admin token>` fallback. An
      * unsigned/forged request is rejected with 403; we never run a job we can't
      * authenticate.
      *
@@ -2639,7 +2639,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return response;
     };
 
-    /** The `&lt;CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
+    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
     interface NotConfiguredError {
         code: string;
         message: string;
@@ -3256,7 +3256,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Handle a voice-session WebSocket upgrade for `/_lunora/voice/&lt;agentExportName>`.
+     * Handle a voice-session WebSocket upgrade for `/_lunora/voice/<agentExportName>`.
      * Only registered when `options.voiceAgents` is provided (a voice-free app has
      * no route). Mirrors {@link handleWebSocketUpgrade}: enforce the WS origin
      * guard, resolve the caller's identity once, and forward the socket to the

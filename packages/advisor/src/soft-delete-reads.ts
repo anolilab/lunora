@@ -1,5 +1,5 @@
 /**
- * One `ctx.db.&lt;table>.findMany({ includeDeleted })` list read whose
+ * One `ctx.db.<table>.findMany({ includeDeleted })` list read whose
  * `includeDeleted` is either a hardcoded `true` or derived from the handler's
  * `args` — the shared input for the `soft_delete_include_deleted_from_args`
  * lint. `includeDeleted` resurfaces rows a `.softDelete()` table would otherwise

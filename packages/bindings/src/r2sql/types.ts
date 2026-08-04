@@ -61,8 +61,8 @@ export interface R2SqlColumn {
  * (`{ success, result, errors }`); we surface the `rows` (the `result` array of
  * column→value records), the inferred/echoed `columns`, and the `rowCount`.
  *
- * `Row` defaults to an open record; supply it (`from&lt;MyRow>(…)` /
- * `query&lt;MyRow>(…)`) to get typed result fields — R2 SQL tables live in Iceberg,
+ * `Row` defaults to an open record; supply it (`from<MyRow>(…)` /
+ * `query<MyRow>(…)`) to get typed result fields — R2 SQL tables live in Iceberg,
  * not `defineSchema`, so the row type is caller-declared rather than inferred.
  */
 export interface R2SqlResult<Row = Record<string, unknown>> {

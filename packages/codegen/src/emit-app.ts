@@ -63,7 +63,7 @@ interface EmitAppOptions {
      * Voice-enabled agents (`defineAgent({ voice: … })`) → wire
      * `options.voiceAgents`, mapping each agent's export name to its `VOICE_*`
      * Durable Object namespace binding so the runtime exposes
-     * `/_lunora/voice/&lt;exportName>`. Empty/absent ⇒ no wiring, byte-identical
+     * `/_lunora/voice/<exportName>`. Empty/absent ⇒ no wiring, byte-identical
      * output for voice-free (and agent-free) projects.
      */
     voiceAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
@@ -84,13 +84,13 @@ interface EmitAppOptions {
  * Derived from the single {@link APP_METHOD_CAPABILITIES} table (so it can't
  * drift from the usage probe / ctx-field seam) into the `[flag, methodName,
  * configKey, doc]` shape the emitters below consume — the flag is the capability
- * key's `has&lt;Capitalized>` option (`ai` → `hasAi`, `payments` → `hasPayments`).
+ * key's `has<Capitalized>` option (`ai` → `hasAi`, `payments` → `hasPayments`).
  */
 
 /**
- * The capability key's `has&lt;Capitalized>` option name (`ai` → `hasAi`, `payments`
+ * The capability key's `has<Capitalized>` option name (`ai` → `hasAi`, `payments`
  * → `hasPayments`). The internal `as` is a narrow, provably-correct cast — the
- * runtime string equals the `has${Capitalize&lt;K>}` template; string methods just
+ * runtime string equals the `has${Capitalize<K>}` template; string methods just
  * don't preserve the literal type. Correctness of the *flag* (that it names a real
  * `EmitAppOptions` key) is enforced at {@link LONG_TAIL}'s type annotation below,
  * not here — so a capability whose flag is missing from `EmitAppOptions` is a

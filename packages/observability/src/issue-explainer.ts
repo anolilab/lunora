@@ -97,7 +97,7 @@ export interface AiRunBinding {
 
 /** Parsed `__lunora_admin__:explainIssue` payload: the folded Issue's identifying facts, plus an optional model override. */
 export interface ExplainIssueArgs {
-    /** The Issue's culprit (`&lt;file>:&lt;function>` or `container:&lt;name>`), for grounding context. */
+    /** The Issue's culprit (`<file>:<function>` or `container:<name>`), for grounding context. */
     culprit?: string;
     /** Per-request model-id override; falls back to the caller's `defaultModel`, then {@link DEFAULT_EXPLAIN_ISSUE_MODEL}. */
     model?: string;

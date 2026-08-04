@@ -38,7 +38,7 @@ export interface MiddlewareNext<ContextIn> {
  */
 export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }) => ContextOut | Promise<ContextOut>;
 
-/** Options accepted by `initLunora.dataModel&lt;DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
+/** Options accepted by `initLunora.dataModel<DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
 export type CreateOptions = Record<never, never>;
 
 /**
@@ -55,7 +55,7 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
 
     /**
      * Publish this query on the opt-in public REST surface (plan 167) — the
-     * runtime mints `GET /_lunora/rest/&lt;namespace>/&lt;fn>` (and `POST`), dispatching
+     * runtime mints `GET /_lunora/rest/<namespace>/<fn>` (and `POST`), dispatching
      * THROUGH the procedure so `ctx.auth` / RLS / validators are enforced, and the
      * generated OpenAPI describes it. Default-closed: omit to keep it RPC-only.
      */
@@ -80,7 +80,7 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
 
     /**
      * Terminal: declare this procedure as a streaming query. The handler is an
-     * async generator (or any function returning an `AsyncIterable&lt;R>`) that
+     * async generator (or any function returning an `AsyncIterable<R>`) that
      * yields one chunk per server-pushed frame. The third `signal` argument is
      * tripped when the client cancels — break out of the loop or check
      * `signal.aborted` between yields. `.output()` does not apply: per-chunk
@@ -105,7 +105,7 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
 
     /**
      * Publish this mutation on the opt-in public REST surface (plan 167) — the
-     * runtime mints `POST /_lunora/rest/&lt;namespace>/&lt;fn>`, dispatching THROUGH the
+     * runtime mints `POST /_lunora/rest/<namespace>/<fn>`, dispatching THROUGH the
      * procedure so `ctx.auth` / RLS / validators are enforced, and the generated
      * OpenAPI describes it. Default-closed: omit to keep it RPC-only.
      */
@@ -146,7 +146,7 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
 
     /**
      * Publish this action on the opt-in public REST surface (plan 167) — the
-     * runtime mints `POST /_lunora/rest/&lt;namespace>/&lt;fn>`, dispatching THROUGH the
+     * runtime mints `POST /_lunora/rest/<namespace>/<fn>`, dispatching THROUGH the
      * procedure so `ctx.auth` / RLS / validators are enforced, and the generated
      * OpenAPI describes it. Default-closed: omit to keep it RPC-only.
      */

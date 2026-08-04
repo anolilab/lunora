@@ -156,7 +156,7 @@ class OneTapComponent {
 
 /**
  * Upload an organization's logo. Renders only when the app configured an
- * `avatar.upload` handler — without one, `&lt;lunora-organization-settings-card>`'s
+ * `avatar.upload` handler — without one, `<lunora-organization-settings-card>`'s
  * logo URL field is the fallback.
  */
 @Component({

@@ -2,11 +2,11 @@
  * AST-merge helper for `lunora add` registry items that ship a schema
  * extension. Mirrors the table/cron generators in
  * `.vis/templates/_helpers/insert-*.ts` — it loads `lunora/schema.ts` into a
- * ts-morph in-memory project and chains a `.extend(&lt;key>.extension)` onto the
+ * ts-morph in-memory project and chains a `.extend(<key>.extension)` onto the
  * existing `defineSchema(...)` call, plus the matching managed import.
  *
  * Ownership / idempotency: both the import and the `.extend(...)` are wrapped in
- * `// lunora:add:&lt;key>` managed-block markers. Re-running `add` for the same
+ * `// lunora:add:<key>` managed-block markers. Re-running `add` for the same
  * item detects the marker and is a no-op, so user edits elsewhere in the file
  * survive untouched. ts-morph itself doesn't model leading-comment trivia as
  * editable nodes, so we operate on the raw text for the markers and only use
@@ -37,9 +37,9 @@ const endMarker = (key: string): string => `// lunora:add:${key}:end`;
 
 /**
  * The default module specifier a freshly-added item is imported from. The item
- * ships `lunora/&lt;key>/schema.ts` exporting `&lt;key>` (the plugin object whose
+ * ships `lunora/<key>/schema.ts` exporting `<key>` (the plugin object whose
  * `.extension` is the schema extension). Relative to `lunora/schema.ts` that is
- * `./&lt;key>/schema`.
+ * `./<key>/schema`.
  */
 const extensionImportSpecifier = (key: string): string => `./${key}/schema`;
 
@@ -82,7 +82,7 @@ const outermostChainExpression = (defineSchemaCall: CallExpression): TsNode => {
 };
 
 /**
- * Append `.extend(&lt;key>.extension)` and a managed import to an existing
+ * Append `.extend(<key>.extension)` and a managed import to an existing
  * `lunora/schema.ts`. Idempotent: a second call for the same `key` returns
  * `already-applied` and leaves the text unchanged.
  * @param source the current `lunora/schema.ts` contents

@@ -129,7 +129,7 @@ export interface FacadeEntry {
      * Insert many documents into this table in one call. With
      * `{ skipDuplicates: true }`, UNIQUE breaches resolve to `null` for that row
      * instead of failing the batch. The typed facade narrows the return to
-     * `Id&lt;T>[]` when skipDuplicates is not requested.
+     * `Id<T>[]` when skipDuplicates is not requested.
      */
     insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
     // NOTE: `insertManyUnsafe` is DELIBERATELY absent from the per-table facade
@@ -196,7 +196,7 @@ export interface UpsertManyArgs {
  *
  * The by-id accessors (`get`/`delete`/`patch`/`replace`) forward the bound
  * `tableName` as `expectedTable` so the underlying writer scopes its id lookup
- * to this table. Without it, a branded `Id&lt;"posts">` carrying another table's
+ * to this table. Without it, a branded `Id<"posts">` carrying another table's
  * id would resolve cross-table (the writer probes every table by id), letting
  * `ctx.db.posts.get(foreignId)` read — or `.delete`/`.patch`/`.replace`
  * mutate — a row in an unrelated table (IDOR). Writers that ignore the second

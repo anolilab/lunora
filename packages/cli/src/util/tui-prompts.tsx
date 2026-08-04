@@ -1116,7 +1116,7 @@ const TasksView = <T,>({ end, onSettle, start, tasks }: TasksViewProps<T>): Reac
 
 /**
  * Run a sequence of async tasks as a live checklist with the create-astro look: a
- * gradient "rocket" header that flips to `✔  &lt;end>` when done, over `□`/`▶`/`■`
+ * gradient "rocket" header that flips to `✔  <end>` when done, over `□`/`▶`/`■`
  * sub-steps. Returns each task's result. Off a TTY the tasks run bare (no render)
  * and the first failure rejects, exactly like {@link withTuiSpinner}.
  */

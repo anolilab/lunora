@@ -194,7 +194,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 
     /**
      * Turn on soft delete. Adds a nullable timestamp column (`options.field`,
-     * default `deletedAt`) and changes `ctx.db.&lt;table>.delete()` to **set** it
+     * default `deletedAt`) and changes `ctx.db.<table>.delete()` to **set** it
      * instead of removing the row; `onDelete: "cascade"` children are recursively
      * soft-deleted too. **List reads** (`findMany`/`findFirst`/`query()`/`count`/
      * `aggregate`/relation loads) then hide soft-deleted rows unless they pass
@@ -875,7 +875,7 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
 const SYSTEM_INDEX_FIELDS = ["_creationTime", "_id"] as const;
 
 /**
- * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set&lt;string>`
+ * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set<string>`
  * (rather than inferring the literal-union element type) because it is
  * probed with an arbitrary user-declared `IndexDefinition["fields"]` entry,
  * not one already narrowed to the system-field union.

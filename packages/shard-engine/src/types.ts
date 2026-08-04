@@ -4,7 +4,7 @@ export interface SubscriptionQuery {
     args?: Record<string, unknown>;
 
     /**
-     * `&lt;file>:&lt;function>` identifier of the query to re-run server-side when
+     * `<file>:<function>` identifier of the query to re-run server-side when
      * a write touches a table it reads. Present on subscriptions that opt into
      * server re-execution; absent on legacy delta-only subscriptions, which
      * are matched by `table` alone.

@@ -60,7 +60,7 @@ export const createMutationForClient = <F extends FunctionReference>(client: Mut
 /**
  * Returns a reactive handle `{ mutate, pending, data, error, reset }` for the
  * given mutation reference, bound to the `LunoraClient` from the nearest
- * `&lt;LunoraProvider>`.
+ * `<LunoraProvider>`.
  *
  * Optimistic updates stay client-owned: the `optimistic` / `optimisticUpdate`
  * call options pass straight through to `client.mutation`, which applies and

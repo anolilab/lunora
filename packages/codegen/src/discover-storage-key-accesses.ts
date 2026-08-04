@@ -4,7 +4,7 @@ import { discoverArgumentDerivedAccesses } from "./discover-argument-derived-acc
 import type { FunctionIR, StorageKeyAccessIR } from "./ir";
 
 /**
- * The `ctx.storage.&lt;bucket>.&lt;method>(...)` bucket methods whose first argument is a
+ * The `ctx.storage.<bucket>.<method>(...)` bucket methods whose first argument is a
  * per-object R2 key — the IDOR sinks. Confirmed against `@lunora/storage`'s
  * `Storage` surface (the read/write/URL/multipart methods that take `key` as
  * arg[0]), plus the raw R2 verbs (`get`/`put`/`head`) a re-export may surface.
@@ -30,7 +30,7 @@ const KEY_TAKING_METHODS = new Set<string>([
 ]);
 
 /**
- * Discover `ctx.storage.&lt;bucket>.&lt;method>(key, …)` calls in `lunora/` whose object
+ * Discover `ctx.storage.<bucket>.<method>(key, …)` calls in `lunora/` whose object
  * key is derived from the handler's `args` with no server-side scoping — the
  * `storage_key_from_user_args` lint input. An R2 key taken straight from request
  * input lets any caller read, overwrite, or delete another user's object

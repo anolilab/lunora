@@ -15,7 +15,7 @@ interface KvBrowserProps {
      * Load the worker's registered KV namespaces. Defaults to
      * `client.listKvNamespaces`, which hits the admin-gated
      * `GET /_lunora/admin/kv/namespaces` endpoint — so the panel works out of
-     * the box under `&lt;LunoraProvider>`, provided the worker is built with a
+     * the box under `<LunoraProvider>`, provided the worker is built with a
      * `kvIntrospector` and `adminToken`.
      */
     readonly loadNamespaces?: () => Promise<KvNamespaceSummary[]>;

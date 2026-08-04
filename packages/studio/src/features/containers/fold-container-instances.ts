@@ -25,14 +25,14 @@ const EVENT_STATE: Record<string, ContainerLifecycleState> = {
  * The log envelope now carries the per-instance Durable Object id
  * (`entry.instance`) and, for a `stop`, the process `exitCode`; `@lunora/do`
  * maps the Container DO's best-effort lifecycle push to `functionPath:
- * "container:&lt;name>"` + a `&lt;event>` / `&lt;event>: &lt;detail>` message. So this view
+ * "container:<name>"` + a `<event>` / `<event>: <detail>` message. So this view
  * is keyed per `(name, instance)` — many concurrent instances of one container
  * fold into their own rows instead of collapsing into a single lane. An entry
  * with no instance id (older buffers, or a pre-instance transition) folds under
  * a synthetic single-lane key so it still renders.
  */
 interface ContainerInstanceRow {
-    /** Detail after the `&lt;event>:` marker (a stop reason / error message), when present. */
+    /** Detail after the `<event>:` marker (a stop reason / error message), when present. */
     readonly detail?: string;
     /** The raw lifecycle transition token that produced the current state (`start`/`stop`/`sleep`/`error`). */
     readonly event: string;
@@ -52,7 +52,7 @@ interface ContainerInstanceRow {
 
 /**
  * Split a folded container log message into its transition token + optional
- * detail. `@lunora/do` writes `"&lt;event>"` or `"&lt;event>: &lt;detail>"` (e.g.
+ * detail. `@lunora/do` writes `"<event>"` or `"<event>: <detail>"` (e.g.
  * `"stop: hard timeout reached"`), so the first `:` bounds the token.
  */
 const parseContainerMessage = (message: string): { detail?: string; event: string } => {
@@ -73,7 +73,7 @@ const parseContainerMessage = (message: string): { detail?: string; event: strin
 /**
  * Reduce a shard's log entries (newest-first, as `getLogs` returns them) to the
  * current state of each container instance — the panel's "current containers"
- * view. Only `container:&lt;name>` entries are considered; rows are keyed per
+ * view. Only `container:<name>` entries are considered; rows are keyed per
  * `(name, instance)` so concurrent instances stay distinct, and for each key the
  * entry with the greatest timestamp wins. An entry with no instance id folds
  * under the container name alone. Pure + order-independent, so it is

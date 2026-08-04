@@ -20,7 +20,7 @@ export interface RatelimitApiContext<Context> {
  *
  * ```ts
  * const limiter = new RateLimiter({ config: { send: { kind: "token bucket", rate: 5, period: 60_000, capacity: 5 } } });
- * const c = initLunora.dataModel&lt;DataModel>().create();
+ * const c = initLunora.dataModel<DataModel>().create();
  * export const send = c.mutation
  *     .use(ratelimitPlugin(limiter).middleware!)
  *     .mutation(async ({ ctx, args }) => {

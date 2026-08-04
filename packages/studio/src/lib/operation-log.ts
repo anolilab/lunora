@@ -20,7 +20,7 @@
  * `JSON.stringify(args)` is exactly how row data would leak in.
  *
  * The one thing stored verbatim is a rejection's `message`, which the server
- * writes and which CAN echo user data (SQLite's `near "&lt;token&gt;": syntax error`
+ * writes and which CAN echo user data (SQLite's `near "<token>": syntax error`
  * quotes the statement; a constraint violation can quote a value). That is a
  * deliberate trade — the message is the diagnosis, it is already on screen in the
  * error alert, and the tape is memory-only, never persisted or transmitted. The

@@ -52,7 +52,7 @@ interface AuthUIProviderProps {
 
     /**
      * Framework `Link` component for internal links (`NuxtLink`, `RouterLink`,
-     * …). Falls back to a plain `&lt;a>` when omitted.
+     * …). Falls back to a plain `<a>` when omitted.
      */
     Link?: Component;
     localization?: Partial<Localization>;
@@ -69,7 +69,7 @@ interface AuthUIProviderProps {
     social?: ReadonlyArray<string>;
     /** Retint the cards from config; see `core/theme.ts`. */
     theme?: AuthUIConfig["theme"];
-    /** URL segments `&lt;AuthView>` maps to cards; see `core/config.ts`. */
+    /** URL segments `<AuthView>` maps to cards; see `core/config.ts`. */
     viewPaths?: ViewPaths;
 }
 
@@ -199,7 +199,7 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
  * `autoLoad`, the social provider list — are read *through* that ref, so they
  * re-evaluate when the server answers. Neither form needs a component boundary
  * to make that happen. Choose between them on scope: this one is app-wide,
- * `&lt;AuthUIProvider>` scopes the context to a subtree.
+ * `<AuthUIProvider>` scopes the context to a subtree.
  */
 const createAuthUI = (config: AuthUIProviderProps): { install: (app: App) => void } => {
     const context = buildContext(config);
@@ -215,7 +215,7 @@ const createAuthUI = (config: AuthUIProviderProps): { install: (app: App) => voi
  * Composition-API form: call inside a parent component's `setup()` to provide
  * the context to its subtree. The counterpart to `app.use(createAuthUI(config))`
  * when you'd rather scope the context to a subtree than the whole app. Backs the
- * `&lt;AuthUIProvider>` SFC. Must run synchronously inside `setup()`.
+ * `<AuthUIProvider>` SFC. Must run synchronously inside `setup()`.
  */
 const provideAuthUI = (config: AuthUIProviderProps): ShallowRef<ControllerContext> => {
     const context = buildContext(config);
@@ -228,7 +228,7 @@ const provideAuthUI = (config: AuthUIProviderProps): ShallowRef<ControllerContex
 /**
  * The context ref from the nearest provider — use this whenever what you read
  * has to *follow* the one identity change discovery makes: the plugin flags,
- * `credentials`, `social`, `organization`. Bound in `&lt;script setup>` the template
+ * `credentials`, `social`, `organization`. Bound in `<script setup>` the template
  * unwraps it on every read, so `v-if="context.plugins.passkey"` is reactive
  * without further ceremony; in script, wrap the read in a `computed`.
  *

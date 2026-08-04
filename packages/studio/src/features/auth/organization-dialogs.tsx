@@ -23,7 +23,7 @@ const parseJsonObject = (text: string): Record<string, unknown> => {
     return parsed as Record<string, unknown>;
 };
 
-/** Parse + validate a permission grant (`Record&lt;resource, actions[]>`) from a textarea. */
+/** Parse + validate a permission grant (`Record<resource, actions[]>`) from a textarea. */
 const parsePermission = (text: string): Record<string, string[]> => {
     const object = parseJsonObject(text);
     const grant: Record<string, string[]> = {};
@@ -52,7 +52,7 @@ const jsonInitial = (value: unknown): string => {
     return JSON.stringify(value, null, 2);
 };
 
-/** One labelled `&lt;input>` row. */
+/** One labelled `<input>` row. */
 const Field = ({ children, htmlFor, label }: { children: ReactNode; htmlFor: string; label: string }): ReactElement => (
     <div className="flex flex-col gap-1">
         <Label htmlFor={htmlFor}>{label}</Label>

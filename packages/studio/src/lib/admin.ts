@@ -617,7 +617,7 @@ export interface WorkflowsResult {
  * One declared Cloudflare Queue, hand-mirroring `@lunora/do`'s `QueueMetadata`.
  * `binding` is the generated `QUEUE_*` producer binding, `name` the deployed
  * `queues.producers[].queue`, `exportName` the `lunora/queues.ts` export
- * (`ctx.queues.&lt;exportName>`), `mode` whether the queue is consumed by a worker
+ * (`ctx.queues.<exportName>`), `mode` whether the queue is consumed by a worker
  * (`push`) or polled externally (`pull`), and `deadLetterQueue` the optional DLQ.
  */
 export interface QueueMetadata {
@@ -691,7 +691,7 @@ export interface ReplayQueueMessageResult {
 /**
  * One feature flag evaluated under a targeting context, hand-mirroring
  * `@lunora/do`'s `FlagEvaluation` (the studio can't import `@lunora/do`). `key`
- * and `type` are statically discovered from the app's `ctx.flags.&lt;type>("key")`
+ * and `type` are statically discovered from the app's `ctx.flags.<type>("key")`
  * reads; `value`/`reason`/`variant`/`errorCode` come from the live OpenFeature
  * evaluation. A key-exhaustiveness drift guard in this package's tests (and
  * `@lunora/do`'s) fails the build if these keys diverge from the source contract.
@@ -755,7 +755,7 @@ export type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | 
  */
 export interface LogEntry {
     exitCode?: number;
-    /** Structured fields from a `ctx.log.&lt;level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
+    /** Structured fields from a `ctx.log.<level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
     fields?: Record<string, unknown>;
     functionPath?: string;
     instance?: string;
@@ -820,7 +820,7 @@ export interface AuthAuditLogResult {
 /**
  * One live subscription tracked on a shard's WebSocket, returned by
  * `__lunora_admin__:listSubscriptions` and mirroring `@lunora/do`'s
- * `SubscriptionInfo`. `functionPath` is the `&lt;file>:&lt;function>` query re-run on
+ * `SubscriptionInfo`. `functionPath` is the `<file>:<function>` query re-run on
  * a matching write (absent on legacy delta-only subscriptions), `table` the
  * table the raw-delta fan-out matches, and `args` the query args.
  */
@@ -911,7 +911,7 @@ export type RequestOutcome = "error" | "ok";
  * One structured `/rpc` dispatch returned by `__lunora_admin__:getRequestLog`,
  * mirroring `@lunora/do`'s `RequestLogEntry`. Unlike the in-memory `getLogs`
  * error buffer, the request log is durable and records EVERY dispatch with the
- * app-level context Cloudflare cannot attribute: the `&lt;file>:&lt;function>` path,
+ * app-level context Cloudflare cannot attribute: the `<file>:<function>` path,
  * the shard key, the acting `userId`/identity, the (server-side redacted) args,
  * the outcome + error message, the handler duration, the tables read/written,
  * and whether the result came from the reactive cache. `seq` is a monotonic
@@ -924,7 +924,7 @@ export interface RequestLogEntry {
     durationMs: number;
     /** Error message when `outcome === "error"`; absent on success. */
     errorMessage?: string;
-    /** The `&lt;file>:&lt;function>` identifier dispatched. */
+    /** The `<file>:<function>` identifier dispatched. */
     functionPath: string;
     /** Identity claims forwarded by the runtime; absent for anonymous requests. */
     identity?: Record<string, unknown>;
@@ -975,7 +975,7 @@ export type IssueSeverity = "critical" | "high" | "low" | "medium";
 /**
  * One grouped error **Issue** returned by `__lunora_admin__:getIssues`, mirroring
  * `@lunora/do`'s `ErrorIssue`. Many `error`-outcome request-log rows (Worker
- * throws and `container:&lt;name>` crashes alike) that share a fingerprint fold into
+ * throws and `container:<name>` crashes alike) that share a fingerprint fold into
  * a single triage row. The `hash` is the same stable key a cloud Incident groups
  * on, so a local Issue and a cloud Incident are the same object.
  */
@@ -984,7 +984,7 @@ export interface ErrorIssue {
     assignee?: string;
     /** Number of `error` rows folded into this Issue within the scanned window. */
     count: number;
-    /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
+    /** The `<file>:<function>` (or `container:<name>`) the errors came from. */
     culprit: string;
     /** Epoch-ms of the oldest folded row. */
     firstSeen: number;
@@ -1069,7 +1069,7 @@ export interface TraceSpan {
 export interface TraceSummary {
     /** Wall-clock span of the whole trace (root start → last span end), in ms. May be 0. */
     durationMs: number;
-    /** The `&lt;file>:&lt;function>` the trace's root span was recorded under. */
+    /** The `<file>:<function>` the trace's root span was recorded under. */
     functionPath: string;
     /** `false` when the root or any descendant span errored. */
     ok: boolean;

@@ -107,7 +107,7 @@ const mutatorLiteral = (call: CallExpression): ObjectLiteralExpression | undefin
 
 /**
  * The mutator's `args` validator map, parsed with the same `parseObjectShape` a
- * procedure's `args` goes through so `api.mutators.&lt;name>` and `api.&lt;file>.&lt;fn>`
+ * procedure's `args` goes through so `api.mutators.<name>` and `api.<file>.<fn>`
  * can never render a validator differently. `{}` when `args` is absent (a
  * parameterless mutator) or isn't an inline object literal.
  */
@@ -124,8 +124,8 @@ const argsFromMutator = (literal: ObjectLiteralExpression | undefined): Record<s
 };
 
 /**
- * The authoritative `server` impl's return type, `Promise&lt;…>` unwrapped — the
- * `Return` of the emitted `api.mutators.&lt;name>` reference, so `ctx.runMutation`
+ * The authoritative `server` impl's return type, `Promise<…>` unwrapped — the
+ * `Return` of the emitted `api.mutators.<name>` reference, so `ctx.runMutation`
  * on it (and a `useMutation` over it) resolves the real result instead of
  * `unknown`. `"unknown"` when `server` isn't an inline function.
  */
@@ -190,7 +190,7 @@ const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
  * Discover every custom mutator the project declares: exported
  * `defineMutator()` calls in `lunora/mutators.ts`. Returns `[]` when the file
  * doesn't exist. The export binding plus the declared `args` / `server` return
- * type are lifted — enough to emit a typed `api.mutators.&lt;name>` reference —
+ * type are lifted — enough to emit a typed `api.mutators.<name>` reference —
  * while the runtime object still carries the authoritative `server` impl +
  * `handler`, so codegen never evaluates the body. The client `client` impl is
  * split into the browser bundle separately.

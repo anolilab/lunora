@@ -1,7 +1,7 @@
 /**
  * Which optional flows are available — and therefore which cards render.
  *
- * A card like `&lt;MagicLinkCard>` only works if the matching better-auth client
+ * A card like `<MagicLinkCard>` only works if the matching better-auth client
  * plugin is installed, so the cards need to know which are. They cannot ask the
  * client: `createAuthClient` returns a dynamic-path `Proxy`, so
  * `typeof client.organization?.list === "function"` is true for a plugin-free

@@ -74,7 +74,7 @@ export const isClientSeq = (seq: Seq): seq is ClientSeq => typeof seq !== "numbe
  *
  * ```ts
  * const event = events.chat.messageSent({ channelId: "c1", text: "hello" });
- * // event: InputEvent&lt;"chat.messageSent", { channelId: string; text: string }>
+ * // event: InputEvent<"chat.messageSent", { channelId: string; text: string }>
  * ```
  * @experimental
  */

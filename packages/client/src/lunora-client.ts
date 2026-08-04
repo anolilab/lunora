@@ -91,7 +91,7 @@ const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
 
-/** Build the `&amp;bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
+/** Build the `&bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
 const bucketQuery = (bucket?: string): string => (bucket === undefined || bucket === "" ? "" : `&bucket=${encodeURIComponent(bucket)}`);
 
 /**
@@ -255,7 +255,7 @@ interface ClientDebugShard {
 interface ClientDebugSubscription {
     /** Whether the server has acknowledged the subscription on the current socket. */
     acked: boolean;
-    /** `namespace:fn` for a query, `shape:&lt;name>` for a replication shape. */
+    /** `namespace:fn` for a query, `shape:<name>` for a replication shape. */
     functionPath: string;
     id: string;
     kind: "query" | "shape";
@@ -311,7 +311,7 @@ interface MutationSettledEvent {
     readonly code?: string;
     /** The rejection error on `status: "rejected"`. */
     readonly error?: unknown;
-    /** The `&lt;file>:&lt;function>` reference of the mutation. */
+    /** The `<file>:<function>` reference of the mutation. */
     readonly functionPath: string;
     /** Whether a live caller was still awaiting this write's `mutation()` Promise. */
     readonly hadAwaiter: boolean;
@@ -362,7 +362,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
 /**
  * One WebSocket per shard key. Subscriptions and the writes they observe must
  * land on the same Durable Object, so each distinct `shardKey` gets its own
- * socket connected to `?shard=&lt;key>` (the default shard uses no query param).
+ * socket connected to `?shard=<key>` (the default shard uses no query param).
  * Reconnect backoff, offline-flush state, and the pending-unsubscribe buffer
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
@@ -3430,7 +3430,7 @@ class LunoraClient {
     }
 
     /**
-     * Open a typed **HTTP-SSE route stream** (`httpRoute.&lt;verb>(path).stream()`).
+     * Open a typed **HTTP-SSE route stream** (`httpRoute.<verb>(path).stream()`).
      * Distinct from {@link LunoraClient.stream}, which consumes the WS procedure
      * stream (`kind: "stream"`): this one opens the route's own URL with `fetch`
      * and parses the Server-Sent Events framing the route pump writes (`data:`
@@ -5593,7 +5593,7 @@ class LunoraClient {
     }
 
     /**
-     * Stable token-hash fingerprint of a bearer token (the `&lt;len>:&lt;fnv>:&lt;djb2>`
+     * Stable token-hash fingerprint of a bearer token (the `<len>:<fnv>:<djb2>`
      * format a token-stamped queued write carries). Extracted so the replay gate
      * can recompute the hash of the current credential and recognise a write
      * stamped under it — even after the fingerprint was relabelled to a subject.

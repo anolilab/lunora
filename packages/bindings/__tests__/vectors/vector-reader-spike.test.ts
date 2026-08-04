@@ -174,7 +174,7 @@ interface DocRow {
 
 const createPolicyAwareStore = (rows: ReadonlyArray<DocRow>) => {
     return {
-        /** Mirrors `ctx.db.&lt;table>.findMany({ where: { id: { in: ids } } })` under RLS scoped to `callerTenantId`. */
+        /** Mirrors `ctx.db.<table>.findMany({ where: { id: { in: ids } } })` under RLS scoped to `callerTenantId`. */
         findMany: (ids: ReadonlyArray<string>, callerTenantId: string): DocRow[] =>
             rows.filter((row) => ids.includes(row.id) && row.tenantId === callerTenantId),
     };

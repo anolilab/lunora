@@ -68,7 +68,7 @@ const EQUALITY = "=";
 /** `>` / `>=` constrain the slice from BELOW (they raise `lo`). */
 const GREATER_THAN = new Set([">", ">="]);
 
-/** `&lt;` / `&lt;=` constrain the slice from ABOVE (they lower `hi`). */
+/** `<` / `<=` constrain the slice from ABOVE (they lower `hi`). */
 const LESS_THAN = new Set(["<", "<="]);
 
 /**
@@ -85,7 +85,7 @@ interface ParsedConditions {
     lowerExclusive: boolean;
     /** Serialized upper bound, when one was staged. */
     upper?: unknown;
-    /** `true` for `&lt;` (exclusive), `false` for `&lt;=`. */
+    /** `true` for `<` (exclusive), `false` for `<=`. */
     upperExclusive: boolean;
 }
 

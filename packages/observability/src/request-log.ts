@@ -3,7 +3,7 @@
  *
  * A reserved, append-only table that records every lunora-function dispatch
  * with the app-level context Cloudflare structurally cannot attribute: the
- * `&lt;file>:&lt;function>` path, the shard key (the DO id name), the acting user /
+ * `<file>:<function>` path, the shard key (the DO id name), the acting user /
  * identity, the (redacted) call args, the outcome + (redacted) error message,
  * the handler execution time, the tables the handler read and wrote, whether
  * the result came from the reactive cache, and how many subscriptions the
@@ -55,7 +55,7 @@ interface RequestLogEntry {
     durationMs: number;
     /** Error message when `outcome === "error"`, redacted like args/identity; absent on success. */
     errorMessage?: string;
-    /** The `&lt;file>:&lt;function>` identifier dispatched, e.g. `messages:list`. */
+    /** The `<file>:<function>` identifier dispatched, e.g. `messages:list`. */
     functionPath: string;
     /** Identity-claim envelope forwarded by the runtime, JSON-decoded; leaf values are redacted (the claims are PII), so only the shape survives. Absent for anonymous requests. Correlate on `userId` instead. */
     identity?: Record<string, unknown>;
@@ -106,7 +106,7 @@ interface RequestLogWriteOptions {
 
 /** Filters for {@link readRequestLog}, all AND-combined; every value is a bound SQL parameter, so nothing here injects SQL. */
 interface ReadRequestLogOptions {
-    /** Functions whose path begins with this prefix (a `&lt;file>:` or `&lt;file>:&lt;fn>` correlation). */
+    /** Functions whose path begins with this prefix (a `<file>:` or `<file>:<fn>` correlation). */
     functionPathPrefix?: string;
     /** Upper bound on returned rows, clamped to [1, 10000]. */
     limit?: number;
@@ -138,7 +138,7 @@ interface ErrorIssue {
     assignee?: string;
     /** Number of `error` rows folded into this Issue within the scanned window. */
     count: number;
-    /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
+    /** The `<file>:<function>` (or `container:<name>`) the errors came from. */
     culprit: string;
     /** Wall-clock millis of the oldest folded row. */
     firstSeen: number;
@@ -182,7 +182,7 @@ interface IssuesResult {
 
 /** Filters for {@link readErrorIssues}; forwarded to {@link readRequestLog} with `outcome` forced to `error`. */
 interface ReadIssuesOptions {
-    /** Functions whose path begins with this prefix (a `&lt;file>:` or `&lt;file>:&lt;fn>` correlation). */
+    /** Functions whose path begins with this prefix (a `<file>:` or `<file>:<fn>` correlation). */
     functionPathPrefix?: string;
     /** Upper bound on error rows scanned before grouping, clamped to [1, 10000]. */
     limit?: number;
@@ -215,7 +215,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
  * STRING — which is what `errorMessage`/log `fields`-as-rendered-text are —
  * only pattern-shaped matches apply: emails, long digit runs / structured
  * numeric IDs (credit-card, phone, SSN, AWS-access-key-style), and an explicit
- * `Bearer &lt;token>` / `token=…`-shaped substring. A free-text `password=hunter2`
+ * `Bearer <token>` / `token=…`-shaped substring. A free-text `password=hunter2`
  * or a bare provider API key embedded in prose (e.g. `sk-live-…`) is NOT
  * caught on a plain string — there is no key to match against, and neither is
  * a recognized value pattern. So this is a PII-pattern net for rendered text,
@@ -316,8 +316,8 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
  * it's redacted below, and the resulting hash is persisted in
  * `error_fingerprint`. `readErrorIssues` groups off that stored hash instead of
  * recomputing `fingerprintError` from the (redacted) `error_message` column, so
- * masking a PII-bearing value — e.g. two different `&lt;n>`-bucketed IDs that
- * redact to two different tag lengths (`&lt;DL>` vs `&lt;BANKACC>`) — can't split an
+ * masking a PII-bearing value — e.g. two different `<n>`-bucketed IDs that
+ * redact to two different tag lengths (`<DL>` vs `<BANKACC>`) — can't split an
  * existing Issue or change its identity.
  */
 const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
@@ -474,7 +474,7 @@ const isLogFields = (value: unknown): value is LogFields => {
 };
 
 /**
- * Split a `ctx.log.&lt;level>(...)` call's raw arguments into a display `message`
+ * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`
  * and optional structured `fields`. The structured form — a message string plus
  * a plain-object fields bag — is matched only for exactly `(string, object)`;
  * every other shape is console-style and rendered whole (so existing
@@ -697,7 +697,7 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
  * per-occurrence noise — a route-scanner sweep (`/wp-admin`, `/.env`), a
  * per-request id in the message (`user 12345 not found`) — onto one Issue.
  * Container crashes fold in too, since they land as `error` rows under
- * `functionPath: "container:&lt;name>"`.
+ * `functionPath: "container:<name>"`.
  *
  * The grouping hash used per row is `row.error_fingerprint` when present —
  * computed by {@link appendRequestLogEntry} from the RAW message, before

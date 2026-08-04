@@ -505,7 +505,7 @@ export const agentComponent = (): AgentComponent => {
      * ownerless one) could deliver an approve/reject to an arbitrary
      * `instanceId` — a different, unrelated run entirely.
      * - The delivered event's `type` is scoped to `toolCallId`
-     * (`agent-approval:&lt;id>`) — the SAME format `agent-loop.ts`'s
+     * (`agent-approval:<id>`) — the SAME format `agent-loop.ts`'s
      * `awaitApproval` matches on — so a decision meant for one pending tool
      * call cannot resolve a different one on the same instance.
      */
@@ -559,7 +559,7 @@ export const agentComponent = (): AgentComponent => {
     /**
      * Start a durable agent run. PUBLIC (owner-gated) — the only HTTP-reachable
      * way to begin a run, so an external client (e.g. the `@lunora/mcp` server,
-     * which fronts agents over RPC) can invoke `ctx.agents.&lt;name>.run` without
+     * which fronts agents over RPC) can invoke `ctx.agents.<name>.run` without
      * app code. Internal functions are unreachable over client RPC, so this must
      * NOT be `asInternal(...)`; the security boundary is the per-agent
      * `publicRun` opt-in and owner-scoping here (NOT the MCP-side `allowAgents`
@@ -570,7 +570,7 @@ export const agentComponent = (): AgentComponent => {
      * reachable here ONLY when its author opted in with
      * `defineAgent({ publicRun: true })`. Without the opt-in an `agentRun` caller
      * could start ANY declared agent regardless of MCP configuration; the flag
-     * restores the app-author chokepoint that `ctx.agents.&lt;name>.run`
+     * restores the app-author chokepoint that `ctx.agents.<name>.run`
      * (server-side app code) has always been — that programmatic path is
      * unaffected, it never routes through this gate.
      *

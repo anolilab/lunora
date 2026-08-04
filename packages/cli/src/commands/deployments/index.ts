@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `lunora deployments &lt;subcommand>` — inspect deployment history and move
+ * `lunora deployments <subcommand>` — inspect deployment history and move
  * traffic between Worker versions, wrapping `wrangler versions` / `rollback`.
  */
 const deploymentsCommand: Command = {

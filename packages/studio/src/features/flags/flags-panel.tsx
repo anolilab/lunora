@@ -56,7 +56,7 @@ const formatValue = (evaluation: FlagEvaluation): string => {
 
 /**
  * The Flags inspector — lists the deployment's statically-discovered feature
- * flags (`ctx.flags.&lt;type>("key")` reads) and their live evaluation under an
+ * flags (`ctx.flags.<type>("key")` reads) and their live evaluation under an
  * editable targeting context. Flags evaluate through whatever OpenFeature
  * provider the app wired in `lunora/flags.ts`; the studio renders read-only
  * inspection (the source of truth — e.g. Cloudflare Flagship — owns editing).

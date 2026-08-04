@@ -302,7 +302,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 
     /**
-     * Replay endpoint behind `lunora backup restore --to &lt;time>`. Accepts
+     * Replay endpoint behind `lunora backup restore --to <time>`. Accepts
      * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
      * just forwards each shard's changes back to the same shard — no
      * re-bucketing, which also sidesteps deletes carrying no shard-key field)

@@ -48,8 +48,8 @@ const relationTargetsOf = (context: LintContext): Map<string, string> => {
  * relation.
  *
  * INFO, near-zero false positives by construction: it fires only when all of
- * (1) the enclosing read is public, (2) the read declares `with: { &lt;rel> }`,
- * (3) `&lt;rel>` resolves through the schema to a real target table, and (4) that
+ * (1) the enclosing read is public, (2) the read declares `with: { <rel> }`,
+ * (3) `<rel>` resolves through the schema to a real target table, and (4) that
  * target table actually has masked columns (per the discovered mask evidence).
  * Absent any mask usage the lint is a no-op. Runs only when the codegen feeder
  * supplies `context.relationLoads`; a runtime caller flags nothing. One finding

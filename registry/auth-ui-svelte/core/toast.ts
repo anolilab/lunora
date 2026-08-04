@@ -1,14 +1,14 @@
 /**
  * Transient error messages for the flows that have nowhere to put one.
  *
- * Most flows own a card, and a card owns a `&lt;FormBanner>` — that is where their
+ * Most flows own a card, and a card owns a `<FormBanner>` — that is where their
  * errors belong, and this store deliberately does not duplicate them. What it
  * exists for is the handful of actions with **no visible surface at the moment
  * they fail**: social sign-in and account linking (a redirect that never
  * happens), sign-out, anonymous sign-in. Those call `context.onError` and then
  * resolve, so today a failure is a page that simply does nothing.
  *
- * `&lt;ErrorToaster>` renders whatever lands here. Mounting it is opt-in; an app
+ * `<ErrorToaster>` renders whatever lands here. Mounting it is opt-in; an app
  * with its own toast system reads the same store instead, or keeps passing
  * `onError` and ignores this entirely.
  */
@@ -25,7 +25,7 @@ interface ToastState {
 }
 
 /**
- * Module-level, like `discovery.ts`: `&lt;ErrorToaster>` is mounted once in an app
+ * Module-level, like `discovery.ts`: `<ErrorToaster>` is mounted once in an app
  * shell while the flows that push to it live anywhere in the tree, so a
  * per-provider store would need threading through every controller to reach it.
  */

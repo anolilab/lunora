@@ -9,7 +9,7 @@ export interface LunoraKvOptions {
      * `..` or NUL in the prefix is rejected.
      */
     keyPrefix?: string;
-    /** The bound KV namespace (`env.&lt;BINDING>`). */
+    /** The bound KV namespace (`env.<BINDING>`). */
     namespace: KVNamespaceLike;
 }
 

@@ -138,7 +138,7 @@ const configureLogHandlers = (reporters: PailReporter | PailReporter[]): void =>
 
 /**
  * Custom pail log types backing the `init` flow's step badges. Each becomes a
- * `pail.&lt;name>(message)` method; `LunoraReporter` paints them as badge boxes
+ * `pail.<name>(message)` method; `LunoraReporter` paints them as badge boxes
  * (off-TTY fallback) while the colors live in `@lunora/config`'s theme. The
  * `informational` RFC5424 level keeps them on stdout and visible at the default
  * verbosity (pail rejects the `"info"` shorthand).

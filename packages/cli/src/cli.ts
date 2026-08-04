@@ -269,7 +269,7 @@ interface BuildCliResult {
 /**
  * Build the cerebro CLI. Every command is registered as a lazy-loaded
  * {@link https://github.com/visulima/visulima cerebro} command (metadata in
- * `commands/&lt;name>/index.ts`, handler in `commands/&lt;name>/handler.ts`). cerebro
+ * `commands/<name>/index.ts`, handler in `commands/<name>/handler.ts`). cerebro
  * owns help/version/usage rendering and unknown-command handling; the injected
  * `exit` captures each command's exit code so {@link runCli} can return it
  * without terminating the process (important for in-process tests).

@@ -1,5 +1,5 @@
 /**
- * One `ctx.kv.&lt;method>(key, …)` call whose namespace key is derived from the
+ * One `ctx.kv.<method>(key, …)` call whose namespace key is derived from the
  * handler's `args` with no server-side scoping — the input the
  * `kv_unscoped_user_key_idor` lint consumes. Workers KV is a single flat
  * namespace, so a key taken straight from request input lets any caller read,

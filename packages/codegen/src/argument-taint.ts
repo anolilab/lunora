@@ -57,8 +57,8 @@ const textuallyReferencesContext = (node: TsNode): boolean => {
  * the request arrives as a positional parameter the user names freely
  * (`request` / `req` / `r`) rather than a fixed `args`/`ctx` binding. Mirror of
  * {@link isArgsValueReference} with a dynamic root name: excludes the trailing
- * `.&lt;requestName>` of a member access and the key of an explicit
- * `{ &lt;requestName>: … }` property; a `{ request }` shorthand IS a value reference.
+ * `.<requestName>` of a member access and the key of an explicit
+ * `{ <requestName>: … }` property; a `{ request }` shorthand IS a value reference.
  */
 const isRequestValueReference = (identifier: Identifier, requestName: string): boolean => {
     if (identifier.getText() !== requestName) {
@@ -298,7 +298,7 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
 };
 
 /**
- * The export name of the nearest *exported* `const x = …` ancestor, or `"&lt;module>"`
+ * The export name of the nearest *exported* `const x = …` ancestor, or `"<module>"`
  * when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
  * any local `const result = …` bindings to the exported declaration — matching
  * {@link import("./discover-ast").enclosingExportName} — so a sink nested in a

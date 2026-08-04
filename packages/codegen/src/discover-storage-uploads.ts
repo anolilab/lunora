@@ -6,7 +6,7 @@ import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions"
 import type { StorageUploadIR } from "./ir";
 
 /**
- * `ctx.storage.&lt;bucket>.&lt;method>` calls this feeder inspects, mapped to the
+ * `ctx.storage.<bucket>.<method>` calls this feeder inspects, mapped to the
  * 0-based index of their options-object argument. Confirmed against the
  * `Storage` surface in `@lunora/storage`: `upload`/`store` take
  * `(key, body, options?: UploadOptions)`; `generateUploadUrl`/`getPresignedUrl`/
@@ -79,9 +79,9 @@ const readOptionsArgument = (argument: TsNode | undefined): StorageUploadEvidenc
 
 /**
  * The tracked method name + its options-argument index when `node` is a
- * `ctx.storage.&lt;bucket>.&lt;method>` member access, else `undefined`. Matched by
+ * `ctx.storage.<bucket>.<method>` member access, else `undefined`. Matched by
  * shape (a property access whose name is a tracked method and whose receiver
- * text is `ctx.storage` or `ctx.storage.&lt;bucket>`) — the same `import`-agnostic,
+ * text is `ctx.storage` or `ctx.storage.<bucket>`) — the same `import`-agnostic,
  * fail-closed convention the other feeders use, so a re-export or alias still
  * resolves.
  */
@@ -102,7 +102,7 @@ const storageUploadMethod = (node: TsNode): { method: string; optionsIndex: numb
     return receiver === "ctx.storage" || receiver.startsWith("ctx.storage.") ? { method, optionsIndex } : undefined;
 };
 
-/** The IR row for a tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` call, or `undefined`. */
+/** The IR row for a tracked `ctx.storage.<bucket>.<method>(...)` call, or `undefined`. */
 const storageUploadInCall = (call: CallExpression, relativePath: string): StorageUploadIR | undefined => {
     const matched = storageUploadMethod(call.getExpression());
 
@@ -135,7 +135,7 @@ const storageUploadsInSourceFile = (sourceFile: SourceFile, relativePath: string
 };
 
 /**
- * Discover `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing calls in
+ * Discover `ctx.storage.<bucket>.<method>(...)` upload/signing calls in
  * `lunora/` — the shared input for the storage config-hygiene security lints
  * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
  * `storage_generate_upload_url_no_content_type_pin`, `storage_presigned_url_for_private_content`).

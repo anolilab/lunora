@@ -14,16 +14,16 @@ const enc = (value: unknown): string => {
 };
 
 /**
- * Does `a` sort before `b` under the plain lexicographic `&lt;` the invalidation
+ * Does `a` sort before `b` under the plain lexicographic `<` the invalidation
  * layer uses? Expressed as a named predicate because `toBeLessThan` is typed
  * for numbers only — these are encoded strings.
  */
 const sortsBefore = (a: unknown, b: unknown): boolean => enc(a) < enc(b);
 
-/** Do the raw (unencoded) strings sort in this order under JS `&lt;`? */
+/** Do the raw (unencoded) strings sort in this order under JS `<`? */
 const rawSortsBefore = (a: string, b: string): boolean => a < b;
 
-/** Sort a copy with plain lexicographic `&lt;`, the comparison the codec must make correct. */
+/** Sort a copy with plain lexicographic `<`, the comparison the codec must make correct. */
 const lexSorted = (values: unknown[]): unknown[] => values.toSorted((a, b) => (enc(a) < enc(b) ? -1 : 1));
 
 describe("encodeIndexValue", () => {

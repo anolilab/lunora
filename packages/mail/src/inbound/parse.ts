@@ -106,7 +106,7 @@ const safe = (label: string, value: string | undefined): string | undefined => {
     return value;
 };
 
-/** Render a parser `Address` (mailbox or group) as a single `name &lt;addr>` string. */
+/** Render a parser `Address` (mailbox or group) as a single `name <addr>` string. */
 const formatAddress = (entry: { address?: string; group?: { address?: string; name?: string }[]; name?: string }): string => {
     if (entry.address !== undefined && entry.address !== "") {
         return entry.name ? `${entry.name} <${entry.address}>` : entry.address;

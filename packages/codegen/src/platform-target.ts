@@ -21,7 +21,7 @@
  *
  * Cloudflare and Node are registered (their matrices live in `@lunora/platform`
  * as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES`); other hosts register
- * their matrices as their per-target `@lunora/platform-&lt;target>` packages land.
+ * their matrices as their per-target `@lunora/platform-<target>` packages land.
  * An unregistered `target` is a configuration error, reported as
  * `platform_unknown_target` — and, crucially, the usage set is left untouched
  * so codegen never silently omits a surface against a matrix it does not have.
@@ -59,7 +59,7 @@ const DEFAULT_TARGET = "cloudflare";
 const PROJECT_CONFIG_FILE = "lunora.json";
 
 /**
- * Read `target` from `&lt;projectRoot>/lunora.json`.
+ * Read `target` from `<projectRoot>/lunora.json`.
  *
  * This lives in `@lunora/codegen` rather than `@lunora/config` — where the rest
  * of the `lunora.json` reading lives — because `@lunora/config` depends on

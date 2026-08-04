@@ -7,7 +7,7 @@
  * triggers) that the host app's schema merges in.
  * 2. **Middleware** — a builder-compatible middleware that runs on every
  * procedure that opts in via `.use(plugin.middleware)`. By convention it
- * extends `ctx.api.&lt;key>` with helpers the plugin exposes. Install several at
+ * extends `ctx.api.<key>` with helpers the plugin exposes. Install several at
  * once with `composePluginMiddleware([...])` (one `.use(...)`) and
  * `installPlugins(schema, [...])` (one schema fold).
  * 3. **Functions** — registered queries/mutations/actions bundled on a
@@ -32,7 +32,7 @@
  * export const schema = defineSchema({ todos: ... }).extend(ratelimit.extension);
  *
  * // procedure that uses the plugin:
- * const c = initLunora.dataModel&lt;DataModel>().create();
+ * const c = initLunora.dataModel<DataModel>().create();
  * export const rateLimitedQuery = c.query.use(ratelimit.middleware);
  * ```
  *
@@ -53,7 +53,7 @@
  *     name — silent shadow would let one plugin invisibly hijack another's
  *     data.
  *   - **Middleware composability.** Plugins re-export middleware as
- *     plain `Middleware&lt;...>` values; users compose them via the
+ *     plain `Middleware<...>` values; users compose them via the
  *     existing `.use(...)` chain. No "install" verb that consumes the
  *     builder — each consumer decides which plugin middlewares to attach.
  */
@@ -148,7 +148,7 @@ type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends 
 
 /**
  * Union every plugin's `ContextOut` in a tuple — the type-level mirror of the
- * `ctx.api.&lt;key>` additions {@link composePluginMiddleware} accumulates as each
+ * `ctx.api.<key>` additions {@link composePluginMiddleware} accumulates as each
  * plugin middleware runs. Independent of the incoming context, which the builder
  * infers at the `.use(...)` site.
  */
@@ -221,7 +221,7 @@ export interface Plugin<TExtension extends Record<string, TableDefinition> = Rec
     /**
      * Optional middleware. Users attach with `c.query.use(plugin.middleware)`.
      * The middleware can extend `ctx`; convention is to attach helpers under
-     * `ctx.api.&lt;key>`, e.g.
+     * `ctx.api.<key>`, e.g.
      *
      * ```ts
      * middleware: ({ ctx, next }) =>
@@ -491,7 +491,7 @@ export const installPlugins = <T extends Record<string, TableDefinition>, const 
  * Compose every plugin's middleware into a single middleware you attach with one
  * `.use(...)`. Plugins without middleware (schema-only) are skipped; the rest run
  * in array order, each seeing the context the previous one widened, so the final
- * `next({ ctx })` the builder receives carries every plugin's `ctx.api.&lt;key>`
+ * `next({ ctx })` the builder receives carries every plugin's `ctx.api.<key>`
  * additions. Equivalent to `.use(a.middleware).use(b.middleware)…` but as one
  * value, the middleware sibling of {@link installPlugins}.
  *

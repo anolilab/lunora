@@ -1,6 +1,6 @@
 /**
  * The feature catalog shared by `lunora init`'s post-scaffold offer and the
- * `lunora add &lt;feature>` command. Each feature maps to one or more **registry
+ * `lunora add <feature>` command. Each feature maps to one or more **registry
  * items** (resolved by `runAddCommand`), so there is a single install path —
  * the registry — behind both front doors.
  */

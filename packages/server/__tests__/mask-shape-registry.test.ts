@@ -21,7 +21,7 @@ const builders = initLunora.dataModel<unknown>().create();
 const maskedQuery = (policies: Parameters<typeof mask>[0], options?: Parameters<typeof mask>[1]) =>
     (builders.query as unknown as { use: (m: unknown) => { query: (h: () => unknown) => unknown } }).use(mask(policies, options)).query(() => null);
 
-/** Flatten a `MaskTag`/registry's `Map&lt;table, Set&lt;column>>` into a plain, order-independent object for assertions. */
+/** Flatten a `MaskTag`/registry's `Map<table, Set<column>>` into a plain, order-independent object for assertions. */
 const toPlainObject = (columns: ReadonlyMap<string, ReadonlySet<string>>): Record<string, string[]> =>
     Object.fromEntries([...columns.entries()].map(([table, cols]) => [table, [...cols].toSorted((a, b) => a.localeCompare(b))]));
 

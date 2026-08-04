@@ -182,7 +182,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
  * Open a live presence handle.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client from the
- * Svelte context (requires calling inside a component's `&lt;script>` block or
+ * Svelte context (requires calling inside a component's `<script>` block or
  * inside a function called during component initialisation).
  *
  * Teardown (stop heartbeats, remove the visibility listener, release the

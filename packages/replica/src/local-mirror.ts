@@ -128,7 +128,7 @@ const inferColumnAffinity = (value: unknown): ColumnAffinity => {
  * mirror.applyDiff(someDiff);
  *
  * // Query locally:
- * const rows = mirror.query&lt;{ id: string; name: string }>(
+ * const rows = mirror.query<{ id: string; name: string }>(
  *   "SELECT id, name FROM users WHERE name LIKE ?",
  *   ["alice%"],
  * );

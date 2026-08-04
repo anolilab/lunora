@@ -34,7 +34,7 @@ interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
 
     /**
      * Framework `Link` component for internal links (Next `Link`, react-router
-     * `Link`, …). Falls back to a plain `&lt;a>` when omitted.
+     * `Link`, …). Falls back to a plain `<a>` when omitted.
      */
     Link?: ComponentType<{ children: ReactNode; className?: string; href: string }>;
     /** Router bridge; defaults to a `location`-based fallback. */

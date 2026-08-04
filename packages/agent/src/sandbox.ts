@@ -266,7 +266,7 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
 
 /**
  * A batteries-included agent tool that talks to a declared Cloudflare
- * Container. `name` is the `ctx.containers.&lt;name>` key (the `lunora/containers.ts`
+ * Container. `name` is the `ctx.containers.<name>` key (the `lunora/containers.ts`
  * export). One tool exposes `fetch` (HTTP request) and `exec` (run a command);
  * the model picks via `op`. The call dispatches to the auto-registered
  * `sandbox:invoke` action, which carries `ctx.containers`.

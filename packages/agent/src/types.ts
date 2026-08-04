@@ -27,7 +27,7 @@ export interface AgentStepLike {
     /**
      * Durably hibernate until an external event of `type` arrives, then return
      * its payload. Used for human-in-the-loop approvals: a run pauses on
-     * `approval:&lt;toolCallId>` until a client resolves it. Like `do`, a resolved
+     * `approval:<toolCallId>` until a client resolves it. Like `do`, a resolved
      * wait is memoized — a replay returns the recorded decision without pausing
      * again. Signature mirrors `@lunora/workflow`'s `WorkflowStepLike`.
      */
@@ -41,7 +41,7 @@ export interface AgentStepLike {
  * `idempotencyKey`.
  *
  * The `idempotencyKey` is the deterministic durable-step name
- * (`tool:&lt;name>:&lt;toolCallId>`). A COMPLETED tool step is never re-run on a
+ * (`tool:<name>:<toolCallId>`). A COMPLETED tool step is never re-run on a
  * workflow replay (native step memoization) — but a step that FAILS mid-body
  * is retried at-least-once, so a side-effecting tool (charge a card, send a
  * mail) must dedupe on this key itself.
@@ -143,7 +143,7 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * Gate the tool behind a human approval (mirrors the AI SDK's
      * `needsApproval`). When it resolves truthy the durable run PAUSES — the
      * thread moves to `"awaiting_input"` and the workflow hibernates on
-     * `approval:&lt;toolCallId>` — until a client calls `agents:agentResolveApproval`.
+     * `approval:<toolCallId>` — until a client calls `agents:agentResolveApproval`.
      * On approve the tool runs exactly as normal; on reject it is skipped and a
      * tool result explaining the rejection is persisted so the next turn recovers.
      * A boolean gates statically; a function gates per input. Default: `false`
@@ -151,7 +151,7 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      *
      * The boolean/`undefined` forms are compile-time constants re-derived
      * identically on every replay — no durable step. The FUNCTION form runs
-     * inside its OWN durable step (`tool:approval-gate:&lt;toolCallId>`, distinct
+     * inside its OWN durable step (`tool:approval-gate:<toolCallId>`, distinct
      * from the tool's own step), so it now runs exactly once per call, not once
      * per replay. It must still be otherwise pure: deterministic given its
      * inputs (no `Date.now()`/`Math.random()`) and free of side effects — the
@@ -286,7 +286,7 @@ export interface AgentMemoryOptions {
  * (`key: "default"`) from {@link AgentConfig.memory}, then one per skill that
  * carries `knowledge` (keyed by the skill's name). The key names the durable
  * step — the default source keeps the historic `"memory:retrieve"`, a skill
- * source uses `"memory:retrieve:&lt;key>"` — so replay stays deterministic.
+ * source uses `"memory:retrieve:<key>"` — so replay stays deterministic.
  * @experimental
  */
 export interface AgentMemorySource extends AgentMemoryOptions {
@@ -347,7 +347,7 @@ export interface SkillConfig {
 
     /**
      * The skill's identifier — namespaces this skill's `knowledge` memory source
-     * (the durable step `memory:retrieve:&lt;name>`). Must be identifier-shaped.
+     * (the durable step `memory:retrieve:<name>`). Must be identifier-shaped.
      */
     name: string;
 
@@ -398,7 +398,7 @@ export interface AgentStepFinishInfo {
 
 /**
  * Called after each LLM turn with that turn's text, tool calls, and usage. Runs
- * inside a named durable step (`agent:step-finish:&lt;turn>`) so it fires exactly
+ * inside a named durable step (`agent:step-finish:<turn>`) so it fires exactly
  * once per turn even across a workflow replay.
  * @experimental
  */
@@ -588,7 +588,7 @@ export interface AgentConfig {
 
     /**
      * Optional override for the deployed workflow name (`wrangler.jsonc`
-     * `workflows[].name`). Defaults to `agent-&lt;kebab-cased export name>`. Does
+     * `workflows[].name`). Defaults to `agent-<kebab-cased export name>`. Does
      * NOT change the binding name, which is always derived from the export
      * name (`support` → `AGENT_SUPPORT`).
      */
@@ -640,7 +640,7 @@ export interface AgentConfig {
      * Opt this agent into being STARTED over the public RPC boundary — i.e. via
      * the auto-registered `agents:agentRun` mutation an HTTP-only client (e.g.
      * the `@lunora/mcp` server) calls. Default `false`: an agent is startable
-     * only from server-side app code (`ctx.agents.&lt;name>.run(...)`), so declaring
+     * only from server-side app code (`ctx.agents.<name>.run(...)`), so declaring
      * an agent does NOT expose it to arbitrary RPC callers. Fail-closed — the run
      * mutation refuses an agent that has not opted in, regardless of any MCP-side
      * `allowAgents` configuration. A started thread is still owner-scoped to
@@ -764,7 +764,7 @@ export interface AgentAsToolOptions {
     maxPolls?: number;
 
     /**
-     * The child agent's export name — selects its `AGENT_&lt;NAME>` Workflow
+     * The child agent's export name — selects its `AGENT_<NAME>` Workflow
      * binding (e.g. `"researcher"` → `AGENT_RESEARCHER`). The model-facing tool
      * name is the KEY assigned in the parent's `tools` map, not this.
      */
@@ -1173,7 +1173,7 @@ export interface AgentRunHandle {
 }
 
 /**
- * The `ctx.agents.&lt;name>` producer handle.
+ * The `ctx.agents.<name>` producer handle.
  * @experimental
  */
 export interface AgentHandle {

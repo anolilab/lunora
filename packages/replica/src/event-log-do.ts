@@ -12,7 +12,7 @@
  * |--------|--------------------|--------------------------------------|
  * | POST   | `/append`          | Insert events, return assigned seqs  |
  * | GET    | `/since?seq=N`     | Events with `seq >= N`               |
- * | GET    | `/range?from=N&amp;limit=M` | Paginated read               |
+ * | GET    | `/range?from=N&limit=M` | Paginated read               |
  * | GET    | `/size`            | Number of stored events              |
  * | GET    | `/state`           | Full event log state (for recovery)  |
  */
@@ -474,7 +474,7 @@ export class EventLogDO {
         );
     }
 
-    /** GET /range?from=N&amp;limit=M — paginated read (default limit 50). */
+    /** GET /range?from=N&limit=M — paginated read (default limit 50). */
     #handleRange(url: URL): Response {
         const fromParameter = url.searchParams.get("from");
         const fromSeq = fromParameter === null ? 0 : Number(fromParameter);

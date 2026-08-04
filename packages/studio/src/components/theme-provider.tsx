@@ -68,8 +68,8 @@ const ThemeProvider = ({ children, defaultTheme = "system" }: ThemeProviderProps
  * Render `children` under a theme context, creating a {@link ThemeProvider}
  * only when the host didn't already mount one. `StudioApp` owns a provider (so
  * its login page and scoped root share the preference), but the composable
- * `&lt;Studio>` is a public export an embedder mounts bare — without this its
- * header `&lt;ThemeToggle>` would throw. Mirrors the inherit-or-own pattern the
+ * `<Studio>` is a public export an embedder mounts bare — without this its
+ * header `<ThemeToggle>` would throw. Mirrors the inherit-or-own pattern the
  * i18n provider uses.
  */
 const EnsureThemeProvider = ({ children }: { readonly children: ReactNode }): ReactNode => {

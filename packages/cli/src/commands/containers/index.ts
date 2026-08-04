@@ -1,7 +1,9 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc quotes the `<build|push|images|list|info|delete>` subcommand list, not a credential. */
+
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `lunora containers &lt;build|push|images|list|info|delete>` — thin wrappers over
+ * `lunora containers <build|push|images|list|info|delete>` — thin wrappers over
  * `wrangler containers …` so container image + instance management lives under
  * the same CLI as the rest of the deploy workflow (and CI recipes can split
  * image build/push from `lunora deploy`).

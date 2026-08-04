@@ -30,7 +30,7 @@ interface FieldOperators {
 
 /**
  * Structural runtime shape of the `where` argument. The codegen facade layers a
- * table-typed `Where&lt;Doc>` on top; this is the untyped surface the compiler
+ * table-typed `Where<Doc>` on top; this is the untyped surface the compiler
  * walks. A non-structural key is a field whose value is either a literal
  * (equality shorthand) or a {@link FieldOperators} object.
  */

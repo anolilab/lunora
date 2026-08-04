@@ -582,7 +582,7 @@ const expandObjectType = (type: Type, node: Node, handlerFilePath: string, depth
 /**
  * Structurally expand a return type that references a non-exported local type,
  * so the generated `FunctionReference` carries the real shape (`PostDoc[]` →
- * `{ _id: Id&lt;"posts"&gt;; … }[]`) instead of erasing to `unknown`. Reachable names
+ * `{ _id: Id<"posts">; … }[]`) instead of erasing to `unknown`. Reachable names
  * (`Id`, `Doc`, primitives, library types) are printed verbatim; anything we
  * can't faithfully reproduce — recursion, call/index signatures, exotic types —
  * returns `undefined` so the caller keeps the `unknown` fallback. The result is
@@ -613,7 +613,7 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
 /**
  * Render a handler's resolved return type via ts-morph's type checker. Unwraps
- * the outer `Promise&lt;…>` so the emitted `FunctionReference&lt;Kind, Args, Return>`
+ * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
  * matches what callers see post-await. Shared by the object-literal `query(...)`
  * path and the builder terminal (`c.query(...)`) path.
  *
@@ -991,7 +991,7 @@ const chainHasStep = (receiver: Node, method: string): boolean => {
 
 /**
  * True when the builder chain rooted at `receiver` carries a
- * `.&lt;method>(&lt;wrappedCallee>(...))` step — a `.&lt;method>(...)` whose first argument
+ * `.<method>(<wrappedCallee>(...))` step — a `.<method>(...)` whose first argument
  * is a call to `wrappedCallee` (e.g. `.use(mask(...))` or `.use(rls(...))`).
  */
 const chainUsesWrappedCall = (receiver: Node, method: string, wrappedCallee: string): boolean => {
@@ -1245,12 +1245,12 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
 };
 
 /**
- * Lift `export default &lt;procedure>` into a `&lt;module>.default` registration,
+ * Lift `export default <procedure>` into a `<module>.default` registration,
  * matching Convex.
  *
  * Only named exports used to be walked, so a module whose sole registration was
  * a default export did not merely lose that entry — the whole module was absent
- * from `api.ts`, and the caller's error read "Property '&lt;module>' does not
+ * from `api.ts`, and the caller's error read "Property '<module>' does not
  * exist", pointing at a file that was entirely correct.
  *
  * `export = x` is CJS and never a Lunora registration. Non-procedure defaults

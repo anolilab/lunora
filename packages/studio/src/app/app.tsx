@@ -73,7 +73,7 @@ interface StudioAppBodyProps {
 /**
  * The composed studio plus its error boundary. Kept separate from {@link
  * StudioApp} because its `useT` (for the error-boundary label) must read the
- * `StudioI18nProvider` the app renders above it. The composed `&lt;Studio>`
+ * `StudioI18nProvider` the app renders above it. The composed `<Studio>`
  * inherits that same provider, so it isn't handed an instance here.
  */
 const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactElement => {
@@ -114,7 +114,7 @@ interface StudioShellProps {
  * and applies the `.dark` class to its OWN container (not `document.documentElement`),
  * so the studio can be embedded inside a host app without recoloring the host.
  * Builds the app-owned {@link StudioChrome} (header theme toggle, footer
- * admin-token popover, rules banner) handed to the composed `&lt;Studio>`.
+ * admin-token popover, rules banner) handed to the composed `<Studio>`.
  */
 const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesInstalled, studio, token }: StudioShellProps): ReactElement => {
     // The resolved light/dark is applied to this scoped root (not `<html>`).
@@ -142,7 +142,7 @@ const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesI
 
 /**
  * A fully self-contained studio page: it constructs a {@link LunoraClient}
- * pointed at the worker, wires it through a `&lt;LunoraProvider>`, manages the
+ * pointed at the worker, wires it through a `<LunoraProvider>`, manages the
  * admin token + theme, and renders the composed {@link Studio} — handing it the
  * top-bar/sidebar {@link StudioChrome} (theme toggle, admin-token popover, rules
  * banner) so those affordances render inside the sidebar shell.
@@ -150,7 +150,7 @@ const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesI
  * Mount this directly (the standalone app and the `@lunora/vite` dev route both
  * do) when you want the batteries-included page rather than composing panels
  * yourself. For embedding into an existing admin UI, use the individual panels
- * or `&lt;Studio>` under your own provider instead.
+ * or `<Studio>` under your own provider instead.
  */
 const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rulesInstalled, studio, locale }: StudioAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload

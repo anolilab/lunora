@@ -7,7 +7,7 @@
  * the client, and they belong in different places.
  *
  * **Rendering the widget and capturing a token** is {@link renderCaptcha}, driven
- * by each port's `&lt;Captcha>` component.
+ * by each port's `<Captcha>` component.
  *
  * **Attaching the token to auth requests** is *not* done here. Every flow would
  * have to thread fetch options through, and better-auth already has one place for
@@ -42,7 +42,7 @@ const CAPTCHA_HEADER = "x-captcha-response";
  *
  * The token must only be attached to these. `fetchOptions.onRequest` runs for
  * every* auth call, and `captchaHeaders()` consumes on read — so without this
- * filter a background `getSession` (a session refetch on focus, a `&lt;UserButton>`
+ * filter a background `getSession` (a session refetch on focus, a `<UserButton>`
  * elsewhere in the shell) spends the token on a route that ignores it, and the
  * sign-in the user then clicks arrives with no header at all.
  *
@@ -126,7 +126,7 @@ const setCaptchaToken = (token: string | undefined): void => {
     store.set({ token });
 };
 
-/** The bit of a `&lt;script>` element this module sets, named so the DOM lib isn't needed. */
+/** The bit of a `<script>` element this module sets, named so the DOM lib isn't needed. */
 interface ScriptElement {
     addEventListener: (type: string, listener: () => void) => void;
     async: boolean;

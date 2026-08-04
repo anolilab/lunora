@@ -1,3 +1,5 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc quotes the `r2sql.from<EventStoreRecord<Schema>>(table)` call shape, not a credential. */
+
 /**
  * PROTOTYPE (plan 247, design spike) — types for `defineEventStore`, which
  * explores whether one declared schema can drive BOTH the Pipelines write
@@ -55,7 +57,7 @@ interface EventStoreConfig<Schema extends EventStoreSchema> {
      * The Pipelines binding-like `send()` is forwarded to (the same shape
      * `ctx.pipelines` wraps — see `@lunora/bindings/pipelines`'s
      * `PipelineBindingLike`). Untyped at the Cloudflare API boundary; this
-     * prototype's `EventStoreRecord&lt;Schema>` narrows the call site.
+     * prototype's `EventStoreRecord<Schema>` narrows the call site.
      */
     pipeline: PipelineBindingLike<EventStoreRecord<Schema>>;
 
@@ -88,7 +90,7 @@ interface EventStoreConfig<Schema extends EventStoreSchema> {
 interface EventStore<Schema extends EventStoreSchema> {
     /**
      * Start a typed r2sql `SELECT` over the same table + schema — literally
-     * `r2sql.from&lt;EventStoreRecord&lt;Schema>>(table)`, so it inherits every
+     * `r2sql.from<EventStoreRecord<Schema>>(table)`, so it inherits every
      * `SelectBuilder` feature (`WHERE`, joins, window functions, set
      * operations, …) for free; this prototype adds no query surface of its
      * own.
@@ -99,7 +101,7 @@ interface EventStore<Schema extends EventStoreSchema> {
      * Ingest one record through Pipelines. Runtime-validated against
      * `schema` before the record reaches the binding — Pipelines ingest is
      * otherwise fire-and-forget with zero server-side schema enforcement
-     * (see the design doc), so `EventStoreRecord&lt;Schema>` alone would only be
+     * (see the design doc), so `EventStoreRecord<Schema>` alone would only be
      * a compile-time promise a plain-JS caller (or an `as` cast) could break
      * silently.
      */

@@ -705,7 +705,7 @@ const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult =
  * SQLite storage-class ordering for a single serialized rank-key value.
  * `serializeSqlValue` only ever produces `null | number | string`, and SQLite's
  * `ORDER BY` ranks NULL < numbers < text, then by value within a class. The
- * shard's companion btree (`ORDER BY __partition__, __sort_k&lt;i>__, __id__`) uses
+ * shard's companion btree (`ORDER BY __partition__, __sort_k<i>__, __id__`) uses
  * exactly this order, so to merge shard slices without gaps or dupes at a
  * boundary the coordinator must compare the same way — a naive `a < b` would
  * mis-order `null` vs numbers and number-vs-string mixes.
@@ -765,7 +765,7 @@ const compareRankValueAsc = (a: unknown, b: unknown): number => {
 
 /**
  * Total order over two rank keys, byte-identical to the shard companion's
- * `ORDER BY __partition__ ASC, __sort_k&lt;i>__ &lt;dir>, __id__ ASC`. Partition and
+ * `ORDER BY __partition__ ASC, __sort_k<i>__ <dir>, __id__ ASC`. Partition and
  * the `__id__` tiebreak are always ascending; each sort column honors its
  * declared direction (`directions[i]`, default `asc`).
  */

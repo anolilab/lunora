@@ -106,7 +106,7 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
  * authorization bypass, so a call that trips the lint also trips this guard.
  */
 export class LunoraAuthHeadersError extends LunoraError {
-    /** The `ctx.authApi.&lt;method>` that was called without `headers`. */
+    /** The `ctx.authApi.<method>` that was called without `headers`. */
     public readonly method: string;
 
     public constructor(method: string) {
@@ -135,7 +135,7 @@ export interface WithAuthPluginsOptions {
      * Whether to install the runtime header guard around `ctx.authApi`.
      *
      * **Defaults to `true` — the safe default.** When enabled, every
-     * `ctx.authApi.&lt;method>(…)` call that omits `headers` throws
+     * `ctx.authApi.<method>(…)` call that omits `headers` throws
      * {@link LunoraAuthHeadersError} instead of silently running with full
      * server-to-server privileges. For a deliberate, per-call unauthenticated
      * invocation, use the explicit `ctx.authApi.withoutHeaders()` escape hatch
@@ -189,7 +189,7 @@ export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
      * statically; the guard is the runtime backstop for the cases the lint
      * can't see (dynamic method names, indirected calls). For the rare,
      * deliberate unauthenticated server-to-server call, opt out explicitly with
-     * `ctx.authApi.withoutHeaders().&lt;method>(…)`.
+     * `ctx.authApi.withoutHeaders().<method>(…)`.
      *
      * Lunora's procedure context carries only the resolved identity, not the
      * raw inbound `Headers`, so this middleware CANNOT pre-bind them for you.
@@ -281,7 +281,7 @@ export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
  * Shape of the middleware {@link withAuthPlugins} returns: a callable generic
  * over the incoming ctx so chaining `.use(...)` preserves whatever ctx fields
  * the upstream middleware already installed. Lives as its own interface
- * because TypeScript doesn't allow declaring `const fn: &lt;CtxIn>() => ...` —
+ * because TypeScript doesn't allow declaring `const fn: <CtxIn>() => ...` —
  * the generic must live on a callable type alias or interface.
  */
 export type WithAuthPluginsMiddleware<Auth extends LunoraAuth> = <ContextIn>(options: {

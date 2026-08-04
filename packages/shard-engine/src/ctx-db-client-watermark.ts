@@ -22,7 +22,7 @@
  * guards against once they authenticate.
  *
  * The dispatch contract the watermark enforces (see the DO push path):
- * - `id &lt;= watermark` → already processed (skip, return ok);
+ * - `id <= watermark` → already processed (skip, return ok);
  * - `id == watermark + 1` → run the server impl authoritatively and advance the
  * watermark **in the same transaction** as the writes;
  * - `id > watermark + 1` → an out-of-order gap; the batch halts so the client

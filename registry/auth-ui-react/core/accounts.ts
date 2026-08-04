@@ -21,7 +21,7 @@ import type { AuthAccount, Controller } from "./types";
 /**
  * Providers that are not OAuth links and must never be offered for unlinking as
  * if they were: `credential` is the password itself, and the passkey rows are
- * managed by `&lt;PasskeysCard>`.
+ * managed by `<PasskeysCard>`.
  */
 const NON_SOCIAL_PROVIDERS = new Set(["credential", "email", "passkey"]);
 

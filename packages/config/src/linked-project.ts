@@ -38,7 +38,7 @@ const LINKED_PROJECT_FILE: string = join(LINKED_PROJECT_DIR, "project.json");
 interface LinkedProject {
     /** Cloudflare account id the worker lives under, when known. */
     account?: string;
-    /** Cloudflare environment name (`wrangler … --env &lt;env>`), when scoped. */
+    /** Cloudflare environment name (`wrangler … --env <env>`), when scoped. */
     env?: string;
     /** ISO-8601 timestamp recorded when the link was written. */
     linkedAt?: string;

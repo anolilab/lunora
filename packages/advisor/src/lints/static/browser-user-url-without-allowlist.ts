@@ -3,7 +3,7 @@ import type { Lint } from "../../types";
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
- * Flags a `ctx.browser.&lt;method>(url, …)` call whose navigation URL is derived
+ * Flags a `ctx.browser.<method>(url, …)` call whose navigation URL is derived
  * from the handler's `args` with no server-side scoping — and no hardened
  * `createBrowser` allowlist to contain it.
  *

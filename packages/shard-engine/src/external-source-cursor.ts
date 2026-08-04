@@ -38,8 +38,8 @@ interface SourceCursorState {
 /**
  * Serialize a cursor value to a type-tagged string so its native type survives
  * SQLite TEXT storage and rehydrates identically when bound back into the query.
- * `Date` → `d:&lt;iso>`, `bigint` → `b:&lt;digits>`, `number` → `n:&lt;num>`, everything
- * else → `s:&lt;string>`.
+ * `Date` → `d:<iso>`, `bigint` → `b:<digits>`, `number` → `n:<num>`, everything
+ * else → `s:<string>`.
  */
 const serializeCursor = (value: CursorValue): string => {
     if (value instanceof Date) {

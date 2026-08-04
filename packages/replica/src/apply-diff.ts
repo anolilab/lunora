@@ -250,7 +250,7 @@ const applyDiffs = (current: ReadonlyMap<string, Record<string, unknown>>, diffs
 /**
  * Merge the row-level effect of a {@link TableDiff} into plain JSON
  * state keyed by table name, returning a new snapshot.
- * @param snapshot Current snapshot, e.g. `{ users: Map&lt;id, row>, posts: Map&lt;id, row> }`.
+ * @param snapshot Current snapshot, e.g. `{ users: Map<id, row>, posts: Map<id, row> }`.
  * @param diff Contains the target table name and the row-level changes to merge.
  * @returns A shallow copy of `snapshot` with `diff.table`'s map updated.
  * @experimental

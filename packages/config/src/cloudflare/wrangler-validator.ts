@@ -193,7 +193,7 @@ interface WranglerValidationReport {
 }
 
 /**
- * `env.&lt;name>` keys confirmed NON-inheritable by the current Cloudflare docs
+ * `env.<name>` keys confirmed NON-inheritable by the current Cloudflare docs
  * (`workers/wrangler/configuration/`, "Non-inheritable keys" section, checked
  * 2026-07-31): wrangler does NOT fall back to the top-level value for these
  * when a declared environment omits one — each must be redeclared per
@@ -227,7 +227,7 @@ const NON_INHERITABLE_KEYS = [
 ] as const satisfies ReadonlyArray<keyof WranglerConfig>;
 
 /**
- * `env.&lt;name>` keys confirmed INHERITABLE by the same docs section: an
+ * `env.<name>` keys confirmed INHERITABLE by the same docs section: an
  * environment that does not override one still gets the top-level value.
  * Limited to the keys this validator actually reads — the docs' "Inheritable
  * keys" list is longer (`name`, `route`, `triggers`, …) but this project does
@@ -246,7 +246,7 @@ const INHERITABLE_KEYS = [
 ] as const satisfies ReadonlyArray<keyof WranglerConfig>;
 
 interface WranglerEnvironmentMerge {
-    /** Set when `environment` names no `env.&lt;name>` block declared in the config — the caller should treat this as a hard validation failure. */
+    /** Set when `environment` names no `env.<name>` block declared in the config — the caller should treat this as a hard validation failure. */
     error?: string;
     /** The env-scoped view: `wrangler` unchanged when `environment` is `undefined`, otherwise merged per {@link NON_INHERITABLE_KEYS} / {@link INHERITABLE_KEYS}. */
     merged: WranglerConfig;
@@ -256,13 +256,13 @@ interface WranglerEnvironmentMerge {
      * cannot verify (not in either table above) — validated against the
      * TOP-LEVEL value only, per the "do not guess" rule; the override is
      * silently ignored for validation purposes. The caller logs this ONCE
-     * (not per key) so an unusual `env.&lt;name>` block doesn't spam warnings.
+     * (not per key) so an unusual `env.<name>` block doesn't spam warnings.
      */
     unverifiedKeys: string[];
 }
 
 /**
- * Resolve the config view `wrangler deploy --env &lt;environment>` will actually
+ * Resolve the config view `wrangler deploy --env <environment>` will actually
  * use. Undefined `environment` returns `wrangler` unchanged — the top-level
  * config is what a plain `wrangler deploy` reads, same as today.
  *
@@ -1184,7 +1184,7 @@ const resolveEnvironmentView = (
  * Pure validator: given a parsed `WranglerConfig` object and an optional
  * `SchemaInfo`, produce a structured report. Performs no I/O.
  *
- * `environment`, when set, validates the `env.&lt;environment>` view
+ * `environment`, when set, validates the `env.<environment>` view
  * ({@link mergeWranglerEnvironment}) instead of the top-level config — e.g. a
  * `durable_objects` binding present only at the top level is a validation
  * FAILURE for `--env production` if `env.production` doesn't repeat it,
@@ -1300,7 +1300,7 @@ const validateWrangler: typeof validateWranglerConfig = validateWranglerConfig;
 
 interface WranglerProjectValidationOptions {
     /**
-     * Cloudflare environment to validate against `env.&lt;name>` in
+     * Cloudflare environment to validate against `env.<name>` in
      * wrangler.jsonc. See {@link mergeWranglerEnvironment} for which keys
      * inherit the top-level value vs must be redeclared per environment.
      * Omit to validate the top-level config only (unchanged default).
@@ -1399,7 +1399,7 @@ const EXPORT_DECLARATION_RE = /^(?:class|const|function|let|var)\s+(?<name>[$A-Z
  *
  * This is the generated app builder's OWN pattern, so it is not an exotic form:
  * `apps/playground/src/server/index.ts` ships exactly this. A scanner that only
- * understood `export const &lt;identifier&gt;` reported the repo's own playground as
+ * understood `export const <identifier>` reported the repo's own playground as
  * missing `ShardDO`.
  */
 const EXPORT_DESTRUCTURE_RE = /^\s*(?:const|let|var)\s*\{/u;

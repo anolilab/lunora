@@ -23,7 +23,7 @@ export * from "../core";
  * // a route component
  * import { SignInCardComponent } from "./lunora/auth-ui/angular";
  *
- * `@Component`({ imports: [SignInCardComponent], template: `&lt;lunora-sign-in-card />` })
+ * `@Component`({ imports: [SignInCardComponent], template: `<lunora-sign-in-card />` })
  * export class SignInPage {}
  * ```
  */

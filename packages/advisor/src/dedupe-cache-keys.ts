@@ -11,7 +11,7 @@ import type { Finding } from "./types";
  * within-line discriminator the second finding is silently hidden.
  *
  * This suffixes the second-and-later occurrence of any repeated key with
- * `:&lt;n>` (`:2`, `:3`, …), leaving the first occurrence unsuffixed so existing
+ * `:<n>` (`:2`, `:3`, …), leaving the first occurrence unsuffixed so existing
  * single-occurrence keys stay stable across runs. Order is preserved. Keys are
  * lint-name-prefixed, so this never merges across lints.
  */

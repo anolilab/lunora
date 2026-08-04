@@ -1,6 +1,6 @@
 /**
  * Entrypoint re-export injection for registry items — class-B/C workers get the
- * `export * from "./lunora/&lt;module&gt;.js"` line appended idempotently; class-A
+ * `export * from "./lunora/<module>.js"` line appended idempotently; class-A
  * projects get a fallback instruction instead.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

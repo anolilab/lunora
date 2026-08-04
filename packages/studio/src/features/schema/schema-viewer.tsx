@@ -21,7 +21,7 @@ interface SchemaViewerProps {
 
     /**
      * Table to auto-expand once the shard's tables load. Set by the Insights
-     * "add the index" deep-link (`/schema?table=&lt;name>`) so the operator lands
+     * "add the index" deep-link (`/schema?table=<name>`) so the operator lands
      * directly on the scanned table's index list instead of hunting for it.
      * Re-applied whenever the value changes, so following the link a second time
      * (same tab already open) re-expands the target.
@@ -63,9 +63,9 @@ interface TableEntryProps {
     readonly name: string;
     readonly onToggle: () => void;
     readonly rowCount: number;
-    /** `data-testid` for the `&lt;li>`. */
+    /** `data-testid` for the `<li>`. */
     readonly rowTestId: string;
-    /** `data-testid` for the toggle `&lt;button>`. */
+    /** `data-testid` for the toggle `<button>`. */
     readonly toggleTestId: string;
 }
 

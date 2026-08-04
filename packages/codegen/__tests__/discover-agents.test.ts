@@ -26,9 +26,9 @@ const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: tru
 const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "agent", "src", "component.ts");
 
 /**
- * Read `const &lt;constantName> = query|mutation.input({...}).query|mutation(async (...): Promise&lt;T> => ...)`'s
+ * Read `const <constantName> = query|mutation.input({...}).query|mutation(async (...): Promise<T> => ...)`'s
  * declared return-type text out of `component.ts`, unwrapped of its outer
- * `Promise&lt;…>` — mirroring codegen's own Promise-unwrap convention
+ * `Promise<…>` — mirroring codegen's own Promise-unwrap convention
  * (`unwrapHandlerReturn` in `discover-functions.ts`) so the comparison lines up
  * with what `syntheticAgentApiFunctions` hand-pins in `emit.ts`.
  */

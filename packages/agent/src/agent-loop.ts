@@ -219,12 +219,12 @@ const resolveNeedsApproval = async (
  * Pause the run on a human-in-the-loop tool approval: persist an
  * `"awaiting_approval"` marker (filtered out of the model prompt, but observable
  * by a client), move the thread to `"awaiting_input"`, then hibernate on the
- * deterministically named durable event `approval:&lt;toolCallId>`. A workflow
+ * deterministically named durable event `approval:<toolCallId>`. A workflow
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
  * replay-stable `call.id`.
  *
- * The wait's match `type` is scoped to THIS call (`agent-approval:&lt;call.id>`,
+ * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
  * Workflows matches an incoming event against a waiter by `type`, not by the
  * durable step name, so without this an approval meant for a different
@@ -548,7 +548,7 @@ const graphTraverseBounds = (graph: AgentMemoryOptions["graph"]): Record<string,
     return bounds;
 };
 
-/** Dispatch a `"semantic"` source's RAG action as a `memory:retrieve[:&lt;key>]` step and read its context. */
+/** Dispatch a `"semantic"` source's RAG action as a `memory:retrieve[:<key>]` step and read its context. */
 const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
     // A semantic source without a `source` is rejected at `defineAgent`; guard
     // defensively for a hand-built definition that bypassed it.
@@ -565,7 +565,7 @@ const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, 
 };
 
 /**
- * Dispatch a `"graph"` source's owner-scoped traversal as a `memory:traverse[:&lt;key>]`
+ * Dispatch a `"graph"` source's owner-scoped traversal as a `memory:traverse[:<key>]`
  * step and read its context. Owner-scoped by design: an anonymous run (no `owner`)
  * has no graph to read, so the source no-ops for that run.
  */
@@ -588,7 +588,7 @@ const dispatchGraphMemory = async (
 };
 
 /**
- * Dispatch an `"episodic"` source's recency recall as a `memory:recall[:&lt;key>]`
+ * Dispatch an `"episodic"` source's recency recall as a `memory:recall[:<key>]`
  * step and read its context. Owner-scoped by design: an anonymous run (no
  * `owner`) has no episode timeline, so the source no-ops for that run.
  */
@@ -615,8 +615,8 @@ const dispatchEpisodicMemory = async (
  * context. Sources run in a STABLE order — the default source (from `memory`)
  * first, then skill `knowledge` in declaration order — each inside its own
  * deterministic durable step. A `"semantic"` source keeps the historic
- * `"memory:retrieve[:&lt;key>]"` name so in-flight runs replay identically; a
- * `"graph"` source uses the `"memory:traverse[:&lt;key>]"` namespace (which can't
+ * `"memory:retrieve[:<key>]"` name so in-flight runs replay identically; a
+ * `"graph"` source uses the `"memory:traverse[:<key>]"` namespace (which can't
  * collide). Sourced from `agent.memorySources` (folded by `defineAgent`), falling
  * back to `agent.memory` alone for a directly-authored definition.
  */
@@ -704,7 +704,7 @@ const retrieveMemoryContext = async (
 /**
  * Run-end owner-scoped graph extraction. When a graph memory source is configured
  * and the run has an `owner` + a final answer, extract entities/relations from the
- * exchange in a MEMOIZED `memory:extract[:&lt;key>]` step (the model never re-runs on
+ * exchange in a MEMOIZED `memory:extract[:<key>]` step (the model never re-runs on
  * replay), then upsert them via an IDEMPOTENT dispatch keyed by the instance (the
  * `byTriple` dedup + absolute-max weight converge on replay). No-ops otherwise —
  * an anonymous run has no graph scope, and a run with no graph source or no
@@ -751,7 +751,7 @@ const extractGraphMemoryAtRunEnd = async (options: {
 /**
  * Run-end owner-scoped episode recording. When an episodic memory source is
  * configured and the run has an `owner` + a final answer, summarize the exchange
- * in a MEMOIZED `memory:episode[:&lt;key>]` step (the model never re-runs on
+ * in a MEMOIZED `memory:episode[:<key>]` step (the model never re-runs on
  * replay), then record it via an IDEMPOTENT dispatch keyed by the instance (the
  * `byOwnerMessageKey` unique index no-ops a replay). No-ops otherwise — an
  * anonymous run has no episode scope, and a run with no episodic source or no

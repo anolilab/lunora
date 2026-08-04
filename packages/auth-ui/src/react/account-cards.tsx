@@ -92,7 +92,7 @@ const LinkedAccountsCard = (): ReactElement => {
 
 /**
  * Avatar upload. Rendered only when the app configured an `avatar.upload`
- * handler — without one there is nowhere to put the bytes, and `&lt;ProfileCard>`'s
+ * handler — without one there is nowhere to put the bytes, and `<ProfileCard>`'s
  * URL field is the honest fallback.
  */
 const AvatarCard = (): ReactElement | null => {

@@ -37,7 +37,7 @@ const IDENTITY_FIELDS = new Set<string>([
 const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "patch", "replace"]);
 
 /**
- * When `node` is a `ctx.db.&lt;method>` member access for one of the
+ * When `node` is a `ctx.db.<method>` member access for one of the
  * {@link IDENTITY_WRITE_METHODS}, return the method name; otherwise `undefined`.
  * Matched by shape (a member chain rooted at `ctx.db`), the same import-agnostic,
  * fail-closed convention the other feeders use, so a re-export or alias still resolves.

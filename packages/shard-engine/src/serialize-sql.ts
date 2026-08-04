@@ -1,6 +1,6 @@
 /**
  * Canonicalise a JS value into the SQL-bindable primitive the DO stores in a
- * column / `__sort_k&lt;i>__` blob. The output is always `null`, a `string`, or a
+ * column / `__sort_k<i>__` blob. The output is always `null`, a `string`, or a
  * `number` — never a `boolean`, `bigint`, `Date`, or object — which makes it
  * both bindable and **JSON-safe** (so it survives the cross-shard RPC wire),
  * and the function is **idempotent** (`serializeSqlValue(serializeSqlValue(x))

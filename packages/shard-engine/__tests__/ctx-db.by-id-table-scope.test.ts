@@ -5,10 +5,10 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * Regression for the per-table by-id IDOR: the `ctx.db.&lt;table>.get/delete/
+ * Regression for the per-table by-id IDOR: the `ctx.db.<table>.get/delete/
  * patch/replace` facade pins a `tableName`, which is forwarded to the writer as
  * `expectedTable`. Row ids are globally-unique random UUIDs with no embedded
- * table, so without scoping a branded `Id&lt;"posts">` carrying another table's id
+ * table, so without scoping a branded `Id<"posts">` carrying another table's id
  * would resolve cross-table — letting `ctx.db.posts.get(usersId)` read, or
  * `.delete`/`.patch`/`.replace` mutate, a `users` row. With the bound table
  * forwarded, a foreign id must resolve to "absent" (read → null, write → no-op)

@@ -10,7 +10,7 @@
  * to `@cloudflare/containers`' own guard — the constructor's directed
  * "Containers have not been enabled" error surfaces through a real DO stub
  * call, proving the class boots in workerd right up to the missing container
- * runtime. On top of that, the `ctx.containers.&lt;name>` surface
+ * runtime. On top of that, the `ctx.containers.<name>` surface
  * (`createContainerContext`) resolves real Durable Object namespace bindings
  * and exposes the `.get`/`.any`/`.pool` handles (a missing binding degrades to
  * a directed error), and the container→Lunora bridge client
