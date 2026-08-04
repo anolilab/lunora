@@ -1199,7 +1199,14 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
             // this narrows the union on its own. An absent key and a present-but-
             // undefined one both read as `undefined`, which is why no `in` probe is
             // needed to tell them apart.
-            if (syncResult.issues !== undefined && syncResult.issues.length > 0) {
+            //
+            // ANY defined `issues` is a failure, empty array included. The spec's
+            // rule is that a FALSY `issues` means success, and `[]` is truthy, so a
+            // validator returning `{ issues: [] }` is reporting failure — badly, but
+            // reporting it. Letting an empty array through would fall to the success
+            // path and return a `FailureResult`'s absent `value`, handing the caller
+            // `undefined` as though it had validated.
+            if (syncResult.issues !== undefined) {
                 const first = syncResult.issues[0];
                 const message = first?.message ?? "Standard Schema validation failed";
 
@@ -1210,7 +1217,7 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
                 });
             }
 
-            return (syncResult as { value: InferStandardOutput<S> }).value;
+            return syncResult.value;
         }),
     );
 };

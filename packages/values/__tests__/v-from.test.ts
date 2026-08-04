@@ -208,6 +208,30 @@ describe("v.from()", () => {
         expect(result.error.message).toMatch(/non-object result/u);
     });
 
+    it("rejects a result carrying an EMPTY issues array rather than passing `undefined` through", () => {
+        expect.assertions(3);
+
+        // The spec's rule is that a FALSY `issues` means success — and `[]` is
+        // truthy, so this validator is reporting failure, just without saying what
+        // failed. Treating it as success would take the `.value` path on a result
+        // that has no `value`, handing the caller `undefined` as though it had
+        // validated.
+        const emptyIssues = {
+            "~standard": {
+                validate: (_value: unknown) => {
+                    return { issues: [] as { message: string; path?: PropertyKey[] }[] };
+                },
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+        const result = v.from(emptyIssues).safeParse("x") as { error: ValidationError; ok: false };
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toBeInstanceOf(ValidationError);
+        expect(result.error.message).toBe("Standard Schema validation failed");
+    });
+
     it("falls back to a default message when the issue carries none", () => {
         expect.assertions(2);
 
