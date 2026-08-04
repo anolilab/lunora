@@ -139,6 +139,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
         if (getCurrentScope()) {
             onScopeDispose(teardown);
         } else if (process.env.NODE_ENV !== "production") {
+            // eslint-disable-next-line no-console -- deliberate dev-only warning: this adapter has no injected logger, and the branch is already gated on NODE_ENV !== "production"
             console.warn(
                 "[@lunora/vue] usePresence called with no active effect scope — its heartbeat interval and live subscription will not be cleaned up automatically. " +
                     "Call it inside setup()/an effect scope.",

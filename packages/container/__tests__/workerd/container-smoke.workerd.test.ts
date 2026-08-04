@@ -83,7 +83,7 @@ describe("@lunora/container (workerd)", () => {
 
         const result = await bridge.query<{ authorization: string; echoed: Record<string, unknown> }>("smoke:echo", { limit: 20 });
 
-        expect(result).toEqual({ authorization: "Bearer smoke-token", echoed: { limit: 20 } });
+        expect(result).toStrictEqual({ authorization: "Bearer smoke-token", echoed: { limit: 20 } });
     });
 
     it("the bridge surfaces a Lunora error envelope as a typed ContainerBridgeError", async () => {

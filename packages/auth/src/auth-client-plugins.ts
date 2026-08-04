@@ -6,8 +6,7 @@
  * Two entry points, same toggles:
  *
  * - {@link createLunoraAuthClient} builds the whole client — the one-liner.
- * - {@link lunoraAuthPlugins} returns just the array, for when you want to own
- *   the `createAuthClient` call.
+ * - {@link lunoraAuthPlugins} returns just the array, for when you want to own the `createAuthClient` call.
  *
  * Neither picks the framework variant for you (`better-auth/react` | `/vue` |
  * `/svelte` | `/solid`) — it has to match your UI framework, so you pass it in:
@@ -184,6 +183,7 @@ const createLunoraAuthClient = <TClient>(
     return createAuthClient({
         ...rest,
         baseURL: baseURL ?? currentOrigin(),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- `LunoraAuthClientPlugin` is `ReturnType<typeof organizationClient>`, and better-auth types that return as `any`, so every plugin array spreads as `any`. Verified with a `const check: never = p` probe. Not fixable here without hand-writing a plugin type that would then drift from better-auth's.
         plugins: [...lunoraAuthPlugins(plugins), ...oneTap, ...extraPlugins],
     });
 };
