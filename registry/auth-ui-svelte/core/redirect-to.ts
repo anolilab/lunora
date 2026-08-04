@@ -3,7 +3,7 @@
  * on purpose.
  *
  * `invitations.ts` bounces a signed-out invitee through the sign-in screen with
- * `?redirectTo=&lt;the invitation>`, and an app's own route guard usually does the
+ * `?redirectTo=<the invitation>`, and an app's own route guard usually does the
  * same. Without this the parameter is written and never read, so the user signs
  * in and lands on the generic post-login page with the invitation forgotten —
  * the bounce looks like it worked and quietly didn't.

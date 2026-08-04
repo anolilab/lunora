@@ -15,7 +15,7 @@ interface VectorBrowserProps {
     /**
      * Load the schema's vector indexes. Defaults to `client.listVectorIndexes`,
      * which hits the worker's admin-gated `/_lunora/admin/vector/indexes`
-     * endpoint — so the panel works out of the box under `&lt;LunoraProvider>`,
+     * endpoint — so the panel works out of the box under `<LunoraProvider>`,
      * provided the worker is built with a `vectorIntrospector` and `adminToken`.
      */
     readonly loadIndexes?: () => Promise<VectorIndexSummary[]>;

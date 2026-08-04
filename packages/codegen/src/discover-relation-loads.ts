@@ -17,7 +17,7 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
  * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
  * call isn't one. Matched by receiver **shape** (not import origin), fail-closed,
  * in both surface forms Lunora exposes. Facade form
- * `ctx.db.&lt;table>.findMany(options?)` — the form real app code writes — puts the
+ * `ctx.db.<table>.findMany(options?)` — the form real app code writes — puts the
  * table in the receiver's property name and the options object at argument 0.
  * Table-arg form `ctx.db.findMany("table", options?)` puts the table in the
  * string-literal argument 0 and the options object at argument 1. `table` is `""`
@@ -137,7 +137,7 @@ const relationLoadsInDeclaration = (declaration: TsNode, relativePath: string): 
 };
 
 /**
- * Discover `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating
+ * Discover `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating
  * list reads under the lunora source directory — the `masked_relation_leak_via_with`
  * lint input. Column masking is applied per-procedure to the top-level rows of
  * the table named in the read; it does **not** descend into `with`-hydrated

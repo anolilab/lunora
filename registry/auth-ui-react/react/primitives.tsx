@@ -127,7 +127,7 @@ const FormBanner = ({ error, success }: FormBannerProps): ReactElement | null =>
     return null;
 };
 
-/** Internal link using the provider's framework `Link` when present, else `&lt;a>`. */
+/** Internal link using the provider's framework `Link` when present, else `<a>`. */
 interface AuthLinkProps {
     children: ReactNode;
     href: string;
@@ -155,7 +155,7 @@ const AuthLink = ({ children, href }: AuthLinkProps): ReactElement => {
  * A "last used" marker, shown against whichever sign-in route the user took
  * last time.
  *
- * A standalone primitive rather than something only `&lt;SocialButtons>` renders,
+ * A standalone primitive rather than something only `<SocialButtons>` renders,
  * because better-auth records `email`, `magic-link` and `passkey` as well as
  * provider ids: badging only the OAuth buttons makes the feature invisible for
  * the most common case there is.
@@ -171,7 +171,7 @@ const LastUsedBadge = (): ReactElement => {
  * server discovery on, is whatever `socialProviders` the deployment configured.
  *
  * The provider's brand mark is left to CSS: each button carries a
- * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
+ * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
  * set with a stylesheet rule and this package ships no SVG payload for a list of
  * providers it can't know in advance.
  */

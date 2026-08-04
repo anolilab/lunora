@@ -20,9 +20,9 @@ export * from "../core";
  * ```
  *
  * ```vue
- * &lt;script setup lang="ts">
+ * <script setup lang="ts">
  * import { SignInCard } from "./lunora/auth-ui/vue";
- * &lt;/script>
+ * </script>
  * ```
  */
 

@@ -146,7 +146,7 @@ const episodicComponent = (): EpisodicComponentFunctions => {
     /**
      * Episodic READ (internal query — queries are dispatchable via `run`, like
      * `agentState`). Returns the owner's most recent `limit` episodes rendered
-     * chronologically (oldest → newest) as compact `- &lt;summary>` lines, so the
+     * chronologically (oldest → newest) as compact `- <summary>` lines, so the
      * model reads a short timeline. Owner-scoped; deterministic (explicit sort);
      * `{ context: "" }` when the owner has no episodes (the loop drops it).
      */

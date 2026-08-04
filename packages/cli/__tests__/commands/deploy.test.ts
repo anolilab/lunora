@@ -77,13 +77,13 @@ const VALID_WRANGLER = `{
 `;
 
 /**
- * `VALID_WRANGLER` plus a declared `env.&lt;name>` block repeating the same
+ * `VALID_WRANGLER` plus a declared `env.<name>` block repeating the same
  * (non-inheritable) bindings — real wrangler only WARNS on an undeclared
- * `--env &lt;name>` and then deploys with NO bindings at all (confirmed against
+ * `--env <name>` and then deploys with NO bindings at all (confirmed against
  * wrangler 4.114.0: `wrangler deploy --dry-run --env doesnotexist` prints
  * "No bindings found."), which is exactly the silent failure mode the deploy
  * validator's env-scoping gate exists to turn into a loud one — so any test
- * exercising a real `--env &lt;name>` deploy needs a matching declared block,
+ * exercising a real `--env <name>` deploy needs a matching declared block,
  * same as a correctly-configured project would have.
  */
 const validWranglerWithEnv = (name: string): string => `{

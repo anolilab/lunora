@@ -123,7 +123,7 @@ const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
  * Build the single RPC operation for one query/mutation/action. Every RPC call
  * is `POST /_lunora/rpc`; to list each function individually in Swagger UI (oRPC
  * pattern: one operation per procedure) we synthesise a distinct path suffix
- * `/_lunora/rpc#&lt;functionPath>` — the `#`-fragment is ignored by the transport
+ * `/_lunora/rpc#<functionPath>` — the `#`-fragment is ignored by the transport
  * (all still POST to `/_lunora/rpc`) but gives each operation a unique path key
  * so they render as separate entries. The requestBody pins `functionPath` to a
  * `const`, types `args` from the function's validators, and allows an optional
@@ -233,7 +233,7 @@ const cacheResponseHeaders = (cache: ExposeCacheIR | undefined, method: "get" | 
 /**
  * Build the OpenAPI operation for one `.expose({ rest: true })` procedure (plan
  * 167). Unlike the synthetic RPC operations, these are REAL REST endpoints on
- * `/_lunora/rest/&lt;namespace>/&lt;fn>` — the exact path + method the runtime router
+ * `/_lunora/rest/<namespace>/<fn>` — the exact path + method the runtime router
  * mints (both derive from the shared `restPathForFunction` contract, so the spec
  * cannot drift from the live surface). A `query` maps to `GET` with its args as
  * query parameters; a `mutation`/`action` maps to `POST` with a JSON request body.

@@ -19,7 +19,7 @@ interface LunoraProviderProps {
      * route through the offline queue on the client), and `gcTime: 5min` (keep
      * results around for a short return-to-view window).
      *
-     * If a parent `&lt;QueryClientProvider>` is already mounted, the provider
+     * If a parent `<QueryClientProvider>` is already mounted, the provider
      * uses *that* client and does NOT install an inner one (so apps with their
      * own setup don't double-wrap).
      */
@@ -73,7 +73,7 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
 };
 
 /**
- * Read the {@link LunoraClient} from the nearest `&lt;LunoraProvider>`. Kept
+ * Read the {@link LunoraClient} from the nearest `<LunoraProvider>`. Kept
  * colocated with the provider for back-compat.
  */
 const useLunora = (): LunoraClient => {

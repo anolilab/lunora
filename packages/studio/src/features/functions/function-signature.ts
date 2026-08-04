@@ -1,7 +1,7 @@
 import type { FunctionArgumentDescriptor } from "../../lib/types";
 
 /**
- * The display type of one argument: `id&lt;table>` for foreign keys, `kind[]`
+ * The display type of one argument: `id<table>` for foreign keys, `kind[]`
  * for arrays whose element kind is known, otherwise the bare validator kind.
  */
 const argumentType = (argument: FunctionArgumentDescriptor): string => {
@@ -18,7 +18,7 @@ const argumentType = (argument: FunctionArgumentDescriptor): string => {
 
 /**
  * A one-line, human-readable function signature from its argument descriptors,
- * e.g. `(channelId: id&lt;channels>, text: string, limit?: number)`. Optional
+ * e.g. `(channelId: id<channels>, text: string, limit?: number)`. Optional
  * arguments are marked with `?`. Returns `()` when there are no arguments.
  */
 const formatSignature = (arguments_: FunctionArgumentDescriptor[] | undefined): string => {

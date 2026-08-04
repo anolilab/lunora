@@ -26,7 +26,7 @@ const expectedDirectory = join(fixtureRoot, "expected", "_generated");
 const SCHEMA_NOT_FOUND_RE = /schema\.ts not found/u;
 
 /**
- * Slice a single `export interface &lt;Name> ... { ... }` block out of emitted
+ * Slice a single `export interface <Name> ... { ... }` block out of emitted
  * `server.ts` so a ctx-augmentation assertion can scope to exactly one context
  * (e.g. assert a field is on `ActionCtx` but absent from `QueryCtx`).
  */

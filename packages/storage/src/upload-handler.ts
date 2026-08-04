@@ -119,8 +119,8 @@ interface R2UploadStorageOptions {
 
     /**
      * Explicit R2 S3 endpoint. Defaults to
-     * `https://&lt;accountId>.r2.cloudflarestorage.com`. Pass this to pin a
-     * jurisdiction (e.g. `&lt;accountId>.eu.r2.cloudflarestorage.com`).
+     * `https://<accountId>.r2.cloudflarestorage.com`. Pass this to pin a
+     * jurisdiction (e.g. `<accountId>.eu.r2.cloudflarestorage.com`).
      */
     endpoint?: string;
     /** Client-side multipart part size (bytes or a size string like `"16MB"`). */

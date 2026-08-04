@@ -237,7 +237,7 @@ const remoteConfigBasename = (): string => `.wrangler.lunora-remote.${String(pro
 
 /**
  * Produce a temporary wrangler config with `"remote": true` on every eligible
- * binding, so `lunora dev` can run `wrangler dev --config &lt;temp>` against the
+ * binding, so `lunora dev` can run `wrangler dev --config <temp>` against the
  * deployed D1/KV/R2 without touching the user's file.
  *
  * The temp file is written as a sibling of the source `wrangler.jsonc` (in the

@@ -579,7 +579,7 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
 /**
  * Whether the worker entry exports each definition's generated class: a named
  * export of the class (covered by `es-module-lexer`'s export list) or the
- * conventional `export * from "./lunora/_generated/&lt;generatedModule>"` star
+ * conventional `export * from "./lunora/_generated/<generatedModule>"` star
  * re-export — the way a worker entry re-exports every generated class of one
  * kind at once. `es-module-lexer` lists the module request but not the names a
  * star re-export forwards, so the path itself is the signal that every class

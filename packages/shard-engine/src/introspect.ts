@@ -10,7 +10,7 @@ import type { SortDirection } from "./schema-types";
  * over the same `/_lunora/rpc` → shard `/rpc` path as ordinary functions, but
  * `ShardDO` intercepts them before user dispatch and serves them from the
  * helpers below. The `__lunora_` namespace is reserved (it also backs the FTS
- * capability probe), so a real generated `&lt;file>:&lt;function>` can never collide.
+ * capability probe), so a real generated `<file>:<function>` can never collide.
  */
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
@@ -36,7 +36,7 @@ const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
  * evaluates the flag through the app's OpenFeature provider under the socket's
  * verified identity. Like the other reserved prefixes it is NOT admin-gated (a
  * flag read is public, scoped to the subscriber's own targeting context), and
- * the `__lunora_` namespace is reserved so a real `&lt;file>:&lt;function>` can't
+ * the `__lunora_` namespace is reserved so a real `<file>:<function>` can't
  * collide. Re-evaluated on every write-flush so values stay live within a
  * session (provider-side flips with no intervening write surface on reconnect).
  */
@@ -139,7 +139,7 @@ interface AuditLogResult {
 /**
  * One live subscription tracked on a shard's WebSocket, as surfaced by
  * `__lunora_admin__:listSubscriptions`. Mirrors the persisted `SubscriptionQuery`
- * attachment shape: `functionPath` is the `&lt;file>:&lt;function>` query re-run on a
+ * attachment shape: `functionPath` is the `<file>:<function>` query re-run on a
  * matching write (absent on legacy delta-only subscriptions), `table` is the
  * table the raw-delta fan-out matches against, and `args` are the query args.
  */
@@ -189,7 +189,7 @@ interface FunctionScanAttribution {
 
 /**
  * Per-function execution counters served by `__lunora_admin__:getFunctionStats`,
- * one entry per `&lt;file>:&lt;function>` path dispatched since this DO instance woke.
+ * one entry per `<file>:<function>` path dispatched since this DO instance woke.
  * Like `getMetrics`'s counters these are in-memory and reset on
  * hibernation/restart — a "since this instance woke" readout, not a durable
  * time series. Durations are wall-clock milliseconds of the handler call itself
@@ -222,7 +222,7 @@ interface FunctionCallStat {
     lastErrorMessage: null | string;
     /** Slowest single dispatch, in milliseconds. */
     maxDurationMs: number;
-    /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
+    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
     path: string;
 
     /**
@@ -523,18 +523,18 @@ interface StudioFeaturesResult {
  * One feature flag evaluated under a supplied targeting context, surfaced by
  * `__lunora_admin__:listFlags` for the studio's read-only Flags page. The `key`
  * and `type` are statically discovered by `@lunora/codegen` from the app's
- * `ctx.flags.&lt;type>("key", …)` reads; `value`/`reason`/`variant`/`errorCode`
+ * `ctx.flags.<type>("key", …)` reads; `value`/`reason`/`variant`/`errorCode`
  * come from the live OpenFeature evaluation (the codegen subclass overrides the
  * base `evaluateFlags` hook). `value` is the resolved flag value as JSON.
  */
 interface FlagEvaluation {
     /** OpenFeature `errorCode` when the evaluation failed (the value falls back to the default). */
     errorCode?: string;
-    /** The discovered flag key (the first argument of a `ctx.flags.&lt;type>(...)` read). */
+    /** The discovered flag key (the first argument of a `ctx.flags.<type>(...)` read). */
     key: string;
     /** OpenFeature `reason` for the resolution (`TARGETING_MATCH`, `DEFAULT`, `ERROR`, …). */
     reason?: string;
-    /** The flag's value type, derived from which `ctx.flags.&lt;type>` method read it. */
+    /** The flag's value type, derived from which `ctx.flags.<type>` method read it. */
     type: "boolean" | "number" | "object" | "string";
     /** The resolved value (JSON), or the type default when unconfigured / on error. */
     value: unknown;
@@ -584,7 +584,7 @@ interface WorkflowsResult {
  * not Durable Objects and carry no runtime state in the shard, so this is pure
  * declaration metadata. `binding` is the generated `QUEUE_*` producer binding,
  * `name` the deployed `queues.producers[].queue`, `exportName` the
- * `lunora/queues.ts` export (`ctx.queues.&lt;exportName>`), `mode` whether the
+ * `lunora/queues.ts` export (`ctx.queues.<exportName>`), `mode` whether the
  * queue is consumed by a worker (`push`) or polled externally (`pull`), and
  * `deadLetterQueue` the optional DLQ a push consumer dead-letters to.
  */
@@ -1308,8 +1308,8 @@ const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns:
 
 /**
  * Summarise the distinct values of one displayed column over the **active view** —
- * Datasette-style faceting. Read-only: a `SELECT &lt;col> AS value, COUNT(*) AS count
- * … GROUP BY &lt;col> ORDER BY count DESC LIMIT N+1` with every value and JSON path
+ * Datasette-style faceting. Read-only: a `SELECT <col> AS value, COUNT(*) AS count
+ * … GROUP BY <col> ORDER BY count DESC LIMIT N+1` with every value and JSON path
  * bound, never interpolated. `column` is validated against the table's known
  * displayed columns (rejected with a typed 404 if unknown) and resolved through the
  * SAME {@link resolveColumnExpression} allowlist as filters/order-by, so a

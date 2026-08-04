@@ -1,5 +1,5 @@
 /**
- * One `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list read
+ * One `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating list read
  * — the shared input for the `masked_relation_leak_via_with` lint. Column
  * masking is applied per-procedure to the top-level rows of the table named in
  * the read; it does **not** descend into `with`-hydrated relations, so a masked

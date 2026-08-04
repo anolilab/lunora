@@ -23,8 +23,8 @@ export type UnknownEventHandling = "warn" | "ignore" | "fail" | ((entry: EventLo
  * Events emitted by the {@link EventSource} runtime.
  *
  * A `type` (not `interface`) so it satisfies `EventEmitter`'s
- * `Record&lt;string, unknown>` constraint — interfaces have no implicit index
- * signature and aren't assignable to `Record&lt;string, unknown>`.
+ * `Record<string, unknown>` constraint — interfaces have no implicit index
+ * signature and aren't assignable to `Record<string, unknown>`.
  * @experimental
  */
 export type EventSourceEvents = {

@@ -1,5 +1,5 @@
 /**
- * One `ctx.browser.&lt;method>(url, …)` call whose navigation URL (`arguments[0]`)
+ * One `ctx.browser.<method>(url, …)` call whose navigation URL (`arguments[0]`)
  * is derived from the handler's `args` with no server-side scoping — the input
  * the `browser_user_url_without_allowlist` lint consumes. `@lunora/browser`
  * blocks private/internal targets by default, but a request-supplied *public*

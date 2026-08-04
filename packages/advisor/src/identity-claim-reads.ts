@@ -1,5 +1,5 @@
 /**
- * One `&lt;receiver>.identity.&lt;key>` claim read (where `&lt;receiver>` is an RLS/mask
+ * One `<receiver>.identity.<key>` claim read (where `<receiver>` is an RLS/mask
  * policy `auth`, or `ctx.auth`/`context.auth`) — the shared input for the
  * `identity_undeclared_claim_trusted` lint. `defineIdentity` validates only its
  * declared claims at the trust boundary and forwards undeclared claims
@@ -13,7 +13,7 @@
 export interface AdvisorIdentityClaimRead {
     /** `true` when `key` is a declared claim (in the `defineIdentity` contract, or the always-present `userId`). */
     declared: boolean;
-    /** The exported binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    /** The exported binding name of the enclosing declaration (`<module>` at file scope). */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;

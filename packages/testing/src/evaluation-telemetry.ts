@@ -9,7 +9,7 @@
  * and an optional short label leave, never the graded prompt or completion:
  *
  * Attach to a generation span by passing the post-hoc `SpanHandle` a
- * `ctx.trace(name, (trace, span) =&gt; …)` body receives as `span`, and the score
+ * `ctx.trace(name, (trace, span) => …)` body receives as `span`, and the score
  * lands on that generation's span. Or omit `span` and use the returned attribute
  * bag as a standalone eval event/metric payload — e.g. `recordEvaluation({ label:
  * "pass", name: "exact-match", score: 1 })` returns

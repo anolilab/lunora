@@ -24,7 +24,7 @@ interface ScheduledJobsProps {
     /**
      * Load the pending scheduled jobs. Defaults to `client.listScheduledJobs`,
      * which hits the worker's admin-gated `/_lunora/admin/scheduled` endpoint —
-     * so the panel works out of the box under `&lt;LunoraProvider>`, provided the
+     * so the panel works out of the box under `<LunoraProvider>`, provided the
      * worker is built with a `schedulerDO` namespace and `adminToken`. Override
      * it to source jobs from elsewhere.
      */
@@ -55,7 +55,7 @@ const jobCanceller = (
  * scheduler. Cron *triggers* are static wrangler config and don't appear here;
  * this lists the dynamic, in-flight schedule only.
  *
- * Works out of the box under `&lt;LunoraProvider>` via the client's scheduler
+ * Works out of the box under `<LunoraProvider>` via the client's scheduler
  * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
  * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */

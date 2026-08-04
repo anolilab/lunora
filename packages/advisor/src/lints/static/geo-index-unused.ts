@@ -10,7 +10,7 @@ import type { Lint } from "../../types";
  * `withGeoIndex(name, q => q.near(…) | q.within(…))` the companion is pure dead
  * overhead — the geo analogue of a dead regular index. Cross-references every geo
  * index in the schema against the set of index names some handler references via
- * `withGeoIndex("&lt;name>")`.
+ * `withGeoIndex("<name>")`.
  *
  * Suppressed entirely when any usage passes a non-literal name
  * (`withGeoIndex(someVariable, …)`), because a dynamic reference could target any

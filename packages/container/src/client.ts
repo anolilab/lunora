@@ -158,7 +158,7 @@ interface ContainerEgressControls {
 }
 
 /**
- * The per-definition accessor exposed as `ctx.containers.&lt;exportName>`.
+ * The per-definition accessor exposed as `ctx.containers.<exportName>`.
  * @experimental
  */
 interface ContainerAccessor {

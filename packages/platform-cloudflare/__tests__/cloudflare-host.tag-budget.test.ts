@@ -5,7 +5,7 @@ import { createSocketHost } from "../src/cloudflare-host";
 
 /**
  * The Cloudflare socket host reserves one `acceptWebSocket` tag slot for its
- * own identity tag (`lunora-socket:&lt;uuid>`, see `cloudflare-host.ts`'s
+ * own identity tag (`lunora-socket:<uuid>`, see `cloudflare-host.ts`'s
  * `ID_TAG_PREFIX`), so Cloudflare's documented cap of 10 tags / 256 characters
  * per tag (developers.cloudflare.com/durable-objects/api/state/) becomes a
  * caller-visible budget of 9 usable tags. These tests pin that the adapter

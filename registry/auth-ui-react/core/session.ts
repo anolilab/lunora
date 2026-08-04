@@ -1,6 +1,6 @@
 /**
- * The signed-in user, for the chrome rather than a form: `&lt;UserButton>`,
- * `&lt;UserAvatar>`, `&lt;UserView>`, and any card that needs to know whether anyone
+ * The signed-in user, for the chrome rather than a form: `<UserButton>`,
+ * `<UserAvatar>`, `<UserView>`, and any card that needs to know whether anyone
  * is signed in at all.
  *
  * better-auth's framework clients each ship their own reactive `useSession`, but

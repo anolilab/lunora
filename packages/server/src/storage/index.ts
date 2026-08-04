@@ -5,7 +5,7 @@
  * ```ts
  * import { defineStorageRule, defineStorageRules, storageRules } from "@lunora/server";
  *
- * const ownAvatars = defineStorageRule&lt;MyCtx>({
+ * const ownAvatars = defineStorageRule<MyCtx>({
  *     bucket: "avatars",
  *     on: "read",
  *     prefix: "user/",
@@ -14,7 +14,7 @@
  *
  * const rules = defineStorageRules([ownAvatars]);
  *
- * const builders = initLunora.dataModel&lt;DataModel>().create();
+ * const builders = initLunora.dataModel<DataModel>().create();
  * const guardedAction = builders.action.use(storageRules(rules));
  * ```
  *

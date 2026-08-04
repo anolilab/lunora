@@ -52,7 +52,7 @@ const VALIDATOR_METHODS = new Set([
 
 /**
  * True when `node` is a side-effect-free `v.*` validator expression — a call on
- * `v.&lt;method>` (method in {@link VALIDATOR_METHODS}) whose arguments are
+ * `v.<method>` (method in {@link VALIDATOR_METHODS}) whose arguments are
  * themselves validator expressions or safe literals (string/number/boolean/null,
  * object literals of validators, arrays of validators). Anything else — a bare
  * identifier, a `require(...)`/`fetch(...)` call, a comma/assignment expression,

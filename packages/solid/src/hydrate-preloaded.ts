@@ -19,7 +19,7 @@ import { useLunora } from "./context";
  * ```tsx
  * // route loader (server): const preloaded = await preloadQuery(client, api.messages.list, args);
  * const messages = hydratePreloaded(preloaded); // seeded from SSR, then live
- * return &lt;pre>{JSON.stringify(messages())}&lt;/pre>;
+ * return <pre>{JSON.stringify(messages())}</pre>;
  * ```
  *
  * Effects do not run on the server during SSR (Solid only runs them after

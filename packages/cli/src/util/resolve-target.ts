@@ -16,7 +16,7 @@ import { readLinkedProject } from "@lunora/config";
 
 interface ResolveWorkerUrlInputs {
     cwd: string;
-    /** The `--env &lt;name>` the caller is targeting, when scoped. `undefined` means top-level (no `--env`). */
+    /** The `--env <name>` the caller is targeting, when scoped. `undefined` means top-level (no `--env`). */
     env?: string;
     /** Explicit `--url` flag value, when the caller passed one. */
     url?: string;

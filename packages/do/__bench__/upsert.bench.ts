@@ -4,7 +4,7 @@ import { beforeAll, bench, describe } from "vitest";
 import { makeWriter } from "./shared";
 
 /**
- * The work behind `ctx.db.&lt;table>.upsert(...)` — a `findFirst` by the unique
+ * The work behind `ctx.db.<table>.upsert(...)` — a `findFirst` by the unique
  * `target` followed by a `patch` (match) or `insert` (miss). The facade is a
  * thin wrapper over exactly these calls, so this engine-level pair is a faithful
  * measure of upsert's cost. The `by_email` UNIQUE index backs the lookup.

@@ -10,7 +10,7 @@
  * `ShardRegistryDO` is the persistent source of truth. A worker:
  *
  * - calls `POST /register {table, shardKey}` when a sharded table first
- * sees a write on a new key (typically from `ctx.db.&lt;table>.insert` via
+ * sees a write on a new key (typically from `ctx.db.<table>.insert` via
  * the worker's onWrite hook, fired through `ctx.waitUntil` so the
  * user-facing write doesn't pay the registry round-trip);
  * - calls `POST /unregister {table, shardKey}` when a shard is decommissioned;
@@ -21,7 +21,7 @@
  *
  * Single-instance contract: deploy one DO instance per environment, by
  * convention named {@link SHARD_REGISTRY_DO_NAME}. The DO is small (just a
- * `Map&lt;table, Set&lt;shardKey>>`) and writes are infrequent (only on first-seen
+ * `Map<table, Set<shardKey>>`) and writes are infrequent (only on first-seen
  * shardKey per table), so a single instance is sufficient up to tens of
  * thousands of distinct shard keys.
  *

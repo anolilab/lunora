@@ -1,7 +1,7 @@
 /**
  * The framework-agnostic configuration + resolved controller context.
  *
- * A framework provider (`&lt;AuthUIProvider>`) collects the user-facing
+ * A framework provider (`<AuthUIProvider>`) collects the user-facing
  * {@link AuthUIConfig}, then {@link resolveContext} normalizes it into a
  * {@link ControllerContext} — the fully-defaulted object every controller
  * receives. Keeping resolution here means the five framework providers share one
@@ -74,7 +74,7 @@ interface RedirectConfig {
 }
 
 /**
- * URL segments `&lt;AuthView>` maps to cards, so an app can host every auth screen
+ * URL segments `<AuthView>` maps to cards, so an app can host every auth screen
  * on one route (`/auth/:view`) instead of wiring ten of them.
  */
 interface ViewPaths {
@@ -103,7 +103,7 @@ interface AvatarConfig {
     upload?: (file: File) => Promise<string>;
 }
 
-/** The user-facing config passed to a framework `&lt;AuthUIProvider>`. */
+/** The user-facing config passed to a framework `<AuthUIProvider>`. */
 interface AuthUIConfig {
     authClient: AnyAuthClient;
     avatar?: AvatarConfig;
@@ -172,7 +172,7 @@ interface AuthUIConfig {
          * Needed because teams are detected from the server's table map and
          * have no client-side equivalent to fall back on: a deployment that
          * withholds the organization block (`uiConfig({ expose })`) would
-         * otherwise lose `&lt;TeamsCard>` from every port with no way to restore it.
+         * otherwise lose `<TeamsCard>` from every port with no way to restore it.
          */
         teams?: boolean;
     };

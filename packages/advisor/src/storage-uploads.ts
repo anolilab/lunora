@@ -1,5 +1,5 @@
 /**
- * One tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing call — the
+ * One tracked `ctx.storage.<bucket>.<method>(...)` upload/signing call — the
  * shared input for the storage config-hygiene security lints
  * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
  * `storage_generate_upload_url_no_content_type_pin`, `storage_presigned_url_for_private_content`).

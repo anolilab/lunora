@@ -54,7 +54,7 @@ export interface LunoraMailOptions {
      * `transport` is set.
      */
     cloudflareSend?: (from: string, to: string, raw: string) => Promise<void>;
-    /** Default sender (`Name &lt;addr@host>` or bare email). */
+    /** Default sender (`Name <addr@host>` or bare email). */
     from: string;
     /** Default queue binding for `mailer.queue()`. */
     queue?: QueueLike;

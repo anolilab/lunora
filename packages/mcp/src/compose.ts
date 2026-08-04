@@ -4,7 +4,7 @@
  * Compose several independent tool surfaces into one MCP server.
  *
  * `createLunoraMcpServer` hard-wires the deployment surface because it also has
- * to route dynamically-named `agent_&lt;name>` tools. Everything else in this
+ * to route dynamically-named `agent_<name>` tools. Everything else in this
  * package — the documentation tools, and the CLI's local dev tools — is a flat
  * list of `(definition, handler)` pairs, and those compose by concatenation.
  * {@link createToolServer} is that composition: one `ListTools` answer, one

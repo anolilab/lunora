@@ -124,7 +124,7 @@ const scanWranglerVariablesForSecrets = (variables: Record<string, unknown> | un
  * for the `plaintext_secret_in_wrangler_vars` lint. Returns `[]` when there is no
  * wrangler config, it doesn't parse, or nothing looks like a secret. Scans the
  * top-level `vars` block (mirroring the existing `validateCorsVariables` scope);
- * per-environment `env.&lt;name>.vars` overrides are out of scope for now.
+ * per-environment `env.<name>.vars` overrides are out of scope for now.
  */
 const collectWranglerSecretVariables = (projectRoot: string): WranglerVariableIR[] => {
     const wranglerPath = findWranglerFile(projectRoot);

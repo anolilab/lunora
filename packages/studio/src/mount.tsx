@@ -18,7 +18,7 @@ export interface MountStudioOptions extends StudioAppProps {
  * Mount the batteries-included {@link StudioApp} into the DOM and return the
  * React root (call `.unmount()` to tear it down). This is the entry the
  * standalone app's `main.tsx` and the `@lunora/vite` dev route both call — it
- * keeps the host HTML to a single `&lt;div id="root">` plus one script.
+ * keeps the host HTML to a single `<div id="root">` plus one script.
  */
 export const mountStudio = (options: MountStudioOptions = {}): Root => {
     const { container = "#root", ...appProps } = options;

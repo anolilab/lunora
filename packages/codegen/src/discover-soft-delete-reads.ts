@@ -18,7 +18,7 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
  * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
  * call isn't one. Matched by receiver **shape** (not import origin), fail-closed,
  * in both surface forms Lunora exposes. Facade form
- * `ctx.db.&lt;table>.findMany(options?)` — the form real app code writes — puts the
+ * `ctx.db.<table>.findMany(options?)` — the form real app code writes — puts the
  * table in the receiver's property name and the options object at argument 0.
  * Table-arg form `ctx.db.findMany("table", options?)` puts the table in the
  * string-literal argument 0 and the options object at argument 1. `table` is `""`
@@ -125,7 +125,7 @@ const softDeleteReadsInDeclaration = (declaration: TsNode, relativePath: string)
 };
 
 /**
- * Discover `ctx.db.&lt;table>.findMany({ includeDeleted })` list reads under the
+ * Discover `ctx.db.<table>.findMany({ includeDeleted })` list reads under the
  * lunora source directory whose `includeDeleted` is either a hardcoded `true` or
  * derived from the handler's `args` — the `soft_delete_include_deleted_from_args`
  * lint input. The lint joins each row's `table` against the schema's

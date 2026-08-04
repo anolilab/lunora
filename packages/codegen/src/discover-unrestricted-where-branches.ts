@@ -172,7 +172,7 @@ const returnedExpressions = (predicate: PredicateFunction): TsNode[] => {
     return found;
 };
 
-/** Resolve the enclosing exported binding name for a node, or `"&lt;anonymous>"`. */
+/** Resolve the enclosing exported binding name for a node, or `"<anonymous>"`. */
 const enclosingExport = (node: TsNode): string => {
     for (const declaration of node.getAncestors()) {
         if (Node.isVariableDeclaration(declaration)) {

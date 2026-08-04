@@ -29,9 +29,9 @@ type VoiceServerFrame =
 type VoiceClientFrame = { text: string; type: "text" } | { type: "commit" } | { type: "interrupt" };
 
 /**
- * The `agents.&lt;name>Voice` reference codegen emits for a voice-enabled agent — a
+ * The `agents.<name>Voice` reference codegen emits for a voice-enabled agent — a
  * live, WS-backed session keyed by `threadKey`. A structural subset of the
- * generated member, so passing `api.agents.&lt;name>Voice` type-checks.
+ * generated member, so passing `api.agents.<name>Voice` type-checks.
  */
 type VoiceReference = FunctionReference<"stream", { threadKey: string }, Record<string, unknown>>;
 
@@ -75,7 +75,7 @@ interface VoiceAgentOptions {
     silenceThreshold?: number;
     /** The thread to converse on — shared with the agent's text turns. */
     threadKey: string;
-    /** The generated `api.agents.&lt;name>Voice` reference — identifies the voice DO endpoint. */
+    /** The generated `api.agents.<name>Voice` reference — identifies the voice DO endpoint. */
     voice: VoiceReference;
 }
 
@@ -127,7 +127,7 @@ const deriveWebSocketUrl = (url: string): string => {
 
 /**
  * Derive the agent's export name from its voice reference. Codegen emits the
- * member as `agents.&lt;name>Voice` (ref `agents:&lt;name>Voice`), so strip the
+ * member as `agents.<name>Voice` (ref `agents:<name>Voice`), so strip the
  * `agents:` namespace and the `Voice` suffix.
  */
 const agentNameFromReference = (voice: VoiceReference): string => {
@@ -462,7 +462,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
  * streams the agent's synthesized speech back through the browser's audio output,
  * and mirrors the call lifecycle (`status`, `transcript`, `interimTranscript`,
  * `audioLevel`) to Svelte readable stores you read with `$`. Pass the generated
- * `api.agents.&lt;name>Voice` reference (never a string), matching `agentChat`'s
+ * `api.agents.<name>Voice` reference (never a string), matching `agentChat`'s
  * reference-passing style. The Svelte counterpart to React's `useVoiceAgent`,
  * re-expressed as stores; the per-call connection lives in a closure variable (a
  * handle is created once per component, so no store-of-store indirection is

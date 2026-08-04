@@ -29,9 +29,9 @@ type VoiceServerFrame =
 type VoiceClientFrame = { text: string; type: "text" } | { type: "commit" } | { type: "interrupt" };
 
 /**
- * The `agents.&lt;name>Voice` reference codegen emits for a voice-enabled agent — a
+ * The `agents.<name>Voice` reference codegen emits for a voice-enabled agent — a
  * live, WS-backed session keyed by `threadKey`. A structural subset of the
- * generated member, so passing `api.agents.&lt;name>Voice` type-checks.
+ * generated member, so passing `api.agents.<name>Voice` type-checks.
  */
 type VoiceReference = FunctionReference<"stream", { threadKey: string }, Record<string, unknown>>;
 
@@ -75,7 +75,7 @@ interface UseVoiceAgentOptions {
     silenceThreshold?: number;
     /** The thread to converse on — shared with the agent's text turns. */
     threadKey: string;
-    /** The generated `api.agents.&lt;name>Voice` reference — identifies the voice DO endpoint. */
+    /** The generated `api.agents.<name>Voice` reference — identifies the voice DO endpoint. */
     voice: VoiceReference;
 }
 
@@ -127,7 +127,7 @@ const deriveWebSocketUrl = (url: string): string => {
 
 /**
  * Derive the agent's export name from its voice reference. Codegen emits the
- * member as `agents.&lt;name>Voice` (ref `agents:&lt;name>Voice`), so strip the
+ * member as `agents.<name>Voice` (ref `agents:<name>Voice`), so strip the
  * `agents:` namespace and the `Voice` suffix.
  */
 const agentNameFromReference = (voice: VoiceReference): string => {
@@ -168,7 +168,7 @@ interface VoiceConnection {
  * WebSocket to the agent's `VoiceSessionDO`, captures mic audio as 16 kHz PCM,
  * streams the agent's synthesized speech back through the browser's audio output,
  * and mirrors the call lifecycle (`status`, `transcript`, `interimTranscript`,
- * `audioLevel`) to React state. Pass the generated `api.agents.&lt;name>Voice`
+ * `audioLevel`) to React state. Pass the generated `api.agents.<name>Voice`
  * reference (never a string), matching `useAgentChat`'s reference-passing style.
  *
  * v1 transport is plain binary WebSocket frames with push-to-talk / silence-timer

@@ -13,7 +13,7 @@ export const TS_EXTENSION_RE: RegExp = /\.ts$/u;
  * Shared by the call-attribution discoverers (`discover-inserts`,
  * `discover-authapi-calls`, `discover-workflow-calls`). The
  * `discover-sql-interpolation` variant has divergent semantics (no export-keyword
- * check, `"&lt;module>"` fallback) and is intentionally NOT this helper.
+ * check, `"<module>"` fallback) and is intentionally NOT this helper.
  */
 export const enclosingExportName = (call: CallExpression): string => {
     for (const ancestor of call.getAncestors()) {

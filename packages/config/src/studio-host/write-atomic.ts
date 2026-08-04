@@ -6,7 +6,7 @@
  * target. The rename is atomic within a filesystem, so a crash mid-write can
  * never leave a half-written file at `path`. On any failure the temp file is
  * removed before the error propagates, so a crashed rename doesn't leave a stray
- * `&lt;path>.lunora-tmp` behind.
+ * `<path>.lunora-tmp` behind.
  *
  * The `.dev.vars` writers in `scaffold-dev-variables` use their own exclusive-
  * create / `0o600` / compare-and-swap variants for their concurrency and secret-

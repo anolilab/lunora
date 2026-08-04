@@ -12,7 +12,7 @@ import { copyToClipboard, errorMessage, fireAndForget } from "../../lib/internal
 interface DestinationCard {
     /** Translated one-line explainer. */
     readonly description: string;
-    /** Stable id; also keys the copy button testid (`drain-copy-&lt;id>`). */
+    /** Stable id; also keys the copy button testid (`drain-copy-<id>`). */
     readonly id: string;
     /** A `wrangler.jsonc` / setup snippet the operator copies into their project. */
     readonly snippet: string;

@@ -26,7 +26,7 @@ interface SandboxBrowserSurface {
     screenshot: (url: string, options?: { fullPage?: boolean; type?: "jpeg" | "png" }) => Promise<Uint8Array>;
 }
 
-/** Structural view of a `ctx.containers.&lt;name>` accessor + its fetch handle. */
+/** Structural view of a `ctx.containers.<name>` accessor + its fetch handle. */
 interface SandboxContainerAccessor {
     any: () => {
         fetch: (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<{ text: () => Promise<string> }>;

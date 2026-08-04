@@ -1,8 +1,8 @@
 /**
- * HTTP-SSE stream consumer for `httpRoute.&lt;verb>(path).stream()` routes.
+ * HTTP-SSE stream consumer for `httpRoute.<verb>(path).stream()` routes.
  *
  * The server pump (`@lunora/server`'s `buildStreamHandler`) writes one
- * `data: &lt;json>\n\n` frame per yielded chunk, a final `event: complete` frame
+ * `data: <json>\n\n` frame per yielded chunk, a final `event: complete` frame
  * on iterator completion, and an `event: error` frame carrying
  * `{ code, message }` on throw. This consumer opens the route with `fetch`,
  * reads `response.body.getReader()`, parses that exact framing, and yields

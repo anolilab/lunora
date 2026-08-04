@@ -8,7 +8,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
 /**
  * Triggers run inline within the DO transaction; the counter / rank
  * companions are stepped BEFORE the after-trigger fires (see ctx-db.ts), so a
- * handler's `ctx.db.&lt;table>.aggregate(...)` / `count(...)` / `rank(...)` MUST
+ * handler's `ctx.db.<table>.aggregate(...)` / `count(...)` / `rank(...)` MUST
  * observe the just-staged write. These tests enforce that contract.
  */
 

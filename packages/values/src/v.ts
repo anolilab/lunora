@@ -3,7 +3,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 import { describeValue, formatPath, ValidationError } from "./errors";
 
-/** Branded id type, e.g. `Id&lt;"users">`. */
+/** Branded id type, e.g. `Id<"users">`. */
 type Id<TableName extends string> = string & { readonly __table: TableName };
 
 /**
@@ -179,7 +179,7 @@ interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Va
     $defaultFn: (function_: () => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Recompute the field on every patch/replace when not explicitly provided. */
     $onUpdateFn: (function_: () => TSelect) => ColumnValidator<TSelect, TInsert>;
-    /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type&lt;Id&lt;"users">>()`). */
+    /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type<Id<"users">>()`). */
     $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
     /** Refinement predicate run after parsing — see {@link Validator.check}. Chainable; preserves column modifiers. */
     check: (predicate: (value: TSelect) => boolean, options?: CheckOptions | string) => ColumnValidator<TSelect, TInsert>;

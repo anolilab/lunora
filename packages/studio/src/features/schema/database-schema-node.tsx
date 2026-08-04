@@ -28,7 +28,7 @@ interface DatabaseSchemaColumn {
 
 /**
  * Node data for the table node. A `type` alias (not an interface) so it
- * satisfies React Flow's `Record&lt;string, unknown>` data constraint.
+ * satisfies React Flow's `Record<string, unknown>` data constraint.
  */
 type DatabaseSchemaNodeData = {
     columns: ReadonlyArray<DatabaseSchemaColumn>;

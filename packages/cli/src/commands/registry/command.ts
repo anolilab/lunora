@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `lunora registry &lt;add|list|view|build>` — the component-registry command.
+ * `lunora registry <add|list|view|build>` — the component-registry command.
  * Metadata only; `./handler` dispatches the subcommand. (The sibling `./index`
  * barrel stays the library entry that exports the `run*` orchestrators + types.)
  */

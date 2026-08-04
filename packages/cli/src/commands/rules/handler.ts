@@ -114,7 +114,7 @@ const WORKSPACE_ROOT_MARKERS = ["pnpm-workspace.yaml", "pnpm-lock.yaml", "yarn.l
  *
  * Skills belong to the repo, not to whichever package you happened to `cd`
  * into: running `lunora rules install` from a subdirectory dropped them in
- * `&lt;pkg>/.agents/skills`, where the coding agent never looks. Falls back to `start` when no marker is found, so a standalone project
+ * `<pkg>/.agents/skills`, where the coding agent never looks. Falls back to `start` when no marker is found, so a standalone project
  * behaves exactly as before.
  */
 const resolveWorkspaceRoot = (start: string): string => {
@@ -219,7 +219,7 @@ const runRulesCheck = (options: RunRulesOptions): RunRulesResult => {
     return { code: options.strict === true ? 1 : 0, installed: status.present, skipped: [] };
 };
 
-/** `lunora rules &lt;install|check>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora rules <install|check>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ argument, cwd, logger, options }) => {
     const subcommand = argument[0] ?? "check";
 

@@ -71,7 +71,7 @@ export interface SignedUrlOptions {
     /**
      * Pin the `Content-Type` an uploader must send on a `method: "PUT"` URL.
      * Baked into the HMAC canonical so the signature only authorizes a PUT with
-     * exactly this content-type; mirrored on the URL as `&amp;ct=...`. Ignored for
+     * exactly this content-type; mirrored on the URL as `&ct=...`. Ignored for
      * `GET` URLs (a download has no request body content-type to pin).
      */
     contentType?: string;

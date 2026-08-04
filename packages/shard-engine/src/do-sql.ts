@@ -98,7 +98,7 @@ const qualifiedJsonPath = (table: string, field: string): string => {
 /** Table-qualified twin of {@link jsonPathSql} for EXISTS correlation refs. */
 const qualifiedJsonPathSql = (table: string, field: string): SQL => dsql.raw(qualifiedJsonPath(table, field));
 
-/** A `CREATE [UNIQUE] INDEX IF NOT EXISTS &lt;name> ON &lt;table> (&lt;columns>)` — the DO-local twin of sql-store's `createIndexIfNotExists` (single-engine SQLite, so no per-engine branching). */
+/** A `CREATE [UNIQUE] INDEX IF NOT EXISTS <name> ON <table> (<columns>)` — the DO-local twin of sql-store's `createIndexIfNotExists` (single-engine SQLite, so no per-engine branching). */
 const createIndexSql = (name: string, table: string, columns: SQL, unique: boolean): SQL =>
     dsql`CREATE ${unique ? dsql`UNIQUE ` : dsql``}INDEX IF NOT EXISTS ${dsql.identifier(name)} ON ${dsql.identifier(table)} (${columns})`;
 
@@ -108,8 +108,8 @@ const AGG_VALUE: Name = dsql.identifier("__value__");
 const AGG_COUNT: Name = dsql.identifier("__count__");
 
 /**
- * An aggregate-counter upsert: `INSERT INTO &lt;agg> (__key__, __value__, __count__)
- * VALUES (key, value, count) ON CONFLICT(__key__) DO UPDATE SET &lt;set>`. The
+ * An aggregate-counter upsert: `INSERT INTO <agg> (__key__, __value__, __count__)
+ * VALUES (key, value, count) ON CONFLICT(__key__) DO UPDATE SET <set>`. The
  * seeded value/count and the conflict-merge `set` vary per reducer (count / sum /
  * avg / min / max); the INSERT + ON CONFLICT scaffold is shared here.
  */

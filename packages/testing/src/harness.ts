@@ -70,7 +70,7 @@ type InlineActionFunction<R> = (context: ActionCtx) => Promise<R> | R;
  * The value type uses `any` because `RegisteredFunction` is contravariant in its
  * args type parameter — a `RegisteredMutation` with concrete args is not assignable
  * to `RegisteredMutation` with `ArgsValidator` at the type level even though at
- * runtime it is sound (the fake scheduler passes `Record&lt;string, unknown>` to
+ * runtime it is sound (the fake scheduler passes `Record<string, unknown>` to
  * `handler` and ignores the return value).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural erasure at registry boundary; see comment above

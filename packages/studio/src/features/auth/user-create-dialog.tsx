@@ -19,7 +19,7 @@ interface UserCreateDialogProps {
     readonly onCreated: () => void;
 }
 
-/** The `&lt;input type>` for a plugin field's value control (booleans get a checkbox instead). */
+/** The `<input type>` for a plugin field's value control (booleans get a checkbox instead). */
 const INPUT_TYPE_BY_FIELD: Record<AuthUserFieldSpec["type"], string> = {
     boolean: "checkbox",
     date: "datetime-local",

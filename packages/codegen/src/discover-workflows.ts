@@ -136,7 +136,7 @@ const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] =
  * `ctx.step.*` calls statically, and a value assembled across modules or by a
  * function call cannot be read at all. Those still fail loudly — silently
  * registering a workflow whose declared `name` we could not see would make
- * `ctx.workflows.get("&lt;name>")` throw at runtime with nothing pointing here.
+ * `ctx.workflows.get("<name>")` throw at runtime with nothing pointing here.
  */
 /** Strip `as` / `satisfies` / parenthesized wrappers from an expression. */
 const unwrapTypeWrappers = (node: Node | undefined): Node | undefined => {

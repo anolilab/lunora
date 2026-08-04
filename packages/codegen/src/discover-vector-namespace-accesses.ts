@@ -18,7 +18,7 @@ import type { VectorNamespaceAccessIR } from "./ir";
 const VECTOR_NAMESPACE_METHODS = new Set(["query", "upsert", "upsertMany"]);
 
 /**
- * The `ctx.vectors.&lt;method>` namespace-taking method invoked by `node`, or
+ * The `ctx.vectors.<method>` namespace-taking method invoked by `node`, or
  * `undefined` when `node` is not a `ctx.vectors` call. Matched by shape (a
  * property access whose name is a namespace-taking method and whose receiver
  * text is exactly `ctx.vectors`) — the same `import`-agnostic, fail-closed
@@ -54,7 +54,7 @@ const namespaceInitializer = (input: TsNode): TsNode | undefined => {
     return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
-/** The IR row for a `ctx.vectors.&lt;method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */
+/** The IR row for a `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */
 const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string): VectorNamespaceAccessIR | undefined => {
     const method = vectorsNamespaceMethod(call.getExpression());
 
@@ -96,7 +96,7 @@ const vectorNamespaceAccessesInSourceFile = (sourceFile: SourceFile, relativePat
 };
 
 /**
- * Discover `ctx.vectors.&lt;method>(indexName, input)` calls in `lunora/` whose
+ * Discover `ctx.vectors.<method>(indexName, input)` calls in `lunora/` whose
  * `input.namespace` is derived from the handler's `args` with no server-side
  * scoping — the `vectors_namespace_from_user_input` lint input. A Vectorize
  * namespace partitions one index into isolated sub-collections, so a namespace

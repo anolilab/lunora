@@ -41,7 +41,7 @@ const workflowDefaultName = (exportName: string): string => exportName.replaceAl
  * import { defineWorkflow } from "@lunora/workflow";
  * import { api } from "./_generated/api";
  *
- * export const orderPipeline = defineWorkflow&lt;{ orderId: string }>({
+ * export const orderPipeline = defineWorkflow<{ orderId: string }>({
  *     handler: async (ctx) => {
  *         const order = await ctx.step.do("load", () => ctx.run(api.orders.get, { id: ctx.params.orderId }));
  *         await ctx.step.sleep("cool-off", "1 minute");

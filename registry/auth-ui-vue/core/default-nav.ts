@@ -1,6 +1,6 @@
 /**
  * The zero-config navigation fallback. When an app doesn't wire its router into
- * `&lt;AuthUIProvider nav={...}>`, the components still work by driving
+ * `<AuthUIProvider nav={...}>`, the components still work by driving
  * `globalThis.location` directly. Meta-frameworks should override this with
  * their own router for client-side transitions.
  */

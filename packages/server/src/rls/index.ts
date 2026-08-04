@@ -6,7 +6,7 @@
  * ```ts
  * import { definePolicy, definePolicies, defineRole, rls } from "@lunora/server";
  *
- * const userPolicy = definePolicy&lt;MyCtx>({
+ * const userPolicy = definePolicy<MyCtx>({
  *     table: "documents",
  *     on: "read",
  *     when: ({ auth }) => ({ ownerId: auth.userId }),
@@ -14,7 +14,7 @@
  *
  * const policies = definePolicies([userPolicy]);
  *
- * const builders = initLunora.dataModel&lt;DataModel>().create();
+ * const builders = initLunora.dataModel<DataModel>().create();
  * const guardedQuery = builders.query.use(rls(policies));
  * ```
  *
@@ -24,7 +24,7 @@
  *
  * `count()` against a policy-restricted table throws
  * `LunoraError("COUNT_RLS_UNSUPPORTED")` (422). Document this in any
- * code that wraps `ctx.db.&lt;table>.count`.
+ * code that wraps `ctx.db.<table>.count`.
  *
  * Permissions let a policy check a named capability instead of enumerating
  * roles. Declare them with `definePermission`, grant them via a role's
@@ -35,7 +35,7 @@
  * const deletePosts = definePermission("posts:delete");
  * const admin = defineRole("admin", { permissions: [deletePosts] });
  *
- * const policy = definePolicy&lt;MyCtx>({
+ * const policy = definePolicy<MyCtx>({
  *     table: "posts",
  *     on: "delete",
  *     when: ({ auth }) => auth.can(deletePosts),

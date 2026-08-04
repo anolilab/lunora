@@ -91,8 +91,8 @@ export type TriggerTimingLike = "after" | "before";
 export type TriggerOpLike = "delete" | "insert" | "update";
 
 /**
- * A schedulable durable-workflow reference — the generated `workflows.&lt;name>` /
- * `agents.&lt;name>` object (carries its `WORKFLOW_*`/`AGENT_*` binding + stable
+ * A schedulable durable-workflow reference — the generated `workflows.<name>` /
+ * `agents.<name>` object (carries its `WORKFLOW_*`/`AGENT_*` binding + stable
  * name). Structural mirror so a scheduled target can be a workflow/agent, not
  * just a function path, without this package depending on `@lunora/scheduler`.
  */
@@ -141,7 +141,7 @@ export interface GuardableSchema {
     readonly tables: Record<string, { readonly isPublic?: boolean }>;
 }
 
-/** Minimal subset of `@lunora/server`'s `Schema&lt;T>` the adapter reads. */
+/** Minimal subset of `@lunora/server`'s `Schema<T>` the adapter reads. */
 export interface SchemaLike {
     readonly rlsMode?: "required";
     readonly tables: Record<string, TableDefinitionLike>;
@@ -375,7 +375,7 @@ export interface SearchScoredDocument {
     score: number;
 }
 
-/** A `ctx.db.&lt;table>` reader facade. */
+/** A `ctx.db.<table>` reader facade. */
 export interface TableReaderLike {
     /** Lazy row iteration — see the implementation note in `ctx-db.ts`. */
     [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;

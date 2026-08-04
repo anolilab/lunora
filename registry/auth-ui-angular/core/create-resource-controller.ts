@@ -19,7 +19,7 @@ import type { FlowStatus } from "./types";
  * one snapshot, one stable reference, and no flow having to re-implement the
  * engine to carry two more properties.
  *
- * A nested field rather than an intersection: `Partial&lt;A & B>` is not assignable
+ * A nested field rather than an intersection: `Partial<A & B>` is not assignable
  * from `{ busy: true }` while `B` is an unresolved generic, so an intersection
  * would need a cast at every internal update. Nesting keeps all of them honest.
  */

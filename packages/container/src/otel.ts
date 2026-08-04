@@ -138,7 +138,7 @@ interface ContainerTelemetryOptions {
      * under the Worker's trace instead of forming a fresh, disconnected trace.
      *
      * `@lunora/container` stamps this trace context as the **`traceparent` request
-     * header** on every proxied fetch (`ctx.containers.&lt;name>.…`), so a container
+     * header** on every proxied fetch (`ctx.containers.<name>.…`), so a container
      * that serves many requests should read it per request and create a telemetry
      * instance scoped to that request — the trace context differs each call, so a
      * single process-lifetime instance can't carry it:

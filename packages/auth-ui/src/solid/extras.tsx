@@ -1,3 +1,5 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc names the `<OrganizationSettingsCard>` component, not a credential. */
+
 import type { JSX } from "solid-js";
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
@@ -131,7 +133,7 @@ const OneTap = (): JSX.Element => {
 
 /**
  * Upload an organization's logo. Renders only when the app configured an
- * `avatar.upload` handler — without one, `&lt;OrganizationSettingsCard>`'s logo URL
+ * `avatar.upload` handler — without one, `<OrganizationSettingsCard>`'s logo URL
  * field is the fallback.
  */
 interface OrganizationLogoCardProps {

@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `lunora run &lt;functionPath>` — send a single RPC to a running Lunora worker.
+ * `lunora run <functionPath>` — send a single RPC to a running Lunora worker.
  * Metadata only; the handler (lazy-loaded via `loader`) holds the logic.
  */
 const runCommand: Command = {

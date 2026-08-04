@@ -43,7 +43,7 @@ interface ContainerBridgeOptions {
     fetch?: FetchLike;
 
     /**
-     * Bearer token sent as `Authorization: Bearer &lt;token>`. Your Worker's
+     * Bearer token sent as `Authorization: Bearer <token>`. Your Worker's
      * `resolveIdentity` maps it to the identity the called functions run as.
      * Pass it to the container as a `secret`, never bake it into the image.
      */

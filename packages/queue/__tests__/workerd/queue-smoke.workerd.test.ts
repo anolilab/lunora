@@ -3,7 +3,7 @@
  *
  * The Node unit suite exercises the producer/dispatcher against plain-object
  * doubles; this suite proves the same code boots and runs against the real
- * runtime objects. Covered: the typed `ctx.queues.&lt;name>` producer sends
+ * runtime objects. Covered: the typed `ctx.queues.<name>` producer sends
  * through a real Cloudflare `Queue` binding (Miniflare-backed); the generated
  * worker `queue()` consumer path (`dispatchQueueBatch`) consumes a real workerd
  * `MessageBatch` and its `ack()` disposition is visible to the runtime

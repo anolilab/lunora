@@ -144,7 +144,7 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
  */
 const WRITE_METHODS = new Set(["delete", "deleteMany", "insert", "insertMany", "patch", "patchMany", "replace"]);
 
-/** True when `call` is a `ctx.db.&lt;method>(...)` or bare `db.&lt;method>(...)` call. */
+/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call. */
 const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean => {
     const callee = call.getExpression();
 
@@ -162,7 +162,7 @@ const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean =
 };
 
 /**
- * String-literal first argument of a `ctx.db.&lt;method>("table", ...)` call, or
+ * String-literal first argument of a `ctx.db.<method>("table", ...)` call, or
  * `""` when the argument is not a string literal (dynamic table — not lintable).
  */
 const tableArgumentOf = (call: CallExpression): string => {

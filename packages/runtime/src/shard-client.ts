@@ -58,7 +58,7 @@ interface ShardFunctionReference<Args = unknown, Return = unknown> {
     readonly __lunoraRef: string;
 }
 
-/** Args type of a {@link ShardFunctionReference} (`Record&lt;string, unknown>` for an untyped ref). */
+/** Args type of a {@link ShardFunctionReference} (`Record<string, unknown>` for an untyped ref). */
 type ShardCallArgs<F> = F extends ShardFunctionReference<infer A, infer _R> ? A : Record<string, unknown>;
 
 /** Return type of a {@link ShardFunctionReference} (`unknown` for an untyped ref). */

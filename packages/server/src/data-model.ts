@@ -107,7 +107,7 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
 /**
  * Relation-aware `where` tree — the column predicates of {@link Where} plus
  * Prisma-style relation predicates resolved by the `@lunora/do` pre-resolver.
- * `Where&lt;DM[T]>` stays the column-only structural mirror for back-compat; the
+ * `Where<DM[T]>` stays the column-only structural mirror for back-compat; the
  * table facade threads `REL` through this richer form.
  */
 export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = RelationWhere<DM, REL, T> & {
@@ -194,7 +194,7 @@ type ProjectDoc<DM, T extends keyof DM, S> =
     S extends ReadonlyArray<infer K> ? (K extends keyof DM[T] ? Pick<DM[T], (K & keyof DM[T]) | SelectAlwaysKeep<DM, T>> : DM[T]) : DM[T];
 
 /**
- * `Doc&lt;T>` narrowed to exactly the relations requested in the with-arg `W` and,
+ * `Doc<T>` narrowed to exactly the relations requested in the with-arg `W` and,
  * when a `select` tuple `S` is supplied, to its projected columns. `S` defaults
  * to `undefined` so the 4-argument form (the codegen-emitted callers) keeps the
  * full document.
@@ -231,7 +231,7 @@ export interface RestrictableQueryOptionsOf<DM, REL extends Record<keyof DM, obj
     where?: WhereOf<DM, REL, T>;
 }
 
-/** Args for `ctx.db.&lt;table>.aggregate({ op, field?, where? })`. */
+/** Args for `ctx.db.<table>.aggregate({ op, field?, where? })`. */
 export interface TableAggregateOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     field?: keyof TDocument & string;
     op: AggregateOp;
@@ -243,7 +243,7 @@ export interface TableAggregateOptionsOf<DM, REL extends Record<keyof DM, object
     op: AggregateOp;
 }
 
-/** Args for `ctx.db.&lt;table>.groupBy({ by, agg?, where? })`. */
+/** Args for `ctx.db.<table>.groupBy({ by, agg?, where? })`. */
 export interface TableGroupByOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     agg?: { field?: keyof TDocument & string; op: AggregateOp };
     by: ReadonlyArray<keyof TDocument & string>;
@@ -261,7 +261,7 @@ export interface GroupByEntry<TDocument> {
     value: null | number;
 }
 
-/** Args for `ctx.db.&lt;table>.rank(name, args)`. `row` is either an id or a row doc. */
+/** Args for `ctx.db.<table>.rank(name, args)`. `row` is either an id or a row doc. */
 export interface TableRankOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     row: string | TDocument;
 }
@@ -272,7 +272,7 @@ export interface RankResult {
     total: number;
 }
 
-/** Args for `ctx.db.&lt;table>.rankPage(name, args)`. */
+/** Args for `ctx.db.<table>.rankPage(name, args)`. */
 export interface TableRankPageOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     cursor?: null | string;
     take?: number;
@@ -359,7 +359,7 @@ export interface GeoReader<TDocument> {
     unique: () => Promise<TDocument | null>;
 }
 
-/** Read-only typed table accessor exposed on `QueryCtx.db.&lt;table>`. */
+/** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
 export interface TableReaderFacade<
     DM,
     REL extends Record<keyof DM, object>,
@@ -436,7 +436,7 @@ export interface TableReaderFacade<
     withSearchIndex: (indexName: SEARCH[T], search: (q: SearchFilterBuilder<DM[T]>) => SearchFilterBuilder<DM[T]>) => SearchReader<DM[T]>;
 }
 
-/** Read-write typed table accessor exposed on `MutationCtx.db.&lt;table>` / `ActionCtx.db.&lt;table>`. */
+/** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
 export interface TableWriterFacade<
     DM,
     IM extends Record<keyof DM, object>,
@@ -519,7 +519,7 @@ export interface TableWriterFacade<
 /** Conflict target for `upsert`/`upsertMany`: one column of table `T`, or a tuple of them. */
 export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
 
-/** Per-table read facade — `ctx.db.&lt;table>` on a `QueryCtx`. */
+/** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<
     DM,
     REL extends Record<keyof DM, object>,
@@ -530,7 +530,7 @@ export type DatabaseReaderFacade<
     readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO>;
 };
 
-/** Per-table read-write facade — `ctx.db.&lt;table>` on a `MutationCtx` / `ActionCtx`. */
+/** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
 export type DatabaseWriterFacade<
     DM,
     IM extends Record<keyof DM, object>,

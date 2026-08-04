@@ -12,9 +12,9 @@ import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
 interface McpAgentExposure {
     /** What the agent does — shown to the calling model, which decides from it. */
     description: string;
-    /** The agent's export name (its `ctx.agents.&lt;name>` / `AGENT_&lt;NAME>` binding). */
+    /** The agent's export name (its `ctx.agents.<name>` / `AGENT_<NAME>` binding). */
     name: string;
-    /** Override the model-facing tool name (default `agent_&lt;name>`). */
+    /** Override the model-facing tool name (default `agent_<name>`). */
     toolName?: string;
 }
 
@@ -67,7 +67,7 @@ const AGENT_STATUS_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
-/** The model-facing tool name for an exposure (`toolName` override or `agent_&lt;name>`). */
+/** The model-facing tool name for an exposure (`toolName` override or `agent_<name>`). */
 const agentToolName = (exposure: McpAgentExposure): string => exposure.toolName ?? `agent_${exposure.name}`;
 
 /**

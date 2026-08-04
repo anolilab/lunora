@@ -11,7 +11,7 @@ import { parseObjectShape, parseValidator } from "./parse-validator";
 const TS_EXTENSION_RE = /\.ts$/u;
 
 /**
- * The `httpRoute.&lt;verb>(...)` factory verbs. Each opens a fresh typed-route
+ * The `httpRoute.<verb>(...)` factory verbs. Each opens a fresh typed-route
  * builder; the verb is the HTTP method (uppercased) the route binds to.
  */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);
@@ -34,7 +34,7 @@ interface RouteChainState {
 }
 
 /**
- * Read the first string-literal argument of a `httpRoute.&lt;verb>(path)` call.
+ * Read the first string-literal argument of a `httpRoute.<verb>(path)` call.
  * A non-literal path (a computed expression) can't be rendered into the OpenAPI
  * document, so it returns `undefined` and the route is skipped.
  */
@@ -56,7 +56,7 @@ const readMapArgument = (call: CallExpression): Record<string, ValidatorIR> => {
 };
 
 /**
- * Resolve the receiver chain's root `httpRoute.&lt;verb>(path)` segment, returning
+ * Resolve the receiver chain's root `httpRoute.<verb>(path)` segment, returning
  * the method + path, or `undefined` when the chain doesn't bottom out in a
  * `httpRoute` verb factory (so it isn't a Lunora REST route).
  */
@@ -91,9 +91,9 @@ const readRootVerb = (node: TsNode): { method: string; path: string } | undefine
 };
 
 /**
- * Walk a `httpRoute.&lt;verb>("/p").searchParams({...}).body({...}).output(v).handler(fn)`
+ * Walk a `httpRoute.<verb>("/p").searchParams({...}).body({...}).output(v).handler(fn)`
  * chain leftward from the terminal call, merging the input maps and recording
- * `.output()`, until it reaches the `httpRoute.&lt;verb>(path)` root. Mirrors
+ * `.output()`, until it reaches the `httpRoute.<verb>(path)` root. Mirrors
  * `discover-functions`' `argsFromBuilderChain`: chains read terminal → root, so a
  * key set by a later (encountered-first) `.body()` wins over an earlier one —
  * matching the runtime's `{ ...state.body, ...validators }` spread.
@@ -160,7 +160,7 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
 /**
  * Render the SSE chunk type of a `.stream(handler)` terminal — the `R` the
  * handler yields. The handler is the terminal call's only argument; its
- * `AsyncGenerator&lt;R, …>` / `AsyncIterable&lt;R>` return type is unwrapped by
+ * `AsyncGenerator<R, …>` / `AsyncIterable<R>` return type is unwrapped by
  * `unwrapHandlerReturn` (shared with function discovery), so the same
  * degraded-checker fallbacks apply. `"unknown"` when the argument isn't an
  * inline function expression (e.g. a hoisted identifier).
@@ -242,7 +242,7 @@ const discoverFileRoutes = (source: SourceFile, relativePath: string): HttpRoute
 
 /**
  * Scan all `.ts` files under `lunoraDir` (skipping `_generated/` and `schema.ts`)
- * for `export const x = httpRoute.&lt;verb>(...)…handler(...)` typed REST routes.
+ * for `export const x = httpRoute.<verb>(...)…handler(...)` typed REST routes.
  * These are the headline OpenAPI target: each becomes a real `paths` entry.
  */
 const discoverHttpRoutes = (project: Project, lunoraDirectory: string): HttpRouteIR[] => {

@@ -64,7 +64,7 @@ export interface VerifyStandardWebhookInput {
     readonly toleranceSeconds?: number;
     /** `webhook-id` header. */
     readonly webhookId: string;
-    /** `webhook-signature` header — space-separated `v1,&lt;base64>` entries. */
+    /** `webhook-signature` header — space-separated `v1,<base64>` entries. */
     readonly webhookSignature: string;
     /** `webhook-timestamp` header — unix seconds as a string. */
     readonly webhookTimestamp: string;

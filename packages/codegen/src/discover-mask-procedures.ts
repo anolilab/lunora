@@ -138,7 +138,7 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
 /** Write-access call sites: `ctx.db.insert/patch/replace/delete` (masking never touches these — captured only for completeness). */
 const WRITE_METHODS = new Set(["delete", "insert", "patch", "replace"]);
 
-/** True when `call` is a `ctx.db.&lt;method>(...)` or bare `db.&lt;method>(...)` call against `methodSet`. */
+/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call against `methodSet`. */
 const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean => {
     const callee = call.getExpression();
 
@@ -155,7 +155,7 @@ const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean =
     return Node.isIdentifier(receiver) && receiver.getText() === "db";
 };
 
-/** String-literal first argument of a `ctx.db.&lt;method>("table", ...)` call, or `""` when the argument is not a string literal (dynamic table — not lintable). */
+/** String-literal first argument of a `ctx.db.<method>("table", ...)` call, or `""` when the argument is not a string literal (dynamic table — not lintable). */
 const tableArgumentOf = (call: CallExpression): string => {
     const argument = call.getArguments()[0];
 

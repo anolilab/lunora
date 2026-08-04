@@ -124,7 +124,7 @@ export interface Finding {
  */
 export interface LintContext {
     /**
-     * `httpRoute.&lt;verb>("/admin/…")` routes on admin/privileged-looking paths and
+     * `httpRoute.<verb>("/admin/…")` routes on admin/privileged-looking paths and
      * whether each references an auth/admin guard — the `admin_route_without_guard`
      * input. Supplied by the codegen feeder; absent for runtime callers, where the
      * lint finds nothing.
@@ -170,7 +170,7 @@ export interface LintContext {
     argValidators?: ReadonlyArray<AdvisorArgumentValidator>;
 
     /**
-     * `ctx.authApi.&lt;method>(...)` calls discovered in function bodies (the
+     * `ctx.authApi.<method>(...)` calls discovered in function bodies (the
      * `auth_api_call_without_headers` input). Supplied by the codegen feeder; absent
      * for runtime callers, where the lint finds nothing.
      */
@@ -191,7 +191,7 @@ export interface LintContext {
     authConfigs?: ReadonlyArray<AdvisorAuthConfig>;
 
     /**
-     * `ctx.browser.&lt;method>(url, …)` calls whose navigation URL is derived from the
+     * `ctx.browser.<method>(url, …)` calls whose navigation URL is derived from the
      * handler's `args` with no server-side scoping — the
      * `browser_user_url_without_allowlist` input. `@lunora/browser` blocks
      * private/internal targets by default, but a request-supplied public URL can
@@ -212,7 +212,7 @@ export interface LintContext {
     configCalls?: ReadonlyArray<AdvisorConfigCall>;
 
     /**
-     * `ctx.containers.&lt;name>.get(key, …)` calls whose instance key is derived from
+     * `ctx.containers.<name>.get(key, …)` calls whose instance key is derived from
      * the handler's `args` with no server-side scoping — the
      * `container_instance_key_from_user_input` input. Each container definition's
      * `.get(name)` accessor routes to one instance per key, so an arg-derived key lets
@@ -224,7 +224,7 @@ export interface LintContext {
 
     /**
      * Runtime container-override calls — a `.start({ enableInternet: true, … })`
-     * launch override, or a `.egress.&lt;method>(...)` runtime firewall mutation — the
+     * launch override, or a `.egress.<method>(...)` runtime firewall mutation — the
      * `container_start_enable_internet_override` and `container_runtime_egress_relaxation`
      * lint input. Supplied by the codegen feeder; absent for runtime callers, where
      * those lints find nothing.
@@ -319,7 +319,7 @@ export interface LintContext {
     hyperdriveCalls?: ReadonlyArray<AdvisorHyperdriveCall>;
 
     /**
-     * `&lt;receiver>.identity.&lt;key>` claim reads (RLS/mask policy `auth`, or
+     * `<receiver>.identity.<key>` claim reads (RLS/mask policy `auth`, or
      * `ctx.auth`/`context.auth`) — the `identity_undeclared_claim_trusted` input.
      * `defineIdentity` validates only declared claims and forwards undeclared ones
      * verbatim, so each row's `declared` flag says whether `key` is in the contract
@@ -362,7 +362,7 @@ export interface LintContext {
     inserts?: ReadonlyArray<AdvisorInsertWrite>;
 
     /**
-     * `ctx.kv.&lt;method>(key, …)` calls whose namespace key is derived from the
+     * `ctx.kv.<method>(key, …)` calls whose namespace key is derived from the
      * handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
      * input. Workers KV is one flat namespace, so a key taken straight from request
      * input lets any caller read/overwrite/delete another user's entry (IDOR). Only
@@ -545,7 +545,7 @@ export interface LintContext {
     /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
 
     /**
-     * `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list reads
+     * `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating list reads
      * — the `masked_relation_leak_via_with` input. Column masking is applied to a
      * read's top-level rows but does not descend into `with`-hydrated relations,
      * so a masked table surfaced only through a `with` on an unprotected public
@@ -592,7 +592,7 @@ export interface LintContext {
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
 
     /**
-     * `ctx.db.&lt;table>.findMany({ includeDeleted })` list reads whose
+     * `ctx.db.<table>.findMany({ includeDeleted })` list reads whose
      * `includeDeleted` is a hardcoded `true` or derived from the handler's
      * `args` — the `soft_delete_include_deleted_from_args` input. On a public
      * read of a `.softDelete()` table this resurfaces soft-deleted rows to any
@@ -610,7 +610,7 @@ export interface LintContext {
     sqlInterpolations?: ReadonlyArray<AdvisorSqlInterpolation>;
 
     /**
-     * `ctx.storage.&lt;bucket>.&lt;method>(key, …)` calls whose R2 object key is derived
+     * `ctx.storage.<bucket>.<method>(key, …)` calls whose R2 object key is derived
      * from the handler's `args` with no server-side scoping — the
      * `storage_key_from_user_args` input. The bucket read/write/URL/delete methods
      * key by their first argument, so an arg-derived key is object-level IDOR
@@ -622,7 +622,7 @@ export interface LintContext {
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
 
     /**
-     * Tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing calls — the
+     * Tracked `ctx.storage.<bucket>.<method>(...)` upload/signing calls — the
      * shared input for the storage config-hygiene lints
      * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
      * `storage_generate_upload_url_no_content_type_pin`,
@@ -666,7 +666,7 @@ export interface LintContext {
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
 
     /**
-     * `ctx.vectors.&lt;method>(index, { namespace, … })` calls whose `namespace` is
+     * `ctx.vectors.<method>(index, { namespace, … })` calls whose `namespace` is
      * derived from the handler's `args` with no server-side scoping — the
      * `vectors_namespace_from_user_input` input. A Vectorize namespace partitions one
      * index into isolated sub-collections, so an arg-derived namespace lets any caller

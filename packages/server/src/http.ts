@@ -173,7 +173,7 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     /**
      * Terminal: declare this route as a streaming Server-Sent Events endpoint.
      * The handler is an async generator (or any function returning an
-     * `AsyncIterable&lt;R>`) that yields one chunk per SSE `data:` frame; on
+     * `AsyncIterable<R>`) that yields one chunk per SSE `data:` frame; on
      * iterator completion the route writes a final `event: complete` frame; on
      * throw, an `event: error` frame is written with `{code, message}` before
      * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
@@ -267,7 +267,7 @@ const coerceScalar = (kind: ValidatorKind, raw: string): unknown => {
 /**
  * Decode one declared query parameter from the hono request. Absent →
  * `undefined` (so `v.optional` passes and a required validator fails). An
- * `array` validator collects every repeated occurrence (`?tag=a&amp;tag=b`) via
+ * `array` validator collects every repeated occurrence (`?tag=a&tag=b`) via
  * `c.req.queries`, coercing each element.
  */
 const coerceSearchParameter = (validator: Validator, c: Context<LunoraHttpEnv>, key: string): unknown => {

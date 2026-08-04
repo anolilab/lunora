@@ -7,7 +7,7 @@
  * than the MCP endpoint the same site serves:
  *
  * - `GET /api/search?query=…` — the fumadocs (Orama) search index
- * - `GET /llms.mdx/docs/&lt;slug>` — one page as Markdown
+ * - `GET /llms.mdx/docs/<slug>` — one page as Markdown
  * - `GET /llms.txt` — the page index
  *
  * That keeps a locally-run server (the CLI's `lunora mcp serve`) working

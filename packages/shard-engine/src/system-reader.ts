@@ -6,7 +6,7 @@
  * `_storage`, ...) through `ctx.db.system`. Lunora mirrors that surface, but with
  * one load-bearing caveat: **the data these tables expose does not live in the
  * shard's SQLite**. Scheduled functions live in the `SchedulerDO`; storage
- * objects live in R2. So unlike `ctx.db.&lt;table>` — which reads the same
+ * objects live in R2. So unlike `ctx.db.<table>` — which reads the same
  * transactional SQLite snapshot the mutation writes into — `ctx.db.system`
  * reaches across a network/DO boundary on every call.
  *
@@ -212,7 +212,7 @@ const toStorageMetadata = (object: Record<string, unknown>): StorageMetadata => 
 /**
  * Build the read-only {@link SystemDatabaseReader} assigned to `ctx.db.system`.
  * Reads route to the supplied backing sources; an unconfigured source throws a
- * clear `ctx.db.system.&lt;table>: no &lt;source> configured` error (mirroring the
+ * clear `ctx.db.system.<table>: no <source> configured` error (mirroring the
  * generated `storageStub` / `schedulerStub` "no X configured" stubs) rather than
  * silently returning empty — a missing source is a wiring bug, not an empty
  * table.

@@ -17,7 +17,7 @@ export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } 
 
 /**
  * Typed reference to a Lunora durable workflow — either the generated
- * `workflows.&lt;name>` reference object (`_generated/api.ts`, which carries the
+ * `workflows.<name>` reference object (`_generated/api.ts`, which carries the
  * `WORKFLOW_*` binding + export name) or, structurally, a `defineWorkflow()`
  * result imported directly. Both are matched by the `isLunoraWorkflow` brand and
  * carry the workflow's `params` in the phantom `__params`, so a `cronJobs()`
@@ -35,7 +35,7 @@ export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } 
 export interface WorkflowReference<Params = Record<string, unknown>> {
     /** Phantom carrier for the workflow's `params` type — drives `cronJobs()` arg inference. Never read at runtime. */
     readonly __params?: Params;
-    /** The `WORKFLOW_*` binding name (present on a generated `workflows.&lt;name>` ref). */
+    /** The `WORKFLOW_*` binding name (present on a generated `workflows.<name>` ref). */
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     /** The workflow's export/stable name (present on a generated ref; a `defineWorkflow({ name })` override otherwise). */
@@ -176,8 +176,8 @@ export interface Scheduler {
     /**
      * Schedule `target` to run once, `delayMs` from now. `target` is a function
      * {@link FunctionReference} (dispatched as a one-shot) or a durable
-     * {@link WorkflowReference} — the generated `workflows.&lt;name>` /
-     * `agents.&lt;name>` ref — which starts a fresh instance on fire (args become
+     * {@link WorkflowReference} — the generated `workflows.<name>` /
+     * `agents.<name>` ref — which starts a fresh instance on fire (args become
      * its `params`). {@link ScheduleTargetArgs} infers the accepted args from
      * whichever target was passed.
      */
@@ -271,7 +271,7 @@ export interface WorkpoolOptions extends LunoraSchedulerOptions {
 
     /**
      * Pool name — the concurrency counter is keyed by this inside the
-     * SchedulerDO storage (`pool:&lt;name>`). Default `default`.
+     * SchedulerDO storage (`pool:<name>`). Default `default`.
      */
     name?: string;
 }
@@ -292,7 +292,7 @@ export interface Workpool {
      * is at capacity).
      */
     enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{ id: string; scheduledFor: number }>;
-    /** The pool's name (the `pool:&lt;name>` storage key suffix). */
+    /** The pool's name (the `pool:<name>` storage key suffix). */
     readonly name: string;
     /** Inspect the pool's current state — `inFlight` slots used and the configured `maxConcurrency`. */
     status: () => Promise<{ inFlight: number; maxConcurrency: number; queued: number }>;

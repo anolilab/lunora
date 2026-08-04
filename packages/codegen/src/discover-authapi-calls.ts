@@ -8,12 +8,12 @@ import { listLunoraSourceFiles } from "./discover-functions";
 import type { AuthApiCallIR } from "./ir";
 
 /**
- * True for a `ctx.authApi.&lt;method>(...)` (or bare `authApi.&lt;method>(...)`)
+ * True for a `ctx.authApi.<method>(...)` (or bare `authApi.<method>(...)`)
  * call — the privileged better-auth API surface installed by `withAuthPlugins`.
  *
  * Accepted receiver shapes: (1) a `PropertyAccessExpression` whose receiver is
  * itself a `PropertyAccessExpression` named `authApi` — the standard
- * `ctx.authApi.&lt;method>` form; (2) a bare `authApi` identifier — the
+ * `ctx.authApi.<method>` form; (2) a bare `authApi` identifier — the
  * destructured `const { authApi } = ctx` case. We require the inner receiver
  * to be named `authApi` rather than requiring the outermost receiver to be
  * `ctx`, per the plan STOP note: under-report rather than flag unrelated code.
@@ -76,7 +76,7 @@ const hasHeadersProp = (call: CallExpression): boolean => {
 };
 
 /**
- * Discover `ctx.authApi.&lt;method>(...)` (and bare `authApi.&lt;method>(...)`) calls
+ * Discover `ctx.authApi.<method>(...)` (and bare `authApi.<method>(...)`) calls
  * under the lunora source directory and attribute each to the exported function
  * (and file) performing it. Calls outside an exported declaration are dropped.
  */

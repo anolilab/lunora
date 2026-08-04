@@ -18,7 +18,7 @@ import { definePermission, definePolicies, definePolicy, defineRole, initLunora,
  * shape is a superset (it also accepts the new `baseWhere` /
  * `restrictsCounts` count signature) so TS rejects the direct widening.
  * Pin a permissive cast once here so each test reads cleanly without
- * scattering `as unknown as Middleware&lt;…>` at every call site.
+ * scattering `as unknown as Middleware<…>` at every call site.
  */
 const rlsForTest = <Context>(policies: ReadonlyArray<Policy<Context>>): Middleware<any, any> =>
     (rls as unknown as (p: ReadonlyArray<Policy<Context>>) => Middleware<any, any>)(policies);

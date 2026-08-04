@@ -6,10 +6,10 @@
  *
  * Two forms are produced:
  *
- * - **Cloudflare URL-based transform** — `/cdn-cgi/image/&lt;options>/&lt;source>`,
- * where `&lt;source>` is an absolute URL or an origin-relative key. This is the
+ * - **Cloudflare URL-based transform** — `/cdn-cgi/image/<options>/<source>`,
+ * where `<source>` is an absolute URL or an origin-relative key. This is the
  * on-the-fly transform CDN endpoint.
- * - **Images delivery variant** — `&lt;baseUrl>/&lt;imageId>/&lt;variant>`, the
+ * - **Images delivery variant** — `<baseUrl>/<imageId>/<variant>`, the
  * hosted-Images delivery form (a named variant like `public`/`thumbnail`).
  */
 import { LunoraError } from "@lunora/errors";
@@ -20,7 +20,7 @@ const ABSOLUTE_URL_RE = /^[a-z][a-z\d+\-.]*:\/\//i;
 
 /**
  * Characters a transform value may not contain: `,`/`=` are the option and
- * key-value separators of the `/cdn-cgi/image/&lt;opts>/` form, and `#`/`?`/`/`
+ * key-value separators of the `/cdn-cgi/image/<opts>/` form, and `#`/`?`/`/`
  * are URL-structural (fragment / query / path-segment delimiters) that would
  * silently corrupt the delivery URL if spliced in raw.
  */
@@ -81,7 +81,7 @@ export interface ImageDeliveryUrlOptions {
 
     /**
      * Hosted-Images image id. When set, the **delivery-variant** form is built
-     * (`&lt;baseUrl>/&lt;imageId>/&lt;variant>`) and `transform`/`key` are ignored.
+     * (`<baseUrl>/<imageId>/<variant>`) and `transform`/`key` are ignored.
      */
     imageId?: string;
 
@@ -90,7 +90,7 @@ export interface ImageDeliveryUrlOptions {
      * `/cdn-cgi/image/...` transform form. Ignored when `imageId` is set.
      */
     key?: string;
-    /** Transform options for the `/cdn-cgi/image/&lt;options>/&lt;source>` form. */
+    /** Transform options for the `/cdn-cgi/image/<options>/<source>` form. */
     transform?: TransformOptions;
     /** Named delivery variant (e.g. `public`, `thumbnail`). Used with `imageId`; default `public`. */
     variant?: string;
@@ -99,8 +99,8 @@ export interface ImageDeliveryUrlOptions {
 /**
  * Build a Cloudflare Images delivery / transform URL.
  *
- * - With `imageId`: `&lt;baseUrl>/&lt;imageId>/&lt;variant>` (hosted delivery variant).
- * - With `key`: `&lt;baseUrl>/cdn-cgi/image/&lt;options>/&lt;source>` (URL-based transform).
+ * - With `imageId`: `<baseUrl>/<imageId>/<variant>` (hosted delivery variant).
+ * - With `key`: `<baseUrl>/cdn-cgi/image/<options>/<source>` (URL-based transform).
  *
  * Pure and deterministic — usable from any handler.
  */

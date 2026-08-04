@@ -15,7 +15,7 @@
 export interface AdvisorPaymentWebhook {
     /** The adapter factory invoked. */
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    /** The exported binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    /** The exported binding name of the enclosing declaration (`<module>` at file scope). */
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;

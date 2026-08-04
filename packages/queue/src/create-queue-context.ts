@@ -15,7 +15,7 @@ import type { QueueBindingLike, QueueBindingSpec, Queues } from "./types";
  * Build the `ctx.queues` map for a request: resolve every spec's `env[binding]`
  * into the `exportName → Queue binding` map and wrap it in {@link createQueues}.
  * A spec whose binding is absent from `env` is skipped here — the helpful "no
- * queue named …" error is raised lazily by `ctx.queues.&lt;name>.send(...)` when
+ * queue named …" error is raised lazily by `ctx.queues.<name>.send(...)` when
  * the missing queue is actually used.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export by package convention; the index re-exports it

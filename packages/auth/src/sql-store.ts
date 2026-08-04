@@ -40,7 +40,7 @@ const patternFragment = (column: string, value: unknown, operator: "contains" | 
     return { params: [value, value], sql: `substr(${side.column}, -length(?)) = ${side.placeholder}` };
 };
 
-/** `=`/`&lt;>` equality (or `IS [NOT] NULL`), with optional case folding. `negated` flips it to `ne`. */
+/** `=`/`<>` equality (or `IS [NOT] NULL`), with optional case folding. `negated` flips it to `ne`. */
 const equalityFragment = (column: string, value: unknown, insensitive: boolean, negated: boolean): SqlFragment => {
     if (value === null) {
         return { params: [], sql: `${column} IS ${negated ? "NOT " : ""}NULL` };

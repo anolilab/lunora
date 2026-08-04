@@ -28,9 +28,9 @@ export interface LunoraProviderProps {
  * const client = new LunoraClient({ url: window.location.origin });
  *
  * render(() => (
- *     &lt;LunoraProvider client={client}>
- *         &lt;App />
- *     &lt;/LunoraProvider>
+ *     <LunoraProvider client={client}>
+ *         <App />
+ *     </LunoraProvider>
  * ), root);
  * ```
  */

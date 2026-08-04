@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { AdminRouteIR } from "./ir";
 
-/** The `httpRoute.&lt;verb&gt;(...)` factory verbs. */
+/** The `httpRoute.<verb>(...)` factory verbs. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);
 
 /** The terminal steps that close a route builder chain into a mountable handler. */
@@ -36,7 +36,7 @@ const GUARD_NAMES = new Set([
     "verifyAdmin",
 ]);
 
-/** Resolve a builder chain's root `httpRoute.&lt;verb&gt;("/path")`, returning `{ method, path }` or `undefined`. */
+/** Resolve a builder chain's root `httpRoute.<verb>("/path")`, returning `{ method, path }` or `undefined`. */
 const readRootVerb = (node: TsNode): { method: string; path: string } | undefined => {
     if (!Node.isCallExpression(node)) {
         return undefined;
@@ -63,7 +63,7 @@ const readRootVerb = (node: TsNode): { method: string; path: string } | undefine
     return { method: callee.getName().toUpperCase(), path: first.getLiteralValue() };
 };
 
-/** Walk a route chain leftward from the terminal call to its `httpRoute.&lt;verb&gt;(path)` root. */
+/** Walk a route chain leftward from the terminal call to its `httpRoute.<verb>(path)` root. */
 const rootOfChain = (terminalCall: CallExpression): { method: string; path: string } | undefined => {
     const terminalCallee = terminalCall.getExpression();
 
@@ -171,7 +171,7 @@ const adminRoutesInSourceFile = (sourceFile: SourceFile, relativePath: string): 
 };
 
 /**
- * Discover `httpRoute.&lt;verb&gt;("/admin/…")` REST routes on admin/privileged-looking
+ * Discover `httpRoute.<verb>("/admin/…")` REST routes on admin/privileged-looking
  * paths and whether each references an auth/admin guard in its handler — the
  * `admin_route_without_guard` lint input. A privileged route with no visible
  * session/admin check is an authorization gap, so only the path + guard-presence

@@ -68,7 +68,7 @@ interface BuildImageSource {
 /**
  * Where the container image comes from. A `string` is a **local path** —
  * either a directory containing a `Dockerfile` (normalized to
- * `&lt;dir>/Dockerfile` with the directory as the build context) or a path to
+ * `<dir>/Dockerfile` with the directory as the build context) or a path to
  * the Dockerfile itself — while `{ registry }` is a pre-built image reference.
  * @experimental
  */
@@ -216,7 +216,7 @@ interface ContainerConfig {
 
     /**
      * Application-level readiness probes that gate request proxying: a
-     * `ctx.containers.&lt;name>` fetch waits until every probe responds with its
+     * `ctx.containers.<name>` fetch waits until every probe responds with its
      * expected status before the request reaches the container — on top of the
      * platform's port/`pingEndpoint` health wait. All probes run in parallel.
      * Use these for readiness an open-port check can't see (migrations applied,

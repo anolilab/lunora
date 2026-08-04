@@ -45,7 +45,7 @@ const entriesOf = (result: unknown): LogEntry[] => {
  * Data-source note: the lifecycle envelope carries `name` + the per-instance
  * Durable Object id + transition + detail (and a process `exitCode` on a stop) —
  * `@lunora/do` folds the Container DO's push to `functionPath:
- * "container:&lt;name>"` and carries the instance id through, so this is a
+ * "container:<name>"` and carries the instance id through, so this is a
  * per-instance view. The envelope has no ports/health, so those aren't surfaced
  * (they live in static `defineContainer` config, not the runtime stream). It
  * streams live over the same admin WS the Logs panel uses.

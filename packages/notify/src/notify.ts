@@ -442,7 +442,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * iteration until it empties out.
      *
      * A non-positive `filter.limit` (zero or negative) short-circuits to an
-     * empty page — `{ nextCursor: undefined, result: &lt;all-zero> }` — without
+     * empty page — `{ nextCursor: undefined, result: <all-zero> }` — without
      * calling the store or `deliverPage`. This differs from the STORE layer's
      * `limit` convention (non-positive means "no cap"): here `limit` is an
      * audience cap, so its zero-floor is zero deliveries, not an unbounded page.

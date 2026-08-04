@@ -19,7 +19,7 @@ const CONSTRUCTOR_CALLEES = new Set(["RateLimiter"]);
  * Chained builder methods whose first-argument *callback* (not a bare object
  * literal) returns the config object literal a security lint inspects — the
  * generated `defineApp()...extend(fn)` escape hatch (`fn: (env, derived) =>
- * Partial&lt;WorkerOptions>`, merged straight into the `createWorker(...)` options
+ * Partial<WorkerOptions>`, merged straight into the `createWorker(...)` options
  * — see `emit-app.ts`'s `buildWorkerOptions`). Matched by name only (the same
  * import-agnostic convention as {@link FUNCTION_CALLEES}); the compound
  * signature of the method name plus a specific `trueKeys` member is precise

@@ -81,7 +81,7 @@ type AnyDef = CollectionDef<any, any>;
 
 /**
  * The public row type a collection exposes — the element type of its `list`
- * query's return, with no `& Row`: a `Collection&lt;T>` is invariant in `T`, so the
+ * query's return, with no `& Row`: a `Collection<T>` is invariant in `T`, so the
  * exposed type must be exactly the document type, not a subtype.
  */
 type RowOf<C extends AnyDef> = C["list"] extends FunctionReference<infer _K, infer _A, infer R> ? Element<R> : never;

@@ -1,3 +1,5 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc names the `RegisteredFunction<ArgsValidator, …>` type, not a credential. */
+
 // The declared analysis languages and storage strategies. Inlined by the
 // bundler from `shared/search` rather than depended on, so the schema builder
 // still stands up without the DO runtime — it just no longer restates the
@@ -398,7 +400,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * data field doesn't collide with the fluent `.softDelete()` builder method —
      * same convention as `shardBy()`/`shardMode`). When present, the table carries
      * a nullable timestamp column (`field`, default `deletedAt`):
-     * `ctx.db.&lt;table>.delete()` flips it instead of physically removing the row,
+     * `ctx.db.<table>.delete()` flips it instead of physically removing the row,
      * and **list reads** (`findMany`/`findFirst`/`query()`/`count`/`aggregate`/
      * relation loads) hide rows whose `field` is set unless
      * `includeDeleted: true` is passed. By-id `get`/`patch`/`replace` and
@@ -513,7 +515,7 @@ type RestCacheConfig = RestCachePolicy;
 /**
  * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
  * modifier (plan 167). Marks a procedure as deliberately published over the
- * public REST surface: the runtime mints a `/_lunora/rest/&lt;namespace>/&lt;fn>` route
+ * public REST surface: the runtime mints a `/_lunora/rest/<namespace>/<fn>` route
  * that dispatches THROUGH the procedure (so `ctx.auth` / RLS / validators are
  * enforced), and the generated OpenAPI describes it. Everything is default-closed
  * — a procedure without this tag is unreachable over REST.
@@ -569,7 +571,7 @@ type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "ac
 
 /**
  * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
- * generated `api` / `internal` objects hand you, carrying `&lt;file>:&lt;function>`
+ * generated `api` / `internal` objects hand you, carrying `<file>:<function>`
  * in `__lunoraRef`. Redeclared here so `@lunora/server` needs no dependency on
  * the client package, exactly as {@link Scheduler} avoids one on
  * `@lunora/scheduler`. `RegisteredFunction` has no `__lunoraRef`, so the two
@@ -604,8 +606,8 @@ interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream"
  * contextually type a parameter against a multi-signature type, so a hand-built
  * ctx object must annotate its `(reference, args)` explicitly — see
  * `@lunora/testing`'s harness). It does not work: a concrete
- * `RegisteredQuery&lt;{…}, number>` is not assignable to a
- * `RegisteredFunction&lt;ArgsValidator, …>` constraint, because `handler`'s args
+ * `RegisteredQuery<{…}, number>` is not assignable to a
+ * `RegisteredFunction<ArgsValidator, …>` constraint, because `handler`'s args
  * are in a contravariant position. Two inference sites it is.
  */
 interface RunQuery {
@@ -653,7 +655,7 @@ type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "
 
 /**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
- * returns an `AsyncIterable&lt;R>` synchronously (it does NOT `Promise&lt;R>`); the
+ * returns an `AsyncIterable<R>` synchronously (it does NOT `Promise<R>`); the
  * runtime drives it frame by frame and forwards each chunk to the caller. The
  * third `signal` argument is wired to the caller's cancel signal so the handler
  * can stop early — break out of the loop or check `signal.aborted` between
@@ -715,7 +717,7 @@ interface SystemQuery<T extends SystemTableName> {
  * Read-only reader over Lunora's system tables (`_scheduled_functions`,
  * `_storage`), exposed as `ctx.db.system`. Mirrors Convex's `ctx.db.system`.
  *
- * **Best-effort and eventually consistent.** Unlike `ctx.db.&lt;table>` — which
+ * **Best-effort and eventually consistent.** Unlike `ctx.db.<table>` — which
  * reads the shard's transactional SQLite snapshot — the data behind these tables
  * lives OUTSIDE the shard (scheduled functions in the `SchedulerDO`, storage
  * objects in R2). Every `collect()` / `get()` reaches across to that source.
@@ -756,7 +758,7 @@ interface DatabaseReader {
      *
      * This is the **parse boundary** for an id that arrived as a plain `string`: a
      * wire payload, a mutator's args, a change plan computed on the client. The
-     * alternative is `value as Id&lt;"table">` at every such call site — an assertion,
+     * alternative is `value as Id<"table">` at every such call site — an assertion,
      * not a check, and one that has to be repeated for every table a helper is
      * generic over:
      *
@@ -829,8 +831,8 @@ interface PaginationResult<T = Record<string, unknown>> {
 
 /**
  * The fluent `ctx.db.query(table)` reader. Generic over the document type
- * `Row` so the generated `ctx.db` can bind it to `Doc&lt;table>` (the chain and
- * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts),
+ * `Row` so the generated `ctx.db` can bind it to `Doc<table>` (the chain and
+ * every terminal then resolve typed rows — no `as unknown as Doc<...>` casts),
  * and over the table's declared index names so `.withIndex()` / `.withSearchIndex()`
  * / `.withGeoIndex()` reject a name the table does not declare.
  *
@@ -850,9 +852,9 @@ interface PaginationResult<T = Record<string, unknown>> {
  * **Why `with*` are method signatures and everything else is a property.**
  * Narrowing a parameter makes the enclosing type contravariant in it, so as
  * function properties these would make a BOUND reader
- * (`TableReader&lt;Doc, "by_x">`, what `ctx.db.query(t)` returns) unassignable to
- * the unbound `TableReader&lt;Doc>` — quietly breaking every helper factored as
- * `(reader: TableReader&lt;Doc&lt;"users">>) => …`, which is the obvious way to share
+ * (`TableReader<Doc, "by_x">`, what `ctx.db.query(t)` returns) unassignable to
+ * the unbound `TableReader<Doc>` — quietly breaking every helper factored as
+ * `(reader: TableReader<Doc<"users">>) => …`, which is the obvious way to share
  * query logic. A method signature is bivariant in its parameters, which keeps
  * that direction working while the narrow parameter still rejects an undeclared
  * name at the call site. Both directions are pinned in `types.test-d.ts`.
@@ -1176,8 +1178,8 @@ interface ScheduledJob {
 }
 
 /**
- * A schedulable durable-workflow reference — the generated `workflows.&lt;name>` /
- * `agents.&lt;name>` object, which carries its `WORKFLOW_*`/`AGENT_*` binding and
+ * A schedulable durable-workflow reference — the generated `workflows.<name>` /
+ * `agents.<name>` object, which carries its `WORKFLOW_*`/`AGENT_*` binding and
  * stable name. Structural mirror of `@lunora/scheduler`'s `WorkflowReference` so
  * `ctx.scheduler` can target a workflow/agent without a dependency on
  * `@lunora/scheduler` / `@lunora/workflow`. A scheduled workflow target starts a
@@ -1201,8 +1203,8 @@ interface Scheduler {
 
     /**
      * Schedule a one-shot run `delayMs` from now. `target` is a function path
-     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.&lt;name>` /
-     * `agents.&lt;name>` reference which starts a fresh durable instance on fire
+     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.<name>` /
+     * `agents.<name>` reference which starts a fresh durable instance on fire
      * (the args become its `params`).
      */
     runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
@@ -1444,12 +1446,12 @@ interface TriggerRankPageOptions {
 /**
  * Portable, table/id-addressed ORM writer handed to trigger handlers via
  * `ctx.db`. Mirrors `@lunora/do`'s runtime `DatabaseWriterLike` surface — it is
- * **not** the generated per-table `ctx.db.&lt;table>` facade (which can't be typed
+ * **not** the generated per-table `ctx.db.<table>` facade (which can't be typed
  * from inside `defineTable`, where the full schema isn't known).
  *
  * `aggregate`/`groupBy`/`count`/`rank`/`rankPage` route through the same
  * trigger-maintained counter and rank tables the user-facing reader uses, so
- * a handler's `ctx.db.&lt;table>.aggregate(...)` observes the just-staged write
+ * a handler's `ctx.db.<table>.aggregate(...)` observes the just-staged write
  * within the same DO transaction (the counter step happens before the trigger
  * fires).
  */
@@ -1654,7 +1656,7 @@ interface VectorSearch<IndexName extends string = string> extends VectorSearchRe
 
 /**
  * Structured, filterable key/value fields attached to a log line — the second
- * argument of a `ctx.log.&lt;level>(message, fields)` call, or the fields bound by
+ * argument of a `ctx.log.<level>(message, fields)` call, or the fields bound by
  * `ctx.log.with(fields)`. They travel to an `ObservabilitySink`'s `onLog` and,
  * for a network sink, become OTLP log-record attributes a log pipeline (or the
  * Cloud log viewer) can filter and index on. Primitive values pass through;
@@ -1783,7 +1785,7 @@ interface SpanHandle {
 
     /**
      * Attach an AI **evaluation** verdict to this (generation) span as the
-     * `gen_ai.evaluation.&lt;name>.score` / `.label` OpenTelemetry attributes, so a
+     * `gen_ai.evaluation.<name>.score` / `.label` OpenTelemetry attributes, so a
      * scorer's grade rides the same trace as the generation it graded. Convenience
      * over {@link SpanHandle.setAttributes} that owns the key format; privacy-safe —
      * only the name, score, and optional label are emitted. Throws on an empty name

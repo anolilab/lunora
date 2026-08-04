@@ -100,7 +100,7 @@ const fnv1a64 = (input: string): bigint => {
  * that growing `buckets` moves the minimum possible number of keys and nothing
  * else is disturbed. No memory, no lookup table — just the jump loop.
  *
- * Returns `0` for `buckets &lt;= 1`, which keeps the degenerate one-bucket case
+ * Returns `0` for `buckets <= 1`, which keeps the degenerate one-bucket case
  * from needing a caller-side branch.
  */
 const jumpConsistentHash = (key: string, buckets: number): number => {

@@ -7,7 +7,7 @@ import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions"
 /** The three CDC export-sink factories the runtime ships (plan 170). */
 const SINK_FACTORIES = new Set<AdvisorExportSink["factory"]>(["defineExportSink", "r2Sink", "webhookExportSink"]);
 
-/** The factory name of a `&lt;factory>({ … })` call, or `undefined` when the callee is not one of the sink factories. */
+/** The factory name of a `<factory>({ … })` call, or `undefined` when the callee is not one of the sink factories. */
 const sinkFactoryOf = (call: CallExpression): AdvisorExportSink["factory"] | undefined => {
     const callee = call.getExpression();
 

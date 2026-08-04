@@ -1,6 +1,6 @@
 /**
- * One runtime container-override call: a `&lt;handle>.start({ enableInternet: true, … })`
- * launch override, or a `&lt;handle>.egress.&lt;method>(...)` runtime firewall mutation
+ * One runtime container-override call: a `<handle>.start({ enableInternet: true, … })`
+ * launch override, or a `<handle>.egress.<method>(...)` runtime firewall mutation
  * (`allow` / `deny` / `setAllowed`) — the `container_start_enable_internet_override`
  * and `container_runtime_egress_relaxation` lint input. Both shapes re-open network
  * access the static `defineContainer` declaration (and its `container_public_internet`

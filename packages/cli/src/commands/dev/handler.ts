@@ -568,7 +568,7 @@ interface Teardown {
 
 /**
  * Follow the local Docker logs of every declared container and surface each
- * output line on the dev logger, tagged `[container:&lt;name>]`. Returns a disposer
+ * output line on the dev logger, tagged `[container:<name>]`. Returns a disposer
  * (or `undefined` when there are no containers, so no Docker work ever starts).
  *
  * wrangler builds + runs each declared container locally but only forwards the

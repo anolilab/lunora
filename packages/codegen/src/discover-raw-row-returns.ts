@@ -19,7 +19,7 @@ const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "
 
 /**
  * The table a direct `ctx.db` row read addresses, or `undefined` when `call` isn't
- * one. Facade form `ctx.db.&lt;table>.findMany(...)` puts the table in the receiver's
+ * one. Facade form `ctx.db.<table>.findMany(...)` puts the table in the receiver's
  * property name; table-arg form `ctx.db.findMany("table", ...)` puts it in the
  * string-literal argument 0. `""` when the table-arg form's first argument isn't a
  * string literal (a dynamic table — not lintable).

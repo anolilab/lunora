@@ -31,11 +31,11 @@ export const DIRECT_TRANSACTION_METADATA_KEY = "__tanstack_db_direct";
  * A map of wired collections, keyed by the name the optimistic bodies address them
  * by.
  *
- * The row type is `any` on purpose. `Collection&lt;T, string>` is **invariant** in
+ * The row type is `any` on purpose. `Collection<T, string>` is **invariant** in
  * `T` (its methods both consume and produce rows), so a concrete
- * `Collection&lt;Doc&lt;"nodes"> & Row>` is NOT assignable to `Collection&lt;Row>` — which
- * is why the previous `Record&lt;string, Collection&lt;Row, string>>` forced an
- * `as never` cast on every entry, and left `context.collections.&lt;name>` too
+ * `Collection<Doc<"nodes"> & Row>` is NOT assignable to `Collection<Row>` — which
+ * is why the previous `Record<string, Collection<Row, string>>` forced an
+ * `as never` cast on every entry, and left `context.collections.<name>` too
  * untyped to be worth using. Projects recover the concrete types by binding them
  * once through {@link initMutators}.
  */
@@ -65,7 +65,7 @@ export interface MutatorReference<TArgs = unknown> {
 /**
  * A generated reference with its arg type erased — the widest shape the runtime
  * actually reads. Used on the implementation side (and by {@link mutatorPath}),
- * where narrowing to a concrete `MutatorReference&lt;TArgs>` would make the typed
+ * where narrowing to a concrete `MutatorReference<TArgs>` would make the typed
  * overload's parameter fail the contravariant assignability check against the
  * implementation signature.
  */
@@ -129,7 +129,7 @@ const mutatorPath = (serverRef: AnyMutatorReference | string): string => {
  *
  * `context.collections` is typed by whatever map it is bound to — which for this
  * standalone form is the widest one. Bind the concrete collections once with
- * {@link initMutators} to get `collections.&lt;name>` typed inside `apply`.
+ * {@link initMutators} to get `collections.<name>` typed inside `apply`.
  */
 export const defineMutator: {
     <TArgs = Record<string, unknown>>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: string }): ClientMutatorDef<TArgs>;
@@ -459,17 +459,17 @@ export interface BoundMutatorApi<TCollections extends CollectionMap> {
  * Bind the mutator surface to **this project's** collections map, once.
  *
  * `Collection` is invariant in its row type, so a shared
- * `Record&lt;string, Collection&lt;Row, string>>` could neither accept a generated
+ * `Record<string, Collection<Row, string>>` could neither accept a generated
  * collection without an `as never` cast nor hand a usable type back to `apply` —
  * which is why optimistic bodies tended to ignore `context.collections` and close
  * over module-scope collection variables instead. Declaring the map once here
  * fixes both ends: `bindMutators` takes the concrete collections cast-free, and
- * `apply` reads `collections.&lt;name>` at its real row type.
+ * `apply` reads `collections.<name>` at its real row type.
  *
  * Runtime-identical to the standalone {@link defineMutator} / {@link bindMutators}
  * (this returns those very functions); only the types narrow.
  * @example
- * const { bindMutators, defineMutator } = initMutators&lt;{ nodes: typeof wholeOutlineCollection }>();
+ * const { bindMutators, defineMutator } = initMutators<{ nodes: typeof wholeOutlineCollection }>();
  * const setText = defineMutator({ apply: ({ collections }, args) => collections.nodes.update(args.id, setter), serverRef: api.mutators.setText });
  */
 export const initMutators = <TCollections extends CollectionMap>(): BoundMutatorApi<TCollections> =>

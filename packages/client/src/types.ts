@@ -4,7 +4,7 @@ export type FunctionKind = "action" | "mutation" | "query" | "stream";
 /**
  * Opaque reference to a registered function emitted by `@lunora/codegen`.
  *
- * At runtime it carries the `&lt;file>:&lt;function>` identifier in `__lunoraRef`.
+ * At runtime it carries the `<file>:<function>` identifier in `__lunoraRef`.
  * Generated declarations decorate this with phantom type parameters so the
  * client can infer args / return values per call site.
  */
@@ -25,8 +25,8 @@ export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R>
 export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
 
 /**
- * Typed reference to an HTTP-SSE stream route (`httpRoute.&lt;verb>(path).stream()`)
- * emitted by `@lunora/codegen` as `httpStreams.&lt;namespace>.&lt;name>`.
+ * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)
+ * emitted by `@lunora/codegen` as `httpStreams.<namespace>.<name>`.
  *
  * Distinct from {@link FunctionReference}: this is the **HTTP-SSE route stream**
  * (opened with `fetch` + `ReadableStream` against the route's own URL), not the
@@ -458,7 +458,7 @@ export interface RpcEnvelope {
 
     /**
      * Monotonic per-client mutation id (custom-mutator push path), backing the
-     * server-side per-client watermark: `id &lt;= watermark` is a replay (skipped),
+     * server-side per-client watermark: `id <= watermark` is a replay (skipped),
      * `id == watermark + 1` runs authoritatively, `id > watermark + 1` halts the
      * batch so the client resends from `watermark + 1`. Absent on plain
      * `client.mutation` calls.
@@ -924,7 +924,7 @@ export interface FunctionArgumentDescriptor {
 
 /**
  * One registered function, as returned by the worker's
- * `GET /_lunora/admin/functions` endpoint: its `&lt;file>:&lt;function>` path, which
+ * `GET /_lunora/admin/functions` endpoint: its `<file>:<function>` path, which
  * client method (`query` / `mutation` / `action`) invokes it, and its argument
  * signature. `args` is absent on responses from an older worker.
  */
@@ -937,7 +937,7 @@ export interface FunctionDescriptor {
 /**
  * One code-defined cron trigger, as returned by the worker's
  * `GET /_lunora/admin/cron-jobs` endpoint: the `cron` expression that fires it,
- * the `&lt;file>:&lt;function>` path it invokes, its human `name`, and any bound
+ * the `<file>:<function>` path it invokes, its human `name`, and any bound
  * `args` / `shardKey`. Static for the deployment (Cloudflare exposes no runtime
  * cron introspection), so the studio renders these read-only.
  */

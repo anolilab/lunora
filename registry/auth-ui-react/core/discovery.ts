@@ -89,8 +89,8 @@ const PLUGIN_ID_TO_FLOW: Readonly<Record<string, string>> = {
  * `unavailable` until they remount. A successful answer stays cached, because
  * it cannot change.
  *
- * Module-level rather than per-provider so mounting `&lt;SignInCard>` and
- * `&lt;UserButton>` under two providers doesn't fetch twice. Keyed by the resolved
+ * Module-level rather than per-provider so mounting `<SignInCard>` and
+ * `<UserButton>` under two providers doesn't fetch twice. Keyed by the resolved
  * URL, so an app talking to two deployments still gets two answers.
  */
 const handles = new Map<string, DiscoveryHandle>();

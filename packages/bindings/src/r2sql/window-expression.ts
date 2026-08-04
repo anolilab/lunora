@@ -50,12 +50,12 @@ export default class WindowExpression extends Sql {
         return this.compare(">=", value);
     }
 
-    /** `expr &lt; value`. */
+    /** `expr < value`. */
     public lt(value: unknown): Sql {
         return this.compare("<", value);
     }
 
-    /** `expr &lt;= value`. */
+    /** `expr <= value`. */
     public lte(value: unknown): Sql {
         return this.compare("<=", value);
     }

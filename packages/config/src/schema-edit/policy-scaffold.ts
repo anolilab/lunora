@@ -37,7 +37,7 @@ interface ScaffoldPolicyEdit {
     readonly table: string;
 }
 
-/** Append `.use(rls(&lt;policies>))` to an existing procedure's builder chain. */
+/** Append `.use(rls(<policies>))` to an existing procedure's builder chain. */
 interface WireRlsEdit {
     /** Exported procedure name to wire, e.g. `listInvoices`. */
     readonly exportName: string;
@@ -201,7 +201,7 @@ const chainHasRls = (receiver: Node): boolean => {
 };
 
 /**
- * Append `.use(rls(&lt;policies>))` to a procedure's builder chain, preserving the
+ * Append `.use(rls(<policies>))` to a procedure's builder chain, preserving the
  * terminal `.query(handler)` (and its handler body) byte-for-byte. Only the
  * **builder** form can be wired; the bare-factory form (`query({ handler })`)
  * has no chain and is reported `unsupported-procedure-shape` so the editor can

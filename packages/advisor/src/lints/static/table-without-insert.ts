@@ -7,7 +7,7 @@ import type { Lint } from "../../types";
  * Using `@lunora/codegen`'s write-side discovery (the analog of the read
  * discovery that feeds `filter_without_index`), this lint cross-references every
  * schema table against the set of tables some exported function writes via
- * `ctx.db.insert("&lt;table>", …)`. A table with no such write either is dead schema
+ * `ctx.db.insert("<table>", …)`. A table with no such write either is dead schema
  * or is populated through a path the static analysis can't see — a migration/seed,
  * cross-region replication, the `ctx.orm.insert(...)` builder, or a trusted
  * snapshot import. Hence `INFO`/`INTERNAL`: a nudge to confirm intent, not an error.

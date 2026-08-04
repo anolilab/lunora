@@ -1,7 +1,7 @@
 /**
  * The Lunora **Nuxt module** — single-worker composition, the inverse of the
  * old two-worker split. Instead of Lunora owning the Cloudflare worker entry, it
- * is mounted *inside* Nitro: a server route at `&lt;prefix>/**` (default
+ * is mounted *inside* Nitro: a server route at `<prefix>/**` (default
  * `/_lunora/**`) forwards every RPC / WebSocket / admin request to the project's
  * Lunora app (`createWorker(...)` / `defineApp().build()`), which runs in the
  * same worker Nuxt deploys as. The `ShardDO` Durable Object class is carried to
@@ -203,7 +203,7 @@ export interface ModuleOptions {
 }
 
 /**
- * Return type of `defineNuxtModule&lt;ModuleOptions>({...})` — the value overload of
+ * Return type of `defineNuxtModule<ModuleOptions>({...})` — the value overload of
  * `defineNuxtModule` (the one taking a definition), extracted structurally so the
  * default export has a locally-nameable type under `isolatedDeclarations` without
  * importing `NuxtModule` from `@nuxt/schema` (not a resolvable dependency here).

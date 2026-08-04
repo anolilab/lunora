@@ -7,7 +7,7 @@ import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions"
 /**
  * True for a `.withGeoIndex(name, build)` call — the geo-query read entry point
  * on a table reader (`ctx.db.query("t").withGeoIndex(...)` /
- * `ctx.db.&lt;table>.withGeoIndex(...)`). `withGeoIndex` is a Lunora-only reader
+ * `ctx.db.<table>.withGeoIndex(...)`). `withGeoIndex` is a Lunora-only reader
  * method, so matching the callee name alone is unambiguous (mirrors how
  * `discover-queries` keys off the `.query`/`.withIndex` chain method names).
  */

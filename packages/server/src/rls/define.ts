@@ -16,7 +16,7 @@ export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context
 /**
  * Build a project-bound, relation-aware `definePolicy` typed against the
  * generated `DataModel` (`DM`) + `Relations` (`REL`) maps. Codegen emits a
- * `createPolicyDsl&lt;DataModel, Relations>()` binding into `_generated/server.ts`,
+ * `createPolicyDsl<DataModel, Relations>()` binding into `_generated/server.ts`,
  * so importing `definePolicy` from the generated module constrains `table` to a
  * real table name and type-checks the `when` predicate — including Prisma-style
  * relation predicates (`is`/`some`/…) the `@lunora/do` pre-resolver now resolves

@@ -14,7 +14,7 @@ import type { DispatchLogger, DispatchRunFunction } from "@lunora/dispatch";
 import type { MessageBatchLike, MessageSendRequestLike, QueueBindingLike, QueueSendBatchOptions, QueueSendOptions } from "@lunora/platform";
 
 /**
- * The typed producer bound to `ctx.queues.&lt;name>`. Sending is a side effect, so
+ * The typed producer bound to `ctx.queues.<name>`. Sending is a side effect, so
  * the generated context exposes this only on `MutationCtx` / `ActionCtx` (never
  * the deterministic `QueryCtx`), mirroring `ctx.scheduler` / `ctx.workflows`.
  */
@@ -103,8 +103,8 @@ export interface QueueConfig<Body = unknown> extends QueueConsumerTuning {
 export interface QueueDefinition<Body = unknown> extends QueueConfig<Body> {
     /**
      * Phantom carrier for the message body type, so codegen can type the
-     * generated `ctx.queues.&lt;name>` producer as `QueueProducer&lt;Body>` from
-     * `typeof &lt;export>`. Never assigned at runtime (type-only).
+     * generated `ctx.queues.<name>` producer as `QueueProducer<Body>` from
+     * `typeof <export>`. Never assigned at runtime (type-only).
      */
     readonly __lunoraBody?: Body;
     /** Runtime brand identifying a `defineQueue` result. */

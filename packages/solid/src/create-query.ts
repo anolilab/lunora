@@ -25,7 +25,7 @@ export interface CreateQueryOptions {
  *
  * ```tsx
  * const messages = createQuery(api.messages.list, () => ({ channelId: channelId() }));
- * return &lt;For each={messages()?.messages}>{(m) => &lt;li>{m.text}&lt;/li>}&lt;/For>;
+ * return <For each={messages()?.messages}>{(m) => <li>{m.text}</li>}</For>;
  * ```
  */
 export const createQuery = <F extends FunctionReference>(

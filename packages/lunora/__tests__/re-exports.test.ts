@@ -59,10 +59,10 @@ const OPT_OUT = new Map<string, string>([
 
 /**
  * Upstream subpaths the umbrella re-exports under a DIFFERENT suffix than the
- * upstream's own subpath — `@lunora/flags`'s `./providers/&lt;name>` collapses
- * to `lunorash/flags/&lt;name>`, the umbrella's own naming choice. Maps
- * `&lt;upstream package name>&lt;upstream subpath>` to the umbrella suffix (the
- * part after `lunorash/&lt;prefix>`) it resolves to instead of the verbatim
+ * upstream's own subpath — `@lunora/flags`'s `./providers/<name>` collapses
+ * to `lunorash/flags/<name>`, the umbrella's own naming choice. Maps
+ * `<upstream package name><upstream subpath>` to the umbrella suffix (the
+ * part after `lunorash/<prefix>`) it resolves to instead of the verbatim
  * upstream subpath.
  */
 const ALIAS_SUFFIX = new Map<string, string>([

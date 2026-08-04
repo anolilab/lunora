@@ -40,7 +40,7 @@ const isContextSqlTextCallee = (node: TsNode): boolean => {
  */
 const isStringBuildingText = (expression: TsNode): boolean => Node.isBinaryExpression(expression) || Node.isTemplateExpression(expression);
 
-/** The export name of the nearest exported `const x = …` ancestor, or `"&lt;module>"` when at file scope. */
+/** The export name of the nearest exported `const x = …` ancestor, or `"<module>"` when at file scope. */
 const enclosingExportName = (node: TsNode): string => {
     const declaration = node.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
 

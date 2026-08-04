@@ -15,8 +15,8 @@
  * with one of:
  *
  * POST   /create   body: { token, userId, ttlSeconds }
- * GET    /get      header: `x-lunora-session-token: &lt;token>`
- * DELETE /revoke   header: `x-lunora-session-token: &lt;token>`
+ * GET    /get      header: `x-lunora-session-token: <token>`
+ * DELETE /revoke   header: `x-lunora-session-token: <token>`
  *
  * Every request must additionally carry an `x-lunora-session-secret` header
  * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any

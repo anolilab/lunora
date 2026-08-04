@@ -167,7 +167,7 @@ class FormBannerComponent {
  * server discovery on, is whatever `socialProviders` the deployment configured.
  *
  * The provider's brand mark is left to CSS: each button carries a
- * `lunora-auth-social__icon--&lt;provider>` class, so an app drops in its own icon
+ * `lunora-auth-social__icon--<provider>` class, so an app drops in its own icon
  * set with a stylesheet rule and this package ships no SVG payload for a list of
  * providers it can't know in advance.
  */
@@ -243,7 +243,7 @@ class AuthDividerComponent {
     readonly label = input("or");
 }
 
-/** Internal link using the provider's `link` hook when present, else a plain `&lt;a>`. */
+/** Internal link using the provider's `link` hook when present, else a plain `<a>`. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-link",
