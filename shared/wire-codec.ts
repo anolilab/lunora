@@ -288,8 +288,23 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
     for (const key of Object.keys(source)) {
         const field = source[key];
 
-        if (field !== undefined) {
-            result[key] = encodeWire(field, depth + 1);
+        if (field === undefined) {
+            continue;
+        }
+
+        const encoded = encodeWire(field, depth + 1);
+
+        // Mirror the decode side's `UNSAFE_KEY` handling. A plain
+        // `result[key] = …` for `"__proto__"` fires the prototype SETTER
+        // instead of creating an own property, so the field is silently
+        // dropped from the output — a `JSON.parse`d document carrying a
+        // literal `__proto__` field would lose it on every re-encode, while
+        // `decodeWire` faithfully preserves it. `defineProperty` installs it
+        // as an own data property, so it survives without polluting anything.
+        if (key === UNSAFE_KEY) {
+            Object.defineProperty(result, key, { configurable: true, enumerable: true, value: encoded, writable: true });
+        } else {
+            result[key] = encoded;
         }
     }
 
