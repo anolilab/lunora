@@ -55,6 +55,30 @@ const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Reco
     return fields.every((field) => previous[field] === next[field]);
 };
 
+/** The rank companion's column list: `__id__, __partition__, __sort_k<i>__…`. */
+const rankColumnsSql = (index: RankIndexDefinitionLike): SQL =>
+    dsql.join(
+        ["__id__", "__partition__", ...index.sortBy.map((_, i) => sortColumnName(i))].map((column) => dsql.identifier(column)),
+        dsql`, `,
+    );
+
+/**
+ * INSERT one row's rank-companion entry (id, canonical partition key, the
+ * serialized sort values). `columnsSql` is prebuilt via {@link rankColumnsSql}
+ * so a backfill loop hoists it out of its per-row iteration.
+ */
+const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+    const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
+    // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
+    const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
+    const valuesSql = dsql.join(
+        [id, partitionKey, ...sortValues].map((value) => param(value)),
+        dsql`, `,
+    );
+
+    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+};
+
 /**
  * Apply one rank index's `-prev + next` companion step for a single row write.
  * DELETE-by-id is unconditional (a missing row is a no-op); INSERT only when the
@@ -86,20 +110,7 @@ const syncRankIndexEntry = (
         return;
     }
 
-    const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-    const columnsSql = dsql.join(
-        ["__id__", "__partition__", ...sortColumns].map((column) => dsql.identifier(column)),
-        dsql`, `,
-    );
-    const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
-    // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
-    const sortValues = index.sortBy.map((key) => serializeSqlValue(next[key.field] ?? null));
-    const valuesSql = dsql.join(
-        [id, partitionKey, ...sortValues].map((value) => param(value)),
-        dsql`, `,
-    );
-
-    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+    insertRankRow(sql, rankTable, index, rankColumnsSql(index), id, next);
 };
 
 /**
@@ -251,19 +262,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         const field = index.field ?? "";
         const conditions: SQL[] = [];
 
-        for (const key of by) {
-            // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
-            const value = serializeSqlValue(record[key] ?? null);
-
-            if (value === null) {
-                conditions.push(dsql`${jsonPathSql(key)} IS NULL`);
-            } else {
-                conditions.push(dsql`${jsonPathSql(key)} = ${value}`);
-            }
-        }
-
-        for (const [key, expected] of Object.entries(index.where ?? {})) {
-            const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
+        const pushEq = (key: string, literal: unknown): void => {
             const value = serializeSqlValue(literal);
 
             if (value === null) {
@@ -271,6 +270,15 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
             } else {
                 conditions.push(dsql`${jsonPathSql(key)} = ${value}`);
             }
+        };
+
+        for (const key of by) {
+            // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
+            pushEq(key, record[key] ?? null);
+        }
+
+        for (const [key, expected] of Object.entries(index.where ?? {})) {
+            pushEq(key, expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected);
         }
 
         const whereSql = conditions.length > 0 ? dsql` WHERE ${dsql.join(conditions, dsql` AND `)}` : dsql``;
@@ -464,13 +472,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * lands in both the rebuild and the `+1` step that follows.
      */
     const ensureBackfilledForTable = (tableName: string): void => {
-        const indexes = schema.tables[tableName]?.aggregateIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            return;
-        }
-
-        for (const index of indexes) {
+        for (const index of schema.tables[tableName]?.aggregateIndexes ?? []) {
             ensureBackfilledIndex(tableName, index);
         }
     };
@@ -481,13 +483,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * earlier in the same write so the counter is in step with the source.
      */
     const syncAggregates = (tableName: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined): void => {
-        const indexes = schema.tables[tableName]?.aggregateIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            return;
-        }
-
-        for (const index of indexes) {
+        for (const index of schema.tables[tableName]?.aggregateIndexes ?? []) {
             applyAggregateDelta(tableName, index, previous, next);
         }
     };
@@ -510,32 +506,16 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
         runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(rankTable)}`);
 
-        const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-        const columnsSql = dsql.join(
-            ["__id__", "__partition__", ...sortColumns].map((column) => dsql.identifier(column)),
-            dsql`, `,
-        );
+        const columnsSql = rankColumnsSql(index);
 
         for (const row of rows) {
             const record = rowToDocument(row);
 
-            if (!record) {
+            if (!record || (index.where && !matchesRankStaticWhere(record, index.where))) {
                 continue;
             }
 
-            if (index.where && !matchesRankStaticWhere(record, index.where)) {
-                continue;
-            }
-
-            const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
-            // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
-            const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
-            const valuesSql = dsql.join(
-                [record["_id"] as string, partitionKey, ...sortValues].map((value) => param(value)),
-                dsql`, `,
-            );
-
-            runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+            insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
         }
 
         rankBackfilled.add(cacheKey);
@@ -543,13 +523,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
     /** Pre-write hook: ensure every rank companion on `tableName` is rebuilt once per ctx-db. */
     const ensureRankBackfilledForTable = (tableName: string): void => {
-        const indexes = schema.tables[tableName]?.rankIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            return;
-        }
-
-        for (const index of indexes) {
+        for (const index of schema.tables[tableName]?.rankIndexes ?? []) {
             ensureRankBackfilled(tableName, index);
         }
     };
@@ -562,13 +536,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * trying to UPDATE in place — keeps the maintenance idempotent.
      */
     const syncRanks = (tableName: string, id: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined): void => {
-        const indexes = schema.tables[tableName]?.rankIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            return;
-        }
-
-        for (const index of indexes) {
+        for (const index of schema.tables[tableName]?.rankIndexes ?? []) {
             syncRankIndexEntry(sql, tableName, index, id, previous, next);
         }
     };
@@ -581,9 +549,11 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * deletes only (row removal).
      */
     const syncSearch = (tableName: string, id: string, document: Record<string, unknown> | undefined, previous?: Record<string, unknown>): void => {
-        const indexes = schema.tables[tableName]?.searchIndexes;
+        const indexes = schema.tables[tableName]?.searchIndexes ?? [];
 
-        if (!indexes || indexes.length === 0 || !isFtsAvailable(sql)) {
+        // The length check short-circuits `isFtsAvailable` — don't probe FTS
+        // on a table with no search indexes.
+        if (indexes.length === 0 || !isFtsAvailable(sql)) {
             return;
         }
 
@@ -616,13 +586,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * reader can Haversine-refine without re-decoding the source doc.
      */
     const syncGeo = (tableName: string, id: string, document: Record<string, unknown> | undefined): void => {
-        const indexes = schema.tables[tableName]?.geoIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            return;
-        }
-
-        for (const index of indexes) {
+        for (const index of schema.tables[tableName]?.geoIndexes ?? []) {
             const geoTable = geoTableName(tableName, index.name);
 
             runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(geoTable)} WHERE ${dsql.identifier("__id__")} = ${id}`);
@@ -680,5 +644,5 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     };
 };
 
-export { createCompanionSync };
+export { createCompanionSync, insertRankRow, rankColumnsSql };
 export type { CompanionSync, CompanionSyncDeps };

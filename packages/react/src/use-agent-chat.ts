@@ -290,21 +290,17 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         }
     };
 
-    const approve = async (toolCallId: string, note?: string): Promise<void> => {
+    const resolve = async (decision: "approve" | "reject", toolCallId: string, note?: string): Promise<void> => {
         if (instanceId === undefined) {
-            throw new Error("useAgentChat: cannot approve — no in-flight run (thread has no instanceId)");
+            throw new Error(`useAgentChat: cannot ${decision} — no in-flight run (thread has no instanceId)`);
         }
 
-        await resolveMutate({ decision: "approve", instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
+        await resolveMutate({ decision, instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
     };
 
-    const reject = async (toolCallId: string, note?: string): Promise<void> => {
-        if (instanceId === undefined) {
-            throw new Error("useAgentChat: cannot reject — no in-flight run (thread has no instanceId)");
-        }
+    const approve = (toolCallId: string, note?: string): Promise<void> => resolve("approve", toolCallId, note);
 
-        await resolveMutate({ decision: "reject", instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
-    };
+    const reject = (toolCallId: string, note?: string): Promise<void> => resolve("reject", toolCallId, note);
 
     const cancel = async (): Promise<void> => {
         // No cancel path, or no run to cancel — nothing to terminate.

@@ -291,32 +291,23 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
             ts: Number(row["ts"]),
         };
 
-        const actorId = text(row["actor_id"]);
-        const actorEmail = text(row["actor_email"]);
-        const targetEmail = text(row["target_email"]);
-        const ip = text(row["ip"]);
-        const userAgent = text(row["user_agent"]);
+        const optionalColumns = [
+            ["actorId", "actor_id"],
+            ["actorEmail", "actor_email"],
+            ["targetEmail", "target_email"],
+            ["ip", "ip"],
+            ["userAgent", "user_agent"],
+        ] as const;
+
+        for (const [key, column] of optionalColumns) {
+            const value = text(row[column]);
+
+            if (value !== undefined) {
+                base[key] = value;
+            }
+        }
+
         const detail = text(row["detail"]);
-
-        if (actorId !== undefined) {
-            base.actorId = actorId;
-        }
-
-        if (actorEmail !== undefined) {
-            base.actorEmail = actorEmail;
-        }
-
-        if (targetEmail !== undefined) {
-            base.targetEmail = targetEmail;
-        }
-
-        if (ip !== undefined) {
-            base.ip = ip;
-        }
-
-        if (userAgent !== undefined) {
-            base.userAgent = userAgent;
-        }
 
         if (detail !== undefined) {
             base.detail = JSON.parse(detail) as Record<string, unknown>;

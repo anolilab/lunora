@@ -56,28 +56,12 @@ const traceIdOf = (signal: BufferedSignal): string | undefined => (signal.kind =
  * trace context at all (a fan-out aggregation, a metric).
  */
 const groupByTrace = (signals: BufferedSignal[]): { byTrace: Map<string, BufferedSignal[]>; untraced: BufferedSignal[] } => {
-    const byTrace = new Map<string, BufferedSignal[]>();
-    const untraced: BufferedSignal[] = [];
+    const grouped = Map.groupBy(signals, (signal) => traceIdOf(signal));
+    const untraced = grouped.get(undefined) ?? [];
 
-    for (const signal of signals) {
-        const traceId = traceIdOf(signal);
+    grouped.delete(undefined);
 
-        if (traceId === undefined) {
-            untraced.push(signal);
-
-            continue;
-        }
-
-        const bucket = byTrace.get(traceId);
-
-        if (bucket === undefined) {
-            byTrace.set(traceId, [signal]);
-        } else {
-            bucket.push(signal);
-        }
-    }
-
-    return { byTrace, untraced };
+    return { byTrace: grouped as Map<string, BufferedSignal[]>, untraced };
 };
 
 /**
@@ -178,13 +162,13 @@ const applyTailSampler = (
  * you cannot retract. So a broken redaction rule loses telemetry rather than
  * exporting secrets.
  */
-const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefined): T | undefined => {
+const postProcess = <T>(event: T, hook: ((event: T) => null | T | undefined) | undefined): T | undefined => {
     if (hook === undefined) {
         return event;
     }
 
     try {
-        return hook(event);
+        return hook(event) ?? undefined;
     } catch {
         return undefined;
     }
@@ -344,48 +328,24 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
         onLog: (event, context) => {
             // `onlyErrors` scopes the RPC stream; `ctx.log` lines always ship, so
             // a developer's logs reach the endpoint even when RPC events are
-            // filtered. Fail-closed on a throwing `transformLog`.
-            let payload: LogEvent | null | undefined = event;
+            // filtered. `postProcess` is fail-closed on a throwing `transformLog`.
+            const payload = postProcess(event, transformLog);
 
-            if (transformLog) {
-                try {
-                    payload = transformLog(event);
-                } catch {
-                    return;
-                }
+            if (payload !== undefined) {
+                post(payload, context);
             }
-
-            if (payload === null || payload === undefined) {
-                return;
-            }
-
-            post(payload, context);
         },
         onRpc: (event, context?: ObservabilitySinkContext) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
             }
 
-            try {
-                let payload: null | ObservabilityEvent | undefined = event;
+            // Fail-closed: if the redactor throws (or returns null/undefined) we
+            // drop the event rather than ship the un-scrubbed original.
+            const payload = postProcess(event, transform);
 
-                if (transform) {
-                    // Fail-closed: if the redactor throws we drop the event
-                    // rather than ship the un-scrubbed original.
-                    try {
-                        payload = transform(event);
-                    } catch {
-                        return;
-                    }
-                }
-
-                if (payload === null || payload === undefined) {
-                    return;
-                }
-
+            if (payload !== undefined) {
                 post(payload, context);
-            } catch {
-                // A synchronous throw in the transform/guard path must not break dispatch.
             }
         },
     };
@@ -606,20 +566,10 @@ export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilityS
                     record.fields = serializeFields === true ? JSON.stringify(event.fields) : event.fields;
                 }
 
-                if (event.shardKey !== undefined) {
-                    record.shardKey = event.shardKey;
-                }
-
-                if (event.userId !== undefined) {
-                    record.userId = event.userId;
-                }
-
-                if (event.traceId !== undefined) {
-                    record.traceId = event.traceId;
-                }
-
-                if (event.spanId !== undefined) {
-                    record.spanId = event.spanId;
+                for (const key of ["shardKey", "userId", "traceId", "spanId"] as const) {
+                    if (event[key] !== undefined) {
+                        record[key] = event[key];
+                    }
                 }
 
                 // `.catch` swallows any rejection so a failed send can never reject
@@ -900,9 +850,13 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         base = base.slice(0, -1);
     }
 
-    const tracesUrl = `${base}/v1/traces`;
-    const logsUrl = `${base}/v1/logs`;
-    const metricsUrl = `${base}/v1/metrics`;
+    // One `(url, envelope wrapper)` pair per OTLP signal endpoint, shared by the
+    // batched and unbatched export paths.
+    const endpointFor = {
+        logs: { url: `${base}/v1/logs`, wrap: wrapResourceLogs },
+        metrics: { url: `${base}/v1/metrics`, wrap: wrapResourceMetrics },
+        spans: { url: `${base}/v1/traces`, wrap: wrapResourceSpans },
+    } as const;
 
     // `token` is applied last (inside `mergeHeaders`) so it wins over any
     // authorization in `headers`, matching the container exporter's precedence.
@@ -977,18 +931,13 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         const sends: Promise<void>[] = [];
 
         for (const [, group] of groups) {
-            const { resource } = group;
+            // Spans → logs → metrics: the send order is part of the wire contract tests pin.
+            for (const bucket of ["spans", "logs", "metrics"] as const) {
+                if (group[bucket].length > 0) {
+                    const { url, wrap } = endpointFor[bucket];
 
-            if (group.spans.length > 0) {
-                sends.push(otlpSend(tracesUrl, wrapResourceSpans(group.spans, "@lunora/runtime", serviceName, resource), mergedHeaders));
-            }
-
-            if (group.logs.length > 0) {
-                sends.push(otlpSend(logsUrl, wrapResourceLogs(group.logs, "@lunora/runtime", serviceName, resource), mergedHeaders));
-            }
-
-            if (group.metrics.length > 0) {
-                sends.push(otlpSend(metricsUrl, wrapResourceMetrics(group.metrics, "@lunora/runtime", serviceName, resource), mergedHeaders));
+                    sends.push(otlpSend(url, wrap(group[bucket], "@lunora/runtime", serviceName, group.resource), mergedHeaders));
+                }
             }
         }
 
@@ -1000,59 +949,31 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
     if (batch === false) {
         // Unbatched: encode and POST each event on arrival. `tailSampler` is
         // inapplicable here (there is no buffered trace to judge) and documented
-        // as such; `postProcessor` still applies.
+        // as such; `postProcessor` still applies (inside `encodeSignal`).
+        const postOne = (signal: BufferedSignal, context?: ObservabilitySinkContext): void => {
+            const encoded = encodeSignal(signal, postProcessor);
+
+            if (encoded !== undefined) {
+                const { url, wrap } = endpointFor[encoded.bucket];
+
+                otlpPost(url, wrap(encoded.encoded, "@lunora/runtime", serviceName, signal.resource), mergedHeaders, context);
+            }
+        };
+
         return {
             onLog: (event, context) => {
-                const processed = postProcess(event, postProcessor?.log);
-
-                if (processed !== undefined) {
-                    otlpPost(
-                        logsUrl,
-                        wrapResourceLogs(otlpLogBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
-                        mergedHeaders,
-                        context,
-                    );
-                }
+                postOne({ event, kind: "log", resource: resourceAttributesFor(context) }, context);
             },
             onMetric: (event, context) => {
-                const processed = postProcess(event, postProcessor?.metric);
-
-                if (processed !== undefined) {
-                    otlpPost(
-                        metricsUrl,
-                        wrapResourceMetrics(otlpMetricBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
-                        mergedHeaders,
-                        context,
-                    );
-                }
+                postOne({ event, kind: "metric", resource: resourceAttributesFor(context) }, context);
             },
             onRpc: (event, context) => {
-                if (shouldSkip(event, onlyErrors)) {
-                    return;
-                }
-
-                const processed = postProcess(event, postProcessor?.rpc);
-
-                if (processed !== undefined) {
-                    otlpPost(
-                        tracesUrl,
-                        wrapResourceSpans(otlpTraceBody(processed, Date.now()), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
-                        mergedHeaders,
-                        context,
-                    );
+                if (!shouldSkip(event, onlyErrors)) {
+                    postOne({ endMs: Date.now(), event, kind: "rpc", resource: resourceAttributesFor(context) }, context);
                 }
             },
             onSpan: (event, context) => {
-                const processed = postProcess(event, postProcessor?.span);
-
-                if (processed !== undefined) {
-                    otlpPost(
-                        tracesUrl,
-                        wrapResourceSpans(otlpSpanBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
-                        mergedHeaders,
-                        context,
-                    );
-                }
+                postOne({ event, kind: "span", resource: resourceAttributesFor(context) }, context);
             },
         };
     }
@@ -1106,16 +1027,6 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
  * @param sinks The sinks to fan out to.
  */
 export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink => {
-    /**
-     * Fan one event out to every child that implements `method`.
-     *
-     * One helper rather than four near-identical loops: "invoke each child in
-     * order, isolate its throws, and forward the per-event context" is a single
-     * policy, not a per-signal one, and there is no reason for the four to
-     * diverge. Forwarding `context` matters — dropping the request's `waitUntil`
-     * would silently degrade every wrapped network sink to fire-and-forget.
-     */
-
     /**
      * Fan one call out to every child that implements `method`.
      *

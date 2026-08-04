@@ -260,6 +260,18 @@ const withDeadline = async <T>(operation: () => Promise<T>, timeoutMs: number): 
 };
 
 /**
+ * Close a browser, swallowing any close failure: the session is being torn down
+ * anyway, and a close failure must not mask the caller's result/error.
+ */
+const closeQuietly = async (browser: BrowserLike): Promise<void> => {
+    try {
+        await browser.close();
+    } catch {
+        // Swallowed — see above.
+    }
+};
+
+/**
  * `createBrowser` is part of the experimental `@lunora/browser` API and may change without a major version bump.
  * @experimental
  */
@@ -315,12 +327,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         try {
             return await use(browser);
         } finally {
-            try {
-                await browser.close();
-            } catch {
-                // Swallow: the session is being torn down anyway, and a close
-                // failure must not mask the caller's result/error.
-            }
+            await closeQuietly(browser);
         }
     };
 
@@ -512,12 +519,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         try {
             return await function_(browser);
         } finally {
-            try {
-                await browser.close();
-            } catch {
-                // Swallow: the session is being torn down anyway, and a close
-                // failure must not mask the caller's result/error.
-            }
+            await closeQuietly(browser);
         }
     };
 

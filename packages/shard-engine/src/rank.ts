@@ -35,17 +35,10 @@
  * `backfillRankIndexes`.
  */
 
+import { matchesStaticWhere } from "./aggregate-sql";
+import { compareStrings } from "./aggregate-tally";
 import type { RankIndexDefinitionLike } from "./schema-types";
 import { serializeSqlValue } from "./serialize-sql";
-
-/** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
-const compareStrings = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
 
 /** Sentinel returned by {@link resolvePartitionValue} when a field can't pin a single partition. */
 const NOT_RESOLVABLE = Symbol("not-resolvable");
@@ -84,7 +77,7 @@ const encodePartitionKey = (partitionBy: ReadonlyArray<string>, source: Record<s
 
     const ordered: Record<string, unknown> = {};
 
-    for (const field of [...partitionBy].toSorted(compareStrings)) {
+    for (const field of partitionBy.toSorted(compareStrings)) {
         // eslint-disable-next-line unicorn/no-null -- canonical JSON partition key: a missing field must serialize as null (stable across runs), not be dropped by JSON.stringify
         ordered[field] = source[field] ?? null;
     }
@@ -105,33 +98,6 @@ const RANK_TIEBREAK = "__id__";
  * source field doesn't require ALTERing the rank table.
  */
 const sortColumnName = (i: number): string => `__sort_k${String(i)}__`;
-
-/** Cheap predicate test against the index's static `where` (literal equality / `{ eq }` only). */
-const matchesRankStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {
-    for (const [field, expected] of Object.entries(predicate)) {
-        const actual = document[field];
-
-        if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
-            const operatorKeys = Object.keys(expected);
-
-            if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
-                if (actual !== (expected as { eq: unknown }).eq) {
-                    return false;
-                }
-
-                continue;
-            }
-
-            return false;
-        }
-
-        if (actual !== expected) {
-            return false;
-        }
-    }
-
-    return true;
-};
 
 /**
  * Resolve a `where`-style partition selector — the user supplies the partition
@@ -216,16 +182,12 @@ const rankKeyFromDocument = (
     };
 };
 
-export {
-    encodePartitionKey,
-    matchesRankStaticWhere,
-    RANK_TIEBREAK,
-    rankKeyFromDocument as rankKeyFromDoc,
-    rankTableName,
-    resolveRankPartition,
-    sortColumnName,
-};
+export { encodePartitionKey, RANK_TIEBREAK, rankKeyFromDocument as rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName };
 
+// Cheap predicate test against the index's static `where` (literal equality /
+// `{ eq }` only) — the identical check aggregates use, aliased for the rank seam.
+// Typed const (not a bare re-export) so the declaration renders under this name.
+export const matchesRankStaticWhere: (document: Record<string, unknown>, predicate: Record<string, unknown>) => boolean = matchesStaticWhere;
 export {
     type RankBeforeOptions,
     type RankBeforeResult,

@@ -20,7 +20,8 @@
 // close the loop. The mirrors below (`RecordMailInput` / `CapturedMailRow`) are
 // therefore hand-maintained copies of mail's `SendPayload` / `CapturedMail`;
 // keep them in sync manually (the studio consumer imports mail's type directly).
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlExec } from "./ctx-db";
+import { decodeJsonColumn, orNull, runSql } from "./do-exec";
 
 /** Reserved captured-mail table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const MAIL_TABLE = "__lunora_mail";
@@ -86,18 +87,6 @@ interface CapturedMailRow {
     to: string | string[];
 }
 
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
-
-/** A string value or SQL NULL for an absent column. */
-const orNull = (value: string | undefined): null | string =>
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for an absent column.
-    value ?? null;
-
 /**
  * JSON-encode a value for a TEXT column, or SQL NULL when absent.
  * @returns the JSON-encoded string, or `null` when the value is absent
@@ -109,19 +98,6 @@ const encode = (value: unknown): null | string => {
     }
 
     return JSON.stringify(value);
-};
-
-/** Parse a JSON TEXT column back to its value, tolerating null/garbage (returns undefined). */
-const decode = (value: null | string | undefined): unknown => {
-    if (value === null || value === undefined || value === "") {
-        return undefined;
-    }
-
-    try {
-        return JSON.parse(value) as unknown;
-    } catch {
-        return undefined;
-    }
 };
 
 /**
@@ -213,17 +189,17 @@ const readCapturedMail = (sql: SqlExec, options: { limit?: number } = {}): { ent
 
     const entries = rows.map((row): CapturedMailRow => {
         return {
-            bcc: decode(row.bcc_addrs) as string[] | undefined,
+            bcc: decodeJsonColumn(row.bcc_addrs) as string[] | undefined,
             capturedAt: row.captured_at,
-            cc: decode(row.cc_addrs) as string[] | undefined,
+            cc: decodeJsonColumn(row.cc_addrs) as string[] | undefined,
             from: row.from_addr ?? undefined,
-            headers: decode(row.headers) as Record<string, string> | undefined,
+            headers: decodeJsonColumn(row.headers) as Record<string, string> | undefined,
             html: row.html ?? undefined,
             id: row.id,
             replyTo: row.reply_to ?? undefined,
             subject: row.subject,
             text: row.body_text ?? undefined,
-            to: (decode(row.to_addrs) as string | string[] | undefined) ?? row.to_addrs,
+            to: (decodeJsonColumn(row.to_addrs) as string | string[] | undefined) ?? row.to_addrs,
         };
     });
 

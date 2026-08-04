@@ -52,4 +52,4 @@ const resolveTargetOrError = (projectRoot: string, explicit?: string): { error?:
     }
 };
 
-export { resolveTargetOrError, TARGET_HELP, TARGET_OPTION };
+export { resolveTargetOrError, TARGET_OPTION };

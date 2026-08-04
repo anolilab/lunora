@@ -1,7 +1,7 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { SqlInterpolationIR } from "./ir";
 
 /** The `SqlClient` methods that splice their first (`text`) argument verbatim into the query. */
@@ -62,21 +62,6 @@ const interpolationInCall = (call: CallExpression, relativePath: string): SqlInt
     return { exportName: enclosingExportName(call), file: relativePath, line: text.getStartLineNumber() };
 };
 
-/** `ctx.sql.query`/`ctx.sql.unsafe` SQL-injection interpolations in one source file. */
-const interpolationsInSourceFile = (sourceFile: SourceFile, relativePath: string): SqlInterpolationIR[] => {
-    const found: SqlInterpolationIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const interpolation = interpolationInCall(call, relativePath);
-
-        if (interpolation) {
-            found.push(interpolation);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.sql.query(text, …)` / `ctx.sql.unsafe(text, …)` calls whose `text`
  * argument is built in place from a string concatenation or a substitution
@@ -86,16 +71,7 @@ const interpolationsInSourceFile = (sourceFile: SourceFile, relativePath: string
  * assembled from request input is a textbook injection vector. A fixed string
  * literal or a no-substitution template is a safe statement and is not recorded.
  */
-const discoverSqlInterpolation = (project: Project, lunoraDirectory: string): SqlInterpolationIR[] => {
-    const interpolations: SqlInterpolationIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        interpolations.push(...interpolationsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return interpolations;
-};
+const discoverSqlInterpolation = (project: Project, lunoraDirectory: string): SqlInterpolationIR[] =>
+    collectCallRows(project, lunoraDirectory, interpolationInCall);
 
 export default discoverSqlInterpolation;

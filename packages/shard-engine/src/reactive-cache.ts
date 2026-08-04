@@ -52,6 +52,18 @@ import { estimateBytes } from "./estimate-bytes";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { keysTouchRanges } from "./read-write-set";
 
+/** Get `key`'s value from `map`, creating and filing it via `create` on first sight. */
+const getOrCreate = <K, V>(map: Map<K, V>, key: K, create: () => V): V => {
+    let value = map.get(key);
+
+    if (value === undefined) {
+        value = create();
+        map.set(key, value);
+    }
+
+    return value;
+};
+
 /** A single memoized result, the deps it read, and any active subscribers. */
 interface CacheEntry {
     /** Approximate serialized size of `result`, charged against `maxBytes`. */
@@ -205,32 +217,13 @@ class ReactiveCache {
         this.totalBytes += bytes;
 
         for (const dep of deps) {
-            let bucket = this.tableIndex.get(dep);
-
-            if (!bucket) {
-                bucket = new Set<string>();
-                this.tableIndex.set(dep, bucket);
-            }
-
-            bucket.add(key);
+            getOrCreate(this.tableIndex, dep, () => new Set<string>()).add(key);
         }
 
         for (const range of readRanges) {
-            let byRange = this.rangeIndex.get(range.table);
+            const byRange = getOrCreate(this.rangeIndex, range.table, () => new Map<KeyRange, Set<string>>());
 
-            if (!byRange) {
-                byRange = new Map<KeyRange, Set<string>>();
-                this.rangeIndex.set(range.table, byRange);
-            }
-
-            let keys = byRange.get(range);
-
-            if (!keys) {
-                keys = new Set<string>();
-                byRange.set(range, keys);
-            }
-
-            keys.add(key);
+            getOrCreate(byRange, range, () => new Set<string>()).add(key);
         }
 
         this.evict();
@@ -379,14 +372,7 @@ class ReactiveCache {
                 continue;
             }
 
-            for (const key of keys) {
-                const entry = this.entries.get(key);
-
-                if (entry) {
-                    this.dropEntry(key, entry);
-                    removed.push(key);
-                }
-            }
+            this.dropKeys(keys, removed);
         }
     }
 
@@ -394,19 +380,20 @@ class ReactiveCache {
     private collectAndDrop(dep: string, removed: string[]): void {
         const bucket = this.tableIndex.get(dep);
 
-        if (!bucket) {
-            return;
+        if (bucket) {
+            this.dropKeys(bucket, removed);
         }
+    }
 
-        for (const key of bucket) {
+    /** Drop every still-present entry named in `keys`, recording each removed key. Iterates the live collection — see `dropRangeDeps`. */
+    private dropKeys(keys: Iterable<string>, removed: string[]): void {
+        for (const key of keys) {
             const entry = this.entries.get(key);
 
-            if (!entry) {
-                continue;
+            if (entry) {
+                this.dropEntry(key, entry);
+                removed.push(key);
             }
-
-            this.dropEntry(key, entry);
-            removed.push(key);
         }
     }
 

@@ -376,17 +376,7 @@ const createPaginatedQuery = <F extends FunctionReference>(
 ): CreatePaginatedQueryResult<PageItemOf<F>> => {
     const { loadMore, pageResults, status } = createPaginatedCore<PageItemOf<F>>(function_, args, options);
 
-    const results = createMemo<PageItemOf<F>[]>(() => {
-        const items: PageItemOf<F>[] = [];
-
-        for (const page of pageResults()) {
-            if (page) {
-                items.push(...page.page);
-            }
-        }
-
-        return items;
-    });
+    const results = createMemo<PageItemOf<F>[]>(() => pageResults().flatMap((page) => page?.page ?? []));
 
     const isLoading = createMemo<boolean>(() => status() === "LoadingFirstPage" || status() === "LoadingMore");
 
@@ -409,17 +399,7 @@ const createInfiniteQuery = <F extends FunctionReference>(
     const { initialNumItems } = options;
     const { loadMore, pageResults, status } = createPaginatedCore<PageItemOf<F>>(function_, args, options);
 
-    const pages = createMemo<PageItemOf<F>[][]>(() => {
-        const result: PageItemOf<F>[][] = [];
-
-        for (const page of pageResults()) {
-            if (page) {
-                result.push(page.page);
-            }
-        }
-
-        return result;
-    });
+    const pages = createMemo<PageItemOf<F>[][]>(() => pageResults().flatMap((page) => (page ? [page.page] : [])));
 
     const isLoading = createMemo<boolean>(() => status() === "LoadingFirstPage");
     const hasNextPage = createMemo<boolean>(() => status() === "CanLoadMore");

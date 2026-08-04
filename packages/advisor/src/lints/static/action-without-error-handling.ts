@@ -28,23 +28,15 @@ const actionWithoutErrorHandling: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.procedureProtections) {
-            if (procedure.kind !== "action" || procedure.reachesOutbound !== true || procedure.handlesErrors !== false) {
-                continue;
-            }
-
-            findings.push(
+        return context.procedureProtections
+            .filter((procedure) => procedure.kind === "action" && procedure.reachesOutbound === true && procedure.handlesErrors === false)
+            .map((procedure) =>
                 emit(actionWithoutErrorHandling, {
                     cacheKey: `action_without_error_handling:${procedure.file}:${procedure.exportName}`,
                     detail: `Action \`${procedure.exportName}\` (${procedure.file}) calls an outbound surface with no \`try\`/\`catch\`. A dependency failure will surface to the caller unexplained.`,
                     metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Action performs outbound I/O with no error handling",

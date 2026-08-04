@@ -16,7 +16,8 @@
  * codegen `queue()` handler wires the sink only when enabled — on by default in
  * dev), so a production consumer pays nothing unless the operator turns it on.
  */
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlExec } from "./ctx-db";
+import { decodeJsonColumn, orNull, runSql } from "./do-exec";
 
 /** Reserved consumed-message table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const QUEUE_TABLE = "__lunora_queue_messages";
@@ -86,18 +87,6 @@ interface QueueMessageRow {
     timestamp: number;
 }
 
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
-
-/** A string value or SQL NULL for an absent column. */
-const orNull = (value: string | undefined): null | string =>
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for an absent column.
-    value ?? null;
-
 /** Suffix appended to an oversized body preview so a viewer sees it was capped. */
 const TRUNCATION_SUFFIX = "… [truncated by the dev queue catcher]";
 /** Stand-in stored when a body can't be JSON-encoded at all (bytes/v8/cyclic). */
@@ -137,19 +126,6 @@ const encodeBody = (value: unknown): string => {
  * corrupted message the original consumer never sent.
  */
 const isLossyBody = (body: unknown): boolean => typeof body === "string" && (body === UNSERIALIZABLE_MARKER || body.endsWith(TRUNCATION_SUFFIX));
-
-/** Parse a JSON TEXT column back to its value, tolerating null/garbage (returns undefined). */
-const decodeBody = (value: null | string | undefined): unknown => {
-    if (value === null || value === undefined || value === "") {
-        return undefined;
-    }
-
-    try {
-        return JSON.parse(value) as unknown;
-    } catch {
-        return undefined;
-    }
-};
 
 /**
  * Create the reserved consumed-message table. Idempotent, so both the read and
@@ -233,7 +209,7 @@ interface QueueMessageSqlRow {
 const rowToEntry = (row: QueueMessageSqlRow): QueueMessageRow => {
     return {
         attempts: row.attempts,
-        body: decodeBody(row.body),
+        body: decodeJsonColumn(row.body),
         capturedAt: row.captured_at,
         deadLettered: row.dead_lettered === 1,
         error: row.error ?? undefined,
@@ -263,7 +239,7 @@ const readQueueMessages = (sql: SqlExec, options: ReadQueueMessagesOptions = {})
     const limit = Math.min(Math.max(options.limit ?? 100, 1), QUEUE_RETENTION);
     const filterQueue = typeof options.queue === "string" && options.queue.length > 0 ? options.queue : undefined;
 
-    const where = filterQueue === undefined ? "" : `WHERE queue = ?`;
+    const where = filterQueue === undefined ? "" : "WHERE queue = ?";
     const params: unknown[] = filterQueue === undefined ? [limit] : [filterQueue, limit];
 
     const rows = runSql<QueueMessageSqlRow>(sql, `SELECT * FROM "${QUEUE_TABLE}" ${where} ORDER BY captured_at DESC, id DESC LIMIT ?`, ...params).toArray();

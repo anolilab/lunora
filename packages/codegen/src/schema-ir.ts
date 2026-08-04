@@ -90,9 +90,6 @@ const validatorIrToJsonSchema = (validator: ValidatorIR): JsonSchema => jsonSche
 /** Build `{ type: "object", properties, required }` from an IR shape (mirrors `@lunora/values`' object mapping). */
 const objectSchema = (shape: Record<string, ValidatorIR>): JsonSchema => objectSchemaFromNodes(shape, irReader);
 
-/** Build the args object schema for an RPC function (mirrors `argsToJsonSchema`). */
-const argsObjectSchema = (args: Record<string, ValidatorIR>): JsonSchema => objectSchema(args);
-
 /**
  * The machine-readable `LunoraError` codes Lunora emits on the RPC + REST
  * surfaces, enumerated from `@lunora/server`'s `CODE_STATUS` map plus the
@@ -118,4 +115,4 @@ const LUNORA_ERROR_CODES: ReadonlyArray<string> = [
     "VALIDATION_ERROR",
 ];
 
-export { argsObjectSchema, literalConst, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema };
+export { literalConst, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema };

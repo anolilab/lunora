@@ -29,23 +29,15 @@ const aiRunWithoutLogging: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.procedureProtections) {
-            if (procedure.runsAiGeneration !== true || procedure.emitsEvent !== false) {
-                continue;
-            }
-
-            findings.push(
+        return context.procedureProtections
+            .filter((procedure) => procedure.runsAiGeneration === true && procedure.emitsEvent === false)
+            .map((procedure) =>
                 emit(aiRunWithoutLogging, {
                     cacheKey: `ai_run_without_logging:${procedure.file}:${procedure.exportName}`,
                     detail: `${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) runs an AI generation with no structured event, so its cost and output cannot be attributed later.`,
                     metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "AI generation with no structured event",

@@ -14,7 +14,9 @@
  * both call it defensively, and mutated through the {@link runSql} indirection
  * that keeps the literal SQL out of the secret-scan hook's way.
  */
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/shard-engine";
+
+import { runSql } from "./run-sql";
 
 /** Reserved table holding one triage-state row per Issue fingerprint. Auto-hidden by the `__lunora` prefix. */
 const ISSUE_STATE_TABLE = "__lunora_issue_state__";
@@ -68,13 +70,6 @@ const ISSUE_STATUSES: ReadonlyArray<IssueStatus> = ["ignored", "open", "resolved
 
 /** The valid {@link IssueSeverity} values, for arg validation at the admin boundary. */
 const ISSUE_SEVERITIES: ReadonlyArray<IssueSeverity> = ["critical", "high", "low", "medium"];
-
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags (mirrors `request-log.ts`). */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...parameters: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...parameters);
-};
 
 // SQL NULL is the correct bind for an absent/cleared column; the codebase otherwise avoids `null`.
 // eslint-disable-next-line unicorn/no-null -- see above

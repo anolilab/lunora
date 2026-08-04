@@ -43,4 +43,4 @@ const printJson = (result: unknown): void => {
     process.stdout.write(`${JSON.stringify(result, undefined, 2)}\n`);
 };
 
-export { isJsonFormat, loggerForFormat, OUTPUT_FORMATS, printJson, validateOutputFormat };
+export { isJsonFormat, loggerForFormat, printJson, validateOutputFormat };

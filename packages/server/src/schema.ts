@@ -269,6 +269,22 @@ const createTriggerBuilder = <Shape extends Record<string, Validator>>(): Trigge
     };
 };
 
+/**
+ * Normalize + validate a rank index's `sortBy` (direction defaults to `"asc"`).
+ * Shared by the inline `.rankIndex(...)` builder and `defineRankIndex` so the
+ * two DSL shapes validate identically. `sortBy` is typed required, but untyped
+ * JS callers can omit it — hence the runtime guard.
+ */
+const normalizeRankSortBy = (name: string, sortBy: ReadonlyArray<{ direction?: "asc" | "desc"; field: string }> | undefined): RankSortKey[] => {
+    if (!sortBy || sortBy.length === 0) {
+        throw new LunoraError("INTERNAL", `rankIndex "${name}": "sortBy" is required and must list at least one key`);
+    }
+
+    return sortBy.map((key) => {
+        return { direction: key.direction ?? "asc", field: key.field };
+    });
+};
+
 /** Options for `defineVectorIndex(...)` (DSL Shape B). */
 interface VectorIndexOptions {
     dimensions: number;
@@ -380,25 +396,13 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             return builder;
         },
         rankIndex(name, options) {
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
-            if (!options.sortBy || options.sortBy.length === 0) {
-                throw new LunoraError("INTERNAL", `rankIndex "${name}": "sortBy" is required and must list at least one key`);
-            }
-
-            const sortBy: RankSortKey[] = options.sortBy.map((key) => {
-                return {
-                    direction: key.direction ?? "asc",
-                    field: key.field,
-                };
-            });
-
             rankIndexes.push({
                 name,
                 // `on` is filled in by `defineSchema` once the table is keyed —
                 // same pattern as `aggregateIndex`.
                 on: "",
                 partitionBy: options.partitionBy,
-                sortBy,
+                sortBy: normalizeRankSortBy(name, options.sortBy),
                 where: options.where,
             });
 
@@ -611,19 +615,7 @@ interface RankIndexOptions {
  * by index name — the schema attaches it to `tables[on].rankIndexes`.
  */
 const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefinition => {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
-    if (!options.sortBy || options.sortBy.length === 0) {
-        throw new LunoraError("INTERNAL", `rankIndex "${name}": "sortBy" is required and must list at least one key`);
-    }
-
-    const sortBy: RankSortKey[] = options.sortBy.map((key) => {
-        return {
-            direction: key.direction ?? "asc",
-            field: key.field,
-        };
-    });
-
-    return { name, on: options.table, partitionBy: options.partitionBy, sortBy, where: options.where };
+    return { name, on: options.table, partitionBy: options.partitionBy, sortBy: normalizeRankSortBy(name, options.sortBy), where: options.where };
 };
 
 /**
@@ -714,13 +706,7 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
  */
 const fillIndexTableNames = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
-        for (const index of table.aggregateIndexes) {
-            if (index.on === "") {
-                (index as { on: string }).on = tableName;
-            }
-        }
-
-        for (const index of table.rankIndexes) {
+        for (const index of [...table.aggregateIndexes, ...table.rankIndexes]) {
             if (index.on === "") {
                 (index as { on: string }).on = tableName;
             }

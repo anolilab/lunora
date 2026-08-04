@@ -129,6 +129,44 @@ const INSERT_CHUNK_ROWS = 50;
 const searchTermPredicate = (token: string, isLast: boolean): SQL =>
     isLast ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} LIKE ${`${token}%`}` : sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${token}`;
 
+/** The main-table (`m`) conditions every layout applies: the staged equality filters plus the soft-delete scope. */
+const mainTableFilters = (definition: TableDefinitionLike, search: SearchStage): SQL[] => {
+    const conditions = search.filters.map((filter) => sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
+
+    if (definition.softDeleteMode) {
+        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    }
+
+    return conditions;
+};
+
+/**
+ * Join a `(id, __score__)` subquery back to the main table, apply the staged
+ * filters, and return the decoded rows in shared-scorer order — the tail both
+ * the inverted and FTS5 layouts share.
+ */
+const runScoredJoin = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    search: SearchStage,
+    limit: number,
+    scored: SQL,
+): Promise<Record<string, unknown>[]> => {
+    const conditions = mainTableFilters(definition, search);
+
+    let query = sql`SELECT m.* FROM (${scored}) s JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = s.${sql.identifier(FTS_ID_COLUMN)}`;
+
+    if (conditions.length > 0) {
+        query = sql`${query} WHERE ${sql.join(conditions, sql` AND `)}`;
+    }
+
+    query = sql`${query} ORDER BY s.${sql.identifier("__score__")} DESC, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
+
+    return decodeRows(definition, await queryAll(exec, dialect, query));
+};
+
 /**
  * Run a search against the portable inverted companion — the path every engine
  * without FTS5 takes.
@@ -182,25 +220,7 @@ const runInvertedSearch = async (
     );
     const scored = sql`SELECT ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM ${sql.identifier(companion)} WHERE ${anyTerm} GROUP BY ${sql.identifier(FTS_ID_COLUMN)} HAVING ${everyTerm}`;
 
-    const conditions: SQL[] = [];
-
-    for (const filter of search.filters) {
-        conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
-    }
-
-    if (definition.softDeleteMode) {
-        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
-    }
-
-    let query = sql`SELECT m.* FROM (${scored}) s JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = s.${sql.identifier(FTS_ID_COLUMN)}`;
-
-    if (conditions.length > 0) {
-        query = sql`${query} WHERE ${sql.join(conditions, sql` AND `)}`;
-    }
-
-    query = sql`${query} ORDER BY s.${sql.identifier("__score__")} DESC, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
-
-    return decodeRows(definition, await queryAll(exec, dialect, query));
+    return runScoredJoin(exec, dialect, definition, tableName, search, limit, scored);
 };
 
 /**
@@ -260,25 +280,7 @@ const runFtsSearch = async (
         sql` AND `,
     )}`;
 
-    const conditions: SQL[] = [];
-
-    for (const filter of search.filters) {
-        conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
-    }
-
-    if (definition.softDeleteMode) {
-        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
-    }
-
-    let query = sql`SELECT m.* FROM (${scored}) s JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = s.${sql.identifier(FTS_ID_COLUMN)}`;
-
-    if (conditions.length > 0) {
-        query = sql`${query} WHERE ${sql.join(conditions, sql` AND `)}`;
-    }
-
-    query = sql`${query} ORDER BY s.${sql.identifier("__score__")} DESC, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
-
-    return decodeRows(definition, await queryAll(exec, dialect, query));
+    return runScoredJoin(exec, dialect, definition, tableName, search, limit, scored);
 };
 
 /**
@@ -309,15 +311,7 @@ const runNativeSearch = async (
     }
 
     const companion = ftsTableName(tableName, search.indexName);
-    const conditions: SQL[] = [native.matches(companion, tokens)];
-
-    for (const filter of search.filters) {
-        conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
-    }
-
-    if (definition.softDeleteMode) {
-        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
-    }
+    const conditions: SQL[] = [native.matches(companion, tokens), ...mainTableFilters(definition, search)];
 
     const statement = sql`SELECT m.* FROM ${sql.identifier(companion)} JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = ${sql.identifier(companion)}.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY ${native.rank(companion, tokens)} DESC, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
 

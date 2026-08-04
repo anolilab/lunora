@@ -23,4 +23,4 @@
 export { buildRegistryIndex } from "./catalog";
 export { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./commands";
 export { default as parseManifest } from "./manifest";
-export type { AddCommandOptions, AddCommandResult, EntrypointReexport, RegistryBinding, RegistryFile, RegistryManifest } from "./types";
+export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryFile, RegistryManifest } from "./types";

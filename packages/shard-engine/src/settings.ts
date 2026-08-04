@@ -84,22 +84,19 @@ const bindingType = (value: object): string => {
  * (`{ id, tag, timestamp }`) when configured.
  */
 const readDeployInfo = (env: Record<string, unknown>): DeployInfo => {
+    const firstStringVariable = (keys: ReadonlyArray<string>): string | undefined =>
+        keys.map((key) => env[key]).find((value): value is string => typeof value === "string" && value !== "");
+
     const deploy: DeployInfo = {};
+    const workerUrl = firstStringVariable(WORKER_URL_VARS);
+    const environment = firstStringVariable(ENVIRONMENT_VARS);
 
-    for (const key of WORKER_URL_VARS) {
-        if (typeof env[key] === "string" && env[key] !== "") {
-            deploy.workerUrl = env[key];
-
-            break;
-        }
+    if (workerUrl !== undefined) {
+        deploy.workerUrl = workerUrl;
     }
 
-    for (const key of ENVIRONMENT_VARS) {
-        if (typeof env[key] === "string" && env[key] !== "") {
-            deploy.environment = env[key];
-
-            break;
-        }
+    if (environment !== undefined) {
+        deploy.environment = environment;
     }
 
     const versionMetadata = env["CF_VERSION_METADATA"];

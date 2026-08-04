@@ -152,27 +152,19 @@ interface ReconcileBindingsResult {
  * call site is how one kind ends up silently uncovered.
  */
 const collectExportGaps = (inferred: InferredBindings): ExportGap[] => {
-    const gaps: ExportGap[] = [];
+    const kinds: ReadonlyArray<[ExportGap["kind"], ExportGap["module"], ReadonlyArray<{ className: string; exported: boolean; exportName: string }>]> = [
+        ["container", "containers", inferred.containers],
+        ["workflow", "workflows", inferred.workflows],
+        ["agent", "agents", inferred.agents],
+    ];
 
-    for (const container of inferred.containers) {
-        if (!container.exported) {
-            gaps.push({ className: container.className, exportName: container.exportName, kind: "container", module: "containers" });
-        }
-    }
-
-    for (const workflow of inferred.workflows) {
-        if (!workflow.exported) {
-            gaps.push({ className: workflow.className, exportName: workflow.exportName, kind: "workflow", module: "workflows" });
-        }
-    }
-
-    for (const agent of inferred.agents) {
-        if (!agent.exported) {
-            gaps.push({ className: agent.className, exportName: agent.exportName, kind: "agent", module: "agents" });
-        }
-    }
-
-    return gaps;
+    return kinds.flatMap(([kind, module, declarations]) =>
+        declarations
+            .filter((declaration) => !declaration.exported)
+            .map(({ className, exportName }) => {
+                return { className, exportName, kind, module };
+            }),
+    );
 };
 
 interface ReconcileStep {
@@ -568,18 +560,13 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
     return { added: ["observability"], text: nextText };
 };
 
-/** Render one wrangler `workflows[]` entry from an inferred workflow. Pure. */
-const workflowEntryFor = (workflow: InferredWorkflow): Record<string, unknown> => {
-    return { binding: workflow.bindingName, class_name: workflow.className, name: workflow.name };
-};
-
 /**
- * Render one wrangler `workflows[]` entry from an inferred agent. An agent
- * compiles onto a Cloudflare Workflow, so its wrangler footprint is identical to
- * a workflow's — a `{ binding, class_name, name }` entry in the same array. Pure.
+ * Render one wrangler `workflows[]` entry from an inferred workflow or agent —
+ * an agent compiles onto a Cloudflare Workflow, so its wrangler footprint is
+ * identical: a `{ binding, class_name, name }` entry in the same array. Pure.
  */
-const agentEntryFor = (agent: InferredAgent): Record<string, unknown> => {
-    return { binding: agent.bindingName, class_name: agent.className, name: agent.name };
+const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<string, unknown> => {
+    return { binding: workflow.bindingName, class_name: workflow.className, name: workflow.name };
 };
 
 /**
@@ -610,7 +597,7 @@ const reconcileWorkflows = (
     const nextText = applyModify(
         text,
         ["workflows"],
-        [...existing, ...missingWorkflows.map((workflow) => workflowEntryFor(workflow)), ...missingAgents.map((agent) => agentEntryFor(agent))],
+        [...existing, ...missingWorkflows.map((workflow) => workflowEntryFor(workflow)), ...missingAgents.map((agent) => workflowEntryFor(agent))],
     );
 
     return {

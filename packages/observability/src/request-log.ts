@@ -26,7 +26,7 @@
  */
 
 import { fingerprintError } from "@lunora/fingerprint";
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/shard-engine";
 import { redact, standardRules } from "@visulima/redact";
 
 import type { LogEvent } from "../../../shared/log-event";
@@ -34,6 +34,7 @@ import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { IssueSeverity, IssueStatus } from "./issue-state";
 import { readIssueStates } from "./issue-state";
+import { runSql } from "./run-sql";
 
 /** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__lunora` prefix. */
 const REQUEST_LOG_TABLE = "__lunora_reqlog__";
@@ -193,13 +194,6 @@ interface ReadIssuesOptions {
     /** Exact acting-userId match. */
     userId?: string;
 }
-
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
 
 /**
  * Redact the secrets / PII out of a value before it reaches the durable log or a
@@ -562,6 +556,24 @@ const emitLogEvent = (input: LogEventInput, options: RequestLogWriteOptions = {}
 /** Escape LIKE wildcards so a literal `%`/`_`/`\` in a filter matches itself (paired with `ESCAPE '\'`). */
 const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
 
+/** Append the scope filters {@link readRequestLog} and {@link readErrorIssues} share (function-path prefix, exact userId/shardKey), each as a bound parameter. */
+const pushScopeFilters = (conjuncts: string[], parameters: unknown[], options: { functionPathPrefix?: string; shardKey?: string; userId?: string }): void => {
+    if (options.functionPathPrefix !== undefined && options.functionPathPrefix !== "") {
+        conjuncts.push(String.raw`function_path LIKE ? ESCAPE '\'`);
+        parameters.push(`${escapeLike(options.functionPathPrefix)}%`);
+    }
+
+    if (options.userId !== undefined && options.userId !== "") {
+        conjuncts.push("user_id = ?");
+        parameters.push(options.userId);
+    }
+
+    if (options.shardKey !== undefined && options.shardKey !== "") {
+        conjuncts.push("shard_key = ?");
+        parameters.push(options.shardKey);
+    }
+};
+
 /** Shape of one persisted row, before it's mapped back to a {@link RequestLogEntry}. */
 interface RequestLogRow {
     args: null | string;
@@ -607,20 +619,7 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
     const conjuncts: string[] = ["seq > ?"];
     const parameters: unknown[] = [options.sinceSeq ?? 0];
 
-    if (options.functionPathPrefix !== undefined && options.functionPathPrefix !== "") {
-        conjuncts.push(String.raw`function_path LIKE ? ESCAPE '\'`);
-        parameters.push(`${escapeLike(options.functionPathPrefix)}%`);
-    }
-
-    if (options.userId !== undefined && options.userId !== "") {
-        conjuncts.push("user_id = ?");
-        parameters.push(options.userId);
-    }
-
-    if (options.shardKey !== undefined && options.shardKey !== "") {
-        conjuncts.push("shard_key = ?");
-        parameters.push(options.shardKey);
-    }
+    pushScopeFilters(conjuncts, parameters, options);
 
     if (options.outcome !== undefined) {
         conjuncts.push("outcome = ?");
@@ -769,20 +768,7 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
     const conjuncts: string[] = ["outcome = 'error'"];
     const parameters: unknown[] = [];
 
-    if (options.functionPathPrefix !== undefined && options.functionPathPrefix !== "") {
-        conjuncts.push(String.raw`function_path LIKE ? ESCAPE '\'`);
-        parameters.push(`${escapeLike(options.functionPathPrefix)}%`);
-    }
-
-    if (options.userId !== undefined && options.userId !== "") {
-        conjuncts.push("user_id = ?");
-        parameters.push(options.userId);
-    }
-
-    if (options.shardKey !== undefined && options.shardKey !== "") {
-        conjuncts.push("shard_key = ?");
-        parameters.push(options.shardKey);
-    }
+    pushScopeFilters(conjuncts, parameters, options);
 
     parameters.push(limit);
 

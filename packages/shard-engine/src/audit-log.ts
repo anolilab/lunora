@@ -14,7 +14,8 @@
  * recent `AUDIT_LOG_RETENTION` rows, so the log can't grow unbounded.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlExec } from "./ctx-db";
+import { runSql } from "./do-exec";
 
 /** Reserved append-only table backing the studio Audit tab. Auto-hidden from the data browser by the `__lunora` prefix. */
 const AUDIT_LOG_TABLE = "__lunora_audit__";
@@ -46,13 +47,6 @@ interface AppendAuditEntry {
     table?: string;
     ts: number;
 }
-
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
 
 /**
  * Create the `__lunora_audit__` table. `seq` is an `AUTOINCREMENT` primary key,

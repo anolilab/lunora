@@ -28,21 +28,15 @@ const publicArgumentUsesAny: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.argValidators) {
-            for (const argument of procedure.anyArgs) {
-                findings.push(
-                    emit(publicArgumentUsesAny, {
-                        cacheKey: `public_arg_uses_any:${procedure.file}:${procedure.exportName}:${argument}`,
-                        detail: `Arg \`${argument}\` of public procedure \`${procedure.exportName}\` (${procedure.file}:${procedure.line.toString()}) is \`v.any()\` — untrusted input with no validation. Give it a precise validator.`,
-                        metadata: { argument, exportName: procedure.exportName, file: procedure.file, line: procedure.line },
-                    }),
-                );
-            }
-        }
-
-        return findings;
+        return context.argValidators.flatMap((procedure) =>
+            procedure.anyArgs.map((argument) =>
+                emit(publicArgumentUsesAny, {
+                    cacheKey: `public_arg_uses_any:${procedure.file}:${procedure.exportName}:${argument}`,
+                    detail: `Arg \`${argument}\` of public procedure \`${procedure.exportName}\` (${procedure.file}:${procedure.line.toString()}) is \`v.any()\` — untrusted input with no validation. Give it a precise validator.`,
+                    metadata: { argument, exportName: procedure.exportName, file: procedure.file, line: procedure.line },
+                }),
+            ),
+        );
     },
     source: "static",
     title: "Public argument uses v.any()",

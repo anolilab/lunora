@@ -7,6 +7,7 @@ import { seedPlan } from "@lunora/seed";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
+import { isLoopbackTarget } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -44,19 +45,7 @@ interface SeedCommandOptions {
 }
 
 /** True when `url` targets the local dev worker (or is unset). `--reset` is local-state only. */
-const isLocalUrl = (url: string | undefined): boolean => {
-    if (url === undefined) {
-        return true;
-    }
-
-    try {
-        const { hostname } = new URL(url);
-
-        return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
-    } catch {
-        return false;
-    }
-};
+const isLocalUrl = (url: string | undefined): boolean => (url === "" ? false : isLoopbackTarget(url));
 
 interface SeedCommandResult {
     code: number;

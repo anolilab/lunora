@@ -246,13 +246,13 @@ const createShardClient = (namespace: ShardNamespaceLike, options: ShardClientOp
                 }),
             );
 
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
             let body: ShardResponseBody;
 
             try {
                 body = await response.json();
             } catch {
-                const statusText = response.statusText ? ` ${response.statusText}` : "";
-
                 throw new LunoraError(
                     "INTERNAL",
                     `createShardClient: shard response for "${functionPath}" was not JSON (status ${String(response.status)}${statusText})`,
@@ -266,8 +266,6 @@ const createShardClient = (namespace: ShardNamespaceLike, options: ShardClientOp
             // A non-2xx whose body parsed as JSON but carried no `error` envelope
             // would otherwise read as a successful `undefined` result.
             if (!response.ok) {
-                const statusText = response.statusText ? ` ${response.statusText}` : "";
-
                 throw new LunoraError("INTERNAL", `createShardClient: shard call "${functionPath}" failed (status ${String(response.status)}${statusText})`);
             }
 

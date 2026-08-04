@@ -3,7 +3,7 @@ import type { JsonSchema } from "@lunora/values";
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR } from "./ir";
 import sanitizeNamespace from "./paths";
-import { argsObjectSchema, LUNORA_ERROR_CODES } from "./schema-ir";
+import { LUNORA_ERROR_CODES, objectSchema } from "./schema-ir";
 
 // ─── OpenRPC document assembly ───────────────────────────────────────────────
 //
@@ -23,8 +23,8 @@ const OPENRPC_VERSION = "1.3.2";
  * `result` is documented permissively with a note — mirroring the OpenAPI
  * emitter's success-response fallback.
  */
-const inferredResultSchema = (): JsonSchema => {
-    return { description: "Result is TS-inferred from the function's return type (no `.output()` declared); best-effort — any JSON." };
+const inferredResultSchema: JsonSchema = {
+    description: "Result is TS-inferred from the function's return type (no `.output()` declared); best-effort — any JSON.",
 };
 
 /**
@@ -61,12 +61,12 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
                 // object; `required` reflects whether the function declares any
                 // arguments at all.
                 required: Object.keys(definition.args).length > 0,
-                schema: argsObjectSchema(definition.args),
+                schema: objectSchema(definition.args),
             },
         ],
         result: {
             name: "result",
-            schema: inferredResultSchema(),
+            schema: inferredResultSchema,
         },
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,

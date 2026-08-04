@@ -9,17 +9,11 @@ import type { ThemeMode } from "../core/theme-mode";
 import { createThemeModeController, THEME_MODES } from "../core/theme-mode";
 import { createSetUsernameController } from "../core/username";
 import { createUsernameAvailabilityController } from "../core/username-availability";
+import { onSubmit } from "./form";
 import { AuthCard, Field, FormBanner, Skeleton, SubmitButton, UsernameAvailability } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 import { UserAvatar } from "./user-button";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: Event): void => {
-        event.preventDefault();
-        void action();
-    };
 
 /**
  * Which OAuth providers are attached, with link/unlink.

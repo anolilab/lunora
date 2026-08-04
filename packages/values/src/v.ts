@@ -666,21 +666,12 @@ const string = (): StringColumnValidator =>
         }) as unknown as InternalStringColumnValidator,
     );
 
-const number = (): NumberColumnValidator =>
-    asNumberColumn(
-        createValidator<number>("number", (value, context) => {
-            // Reject NaN and ±Infinity — they round-trip through JSON as `null`
-            // and break downstream code that assumes a real numeric value.
-            if (typeof value !== "number" || !Number.isFinite(value)) {
-                fail(context, "number", value);
-            }
-
-            return value;
-        }) as unknown as InternalNumberColumnValidator,
-    );
-
-/** Shared parser for the time validators: a finite epoch-millisecond number. */
-const parseEpochMillis = (value: unknown, context: ParseContext): number => {
+/**
+ * Shared parser for `v.number()` and the (epoch-millisecond) time validators.
+ * Rejects NaN and ±Infinity — they round-trip through JSON as `null` and break
+ * downstream code that assumes a real numeric value.
+ */
+const parseFiniteNumber = (value: unknown, context: ParseContext): number => {
     if (typeof value !== "number" || !Number.isFinite(value)) {
         fail(context, "number", value);
     }
@@ -688,11 +679,13 @@ const parseEpochMillis = (value: unknown, context: ParseContext): number => {
     return value;
 };
 
+const number = (): NumberColumnValidator => asNumberColumn(createValidator<number>("number", parseFiniteNumber) as unknown as InternalNumberColumnValidator);
+
 /** Epoch-millisecond timestamp (`number`). Pair with `.defaultNow()` for an insert-time clock. */
-const timestamp = (): TimestampColumnValidator => createValidator<number>("timestamp", parseEpochMillis) as unknown as TimestampColumnValidator;
+const timestamp = (): TimestampColumnValidator => createValidator<number>("timestamp", parseFiniteNumber) as unknown as TimestampColumnValidator;
 
 /** Calendar date stored as an epoch-millisecond `number`. Pair with `.defaultNow()` for an insert-time clock. */
-const date = (): TimestampColumnValidator => createValidator<number>("date", parseEpochMillis) as unknown as TimestampColumnValidator;
+const date = (): TimestampColumnValidator => createValidator<number>("date", parseFiniteNumber) as unknown as TimestampColumnValidator;
 
 const boolean = (): ColumnValidator<boolean, boolean> =>
     asColumn(

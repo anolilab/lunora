@@ -30,6 +30,7 @@ import { createToolServer } from "./compose";
 import { createRemoteDocsIndex } from "./docs/remote-index";
 import { docsResources } from "./docs/resources";
 import { docsTools } from "./docs/tools";
+import type { DocsIndex } from "./docs/types";
 import type { ToolResult } from "./tool-types";
 import { callTool, toolDefinitions } from "./tools";
 
@@ -79,6 +80,15 @@ interface LocalMcpServerOptions {
     /** Version reported in the MCP handshake — the host CLI's, not this package's. */
     version?: string;
 }
+
+/** The remote docs index for `options`, or `undefined` when the docs surface is disabled. */
+const buildDocsIndex = (options: LocalMcpServerOptions): DocsIndex | undefined =>
+    options.docs === false
+        ? undefined
+        : createRemoteDocsIndex({
+              ...(options.docs?.baseUrl === undefined ? {} : { baseUrl: options.docs.baseUrl }),
+              ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+          });
 
 /** Server identity advertised in the MCP `initialize` handshake. */
 const LOCAL_SERVER_NAME = "lunora";
@@ -309,16 +319,10 @@ const combineResourceProviders = (providers: ReadonlyArray<McpResourceProvider>)
  */
 const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient): ReadonlyArray<McpTool> => {
     const tools: McpTool[] = [];
+    const index = buildDocsIndex(options);
 
-    if (options.docs !== false) {
-        tools.push(
-            ...docsTools(
-                createRemoteDocsIndex({
-                    ...(options.docs?.baseUrl === undefined ? {} : { baseUrl: options.docs.baseUrl }),
-                    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-                }),
-            ),
-        );
+    if (index !== undefined) {
+        tools.push(...docsTools(index));
     }
 
     tools.push(...(options.extraTools ?? []));
@@ -334,13 +338,7 @@ const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: Loc
 const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
     // Resources come from the same docs index the tools read, so they appear
     // only when the documentation surface is enabled.
-    const index =
-        options.docs === false
-            ? undefined
-            : createRemoteDocsIndex({
-                  ...(options.docs?.baseUrl === undefined ? {} : { baseUrl: options.docs.baseUrl }),
-                  ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-              });
+    const index = buildDocsIndex(options);
 
     const resourceProviders: McpResourceProvider[] = [];
 

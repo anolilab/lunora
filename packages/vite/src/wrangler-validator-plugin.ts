@@ -83,11 +83,9 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
                 );
             }
 
-            if (result.report.warnings.length > 0) {
-                for (const warning of result.report.warnings) {
-                    // eslint-disable-next-line no-console
-                    console.warn(lunoraLine(`wrangler validator: ${warning}`));
-                }
+            for (const warning of result.report.warnings) {
+                // eslint-disable-next-line no-console
+                console.warn(lunoraLine(`wrangler validator: ${warning}`));
             }
 
             if (result.problems.length > 0) {

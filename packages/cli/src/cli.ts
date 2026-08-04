@@ -355,7 +355,7 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     try {
         manager = detectPackageManager(process.cwd());
     } catch {
-        manager = undefined;
+        // best-effort — leave `manager` undefined
     }
 
     await maybeNotifyUpdate({ current: VERSION, logger: createLogger(), manager });

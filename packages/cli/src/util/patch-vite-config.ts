@@ -14,7 +14,7 @@
  */
 // eslint-disable-next-line import/no-named-as-default -- magic-string's default export IS the MagicString class; this is the documented, idiomatic import
 import MagicString from "magic-string";
-import type { ObjectLiteralExpression } from "ts-morph";
+import type { ObjectLiteralExpression, SourceFile } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";
 
 interface PatchViteConfigResult {
@@ -37,7 +37,7 @@ const LUNORA_VITE_SINGLE = "'@lunora/vite'";
  * Locate the config object inside a ts-morph SourceFile for a defineConfig
  * call expression whose first argument is an object literal.
  */
-const findDefineConfigObject = (sf: ReturnType<InstanceType<typeof Project>["createSourceFile"]>): ObjectLiteralExpression | undefined => {
+const findDefineConfigObject = (sf: SourceFile): ObjectLiteralExpression | undefined => {
     for (const statement of sf.getStatements()) {
         if (statement.getKind() !== SyntaxKind.ExportAssignment) {
             continue;
@@ -69,7 +69,7 @@ const findDefineConfigObject = (sf: ReturnType<InstanceType<typeof Project>["cre
  * Locate a plain `export default { ... }` object literal (no defineConfig
  * wrapper).
  */
-const findPlainExportObject = (sf: ReturnType<InstanceType<typeof Project>["createSourceFile"]>): ObjectLiteralExpression | undefined => {
+const findPlainExportObject = (sf: SourceFile): ObjectLiteralExpression | undefined => {
     for (const statement of sf.getStatements()) {
         if (statement.getKind() !== SyntaxKind.ExportAssignment) {
             continue;
@@ -85,51 +85,19 @@ const findPlainExportObject = (sf: ReturnType<InstanceType<typeof Project>["crea
     return undefined;
 };
 
-/**
- * Build an in-memory ts-morph project and return the config object for the
- * given source text, or undefined when no recognisable shape is found.
- */
-const findConfigObject = (sourceText: string): ObjectLiteralExpression | undefined => {
-    const project = new Project({
+/** Parse the config source into a single in-memory ts-morph SourceFile. */
+const parseConfigSource = (sourceText: string): SourceFile =>
+    new Project({
         compilerOptions: { allowJs: true },
         useInMemoryFileSystem: true,
-    });
-
-    const sf = project.createSourceFile("vite.config.ts", sourceText, { overwrite: true });
-
-    return findDefineConfigObject(sf) ?? findPlainExportObject(sf);
-};
+    }).createSourceFile("vite.config.ts", sourceText, { overwrite: true });
 
 /**
- * Find the last top-level import declaration and return the position
- * immediately after it. Returns 0 when there are no imports so the new
- * import is prepended at the top.
+ * Splice the import for lunora/vite into `ms`: immediately after the last
+ * top-level import, or prepended at the top when there are none.
  */
-const importInsertPosition = (sourceText: string): number => {
-    const project = new Project({
-        compilerOptions: { allowJs: true },
-        useInMemoryFileSystem: true,
-    });
-
-    const sf = project.createSourceFile("vite.config.ts", sourceText, { overwrite: true });
-    const imports = sf.getImportDeclarations();
-
-    if (imports.length === 0) {
-        return 0;
-    }
-
-    const last = imports[imports.length - 1];
-
-    if (last === undefined) {
-        return 0;
-    }
-
-    return last.getEnd();
-};
-
-/** Splice the import for lunora/vite into `ms` at the right position. */
-const addImport = (ms: MagicString, source: string): void => {
-    const insertAt = importInsertPosition(source);
+const addImport = (ms: MagicString, sf: SourceFile): void => {
+    const insertAt = sf.getImportDeclarations().at(-1)?.getEnd() ?? 0;
 
     if (insertAt === 0) {
         ms.prepend(`${LUNORA_IMPORT}\n`);
@@ -196,21 +164,20 @@ const patchViteConfig = (source: string): PatchViteConfigResult => {
         return { changed: false, code: source, reason: "lunora plugin already present" };
     }
 
-    const configObject = findConfigObject(source);
+    const sf = parseConfigSource(source);
+    const configObject = findDefineConfigObject(sf) ?? findPlainExportObject(sf);
 
     if (configObject === undefined) {
         return { changed: false, code: source, reason: "could not locate a Vite config plugins array to patch" };
     }
 
     const ms = new MagicString(source);
-    const alreadyImported = source.includes(LUNORA_VITE_DOUBLE) || source.includes(LUNORA_VITE_SINGLE);
 
-    if (alreadyImported) {
-        patchPluginsArray(ms, configObject);
-    } else {
-        addImport(ms, source);
-        patchPluginsArray(ms, configObject);
+    if (!source.includes(LUNORA_VITE_DOUBLE) && !source.includes(LUNORA_VITE_SINGLE)) {
+        addImport(ms, sf);
     }
+
+    patchPluginsArray(ms, configObject);
 
     return { changed: true, code: ms.toString() };
 };

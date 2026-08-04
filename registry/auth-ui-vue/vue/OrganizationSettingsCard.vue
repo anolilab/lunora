@@ -4,7 +4,7 @@ import { computed } from "vue";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createOrganizationSettingsController } from "../core/organization-settings";
 import AuthCard from "./AuthCard.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -33,27 +33,9 @@ const { actions, state } = useController((context_) =>
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>
         <form v-else class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
-            <Field
-                :field="state.fields.name"
-                :label="t.organizationName"
-                name="organizationName"
-                @blur="actions.blur('name')"
-                @change="actions.setField('name', $event)"
-            />
-            <Field
-                :field="state.fields.slug"
-                :label="t.organizationSlug"
-                name="organizationSlug"
-                @blur="actions.blur('slug')"
-                @change="actions.setField('slug', $event)"
-            />
-            <Field
-                :field="state.fields.logo"
-                :label="t.organizationLogo"
-                name="organizationLogo"
-                @blur="actions.blur('logo')"
-                @change="actions.setField('logo', $event)"
-            />
+            <FormField :actions="actions" field="name" :fields="state.fields" :label="t.organizationName" name="organizationName" />
+            <FormField :actions="actions" field="slug" :fields="state.fields" :label="t.organizationSlug" name="organizationSlug" />
+            <FormField :actions="actions" field="logo" :fields="state.fields" :label="t.organizationLogo" name="organizationLogo" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.saveChanges }}</SubmitButton>
         </form>
     </AuthCard>

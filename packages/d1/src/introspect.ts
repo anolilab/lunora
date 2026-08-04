@@ -29,16 +29,6 @@ import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 // single definition, not byte-identical copies that can drift.
 import { quoteIdentifier } from "./dialect";
 
-/**
- * Provision the schema's `.global()` tables before the browser reads them, so a
- * fresh database lists/pages them instead of failing with `no such table`. The
- * DDL is idempotent (`CREATE … IF NOT EXISTS`) and admin introspection isn't a
- * hot path, so it runs unmemoised — correct for any (exec, schema) pair rather
- * than caching against a single binding. The hot read/write path memoises this
- * per-ctx-db; see `createD1CtxDb`.
- */
-const ensureGlobalTables = (exec: D1Exec, schema: SchemaLike): Promise<void> => runD1GlobalTableMigrations(exec, schema);
-
 /** A table plus its current row count. */
 interface GlobalTableInfo {
     name: string;
@@ -145,6 +135,23 @@ const listTableNames = async (exec: D1Exec): Promise<string[]> => {
     return rows.map((row) => String(row["name"])).filter((name) => !isInternalTable(name));
 };
 
+/**
+ * Provision the schema's `.global()` tables (idempotent DDL, unmemoised — admin
+ * introspection isn't a hot path, and this stays correct for any (exec, schema)
+ * pair; the hot read/write path memoises per-ctx-db, see `createD1CtxDb`), then
+ * assert `table` is in the live browsable-table list (typed 404 otherwise) so a
+ * caller-supplied name can never reach an interpolated identifier.
+ */
+const assertBrowsableTable = async (exec: D1Exec, schema: SchemaLike, table: string): Promise<void> => {
+    await runD1GlobalTableMigrations(exec, schema);
+
+    const tableNames = await listTableNames(exec);
+
+    if (!tableNames.includes(table)) {
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
+    }
+};
+
 const countRows = async (exec: D1Exec, quotedTable: string, whereSql = "", whereParams: unknown[] = []): Promise<number> => {
     const rows = await exec.all(`SELECT COUNT(*) AS c FROM ${quotedTable}${whereSql}`, whereParams);
 
@@ -162,27 +169,23 @@ const physicalColumnName = (schema: SchemaLike, table: string, displayColumn: st
     schema.tables[table] !== undefined && displayColumn === "_id" ? "id" : displayColumn;
 
 /**
- * Compile a list of eq constraints into a bound `WHERE` fragment for the global
- * read/facet paths. Each clause's column is validated against the table's
+ * Compile a list of eq constraints into a bound ` WHERE …` fragment for the
+ * global read/facet paths. Each clause's column is validated against the table's
  * displayed columns (typed 404 if unknown) and mapped to its physical, quoted
  * identifier; a nullish value compiles to `IS NULL` (SQL's `= NULL` never
- * matches), everything else to `= ?` with the raw value bound. Returns
- * `undefined` when there are no clauses, so callers append nothing.
+ * matches), everything else to `= ?` with the raw value bound. No clauses yields
+ * an empty `where`, so callers append it unconditionally.
  */
 const buildEqPredicate = (
     schema: SchemaLike,
     table: string,
     displayColumns: string[],
     filters: GlobalFilterClause[] | undefined,
-): { params: unknown[]; where: string } | undefined => {
-    if (filters === undefined || filters.length === 0) {
-        return undefined;
-    }
-
+): { params: unknown[]; where: string } => {
     const clauses: string[] = [];
     const params: unknown[] = [];
 
-    for (const filter of filters) {
+    for (const filter of filters ?? []) {
         if (!displayColumns.includes(filter.column)) {
             throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${filter.column}`, { status: 404 });
         }
@@ -206,7 +209,7 @@ const buildEqPredicate = (
         }
     }
 
-    return { params, where: clauses.join(" AND ") };
+    return { params, where: clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "" };
 };
 
 /**
@@ -288,7 +291,7 @@ const resolveReferences = async (exec: D1Exec, schema: SchemaLike, table: string
  * (auth, etc.); internal/companion tables are excluded.
  */
 const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<GlobalTableInfo[]> => {
-    await ensureGlobalTables(exec, schema);
+    await runD1GlobalTableMigrations(exec, schema);
 
     const names = await listTableNames(exec);
 
@@ -311,21 +314,13 @@ const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<Globa
 const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: ReadGlobalTablePageOptions): Promise<GlobalTablePage> => {
     const { table } = options;
 
-    await ensureGlobalTables(exec, schema);
-
-    const tableNames = await listTableNames(exec);
-
-    if (!tableNames.includes(table)) {
-        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
-    }
+    await assertBrowsableTable(exec, schema, table);
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
     const offset = Math.max(0, Math.trunc(options.offset ?? 0));
     const quoted = quoteIdentifier(table);
     const columns = await resolveColumns(exec, schema, table);
-    const predicate = buildEqPredicate(schema, table, columns, options.filters);
-    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
-    const whereParams = predicate?.params ?? [];
+    const { params: whereParams, where: whereSql } = buildEqPredicate(schema, table, columns, options.filters);
 
     const total = await countRows(exec, quoted, whereSql, whereParams);
     const raw = await exec.all(`SELECT * FROM ${quoted}${whereSql} LIMIT ? OFFSET ?`, [...whereParams, limit, offset]);
@@ -351,13 +346,7 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
 const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: FacetGlobalColumnOptions): Promise<GlobalFacetResult> => {
     const { column, table } = options;
 
-    await ensureGlobalTables(exec, schema);
-
-    const tableNames = await listTableNames(exec);
-
-    if (!tableNames.includes(table)) {
-        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
-    }
+    await assertBrowsableTable(exec, schema, table);
 
     const columns = await resolveColumns(exec, schema, table);
 
@@ -366,9 +355,7 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     }
 
     const quoted = quoteIdentifier(table);
-    const predicate = buildEqPredicate(schema, table, columns, options.filters);
-    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
-    const whereParams = predicate?.params ?? [];
+    const { params: whereParams, where: whereSql } = buildEqPredicate(schema, table, columns, options.filters);
 
     // Faceting a sensitive column on an external table would expose the very
     // values the page browser redacts — collapse it to one masked bucket instead.

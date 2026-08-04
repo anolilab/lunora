@@ -75,59 +75,30 @@ interface LunoraAuthPluginToggles {
 // `createAuthClient({ plugins })` expects at the call site.
 type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 
+/** Toggle → client-plugin factory. Plugin order in the assembled array is not significant to better-auth. */
+const PLUGIN_FACTORIES: Record<keyof LunoraAuthPluginToggles, () => LunoraAuthClientPlugin> = {
+    admin: adminClient,
+    anonymous: anonymousClient,
+    deviceAuthorization: deviceAuthorizationClient,
+    emailOtp: emailOTPClient,
+    lastLoginMethod: lastLoginMethodClient,
+    magicLink: magicLinkClient,
+    multiSession: multiSessionClient,
+    oauthProvider: oauthProviderClient,
+    organization: organizationClient,
+    passkey: passkeyClient,
+    phoneNumber: phoneNumberClient,
+    twoFactor: twoFactorClient,
+    username: usernameClient,
+};
+
 const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthClientPlugin[] => {
     const plugins: LunoraAuthClientPlugin[] = [];
 
-    if (toggles.organization) {
-        plugins.push(organizationClient());
-    }
-
-    if (toggles.twoFactor) {
-        plugins.push(twoFactorClient());
-    }
-
-    if (toggles.passkey) {
-        plugins.push(passkeyClient());
-    }
-
-    if (toggles.magicLink) {
-        plugins.push(magicLinkClient());
-    }
-
-    if (toggles.emailOtp) {
-        plugins.push(emailOTPClient());
-    }
-
-    if (toggles.admin) {
-        plugins.push(adminClient());
-    }
-
-    if (toggles.username) {
-        plugins.push(usernameClient());
-    }
-
-    if (toggles.phoneNumber) {
-        plugins.push(phoneNumberClient());
-    }
-
-    if (toggles.multiSession) {
-        plugins.push(multiSessionClient());
-    }
-
-    if (toggles.anonymous) {
-        plugins.push(anonymousClient());
-    }
-
-    if (toggles.deviceAuthorization) {
-        plugins.push(deviceAuthorizationClient());
-    }
-
-    if (toggles.lastLoginMethod) {
-        plugins.push(lastLoginMethodClient());
-    }
-
-    if (toggles.oauthProvider) {
-        plugins.push(oauthProviderClient());
+    for (const key of Object.keys(PLUGIN_FACTORIES) as (keyof LunoraAuthPluginToggles)[]) {
+        if (toggles[key]) {
+            plugins.push(PLUGIN_FACTORIES[key]());
+        }
     }
 
     return plugins;

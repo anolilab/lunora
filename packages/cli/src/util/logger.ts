@@ -69,9 +69,6 @@ let sharedPail: PailLogger | undefined;
  */
 let jsonForced = false;
 
-/** Reporters installed via {@link configureLogHandlers}; `undefined` = default selection. */
-let configuredReporters: PailReporter[] | undefined;
-
 const wantJson = (): boolean => {
     if (jsonForced) {
         return true;
@@ -85,20 +82,7 @@ const wantJson = (): boolean => {
 /** Instantiate a reporter class through the local {@link PailReporterConstructor} typing (see its packaging-bug note). */
 const constructReporter = (Reporter: unknown): PailReporter => new (Reporter as PailReporterConstructor)();
 
-const buildReporters = (): PailReporter[] => {
-    // Forced JSON (`--json` / agent auto-detect) is a machine-readability
-    // contract — it must win even over an explicitly configured reporter set,
-    // or automation parsing stdout breaks.
-    if (jsonForced) {
-        return [constructReporter(JsonReporter)];
-    }
-
-    if (configuredReporters !== undefined && configuredReporters.length > 0) {
-        return configuredReporters;
-    }
-
-    return [constructReporter(wantJson() ? JsonReporter : LunoraReporter)];
-};
+const buildReporters = (): PailReporter[] => [constructReporter(wantJson() ? JsonReporter : LunoraReporter)];
 
 /**
  * Switch every subsequent log line to machine-readable JSON (pail's
@@ -112,27 +96,6 @@ const forceJsonLogging = (): void => {
     }
 
     jsonForced = true;
-    sharedPail = undefined;
-};
-
-/**
- * Composable log handlers, mirroring the reporter primitives the logger is
- * built from. `compose` maps directly onto pail's `reporters: [...]` array, so
- * e.g. `configureLogHandlers(logHandlers.compose(logHandlers.console(), logHandlers.json()))`
- * keeps human-readable output while also emitting structured JSON lines.
- */
-const logHandlers = {
-    compose: (...reporters: PailReporter[]): PailReporter[] => reporters,
-    console: (): PailReporter => constructReporter(LunoraReporter),
-    json: (): PailReporter => constructReporter(JsonReporter),
-};
-
-/**
- * Install a custom reporter set (see {@link logHandlers}). Replaces the
- * default console-or-JSON selection; the shared pail is rebuilt on next use.
- */
-const configureLogHandlers = (reporters: PailReporter | PailReporter[]): void => {
-    configuredReporters = Array.isArray(reporters) ? reporters : [reporters];
     sharedPail = undefined;
 };
 
@@ -236,5 +199,5 @@ const logStep = (type: StepBadgeName, message: string): void => {
     (getPail() as unknown as Record<StepBadgeName, (message: string) => void>)[type](message);
 };
 
-export type { Logger, PailReporter };
-export { configureLogHandlers, createLogger, createStderrLogger, forceJsonLogging, getPail, logHandlers, logStep, pail };
+export type { Logger };
+export { createLogger, createStderrLogger, forceJsonLogging, logStep, pail };

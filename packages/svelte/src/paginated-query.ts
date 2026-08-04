@@ -397,17 +397,9 @@ export function paginatedQuery<F extends FunctionReference>(
 
     const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
-    const results = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[]>(pageResults, (currentResults) => {
-        const items: PageItemOf<F>[] = [];
-
-        for (const page of currentResults) {
-            if (page) {
-                items.push(...page.page);
-            }
-        }
-
-        return items;
-    });
+    const results = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[]>(pageResults, (currentResults) =>
+        currentResults.flatMap((page) => page?.page ?? []),
+    );
 
     const isLoading = derived<Readable<PaginationStatus>, boolean>(
         status,
@@ -450,17 +442,9 @@ export function infiniteQuery<F extends FunctionReference>(
 
     const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
-    const pages = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[][]>(pageResults, (currentResults) => {
-        const result: PageItemOf<F>[][] = [];
-
-        for (const page of currentResults) {
-            if (page) {
-                result.push(page.page);
-            }
-        }
-
-        return result;
-    });
+    const pages = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[][]>(pageResults, (currentResults) =>
+        currentResults.flatMap((page) => (page ? [page.page] : [])),
+    );
 
     const isLoading = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "LoadingFirstPage");
     const hasNextPage = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "CanLoadMore");

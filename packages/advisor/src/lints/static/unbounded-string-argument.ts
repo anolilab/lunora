@@ -28,21 +28,15 @@ const unboundedStringArgument: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.argValidators) {
-            for (const argument of procedure.unboundedStringArgs) {
-                findings.push(
-                    emit(unboundedStringArgument, {
-                        cacheKey: `unbounded_string_arg:${procedure.file}:${procedure.exportName}:${argument}`,
-                        detail: `Arg \`${argument}\` of public procedure \`${procedure.exportName}\` (${procedure.file}:${procedure.line.toString()}) is an unbounded \`v.string()\`. Add a max-length bound to cap payload size.`,
-                        metadata: { argument, exportName: procedure.exportName, file: procedure.file, line: procedure.line },
-                    }),
-                );
-            }
-        }
-
-        return findings;
+        return context.argValidators.flatMap((procedure) =>
+            procedure.unboundedStringArgs.map((argument) =>
+                emit(unboundedStringArgument, {
+                    cacheKey: `unbounded_string_arg:${procedure.file}:${procedure.exportName}:${argument}`,
+                    detail: `Arg \`${argument}\` of public procedure \`${procedure.exportName}\` (${procedure.file}:${procedure.line.toString()}) is an unbounded \`v.string()\`. Add a max-length bound to cap payload size.`,
+                    metadata: { argument, exportName: procedure.exportName, file: procedure.file, line: procedure.line },
+                }),
+            ),
+        );
     },
     source: "static",
     title: "Public string argument has no length bound",

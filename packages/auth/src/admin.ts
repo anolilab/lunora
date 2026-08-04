@@ -433,21 +433,7 @@ const USER_FIELD_PLUGIN: Record<string, string> = {
 };
 
 /** Collapse a better-auth field `type` to the coarse input kind the studio renders. */
-const mapUserFieldType = (type: unknown): AuthUserFieldSpec["type"] => {
-    if (type === "boolean") {
-        return "boolean";
-    }
-
-    if (type === "date") {
-        return "date";
-    }
-
-    if (type === "number") {
-        return "number";
-    }
-
-    return "string";
-};
+const mapUserFieldType = (type: unknown): AuthUserFieldSpec["type"] => (type === "boolean" || type === "date" || type === "number" ? type : "string");
 
 /**
  * Derive the user-settable extra fields for the create-user form from the merged

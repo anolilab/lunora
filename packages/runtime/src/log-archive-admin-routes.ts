@@ -23,6 +23,7 @@ import { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../shared/log-archive";
 import type { ContextLogLevel } from "../../../shared/log-event";
 import { LOG_LEVEL_ORDER } from "../../../shared/log-event";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 import type { PipelineLogColumnMap, PipelineLogPage, PipelineLogQuery } from "./pipeline-log-reader";
 import { createPipelineLogReader } from "./pipeline-log-reader";
 
@@ -143,41 +144,32 @@ const parseQuery = (body: Record<string, unknown>): PipelineLogQuery => {
         }
     };
 
+    const assignLevel = (field: "level" | "minLevel"): void => {
+        const value = parseLevel(body[field], field);
+
+        if (value !== undefined) {
+            query[field] = value;
+        }
+    };
+
+    const assignNumber = (field: "limit" | "sinceTs" | "untilTs"): void => {
+        const value = parseFiniteNumber(body[field], field);
+
+        if (value !== undefined) {
+            query[field] = value;
+        }
+    };
+
     assignString("functionPath");
     assignString("functionPathPrefix");
     assignString("traceId");
     assignString("shardKey");
     assignString("userId");
-
-    const level = parseLevel(body["level"], "level");
-
-    if (level !== undefined) {
-        query.level = level;
-    }
-
-    const minLevel = parseLevel(body["minLevel"], "minLevel");
-
-    if (minLevel !== undefined) {
-        query.minLevel = minLevel;
-    }
-
-    const sinceTs = parseFiniteNumber(body["sinceTs"], "sinceTs");
-
-    if (sinceTs !== undefined) {
-        query.sinceTs = sinceTs;
-    }
-
-    const untilTs = parseFiniteNumber(body["untilTs"], "untilTs");
-
-    if (untilTs !== undefined) {
-        query.untilTs = untilTs;
-    }
-
-    const limit = parseFiniteNumber(body["limit"], "limit");
-
-    if (limit !== undefined) {
-        query.limit = limit;
-    }
+    assignLevel("level");
+    assignLevel("minLevel");
+    assignNumber("sinceTs");
+    assignNumber("untilTs");
+    assignNumber("limit");
 
     // The cursor is `{ ts }`; accept it as an object and validate the `ts`.
     const rawCursor = body["cursor"];
@@ -231,9 +223,7 @@ const buildLogArchiveAdminRoutes = (deps: LogArchiveAdminRouteDeps): Record<stri
     const { createReader = createPipelineLogReader, readJsonBody, requireAdminOption } = deps;
 
     const handleLogArchive = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Log-archive endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "Log-archive");
 
         // Admin-gate + require the app to have wired an archive table.
         const config = requireAdminOption(request, deps.logArchive, {

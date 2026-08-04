@@ -153,10 +153,9 @@ export const createNodeSocketHost = (): NodeSocketHost => {
             return id;
         },
         removeTag: (handle, tag) => {
-            const id = handleIds.get(handle);
-            const state = id === undefined ? undefined : runtimeSockets.get(id);
+            const state = runtimeSockets.get(handleIds.get(handle) ?? "");
 
-            if (state === undefined || id === undefined) {
+            if (state === undefined) {
                 return;
             }
 
@@ -166,18 +165,17 @@ export const createNodeSocketHost = (): NodeSocketHost => {
                 state.tags.delete(tag);
             }
 
-            durableTags.set(id, new Set(state.tags));
+            durableTags.set(state.id, new Set(state.tags));
         },
         setTag: (handle, tag) => {
-            const id = handleIds.get(handle);
-            const state = id === undefined ? undefined : runtimeSockets.get(id);
+            const state = runtimeSockets.get(handleIds.get(handle) ?? "");
 
-            if (state === undefined || id === undefined) {
+            if (state === undefined) {
                 return;
             }
 
             state.tags.add(tag);
-            durableTags.set(id, new Set(state.tags));
+            durableTags.set(state.id, new Set(state.tags));
         },
     };
 

@@ -9,6 +9,7 @@ import type { CallExpression, Expression, Identifier, Project, SourceFile } from
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { stringPropertyFor, unwrapToCallExpression } from "./discover-ast";
 import type { AgentIR } from "./ir";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
@@ -43,16 +44,7 @@ const isDefineAgent = (identifier: Identifier): boolean => {
 };
 
 /** Read a property's string-literal value, or throw a located diagnostic. */
-const stringProperty = (expression: Expression, exportName: string, property: string): string => {
-    if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
-        return expression.getLiteralValue();
-    }
-
-    throw diagnosticAt(
-        expression,
-        `agent "${exportName}": \`${property}\` must be a static string literal — it is deploy configuration codegen writes into wrangler.jsonc`,
-    );
-};
+const stringProperty = stringPropertyFor("agent");
 
 /** Read a property's boolean-literal value, or throw a located diagnostic. */
 const booleanProperty = (expression: Expression, exportName: string, property: string): boolean => {
@@ -135,23 +127,6 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     }
 
     return ir;
-};
-
-/**
- * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
- * `defineAgent({...}) satisfies AgentDefinition`, `defineAgent({...}) as const`,
- * or `(defineAgent({...}))` — down to the inner `CallExpression`. Mirrors the
- * identical helper in `discover-workflows.ts`. Returns `undefined` when the
- * (possibly wrapped) node isn't ultimately a call.
- */
-const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefined => {
-    let current: Node | undefined = node;
-
-    while (current && (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current))) {
-        current = current.getExpression();
-    }
-
-    return current && Node.isCallExpression(current) ? current : undefined;
 };
 
 /**

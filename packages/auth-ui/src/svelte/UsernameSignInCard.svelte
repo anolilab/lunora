@@ -5,7 +5,7 @@
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
@@ -26,31 +26,8 @@
             }}
         >
             <FormBanner error={$form.formError} />
-            <Field
-                autoComplete="username"
-                field={$form.fields.username}
-                label={t.usernameLabel}
-                name="username"
-                onBlur={() => {
-                    actions.blur("username");
-                }}
-                onChange={(value) => {
-                    actions.setField("username", value);
-                }}
-            />
-            <Field
-                autoComplete="current-password"
-                field={$form.fields.password}
-                label={t.passwordLabel}
-                name="password"
-                onBlur={() => {
-                    actions.blur("password");
-                }}
-                onChange={(value) => {
-                    actions.setField("password", value);
-                }}
-                type="password"
-            />
+            <FormField {actions} autoComplete="username" field="username" fields={$form.fields} label={t.usernameLabel} />
+            <FormField {actions} autoComplete="current-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
             <SubmitButton pending={$form.status === "submitting"}>{t.signIn}</SubmitButton>
         </form>
     </AuthCard>

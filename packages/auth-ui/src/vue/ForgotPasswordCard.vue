@@ -2,7 +2,7 @@
 import { createForgotPasswordController } from "../core/forgot-password";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -26,15 +26,7 @@ const { actions, state } = useController((context) => createForgotPasswordContro
     <AuthCard :title="t.forgotPassword">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
-            <Field
-                :field="state.fields.email"
-                :label="t.emailLabel"
-                name="email"
-                type="email"
-                autoComplete="email"
-                @blur="actions.blur('email')"
-                @change="actions.setField('email', $event)"
-            />
+            <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.forgotPassword }}</SubmitButton>
         </form>
         <template #footer>

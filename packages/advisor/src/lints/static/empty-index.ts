@@ -16,27 +16,18 @@ const emptyIndex: Lint = {
     level: "WARN",
     name: "empty_index",
     remediation: "Give the index its columns, or remove it.",
-    run: (context) => {
-        const findings = [];
-
-        for (const table of context.schema.tables) {
-            for (const index of table.indexes) {
-                if (index.kind !== "index" || index.fields.length > 0) {
-                    continue;
-                }
-
-                findings.push(
+    run: (context) =>
+        context.schema.tables.flatMap((table) =>
+            table.indexes
+                .filter((index) => index.kind === "index" && index.fields.length === 0)
+                .map((index) =>
                     emit(emptyIndex, {
                         cacheKey: `empty_index:${table.name}:${index.name}`,
                         detail: `Index "${index.name}" on table "${table.name}" declares no columns.`,
                         metadata: { index: index.name, table: table.name },
                     }),
-                );
-            }
-        }
-
-        return findings;
-    },
+                ),
+        ),
     source: "static",
     title: "Empty index",
 };

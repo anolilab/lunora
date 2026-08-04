@@ -98,32 +98,16 @@ const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, 
 
     const pkFor = (table: string): string => (typeof primaryKey === "string" ? primaryKey : (primaryKey[table] ?? DEFAULT_PRIMARY_KEY));
 
-    const bucketFor = (target: Record<string, Record<string, unknown>[]>, table: string): Record<string, unknown>[] => {
-        const existing = target[table];
-
-        if (existing) {
-            return existing;
-        }
-
-        const created: Record<string, unknown>[] = [];
-
-        // eslint-disable-next-line no-param-reassign -- `target` is one of the local accumulator maps owned by this function; mutating it in place is the intent
-        target[table] = created;
-
-        return created;
-    };
+    // `insert` and `upsert` both map to Fivetran's upsert-on-PK `insert`.
+    const buckets = { delete: remove, insert, update, upsert: insert };
 
     for (const change of page.changes) {
         schema[change.table] ??= { primary_key: [pkFor(change.table)] };
 
-        if (change.op === "delete") {
-            bucketFor(remove, change.table).push(change.doc);
-        } else if (change.op === "update") {
-            bucketFor(update, change.table).push(change.doc);
-        } else {
-            // `insert` and `upsert` both map to Fivetran's upsert-on-PK `insert`.
-            bucketFor(insert, change.table).push(change.doc);
-        }
+        const bucket = buckets[change.op][change.table] ?? [];
+
+        buckets[change.op][change.table] = bucket;
+        bucket.push(change.doc);
     }
 
     return { delete: remove, hasMore: page.hasMore, insert, schema, state: { cursor: page.nextCursor }, update };

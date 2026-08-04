@@ -64,22 +64,25 @@ class SubscriptionManager {
 
     // ── Registration ──────────────────────────────────────────────────
 
+    /** Mint an id, store the subscription under it, and return its unsubscribe function. */
+    #register(sub: Omit<EventSub, "id"> | Omit<StateSub, "id">): () => void {
+        const id = String(this.#nextId);
+
+        this.#nextId += 1;
+
+        this.#subscriptions.set(id, { ...sub, id });
+
+        return () => {
+            this.#subscriptions.delete(id);
+        };
+    }
+
     /**
      * Subscribe to every state change emitted by the event source.
      * @returns Unsubscribe function.
      */
     public onStateChange(callback: StateChangeCallback): () => void {
-        const id = String(this.#nextId);
-
-        this.#nextId += 1;
-
-        const sub: StateSub = { kind: "state", id, callback };
-
-        this.#subscriptions.set(id, sub);
-
-        return () => {
-            this.#subscriptions.delete(id);
-        };
+        return this.#register({ kind: "state", callback });
     }
 
     /**
@@ -89,17 +92,7 @@ class SubscriptionManager {
      * @returns Unsubscribe function.
      */
     public onEvent(eventType: string, callback: EventCallback): () => void {
-        const id = String(this.#nextId);
-
-        this.#nextId += 1;
-
-        const sub: EventSub = { kind: "event", id, eventType, callback };
-
-        this.#subscriptions.set(id, sub);
-
-        return () => {
-            this.#subscriptions.delete(id);
-        };
+        return this.#register({ kind: "event", eventType, callback });
     }
 
     // ── Notification ──────────────────────────────────────────────────

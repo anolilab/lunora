@@ -267,6 +267,9 @@ const renderArgsType = (args: Record<string, ValidatorIR>): string => {
  */
 const isOptionalOnInsert = (validator: ValidatorIR): boolean => validator.kind === "optional" || Boolean(validator.column?.hasDefault);
 
+/** The wrapped validator of a `v.optional(...)`, or the validator itself. */
+const unwrapOptional = (validator: ValidatorIR): ValidatorIR => (validator.kind === "optional" && validator.inner ? validator.inner : validator);
+
 /**
  * Render an `Insert_<table>` interface: the document shape as accepted by
  * `ctx.db.<table>.insert(...)`. System fields (`_id`, `_creationTime`) are
@@ -278,7 +281,7 @@ const renderInsertInterface = (table: TableIR): string => {
 
     const fields = Object.entries(table.shape)
         .map(([fieldName, validator]) => {
-            const inner = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+            const inner = unwrapOptional(validator);
             const type = validatorToType(inner);
             const propertyKey = renderPropertyKey(fieldName);
 
@@ -756,21 +759,26 @@ const referenceReturnType = (definition: FunctionIR): string => {
     return validatorToType(definition.output);
 };
 
+/** Group entries by `filePath`, entries sorted by file for deterministic output. */
+const groupByFileSorted = <T extends { filePath: string }>(entries: ReadonlyArray<T>): [string, T[]][] => {
+    const namespaces = new Map<string, T[]>();
+
+    for (const entry of entries) {
+        const list = namespaces.get(entry.filePath) ?? [];
+
+        list.push(entry);
+        namespaces.set(entry.filePath, list);
+    }
+
+    return [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
+};
+
 /**
  * Render the grouped-by-namespace body of an api interface for a subset of
  * functions. Returns `""` when the subset is empty so the caller can emit an
  * empty `{}` interface.
  */
 const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
-    const namespaces = new Map<string, FunctionIR[]>();
-
-    for (const definition of functions) {
-        const list = namespaces.get(definition.filePath) ?? [];
-
-        list.push(definition);
-        namespaces.set(definition.filePath, list);
-    }
-
     const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
         // Sorted by export name so a namespace that mixes discovered functions with
         // synthetic entries (agents, custom mutators — appended after the sorted
@@ -798,8 +806,7 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
         return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
     };
 
-    return [...namespaces.entries()]
-        .toSorted(([a], [b]) => a.localeCompare(b))
+    return groupByFileSorted(functions)
         .map((entry) => renderNamespace(entry))
         .join("\n");
 };
@@ -1187,16 +1194,7 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         return { block: "", body: "" };
     }
 
-    const namespaces = new Map<string, HttpRouteIR[]>();
-
-    for (const route of streams) {
-        const list = namespaces.get(route.filePath) ?? [];
-
-        list.push(route);
-        namespaces.set(route.filePath, list);
-    }
-
-    const sortedNamespaces = [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
+    const sortedNamespaces = groupByFileSorted(streams);
 
     const typeBody = sortedNamespaces
         .map(([file, list]) => {
@@ -1641,16 +1639,7 @@ const renderFunctionRegistry = (
  * return type from the interface's contextual type.
  */
 const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: string; types: string } => {
-    const namespaces = new Map<string, FunctionIR[]>();
-
-    for (const definition of functions) {
-        const list = namespaces.get(definition.filePath) ?? [];
-
-        list.push(definition);
-        namespaces.set(definition.filePath, list);
-    }
-
-    const ordered = [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
+    const ordered = groupByFileSorted(functions);
 
     const types = ordered
         .map(([file, list]) => {
@@ -1719,7 +1708,7 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
 
     for (const table of schema.tables) {
         for (const validator of Object.values(table.shape)) {
-            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+            const resolved = unwrapOptional(validator);
 
             if (resolved.kind === "storage" && typeof resolved.bucket === "string" && resolved.bucket !== "") {
                 named.add(resolved.bucket);
@@ -2600,7 +2589,7 @@ const buildTableReferences = (schema: SchemaIR): Record<string, Record<string, s
         const fields: Record<string, string> = {};
 
         for (const [field, validator] of Object.entries(table.shape)) {
-            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+            const resolved = unwrapOptional(validator);
 
             if (resolved.kind === "id" && resolved.tableName !== undefined) {
                 fields[field] = resolved.tableName;
@@ -2631,7 +2620,7 @@ const buildStorageColumns = (schema: SchemaIR): Record<string, string[]> => {
         const fields: string[] = [];
 
         for (const [field, validator] of Object.entries(table.shape)) {
-            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+            const resolved = unwrapOptional(validator);
 
             if (resolved.kind === "storage") {
                 fields.push(field);
@@ -2759,8 +2748,8 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
         ];
 
         for (const [field, validator] of Object.entries(table.shape)) {
-            const optional = validator.kind === "optional" || Boolean(validator.column?.hasDefault);
-            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+            const optional = isOptionalOnInsert(validator);
+            const resolved = unwrapOptional(validator);
             const column: EmittedColumn = { name: field, optional, type: resolved.kind };
 
             if (resolved.kind === "id" && resolved.tableName !== undefined) {
@@ -2871,6 +2860,23 @@ const aiStub: LunoraAi = {
     };
 };
 
+/**
+ * Render a module-level throwing stub for the generated shard: a `const`
+ * (`declaration` is its head, e.g. `"kvStub: Kv"`) whose every method throws
+ * the `missing` statement. Methods are `async` unless listed in `sync`; `cast`
+ * appends an `as unknown as …` tail after the closing brace.
+ */
+const renderThrowingStub = (
+    declaration: string,
+    missing: string,
+    methods: ReadonlyArray<string>,
+    { cast = "", sync = [] as ReadonlyArray<string> } = {},
+): string => {
+    const members = methods.map((method) => `    ${method}: ${sync.includes(method) ? "" : "async "}() => {\n        ${missing}\n    },`).join("\n");
+
+    return `\nconst ${declaration} = {\n${members}\n}${cast};\n`;
+};
+
 interface HelperFragments {
     /** Lines built inside `buildCtx` (resolve the binding, construct the helper, else fall to the stub). */
     build: string;
@@ -2908,28 +2914,7 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
         configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
         contextField: `\n                kv,`,
         importLines: [`import type { Kv, KVNamespaceLike } from "@lunora/bindings/kv";`, `import { createKv } from "@lunora/bindings/kv";`],
-        stub: `
-const kvStub: Kv = {
-    delete: async () => {
-        ${kvMissing}
-    },
-    get: async () => {
-        ${kvMissing}
-    },
-    getRaw: async () => {
-        ${kvMissing}
-    },
-    getWithMetadata: async () => {
-        ${kvMissing}
-    },
-    list: async () => {
-        ${kvMissing}
-    },
-    put: async () => {
-        ${kvMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("kvStub: Kv", kvMissing, ["delete", "get", "getRaw", "getWithMetadata", "list", "put"]),
     };
 };
 
@@ -3171,16 +3156,7 @@ const emitAnalyticsFragments = (hasAnalytics: boolean): HelperFragments => {
             `import type { AnalyticsClient, AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";`,
             `import { createAnalytics } from "@lunora/bindings/analytics";`,
         ],
-        stub: `
-const analyticsStub: AnalyticsClient = {
-    track: () => {
-        ${analyticsMissing}
-    },
-    writeDataPoint: () => {
-        ${analyticsMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("analyticsStub: AnalyticsClient", analyticsMissing, ["track", "writeDataPoint"], { sync: ["track", "writeDataPoint"] }),
     };
 };
 
@@ -3208,16 +3184,7 @@ const emitImagesFragments = (hasImages: boolean): HelperFragments => {
         // ActionCtx-only: woven onto the action ctx object, never query/mutation.
         contextField: `\n                images,`,
         importLines: [`import type { Images, ImagesBindingLike } from "@lunora/bindings/images";`, `import { createImages } from "@lunora/bindings/images";`],
-        stub: `
-const imagesStub: Images = {
-    info: async () => {
-        ${imagesMissing}
-    },
-    transform: async () => {
-        ${imagesMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("imagesStub: Images", imagesMissing, ["info", "transform"]),
     };
 };
 
@@ -3244,13 +3211,7 @@ const emitHyperdriveFragments = (hasHyperdrive: boolean): HelperFragments => {
         // ActionCtx-only: woven onto the action ctx object, never query/mutation.
         contextField: `\n                sql,`,
         importLines: [`import type { SqlClient } from "@lunora/hyperdrive";`],
-        stub: `
-const sqlStub: SqlClient = {
-    query: async () => {
-        ${sqlMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("sqlStub: SqlClient", sqlMissing, ["query"]),
     };
 };
 
@@ -3280,31 +3241,7 @@ const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
         // `@cloudflare/playwright` peer the worker stays free of), so only the
         // `Browser` type is referenced here.
         importLines: [`import type { Browser } from "@lunora/browser";`],
-        stub: `
-const browserStub: Browser = {
-    connect: async () => {
-        ${browserMissing}
-    },
-    content: async () => {
-        ${browserMissing}
-    },
-    launch: async () => {
-        ${browserMissing}
-    },
-    pdf: async () => {
-        ${browserMissing}
-    },
-    scrape: async () => {
-        ${browserMissing}
-    },
-    screenshot: async () => {
-        ${browserMissing}
-    },
-    sessions: async () => {
-        ${browserMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("browserStub: Browser", browserMissing, ["connect", "content", "launch", "pdf", "scrape", "screenshot", "sessions"]),
     };
 };
 
@@ -3345,28 +3282,9 @@ const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
         // The stub is typed `R2SqlClient`, so TS flags a missing method at build
         // time — but it must stay structurally in sync with that interface
         // (`@lunora/bindings/r2sql` client.ts) when a method is added there.
-        stub: `
-const r2sqlStub: R2SqlClient = {
-    describe: async () => {
-        ${r2sqlMissing}
-    },
-    explain: async () => {
-        ${r2sqlMissing}
-    },
-    from: () => {
-        ${r2sqlMissing}
-    },
-    query: async () => {
-        ${r2sqlMissing}
-    },
-    showDatabases: async () => {
-        ${r2sqlMissing}
-    },
-    showTables: async () => {
-        ${r2sqlMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("r2sqlStub: R2SqlClient", r2sqlMissing, ["describe", "explain", "from", "query", "showDatabases", "showTables"], {
+            sync: ["from"],
+        }),
     };
 };
 /* eslint-enable no-secrets/no-secrets */
@@ -3399,13 +3317,7 @@ const emitPipelinesFragments = (hasPipelines: boolean): HelperFragments => {
             `import type { PipelineBindingLike, PipelineClient } from "@lunora/bindings/pipelines";`,
             `import { createPipelines } from "@lunora/bindings/pipelines";`,
         ],
-        stub: `
-const pipelinesStub: PipelineClient = {
-    send: async () => {
-        ${pipelinesMissing}
-    },
-};
-`,
+        stub: renderThrowingStub("pipelinesStub: PipelineClient", pipelinesMissing, ["send"]),
     };
 };
 
@@ -3805,6 +3717,25 @@ ${specEntries}
 };
 
 /**
+ * The shared skeleton of the studio metadata fragments: a doc'd
+ * `const <name>: <Type> = <JSON>` constant plus the `<method>()` override that
+ * returns it.
+ */
+const renderMetadataFragments = (name: string, type: string, method: string, metadata: unknown, document_: string): { constant: string; override: string } => {
+    return {
+        constant: `
+${document_}
+const ${name}: ${type} = ${JSON.stringify(metadata, undefined, 4)};
+`,
+        override: `
+        protected override ${method}(): ${type} {
+            return ${name};
+        }
+`,
+    };
+};
+
+/**
  * Read-only declared-workflow metadata fragments for the studio's workflows view:
  * the `LUNORA_WORKFLOWS_INFO` constant (the discovered {@link WorkflowIR} set
  * mapped to the DO's `WorkflowMetadata` wire shape) and the `workflowsMetadata()`
@@ -3828,17 +3759,13 @@ const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): {
         }),
     };
 
-    return {
-        constant: `
-/** Read-only declared-workflow metadata (discovered from \`lunora/workflows.ts\`) served via \`__lunora_admin__:listWorkflows\` for the studio's workflows view. */
-const LUNORA_WORKFLOWS_INFO: WorkflowsResult = ${JSON.stringify(metadata, undefined, 4)};
-`,
-        override: `
-        protected override workflowsMetadata(): WorkflowsResult {
-            return LUNORA_WORKFLOWS_INFO;
-        }
-`,
-    };
+    return renderMetadataFragments(
+        "LUNORA_WORKFLOWS_INFO",
+        "WorkflowsResult",
+        "workflowsMetadata",
+        metadata,
+        `/** Read-only declared-workflow metadata (discovered from \`lunora/workflows.ts\`) served via \`__lunora_admin__:listWorkflows\` for the studio's workflows view. */`,
+    );
 };
 
 /**
@@ -3866,17 +3793,13 @@ const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant
         }),
     };
 
-    return {
-        constant: `
-/** Read-only declared-queue metadata (discovered from \`lunora/queues.ts\`) served via \`__lunora_admin__:listQueues\` for the studio's queues view. */
-const LUNORA_QUEUES_INFO: QueuesResult = ${JSON.stringify(metadata, undefined, 4)};
-`,
-        override: `
-        protected override queuesMetadata(): QueuesResult {
-            return LUNORA_QUEUES_INFO;
-        }
-`,
-    };
+    return renderMetadataFragments(
+        "LUNORA_QUEUES_INFO",
+        "QueuesResult",
+        "queuesMetadata",
+        metadata,
+        `/** Read-only declared-queue metadata (discovered from \`lunora/queues.ts\`) served via \`__lunora_admin__:listQueues\` for the studio's queues view. */`,
+    );
 };
 
 /**
@@ -3909,37 +3832,25 @@ const emitPaymentFragments = (
 `,
         configField: `\n    payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;`,
         contextField: `\n                payments,`,
-        stub: `
-const paymentStub: LunoraPayment = {
-    attach: () => {
-        ${missing}
-    },
-    cancelSubscription: () => {
-        ${missing}
-    },
-    check: () => {
-        ${missing}
-    },
-    createCheckout: () => {
-        ${missing}
-    },
-    createPortalSession: () => {
-        ${missing}
-    },
-    handleWebhook: () => {
-        ${missing}
-    },
-    listBalances: () => {
-        ${missing}
-    },
-    listSubscriptions: () => {
-        ${missing}
-    },
-    track: () => {
-        ${missing}
-    },
-} as unknown as LunoraPayment;
-`,
+        stub: renderThrowingStub(
+            "paymentStub: LunoraPayment",
+            missing,
+            ["attach", "cancelSubscription", "check", "createCheckout", "createPortalSession", "handleWebhook", "listBalances", "listSubscriptions", "track"],
+            {
+                cast: " as unknown as LunoraPayment",
+                sync: [
+                    "attach",
+                    "cancelSubscription",
+                    "check",
+                    "createCheckout",
+                    "createPortalSession",
+                    "handleWebhook",
+                    "listBalances",
+                    "listSubscriptions",
+                    "track",
+                ],
+            },
+        ),
     };
 };
 
@@ -3955,10 +3866,12 @@ const paymentStub: LunoraPayment = {
  * why `getSecret` closes over the in-scope `secrets` facade. Falls back to
  * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
  */
-const emitX402Fragments = (hasX402: boolean): { build: string; configField: string; contextField: string; imports: ReadonlyArray<string>; stub: string } => {
+const emitX402Fragments = (hasX402: boolean): { build: string; configField: string; imports: ReadonlyArray<string>; stub: string } => {
     if (!hasX402) {
-        return { build: "", configField: "", contextField: "", imports: [], stub: "" };
+        return { build: "", configField: "", imports: [], stub: "" };
     }
+
+    const x402Missing = `throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");`;
 
     return {
         imports: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
@@ -3970,14 +3883,7 @@ const emitX402Fragments = (hasX402: boolean): { build: string; configField: stri
                 : x402Stub;
 `,
         configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
-        contextField: `\n                x402,`,
-        stub: `
-const x402Stub: X402Pay = {
-    fetch: () => {
-        throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");
-    },
-} as unknown as X402Pay;
-`,
+        stub: renderThrowingStub("x402Stub: X402Pay", x402Missing, ["fetch"], { cast: " as unknown as X402Pay", sync: ["fetch"] }),
     };
 };
 
@@ -4176,8 +4082,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     } = emitPaymentFragments(hasPayments);
     // `ctx.x402` is ActionCtx-only and money-spending, so — like `ctx.sql` /
     // `ctx.browser` / `ctx.images` — it is built AND attached only inside the
-    // `if (isAction)` block below (its `contextField` is deliberately unused: a
-    // query/mutation ctx never carries the property at runtime, not just in types).
+    // `if (isAction)` block below (it exposes no `contextField`: a query/mutation
+    // ctx never carries the property at runtime, not just in types).
     const { build: x402Build, configField: x402ConfigField, imports: x402Imports, stub: x402Stub } = emitX402Fragments(hasX402);
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `LUNORA_ADVISORIES`
@@ -4472,78 +4378,37 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         ? `\n    sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;`
         : "";
 
+    const globalDatabaseMissing = `throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");`;
+    const vectorsMissing = `throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");`;
+    const schedulerMissing = `throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");`;
+    const storageMissing = `throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");`;
     const globalDatabaseStub = hasGlobalTables
-        ? `
-const globalDbStub: DatabaseWriterLike = {
-    aggregate: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    count: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    delete: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    findFirst: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    findFirstOrThrow: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    findMany: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    get: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    groupBy: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    insert: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    normalizeId: () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    patch: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    query: () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    rank: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    rankPage: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-    replace: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");
-    },
-};
-`
+        ? renderThrowingStub(
+              "globalDbStub: DatabaseWriterLike",
+              globalDatabaseMissing,
+              [
+                  "aggregate",
+                  "count",
+                  "delete",
+                  "findFirst",
+                  "findFirstOrThrow",
+                  "findMany",
+                  "get",
+                  "groupBy",
+                  "insert",
+                  "normalizeId",
+                  "patch",
+                  "query",
+                  "rank",
+                  "rankPage",
+                  "replace",
+              ],
+              { sync: ["normalizeId", "query"] },
+          )
         : "";
 
     const vectorsStub = hasVectors
-        ? `
-const vectorsStub: VectorSearchLike = {
-    deleteByIds: async () => {
-        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
-    },
-    getByIds: async () => {
-        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
-    },
-    query: async () => {
-        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
-    },
-    upsert: async () => {
-        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
-    },
-    upsertNow: async () => {
-        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
-    },
-};
-`
+        ? renderThrowingStub("vectorsStub: VectorSearchLike", vectorsMissing, ["deleteByIds", "getByIds", "query", "upsert", "upsertNow"])
         : "";
 
     // Vectorize indexes are account-global — a `.shardBy()` table's auto-sync
@@ -4615,8 +4480,7 @@ ${vectorNamespaceField}
     // server-trusted columns (owner/tenant ids) stamp from the verified caller,
     // never the client. `userId`/`identity` are resolved above in `buildCtx`.
     const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
-    const databaseOptions = hasVectors
-        ? `{${authField}
+    const databaseOptions = `{${authField}
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -4625,43 +4489,33 @@ ${vectorNamespaceField}
                 headroom: options.headroom ?? this.transactionHeadroom(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
-                onReadRange: options.onReadRange,
-                onWrite,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-                storage,${globalDatabaseField}
-            }`
-        : `{${authField}
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                enforceRls: true,
-                headroom: options.headroom ?? this.transactionHeadroom(),
-                onIndexUse: this.getCtxDbIndexUseHook(),
-                onRead: options.onRead ?? this.getCtxDbReadHook(),
-                onReadRange: options.onReadRange,
+                onReadRange: options.onReadRange,${hasVectors ? "\n                onWrite," : ""}
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
                 storage,${globalDatabaseField}
             }`;
 
+    // The admin/maintenance entry points (migrations, shard writes, imports, …)
+    // each build the same bare ctx-db writer: no RLS, no read hooks — just
+    // broadcast + CDC over this instance's SQLite.
+    const adminWriterPrelude = `            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table, delta.indexKeys);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });`;
+
     const vectorsContextField = hasVectors ? `\n                vectors,` : "";
 
     // `ctx.orm` mirrors the per-table facade under a kitcn-style namespace; it
     // only exists when the project declares tables (otherwise `facade` is unbuilt).
     const ormContextField = hasTables ? `\n                orm: bindOrm(facade),` : "";
-
-    // The per-table facade (`ctx.db.<table>.findMany(...)`) is a thin binding
-    // over the structural `DatabaseWriterLike`: it pins `tableName` so callers
-    // don't repeat it. `delete`/`get`/`patch`/`replace` address rows by id, so
-    // they pass straight through.
-    // `bindTableFacade` / `bindOrm` are imported from `@lunora/server` (the ONE
-    // source of truth for the facade shape, also used by the RLS middleware) —
-    // see the import added below. Nothing to emit inline.
-    const bindTableHelper = "";
 
     // Build `globalDb` only when a `.global()` table exists; otherwise the
     // binding (and the stub it falls back to) would be unused.
@@ -5033,43 +4887,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }
-
-const schedulerStub = {
-    cancel: async () => {
-        throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");
-    },
-    runAfter: async () => {
-        throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");
-    },
-    runAt: async () => {
-        throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");
-    },
-};
-
-const storageStub = {
-    delete: async () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-    download: async () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-    getMetadata: async () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-    getSignedUrl: async () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-    getUrl: () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-    list: async () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-    upload: async () => {
-        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
-    },
-};
-${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}${bindTableHelper}
+${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -5248,17 +5066,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
 
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             return runDataMigration({
                 batchSize: args.batchSize,
@@ -5291,17 +5099,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
 
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             if (args.op === "insert") {
                 const id = await writer.insert(args.table, args.doc ?? {});
@@ -5345,17 +5143,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         protected override async runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             const rows: ExportRow[] = [];
 
@@ -5372,17 +5160,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             // \`importShardRows\` inserts with \`allowExplicitId\`, so a source
             // database's \`_id\`s carry across verbatim and every foreign key
@@ -5433,17 +5211,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             // \`rankBefore\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
             // but the shard writer from \`createShardCtxDb\` always defines it.
@@ -5461,17 +5229,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         protected override async runShardRankPage(args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             // \`rankPageRows\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
             // but the shard writer from \`createShardCtxDb\` always defines it. The sort
@@ -5492,17 +5250,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         protected override async runShardApplyCdc(args: RunShardApplyCdcArgs): Promise<{ applied: number }> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+${adminWriterPrelude}
 
             await applyCdcChanges(writer, args.changes);
 
@@ -5711,7 +5459,7 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
  * which columns emit a `.references(...)`.
  */
 const referencedTable = (validator: ValidatorIR, knownTables: ReadonlySet<string>): string | undefined => {
-    const inner = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+    const inner = unwrapOptional(validator);
 
     return inner.kind === "id" && inner.tableName !== undefined && knownTables.has(inner.tableName) ? inner.tableName : undefined;
 };
@@ -5908,7 +5656,6 @@ const emitDrizzleSchema = (schema: SchemaIR, useUmbrella = false): { global: str
  * which have no such cap.
  */
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
-    const triggers: string[] = [];
     const byExpression = new Map<string, CronJobIR[]>();
 
     for (const cron of crons) {
@@ -5918,11 +5665,10 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
             existing.push(cron);
         } else {
             byExpression.set(cron.cron, [cron]);
-            triggers.push(cron.cron);
         }
     }
 
-    const triggerEntries = triggers.map((expression) => `    ${JSON.stringify(expression)},`).join("\n");
+    const triggerEntries = [...byExpression.keys()].map((expression) => `    ${JSON.stringify(expression)},`).join("\n");
     const triggerBody = triggerEntries.length > 0 ? `\n${triggerEntries}\n` : "";
 
     const mapEntries = [...byExpression.entries()]
@@ -6044,19 +5790,7 @@ export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [${body}]
  * (plus the parsed wrangler config) to reconcile generated triggers without the
  * user hand-editing the file.
  */
-const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => {
-    const seen = new Set<string>();
-    const triggers: string[] = [];
-
-    for (const cron of crons) {
-        if (!seen.has(cron.cron)) {
-            seen.add(cron.cron);
-            triggers.push(cron.cron);
-        }
-    }
-
-    return triggers;
-};
+const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => [...new Set(crons.map((cron) => cron.cron))];
 
 export {
     buildStorageColumns,

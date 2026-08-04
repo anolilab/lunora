@@ -255,7 +255,7 @@ const diffSnapshots = (previous: SchemaSnapshot | undefined, next: SchemaSnapsho
     }
 
     // Tables removed.
-    for (const [tableName] of Object.entries(previousTables)) {
+    for (const tableName of Object.keys(previousTables)) {
         if (next.tables[tableName] === undefined) {
             entries.push({
                 kind: "dropTable",

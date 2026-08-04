@@ -5,6 +5,7 @@ import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema } from "@lunora/codegen";
 import type { LinkedProject } from "@lunora/config";
 import { readLinkedProject } from "@lunora/config";
+import { findWranglerFile } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
@@ -55,18 +56,6 @@ interface InfoSnapshot {
     wrangler: WranglerSummary | undefined;
     wranglerPath: string | undefined;
 }
-
-const findWranglerFile = (projectRoot: string): string | undefined => {
-    for (const candidate of ["wrangler.jsonc", "wrangler.json"]) {
-        const fullPath = join(projectRoot, candidate);
-
-        if (existsSync(fullPath)) {
-            return fullPath;
-        }
-    }
-
-    return undefined;
-};
 
 const stringField = (record: unknown, key: string): string | undefined => {
     if (record === null || typeof record !== "object") {

@@ -26,16 +26,12 @@ const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undef
 
     const result: AgentUsage = {};
 
-    if (usage.inputTokens !== undefined) {
-        result.inputTokens = usage.inputTokens;
-    }
+    for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+        const value = usage[key];
 
-    if (usage.outputTokens !== undefined) {
-        result.outputTokens = usage.outputTokens;
-    }
-
-    if (usage.totalTokens !== undefined) {
-        result.totalTokens = usage.totalTokens;
+        if (value !== undefined) {
+            result[key] = value;
+        }
     }
 
     return Object.keys(result).length > 0 ? result : undefined;

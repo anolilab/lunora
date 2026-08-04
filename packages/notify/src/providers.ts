@@ -44,11 +44,12 @@ export interface RoutingPushOptions {
  */
 export const routingPushProvider = (options: RoutingPushOptions): Provider<unknown, PushPayload> => {
     const pick = (target: unknown): Provider<unknown, PushPayload> => {
-        const provider = isWebPushTarget(target) ? options.webPush : options.fcm;
+        const wantsWebPush = isWebPushTarget(target);
+        const provider = wantsWebPush ? options.webPush : options.fcm;
 
         if (provider === undefined) {
             throw new Error(
-                isWebPushTarget(target)
+                wantsWebPush
                     ? "@lunora/notify: received a web-push target but no `webPush` channel is configured"
                     : "@lunora/notify: received an FCM token target but no `fcm` channel is configured",
             );

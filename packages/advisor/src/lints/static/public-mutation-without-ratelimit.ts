@@ -34,25 +34,17 @@ const publicMutationWithoutRatelimit: Lint = {
             return [];
         }
 
-        const findings = [];
+        return context.procedureProtections
+            .filter((procedure) => isPublicWrite(procedure) && !procedure.usesRateLimit)
+            .map((procedure) => {
+                const sensitive = SENSITIVE_NAME_RE.test(procedure.exportName);
 
-        for (const procedure of context.procedureProtections) {
-            if (!isPublicWrite(procedure) || procedure.usesRateLimit) {
-                continue;
-            }
-
-            const sensitive = SENSITIVE_NAME_RE.test(procedure.exportName);
-
-            findings.push(
-                emit(publicMutationWithoutRatelimit, {
+                return emit(publicMutationWithoutRatelimit, {
                     cacheKey: `public_mutation_without_ratelimit:${procedure.file}:${procedure.exportName}`,
                     detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) has no rate limit${sensitive ? " — its name suggests an auth/abuse-sensitive endpoint, so this is high-risk" : ""}. Add \`.use(rateLimit(...))\` or \`.use(protectPublic({ rateLimit }))\`.`,
                     metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind, sensitive },
-                }),
-            );
-        }
-
-        return findings;
+                });
+            });
     },
     source: "static",
     title: "Public write without a rate limit",

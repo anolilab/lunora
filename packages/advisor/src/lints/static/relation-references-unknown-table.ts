@@ -19,26 +19,19 @@ const relationReferencesUnknownTable: Lint = {
     name: "relation_references_unknown_table",
     remediation: "Fix the target table name in the relation, or add the missing table to the schema.",
     run: (context) => {
-        const findings = [];
         const tableNames = new Set(context.schema.tables.map((table) => table.name));
 
-        for (const table of context.schema.tables) {
-            for (const relation of table.relations) {
-                if (tableNames.has(relation.table)) {
-                    continue;
-                }
-
-                findings.push(
+        return context.schema.tables.flatMap((table) =>
+            table.relations
+                .filter((relation) => !tableNames.has(relation.table))
+                .map((relation) =>
                     emit(relationReferencesUnknownTable, {
                         cacheKey: `relation_references_unknown_table:${table.name}:${relation.name}`,
                         detail: `Relation "${relation.name}" on table "${table.name}" targets table "${relation.table}", which does not exist in the schema.`,
                         metadata: { relation: relation.name, table: table.name, target: relation.table },
                     }),
-                );
-            }
-        }
-
-        return findings;
+                ),
+        );
     },
     source: "static",
     title: "Relation references unknown table",

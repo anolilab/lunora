@@ -316,25 +316,19 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
         }
     };
 
-    const approve = async (toolCallId: string, note?: string): Promise<void> => {
+    const resolveApproval = async (decision: "approve" | "reject", toolCallId: string, note?: string): Promise<void> => {
         const instanceId = latestThread?.instanceId;
 
         if (instanceId === undefined) {
-            throw new Error("agentChat: cannot approve — no in-flight run (thread has no instanceId)");
+            throw new Error(`agentChat: cannot ${decision} — no in-flight run (thread has no instanceId)`);
         }
 
-        await approvalMutation.mutate({ decision: "approve", instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
+        await approvalMutation.mutate({ decision, instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
     };
 
-    const reject = async (toolCallId: string, note?: string): Promise<void> => {
-        const instanceId = latestThread?.instanceId;
+    const approve = async (toolCallId: string, note?: string): Promise<void> => resolveApproval("approve", toolCallId, note);
 
-        if (instanceId === undefined) {
-            throw new Error("agentChat: cannot reject — no in-flight run (thread has no instanceId)");
-        }
-
-        await approvalMutation.mutate({ decision: "reject", instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
-    };
+    const reject = async (toolCallId: string, note?: string): Promise<void> => resolveApproval("reject", toolCallId, note);
 
     const cancel = async (): Promise<void> => {
         const instanceId = latestThread?.instanceId;

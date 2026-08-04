@@ -193,30 +193,27 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 }),
             ];
 
-            // Effective validator kind per column (a `v.optional(...)` is unwrapped to
-            // its inner kind) so the schema-type lints can check a referenced column.
+            // One pass over the shape collects both: the effective validator kind
+            // per column (a `v.optional(...)` is unwrapped to its inner kind) so
+            // the schema-type lints can check a referenced column, and the
+            // optional/nullable field names so the constraint-validator can skip
+            // them when checking NOT NULL. A field is optional when its validator
+            // kind is "optional" (v.optional(inner)) or nullable when its
+            // column.notNull flag is false (inner.nullable()). The `_meta` casts
+            // reach into @lunora/values internals — intentional, the same pattern
+            // as isOrWrapsFromValidator.
             const columnKinds: Record<string, string> = {};
-
-            for (const [fieldName, validator] of Object.entries(table.shape)) {
-                const inner = validator.kind === "optional" ? (validator as { _meta?: { inner?: { kind?: string } } })._meta?.inner : validator;
-
-                columnKinds[fieldName] = inner?.kind ?? validator.kind;
-            }
-
-            // Collect optional/nullable field names so the constraint-validator
-            // can skip them when checking NOT NULL. A field is optional when its
-            // validator kind is "optional" (v.optional(inner)) or nullable when
-            // its column.notNull flag is false (inner.nullable()).
             const optionalFields = new Set<string>();
 
             for (const [fieldName, validator] of Object.entries(table.shape)) {
                 if (validator.kind === "optional") {
+                    const inner = (validator as { _meta?: { inner?: { kind?: string } } })._meta?.inner;
+
+                    columnKinds[fieldName] = inner?.kind ?? validator.kind;
                     optionalFields.add(fieldName);
                 } else {
-                    // Access the internal _meta.column shape that the runtime
-                    // validator carries. This is an internal implementation
-                    // detail of @lunora/values — the cast is intentional and
-                    // matches the same pattern used in isOrWrapsFromValidator.
+                    columnKinds[fieldName] = validator.kind;
+
                     const column = (validator as { _meta?: { column?: { notNull?: boolean } } })._meta?.column;
 
                     if (column?.notNull === false) {

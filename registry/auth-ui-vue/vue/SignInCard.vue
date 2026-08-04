@@ -6,7 +6,7 @@ import AnonymousButton from "./AnonymousButton.vue";
 import AuthCard from "./AuthCard.vue";
 import AuthDivider from "./AuthDivider.vue";
 import AuthLink from "./AuthLink.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
 import SocialButtons from "./SocialButtons.vue";
@@ -53,24 +53,8 @@ const onSocial = (provider: string): void => {
         -->
         <form v-if="context.credentials" class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
-            <Field
-                :field="state.fields.email"
-                :label="t.emailLabel"
-                name="email"
-                type="email"
-                autoComplete="email"
-                @blur="actions.blur('email')"
-                @change="actions.setField('email', $event)"
-            />
-            <Field
-                :field="state.fields.password"
-                :label="t.passwordLabel"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                @blur="actions.blur('password')"
-                @change="actions.setField('password', $event)"
-            />
+            <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
+            <FormField :actions="actions" field="password" :fields="state.fields" :label="t.passwordLabel" type="password" autoComplete="current-password" />
             <AuthLink :href="forgotPasswordHref">{{ t.forgotPasswordLink }}</AuthLink>
             <SubmitButton :pending="state.status === 'submitting'">{{ t.signIn }}</SubmitButton>
         </form>

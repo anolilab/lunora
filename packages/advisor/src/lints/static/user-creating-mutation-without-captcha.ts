@@ -62,24 +62,19 @@ const userCreatingMutationWithoutCaptcha: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.procedureProtections) {
-            // `undefined` means the feeder couldn't read the handler body (a
-            // cross-file handler) — stays fail-closed, treated as "might write a
-            // user table" / "might send mail" rather than cleared.
-            const sensitive = mightExhibit(procedure.writesUserTable) || mightExhibit(procedure.callsMail);
-
-            if (!isPublicWrite(procedure) || !sensitive || procedure.usesCaptcha) {
-                continue;
-            }
-
-            const reason = reasonFor(procedure);
-
-            findings.push(
+        // `mightExhibit` keeps an `undefined` fact fail-closed: it means the
+        // feeder couldn't read the handler body (a cross-file handler), so it is
+        // treated as "might write a user table" / "might send mail" rather than
+        // cleared.
+        return context.procedureProtections
+            .filter(
+                (procedure) =>
+                    isPublicWrite(procedure) && (mightExhibit(procedure.writesUserTable) || mightExhibit(procedure.callsMail)) && !procedure.usesCaptcha,
+            )
+            .map((procedure) =>
                 emit(userCreatingMutationWithoutCaptcha, {
                     cacheKey: `user_creating_mutation_without_captcha:${procedure.file}:${procedure.exportName}`,
-                    detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) ${reason} but has no CAPTCHA check. Add \`.use(verifyTurnstile(...))\` or \`.use(protectPublic({ captcha }))\`.`,
+                    detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) ${reasonFor(procedure)} but has no CAPTCHA check. Add \`.use(verifyTurnstile(...))\` or \`.use(protectPublic({ captcha }))\`.`,
                     metadata: {
                         callsMail: procedure.callsMail,
                         exportName: procedure.exportName,
@@ -89,9 +84,6 @@ const userCreatingMutationWithoutCaptcha: Lint = {
                     },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Account-creating / mail-sending write without a CAPTCHA",

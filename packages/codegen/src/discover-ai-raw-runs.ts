@@ -1,8 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { AiRawRunIR } from "./ir";
 
 /**
@@ -48,21 +48,6 @@ const aiRawRunInCall = (call: CallExpression, relativePath: string): AiRawRunIR 
     return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber() };
 };
 
-/** Arg-derived, unscoped `ctx.ai.run` model ids in one source file. */
-const aiRawRunsInSourceFile = (sourceFile: SourceFile, relativePath: string): AiRawRunIR[] => {
-    const found: AiRawRunIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const row = aiRawRunInCall(call, relativePath);
-
-        if (row) {
-            found.push(row);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.ai.run(model, …)` calls in `lunora/` whose model-id argument is
  * derived from the handler's `args` with no server-side scoping — the
@@ -76,16 +61,6 @@ const aiRawRunsInSourceFile = (sourceFile: SourceFile, relativePath: string): Ai
  * local `const` hop) reaches here. The `inputs` argument is never inspected —
  * see {@link aiRawRunInCall}.
  */
-const discoverAiRawRuns = (project: Project, lunoraDirectory: string): AiRawRunIR[] => {
-    const rows: AiRawRunIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        rows.push(...aiRawRunsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return rows;
-};
+const discoverAiRawRuns = (project: Project, lunoraDirectory: string): AiRawRunIR[] => collectCallRows(project, lunoraDirectory, aiRawRunInCall);
 
 export default discoverAiRawRuns;

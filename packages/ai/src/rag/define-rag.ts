@@ -4,6 +4,7 @@ import { embed as aiEmbed, jsonSchema, tool } from "ai";
 
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
+import { contentHash } from "./helpers";
 import hybridRank from "./hybrid-rank";
 import type {
     IndexInput,
@@ -79,11 +80,7 @@ const parseChunkVectorId = (id: string, namespace: string | undefined): { chunkI
     return { chunkIndex, sourceId: body.slice(0, separator) };
 };
 
-const sha256Hex = async (text: string): Promise<string> => {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-};
+const sha256Hex = async (text: string): Promise<string> => contentHash(new TextEncoder().encode(text));
 
 /** Split stored metadata into the caller's fields (internal `__rag*` keys stripped). */
 const userMetadataOf = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {

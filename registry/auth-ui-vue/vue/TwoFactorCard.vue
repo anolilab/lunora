@@ -5,7 +5,7 @@ import { createBackupCodeSignInController } from "../core/backup-codes";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createTwoFactorVerifyController } from "../core/two-factor-verify";
 import AuthCard from "./AuthCard.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -34,14 +34,7 @@ const useBackupCode = ref(false);
     <AuthCard v-if="enabled && useBackupCode" :title="t.twoFactor">
         <form class="lunora-auth-form" novalidate @submit.prevent="backupActions.submit">
             <FormBanner :error="backupState.formError" />
-            <Field
-                :field="backupState.fields.code"
-                :label="t.backupCodeLabel"
-                name="code"
-                autoComplete="one-time-code"
-                @blur="backupActions.blur('code')"
-                @change="backupActions.setField('code', $event)"
-            />
+            <FormField :actions="backupActions" field="code" :fields="backupState.fields" :label="t.backupCodeLabel" autoComplete="one-time-code" />
             <SubmitButton :pending="backupState.status === 'submitting'">{{ t.twoFactor }}</SubmitButton>
         </form>
         <template #footer>
@@ -51,14 +44,7 @@ const useBackupCode = ref(false);
     <AuthCard v-else-if="enabled" :title="t.twoFactor">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
-            <Field
-                :field="state.fields.code"
-                :label="t.codeLabel"
-                name="code"
-                autoComplete="one-time-code"
-                @blur="actions.blur('code')"
-                @change="actions.setField('code', $event)"
-            />
+            <FormField :actions="actions" field="code" :fields="state.fields" :label="t.codeLabel" autoComplete="one-time-code" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.twoFactor }}</SubmitButton>
         </form>
         <template #footer>

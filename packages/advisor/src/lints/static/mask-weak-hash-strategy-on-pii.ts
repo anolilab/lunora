@@ -46,23 +46,15 @@ const maskWeakHashStrategyOnPii: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const strategy of context.maskStrategies) {
-            if (strategy.strategy !== "hash" || !isPiiColumn(strategy.column)) {
-                continue;
-            }
-
-            findings.push(
+        return context.maskStrategies
+            .filter((strategy) => strategy.strategy === "hash" && isPiiColumn(strategy.column))
+            .map((strategy) =>
                 emit(maskWeakHashStrategyOnPii, {
                     cacheKey: `mask_weak_hash_strategy_on_pii:${strategy.file}:${strategy.line.toString()}`,
                     detail: `\`${strategy.exportName}\` in ${strategy.file} masks \`${strategy.table === "" ? strategy.column : `${strategy.table}.${strategy.column}`}\` with \`"hash"\` — its name suggests PII, and \`"hash"\` is brute-force-recoverable and leaks cross-row equality. Use \`"redact"\` instead.`,
                     metadata: { column: strategy.column, exportName: strategy.exportName, file: strategy.file, table: strategy.table },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: 'Weak "hash" mask strategy on a PII column',

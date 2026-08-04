@@ -163,6 +163,14 @@ interface SqlCursor {
     toArray?: () => SqlRow[];
 }
 
+type SqlExec = EventLogDOState["storage"]["sql"];
+
+// ── Response helpers ───────────────────────────────────────────────────
+
+const json = (body: unknown, status = 200): Response => Response.json(body, { status, headers: { "content-type": "application/json" } });
+
+const errorResponse = (status: number, code: string, message: string): Response => json({ error: { code, message } }, status);
+
 // ── Cursor helpers ─────────────────────────────────────────────────────
 
 const toArray = (cursor: SqlCursor): SqlRow[] => {
@@ -237,24 +245,10 @@ export class EventLogDO {
             // leak stack-trace / internal detail (CodeQL: information exposure).
             console.error("[event-log-do] request failed:", error);
 
-            return Response.json(
-                {
-                    error: {
-                        code: "INTERNAL_ERROR",
-                        message: "internal error",
-                    },
-                },
-                { status: 500, headers: { "content-type": "application/json" } },
-            );
+            return errorResponse(500, "INTERNAL_ERROR", "internal error");
         }
 
-        return Response.json(
-            { error: { code: "NOT_FOUND", message: "unknown route" } },
-            {
-                status: 404,
-                headers: { "content-type": "application/json" },
-            },
-        );
+        return errorResponse(404, "NOT_FOUND", "unknown route");
     }
 
     // ── Handlers ──────────────────────────────────────────────────────
@@ -266,25 +260,13 @@ export class EventLogDO {
         try {
             body = (await request.json()) as AppendRequest;
         } catch {
-            return Response.json(
-                { error: { code: "BAD_REQUEST", message: "invalid JSON body" } },
-                {
-                    status: 400,
-                    headers: { "content-type": "application/json" },
-                },
-            );
+            return errorResponse(400, "BAD_REQUEST", "invalid JSON body");
         }
 
         const validationError = EventLogDO.#validateAppendRequest(body);
 
         if (validationError) {
-            return Response.json(
-                { error: { code: "BAD_REQUEST", message: validationError } },
-                {
-                    status: 400,
-                    headers: { "content-type": "application/json" },
-                },
-            );
+            return errorResponse(400, "BAD_REQUEST", validationError);
         }
 
         const { sql } = this.state.storage;
@@ -305,17 +287,14 @@ export class EventLogDO {
             entries = typeof transaction === "function" ? await transaction(runBatch) : await runBatch();
         } catch (error) {
             if (isIdempotencyConflictError(error)) {
-                return Response.json({ error: { code: "CONFLICT", message: error.message } }, { status: 409, headers: { "content-type": "application/json" } });
+                return errorResponse(409, "CONFLICT", error.message);
             }
 
             throw error;
         }
 
         const response: AppendResponse = { entries };
-        return Response.json(response, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-        });
+        return json(response);
     }
 
     /**
@@ -331,11 +310,7 @@ export class EventLogDO {
      * event batch throws an idempotency-conflict error instead of silently
      * dropping the new events and returning unrelated entries.
      */
-    static async #runAppendBatch(
-        sql: { exec: (query: string, ...params: unknown[]) => unknown },
-        body: AppendRequest,
-        batchId: string | undefined,
-    ): Promise<EventLogEntry[]> {
+    static async #runAppendBatch(sql: SqlExec, body: AppendRequest, batchId: string | undefined): Promise<EventLogEntry[]> {
         let fingerprint: string | undefined;
 
         if (typeof batchId === "string") {
@@ -448,13 +423,7 @@ export class EventLogDO {
         const sinceSeq = seqParameter === null ? 0 : Number(seqParameter);
 
         if (!Number.isFinite(sinceSeq) || sinceSeq < 0) {
-            return Response.json(
-                { error: { code: "BAD_REQUEST", message: "invalid seq" } },
-                {
-                    status: 400,
-                    headers: { "content-type": "application/json" },
-                },
-            );
+            return errorResponse(400, "BAD_REQUEST", "invalid seq");
         }
 
         const { sql } = this.state.storage;
@@ -463,15 +432,7 @@ export class EventLogDO {
             sinceSeq,
         ) as SqlCursor;
 
-        const entries = rowsToEntries(cursor);
-
-        return Response.json(
-            { entries },
-            {
-                status: 200,
-                headers: { "content-type": "application/json" },
-            },
-        );
+        return json({ entries: rowsToEntries(cursor) });
     }
 
     /** GET /range?from=N&limit=M — paginated read (default limit 50). */
@@ -482,13 +443,7 @@ export class EventLogDO {
         const limit = limitParameter === null ? 50 : Number(limitParameter);
 
         if (!Number.isFinite(fromSeq) || fromSeq < 0 || !Number.isFinite(limit) || limit < 1 || limit > 1000) {
-            return Response.json(
-                { error: { code: "BAD_REQUEST", message: "invalid from/limit" } },
-                {
-                    status: 400,
-                    headers: { "content-type": "application/json" },
-                },
-            );
+            return errorResponse(400, "BAD_REQUEST", "invalid from/limit");
         }
 
         const { sql } = this.state.storage;
@@ -503,10 +458,7 @@ export class EventLogDO {
         const entries = hasMore ? allRows.slice(0, limit) : allRows;
 
         const response: RangeResponse = { entries, hasMore };
-        return Response.json(response, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-        });
+        return json(response);
     }
 
     /** GET /size — return the number of stored events. */
@@ -517,13 +469,7 @@ export class EventLogDO {
         const rows = toArray(cursor);
         const count = (rows[0] as { count: number } | undefined)?.count ?? 0;
 
-        return Response.json(
-            { count },
-            {
-                status: 200,
-                headers: { "content-type": "application/json" },
-            },
-        );
+        return json({ count });
     }
 
     /** GET /state — return the full event log state. */
@@ -536,7 +482,7 @@ export class EventLogDO {
 
         const nextSeq = (entries.at(-1)?.seq ?? -1) + 1;
 
-        return Response.json({ entries, nextSeq }, { status: 200, headers: { "content-type": "application/json" } });
+        return json({ entries, nextSeq });
     }
 
     // ── Internal ──────────────────────────────────────────────────────
@@ -576,10 +522,7 @@ export class EventLogDO {
     }
 
     /** Look up a previously-persisted batch by its idempotency key. */
-    static #findBatch(
-        sql: { exec: (query: string, ...params: unknown[]) => unknown },
-        batchId: string,
-    ): { entries: EventLogEntry[]; fingerprint: string } | undefined {
+    static #findBatch(sql: SqlExec, batchId: string): { entries: EventLogEntry[]; fingerprint: string } | undefined {
         const batchCursor = sql.exec("SELECT first_seq, last_seq, fingerprint FROM event_batches WHERE batch_id = ?", batchId) as SqlCursor;
         const batchRows = toArray(batchCursor);
         const batchRow = batchRows[0] as { fingerprint: string; first_seq: number; last_seq: number } | undefined;
@@ -598,18 +541,12 @@ export class EventLogDO {
     }
 
     /** Record a persisted batch's seq range and request fingerprint under its idempotency key. */
-    static #recordBatch(
-        sql: { exec: (query: string, ...params: unknown[]) => unknown },
-        batchId: string,
-        firstSeq: number,
-        lastSeq: number,
-        fingerprint: string,
-    ): void {
+    static #recordBatch(sql: SqlExec, batchId: string, firstSeq: number, lastSeq: number, fingerprint: string): void {
         sql.exec("INSERT INTO event_batches (batch_id, first_seq, last_seq, fingerprint) VALUES (?, ?, ?, ?)", batchId, firstSeq, lastSeq, fingerprint);
     }
 
     /** Get the next available sequence number. */
-    static #nextSeq(sql: { exec: (query: string, ...params: unknown[]) => unknown }): number {
+    static #nextSeq(sql: SqlExec): number {
         const cursor = sql.exec("SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM events") as SqlCursor;
 
         const rows = toArray(cursor);
@@ -618,12 +555,10 @@ export class EventLogDO {
 
     /** Insert a single event entry. */
     /* eslint-disable unicorn/no-null -- SQLite bindings use `null` for missing optional columns */
-    static #insertEvent(sql: { exec: (query: string, ...params: unknown[]) => unknown }, entry: EventLogEntry): void {
-        let parentSeq: number | null = null;
-
-        if (typeof entry.parentSeqNum === "number") {
-            parentSeq = entry.parentSeqNum;
-        }
+    static #insertEvent(sql: SqlExec, entry: EventLogEntry): void {
+        // A `ClientSeq` parent (an object) has no column representation — only
+        // a numeric global seq is persisted.
+        const parentSeq = typeof entry.parentSeqNum === "number" ? entry.parentSeqNum : null;
 
         sql.exec(
             "INSERT INTO events (seq, type, payload, timestamp, client_id, session_id, parent_seq) VALUES (?, ?, ?, ?, ?, ?, ?)",

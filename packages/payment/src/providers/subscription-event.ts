@@ -8,24 +8,15 @@
  */
 import type { SubscriptionState, WebhookActionType } from "../types";
 
-const stateToEventType = (state: SubscriptionState | undefined): WebhookActionType => {
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "paused") {
-        return "subscription.paused";
-    }
-
-    if (state === "active" || state === "trialing") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
+const EVENT_TYPE_BY_STATE: Record<SubscriptionState, WebhookActionType> = {
+    active: "subscription.active",
+    canceled: "subscription.canceled",
+    past_due: "subscription.past_due",
+    paused: "subscription.paused",
+    trialing: "subscription.active",
 };
+
+const stateToEventType = (state: SubscriptionState | undefined): WebhookActionType =>
+    state === undefined ? "subscription.updated" : EVENT_TYPE_BY_STATE[state];
 
 export default stateToEventType;
