@@ -516,6 +516,53 @@ export const support = defineAgent({
 Skills carry no runtime of their own — they are pure config the agent absorbs,
 so an agent with skills compiles onto the same durable Workflow as one without.
 
+### Authoring a skill as markdown
+
+The instructions are the part a non-author reads, reviews and copies between
+projects, so they can live in a `SKILL.md` of their own. `skillFromMarkdown`
+takes the file's **source** and reads `name` from its frontmatter:
+
+```md title="skills/triage/SKILL.md"
+---
+name: triage
+description: not read here, but it parses — other tooling uses it
+---
+
+Reproduce the report before proposing a cause. Cite the failing test.
+```
+
+```ts title="lunora/agents.ts"
+import { functionTool, skillFromMarkdown } from "@lunora/agent";
+
+import triage from "../skills/triage/SKILL.md?raw";
+import { api } from "./_generated/api";
+
+const triageSkill = skillFromMarkdown(triage, {
+    tools: {
+        searchCode: functionTool(api.code.search, {
+            description: "Search the repository.",
+            inputSchema: jsonSchema({ properties: { query: { type: "string" } }, required: ["query"], type: "object" }),
+        }),
+    },
+});
+```
+
+The `name` travels **with** the file, so a skill moves between projects without a
+matching TypeScript wrapper. Tools and `knowledge` stay in the second argument,
+because they are code — everything else behaves exactly as the object form,
+including the name rules, so a reserved or malformed `name` fails identically.
+
+Three things worth knowing:
+
+- **Pass the source, not a path.** A Worker has no filesystem to read one from at
+  runtime, so the markdown is imported (`?raw` under Vite) and bundled.
+- **The frontmatter is real YAML.** Keys this does not read — `description`,
+  licences, tool allow-lists meant for other tooling — parse rather than confuse
+  it, including list- and nested-valued ones.
+- **Invalid YAML fails as invalid YAML.** It does not degrade to "no
+  frontmatter", which would report a missing `name` for a file whose real problem
+  is a syntax error and send you to the wrong line.
+
 ## Scheduling
 
 An agent compiles onto a Cloudflare Workflow, so it can be a **cron target**
