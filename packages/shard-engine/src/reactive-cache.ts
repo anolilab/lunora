@@ -495,7 +495,7 @@ class ReactiveCache {
  * userId alone, is what keeps those contexts isolated.
  */
 const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
-    `${identity ?? " anon"} ${functionPath}:${stableWireKey(args)}`;
+    `${identity ?? "\u0000anon"}\u0000${functionPath}:${stableWireKey(args)}`;
 
 export { ReactiveCache, reactiveCacheKey };
 export type { CacheEntry, ReactiveCacheOptions };

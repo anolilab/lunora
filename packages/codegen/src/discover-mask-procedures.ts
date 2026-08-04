@@ -367,7 +367,7 @@ const discoverMaskMetadata = (project: Project, lunoraDirectory: string): MaskMe
         for (const receiver of exportedProcedureChains(sourceFile)) {
             for (const maskCall of maskCallsInChain(receiver)) {
                 for (const column of extractMaskColumnMetadata(maskCall)) {
-                    const key = `${column.table} ${column.column}`;
+                    const key = `${column.table}\u0000${column.column}`;
 
                     if (!columnsByKey.has(key)) {
                         columnsByKey.set(key, column);
