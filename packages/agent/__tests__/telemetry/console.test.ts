@@ -179,4 +179,26 @@ describe(consoleTelemetry, () => {
 
         info.mockRestore();
     });
+
+    it("routes the default logger to the matching console method per level (error/warn/info)", () => {
+        expect.assertions(3);
+
+        const error = vi.spyOn(globalThis.console, "error").mockImplementation(() => undefined);
+        const warn = vi.spyOn(globalThis.console, "warn").mockImplementation(() => undefined);
+        const info = vi.spyOn(globalThis.console, "info").mockImplementation(() => undefined);
+        const telemetry = consoleTelemetry();
+
+        // onStart → info, onAbort → warn, onError → error
+        telemetry.onStart?.(evt({ operationId: "op" }));
+        telemetry.onAbort?.(evt({ callId: "c1" }));
+        telemetry.onError?.(new Error("boom"));
+
+        expect(info).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(error).toHaveBeenCalledTimes(1);
+
+        error.mockRestore();
+        warn.mockRestore();
+        info.mockRestore();
+    });
 });
