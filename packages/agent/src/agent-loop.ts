@@ -1,5 +1,6 @@
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
+import { definedColumns } from "./component-shared";
 import { resolveAgentModel } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
@@ -132,17 +133,7 @@ interface ApprovalDecision {
 const stringifyOutput = (output: unknown): string => (output === undefined ? "null" : JSON.stringify(output));
 
 /** Normalize the config's `stopWhen` (a condition or array) to an array. */
-const normalizeStopWhen = (stopWhen: AgentConfig["stopWhen"]): ReadonlyArray<StopCondition<ToolSet>> => {
-    if (stopWhen === undefined) {
-        return [];
-    }
-
-    if (Array.isArray(stopWhen)) {
-        return stopWhen as ReadonlyArray<StopCondition<ToolSet>>;
-    }
-
-    return [stopWhen as StopCondition<ToolSet>];
-};
+const normalizeStopWhen = (stopWhen: AgentConfig["stopWhen"]): ReadonlyArray<StopCondition<ToolSet>> => (stopWhen === undefined ? [] : [stopWhen].flat());
 
 /** Evaluate the user stop conditions against the completed turns (AI SDK semantics). */
 const isStopConditionMet = async (conditions: ReadonlyArray<StopCondition<ToolSet>>, steps: ReadonlyArray<AgentStepInfo>): Promise<boolean> => {
@@ -153,10 +144,7 @@ const isStopConditionMet = async (conditions: ReadonlyArray<StopCondition<ToolSe
     return results.some(Boolean);
 };
 
-/** Sum two optional token counts, preserving `undefined` when neither is set. */
-const sumTokens = (a: number | undefined, b: number | undefined): number | undefined => (a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0));
-
-/** Accumulate a turn's usage into the running total (defined fields only). */
+/** Accumulate a turn's usage into the running total (defined fields only; a field absent on both sides stays absent). */
 const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): AgentUsage | undefined => {
     if (next === undefined) {
         return base;
@@ -167,20 +155,11 @@ const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): A
     }
 
     const result: AgentUsage = {};
-    const inputTokens = sumTokens(base.inputTokens, next.inputTokens);
-    const outputTokens = sumTokens(base.outputTokens, next.outputTokens);
-    const totalTokens = sumTokens(base.totalTokens, next.totalTokens);
 
-    if (inputTokens !== undefined) {
-        result.inputTokens = inputTokens;
-    }
-
-    if (outputTokens !== undefined) {
-        result.outputTokens = outputTokens;
-    }
-
-    if (totalTokens !== undefined) {
-        result.totalTokens = totalTokens;
+    for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+        if (base[key] !== undefined || next[key] !== undefined) {
+            result[key] = (base[key] ?? 0) + (next[key] ?? 0);
+        }
     }
 
     return result;
@@ -526,27 +505,8 @@ const readRetrievedContext = (retrieved: unknown): string | undefined => {
 };
 
 /** The traversal bounds forwarded to `agentGraphTraverse` — the `graph` config minus `extractionModel` (a write-path concern). */
-const graphTraverseBounds = (graph: AgentMemoryOptions["graph"]): Record<string, number> => {
-    const bounds: Record<string, number> = {};
-
-    if (graph?.depth !== undefined) {
-        bounds.depth = graph.depth;
-    }
-
-    if (graph?.fanOut !== undefined) {
-        bounds.fanOut = graph.fanOut;
-    }
-
-    if (graph?.maxNodes !== undefined) {
-        bounds.maxNodes = graph.maxNodes;
-    }
-
-    if (graph?.maxSeeds !== undefined) {
-        bounds.maxSeeds = graph.maxSeeds;
-    }
-
-    return bounds;
-};
+const graphTraverseBounds = (graph: AgentMemoryOptions["graph"]): Record<string, number> =>
+    definedColumns({ depth: graph?.depth, fanOut: graph?.fanOut, maxNodes: graph?.maxNodes, maxSeeds: graph?.maxSeeds }) as Record<string, number>;
 
 /** Dispatch a `"semantic"` source's RAG action as a `memory:retrieve[:<key>]` step and read its context. */
 const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
@@ -650,21 +610,9 @@ const dispatchInjectedSource = async (
  * here keeps the injection loop uniform (no per-source special case).
  */
 const dedupeEpisodicSources = (sources: ReadonlyArray<AgentMemorySource>): AgentMemorySource[] => {
-    let seenEpisodic = false;
+    const first = sources.findIndex((source) => source.kind === "episodic");
 
-    return sources.filter((source) => {
-        if (source.kind !== "episodic") {
-            return true;
-        }
-
-        if (seenEpisodic) {
-            return false;
-        }
-
-        seenEpisodic = true;
-
-        return true;
-    });
+    return sources.filter((source, index) => source.kind !== "episodic" || index === first);
 };
 
 const retrieveMemoryContext = async (

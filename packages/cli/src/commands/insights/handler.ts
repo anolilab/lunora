@@ -3,25 +3,14 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
+import type { FetchLike } from "../run/handler";
 import type { InsightsOptions } from "./index";
-
-type FetchLike = (
-    input: string,
-    init?: { body?: string; headers?: Record<string, string>; method?: string },
-) => Promise<{
-    json: () => Promise<unknown>;
-    ok: boolean;
-    status: number;
-    text: () => Promise<string>;
-}>;
 
 /** The reserved admin RPC the report reads — the per-function metrics feed. */
 const GET_FUNCTION_STATS_OP = "__lunora_admin__:getFunctionStats";
 
 /** Default rows shown per report section before `--limit` overrides it. */
 const DEFAULT_LIMIT = 10;
-
-const TRAILING_SLASH = /\/$/u;
 
 /**
  * One per-function metrics row as returned by `__lunora_admin__:getFunctionStats`,
@@ -224,7 +213,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
         return { code: 1 };
     }
 
-    const requestUrl = `${baseUrl.replace(TRAILING_SLASH, "")}/_lunora/rpc`;
+    const requestUrl = `${baseUrl}/_lunora/rpc`;
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
 
     if (typeof fetchImpl !== "function") {
@@ -301,4 +290,6 @@ const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(
 });
 
 export { buildInsightsReport, execute, formatInsightsReport, runInsightsCommand };
-export type { FetchLike, FunctionStatRow, InsightRow, InsightsCommandOptions, InsightsCommandResult, InsightsReport };
+export type { FunctionStatRow, InsightRow, InsightsCommandOptions, InsightsCommandResult, InsightsReport };
+
+export { type FetchLike } from "../run/handler";

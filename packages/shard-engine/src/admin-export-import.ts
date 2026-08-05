@@ -74,34 +74,10 @@ const selectExportTables = (schema: SchemaLike, requested?: ReadonlyArray<string
     const isShardLocal = (table: string): boolean => {
         const definition = schema.tables[table];
 
-        if (!definition) {
-            return false;
-        }
-
-        return definition.shardMode?.kind !== "global";
+        return definition !== undefined && definition.shardMode?.kind !== "global";
     };
 
-    if (requested && requested.length > 0) {
-        const filtered: string[] = [];
-
-        for (const name of requested) {
-            if (isShardLocal(name)) {
-                filtered.push(name);
-            }
-        }
-
-        return filtered;
-    }
-
-    const result: string[] = [];
-
-    for (const name of Object.keys(schema.tables)) {
-        if (isShardLocal(name)) {
-            result.push(name);
-        }
-    }
-
-    return result;
+    return (requested && requested.length > 0 ? [...requested] : Object.keys(schema.tables)).filter((name) => isShardLocal(name));
 };
 
 /**

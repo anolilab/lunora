@@ -171,6 +171,9 @@ export const encodeGeohash = (point: GeoPoint, precision: number): string => {
     return hash;
 };
 
+/** The circle's poleward latitude extent `φ = min(90, |lat| + radiusDegrees)` — the φ both covering tests evaluate at. */
+const polewardLatitude = (lat: number, radiusMeters: number): number => Math.min(90, Math.abs(lat) + radiusDegrees(radiusMeters));
+
 /** Great-circle distance between two points in metres (Haversine). */
 export const haversineMeters = (a: GeoPoint, b: GeoPoint): number => {
     const dLat = (b.lat - a.lat) * DEG_TO_RAD;
@@ -201,8 +204,7 @@ export const haversineMeters = (a: GeoPoint, b: GeoPoint): number => {
  * (a wider candidate set) — it never narrows the covering.
  */
 const precisionForRadius = (radiusMeters: number, lat: number): number => {
-    const latPoleward = Math.min(90, Math.abs(lat) + radiusDegrees(radiusMeters));
-    const cosLat = Math.max(Math.cos(latPoleward * DEG_TO_RAD), MIN_LATITUDE_COSINE);
+    const cosLat = Math.max(Math.cos(polewardLatitude(lat, radiusMeters) * DEG_TO_RAD), MIN_LATITUDE_COSINE);
 
     for (let length = CELL_WIDTH_METERS.length - 1; length >= 1; length -= 1) {
         const width = CELL_WIDTH_METERS[length];
@@ -306,7 +308,7 @@ const poleCapCovering = (center: GeoPoint, radiusMeters: number, precision: numb
 export const coveringGeohashes = (center: GeoPoint, radiusMeters: number): string[] => {
     const radius = Math.max(radiusMeters, 1);
     const precision = precisionForRadius(radius, center.lat);
-    const latPoleward = Math.min(90, Math.abs(center.lat) + radiusDegrees(radius));
+    const latPoleward = polewardLatitude(center.lat, radius);
 
     // Once the circle's poleward extent reaches the cap latitude the clamped
     // east-west width test is unsafe for a 3×3 (this is exactly where cos(φ) would

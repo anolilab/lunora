@@ -72,6 +72,17 @@ const RELATION_OPERATOR_META: Record<string, RelationOperatorMeta> = {
 
 const RELATION_OPERATORS = new Set(Object.keys(RELATION_OPERATOR_META));
 
+/** Look up an operator's meta row, throwing on an unknown operator. */
+const requireOperatorMeta = (operator: string): RelationOperatorMeta => {
+    const meta = RELATION_OPERATOR_META[operator];
+
+    if (!meta) {
+        throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
+    }
+
+    return meta;
+};
+
 /**
  * The two join columns a relation predicate touches, derived from cardinality:
  * - **clause** — the *parent* column the rewritten flat clause / EXISTS
@@ -305,12 +316,7 @@ const compileOperator = async (
     context: ResolveContext,
     escalatable: boolean,
 ): Promise<typeof KEY_OVERFLOW | WhereInput> => {
-    const meta = RELATION_OPERATOR_META[operator];
-
-    if (!meta) {
-        throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
-    }
-
+    const meta = requireOperatorMeta(operator);
     const { clause, project } = joinColumns(relation);
     const keys = await projectChildKeys(relation, meta.negateChild ? { NOT: childWhere } : childWhere, project, context, escalatable);
 
@@ -345,12 +351,7 @@ const buildExistsMarker = async (
     parentTable: string,
     context: ResolveContext,
 ): Promise<WhereInput> => {
-    const meta = RELATION_OPERATOR_META[operator];
-
-    if (!meta) {
-        throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
-    }
-
+    const meta = requireOperatorMeta(operator);
     const base = context.relationBaseWhere?.(relation.table);
     const predicatePart: WhereInput = meta.negateChild ? { NOT: childWhere } : childWhere;
     const merged: WhereInput = base ? { AND: [base, predicatePart] } : predicatePart;

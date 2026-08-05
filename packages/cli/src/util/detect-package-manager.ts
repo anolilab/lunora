@@ -16,7 +16,7 @@ type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 const INSTALL_PREFERENCE: ReadonlyArray<PackageManager> = ["pnpm", "bun", "yarn", "npm"];
 
 /** The full set of `PackageManager` names — used to validate an arbitrary agent-name string before it's trusted. */
-const KNOWN_PACKAGE_MANAGERS: ReadonlySet<string> = new Set<PackageManager>(["bun", "npm", "pnpm", "yarn"]);
+const KNOWN_PACKAGE_MANAGERS: ReadonlySet<string> = new Set(INSTALL_PREFERENCE);
 
 /**
  * Narrow an arbitrary manager-name string (e.g. `identifyInitiatingPackageManager()`'s

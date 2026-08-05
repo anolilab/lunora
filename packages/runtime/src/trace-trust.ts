@@ -106,9 +106,7 @@ const resolveTraceTrust = (option: TrustInboundTraceContext | undefined): ((requ
     // that is not a real signal (a typo from a JS caller, where the union is not
     // enforced) matches nothing and the trace stays untrusted rather than throwing
     // on the dispatch path.
-    const check = Object.entries(SIGNAL_CHECKS).find(([signal]) => signal === option)?.[1];
-
-    return check ?? (() => false);
+    return (Object.hasOwn(SIGNAL_CHECKS, option) ? SIGNAL_CHECKS[option] : undefined) ?? (() => false);
 };
 
 /**

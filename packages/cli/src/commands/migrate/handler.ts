@@ -25,6 +25,7 @@ import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
 import { runExportCommand, runImportCommand } from "../data-transfer";
 import type { FetchLike } from "../run/handler";
+import { readAndLogBody } from "../run/handler";
 import type { MigrateOptions } from "./index";
 
 interface MigrateGenerateCommandOptions {
@@ -602,17 +603,7 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
         method: "POST",
     });
 
-    const text = await response.text();
-
-    let body: unknown;
-
-    try {
-        body = JSON.parse(text);
-    } catch {
-        body = text;
-    }
-
-    options.logger.info(JSON.stringify(body, undefined, 2));
+    const body = await readAndLogBody(response, options.logger);
 
     return { body, code: response.ok ? 0 : 1, requestUrl };
 };

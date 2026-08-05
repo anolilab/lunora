@@ -12,8 +12,8 @@
 
 import type { AggregateIndexDefinitionLike } from "./schema-types";
 
-/** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
-const compareStrings = (a: string, b: string): number => {
+/** Code-point-stable string comparator (no locale dependence) for canonical key ordering. Shared with the rank twin (`rank.ts`). */
+export const compareStrings = (a: string, b: string): number => {
     if (a < b) {
         return -1;
     }
@@ -153,7 +153,7 @@ export const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<str
 
     const ordered: Record<string, unknown> = {};
 
-    for (const field of [...by].toSorted(compareStrings)) {
+    for (const field of by.toSorted(compareStrings)) {
         // eslint-disable-next-line unicorn/no-null -- canonical JSON aggregate key: a missing field must serialize as null (stable across runs), not be dropped by JSON.stringify
         ordered[field] = source[field] ?? null;
     }

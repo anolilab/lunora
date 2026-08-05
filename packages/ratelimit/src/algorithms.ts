@@ -24,6 +24,15 @@ interface EvaluateResult {
 const capacityOf = (config: RateLimitConfig): number => config.capacity ?? config.rate;
 
 /**
+ * A single request larger than the limiter can ever hold can never be admitted,
+ * so a finite `retryAfter` would be a lie the caller would chase forever — every
+ * algorithm surfaces this caller misuse with the same error.
+ */
+const throwCountExceedsCapacity = (count: number, capacity: number): never => {
+    throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(count)} exceeds the limiter capacity ${String(capacity)}`);
+};
+
+/**
  * Project a token bucket's stored state forward to `now`: how many tokens have
  * refilled (capped at `capacity`), with the derived `capacity`/`ratePerMs` the
  * caller reuses. Shared by {@link evaluate} and {@link availableAt} so the
@@ -123,11 +132,8 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         return { status: { ok: true, retryAfter }, value: { ts: options.now, value: available - options.count } };
     }
 
-    // A single request larger than the bucket can ever hold can never be
-    // admitted, so a finite `retryAfter` would be a lie the caller would chase
-    // forever. Mirror the windowed algorithms' guard and surface caller misuse.
     if (options.count > capacity) {
-        throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(capacity)}`);
+        throwCountExceedsCapacity(options.count, capacity);
     }
 
     return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
@@ -155,12 +161,8 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         return { status: { ok: true, retryAfter }, value: { ts: base.ts, value: base.value - options.count } };
     }
 
-    // A single request larger than the window can ever grant can never be
-    // admitted, so a `retryAfter` pointing at the next window would be a lie the
-    // caller would chase forever. Mirror the reserve path's `count <= capacity`
-    // guard and surface caller misuse instead of a perpetual rejection.
     if (options.count > capacity) {
-        throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(capacity)}`);
+        throwCountExceedsCapacity(options.count, capacity);
     }
 
     return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
@@ -201,11 +203,8 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
         return { status: { ok: true, retryAfter: admit ? 0 : retryAfter() }, value: options.consume ? value : undefined };
     }
 
-    // A single request larger than the limit can never fit in any window, so a
-    // `retryAfter` would point at a window that also cannot satisfy it. Mirror
-    // the reserve path's `count <= limit` guard and surface caller misuse.
     if (options.count > limit) {
-        throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(limit)}`);
+        throwCountExceedsCapacity(options.count, limit);
     }
 
     return { status: { ok: false, reason: "rate", retryAfter: retryAfter() }, value: undefined };

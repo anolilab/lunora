@@ -17,17 +17,11 @@ import { createSignInController } from "../core/sign-in";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import { createTwoFactorVerifyController } from "../core/two-factor-verify";
+import { FormField } from "./form";
+import { onSubmit } from "./on-submit";
 import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, LastUsedBadge, PasswordStrength, SocialButtons, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
-
-/** Stop the browser's native submit and run the controller action (async or not). */
-const onSubmit =
-    (action: () => unknown) =>
-    (event: { preventDefault: () => void }): void => {
-        event.preventDefault();
-        void action();
-    };
 
 /** Guest sign-in, when the `anonymous` plugin is on. */
 const AnonymousButton = (): ReactElement => {
@@ -79,32 +73,8 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
             {context.credentials ? (
                 <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                     <FormBanner error={state.formError} />
-                    <Field
-                        autoComplete="email"
-                        field={state.fields.email}
-                        label={t.emailLabel}
-                        name="email"
-                        onBlur={() => {
-                            actions.blur("email");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("email", value);
-                        }}
-                        type="email"
-                    />
-                    <Field
-                        autoComplete="current-password"
-                        field={state.fields.password}
-                        label={t.passwordLabel}
-                        name="password"
-                        onBlur={() => {
-                            actions.blur("password");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("password", value);
-                        }}
-                        type="password"
-                    />
+                    <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                    <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                     <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
                     <SubmitButton pending={pending}>
                         {t.signIn}
@@ -153,44 +123,9 @@ const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactEle
             {social.length > 0 ? <AuthDivider /> : null}
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="name"
-                    field={state.fields.name}
-                    label={t.nameLabel}
-                    name="name"
-                    onBlur={() => {
-                        actions.blur("name");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("name", value);
-                    }}
-                />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="name" field="name" label={t.nameLabel} state={state} />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <PasswordStrength value={state.fields.password.value} />
                 <SubmitButton pending={state.status === "submitting"}>{t.signUp}</SubmitButton>
             </form>
@@ -211,19 +146,7 @@ const ForgotPasswordCard = ({ resetPath, signInHref = "/sign-in" }: ForgotPasswo
         <AuthCard footer={<AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>{t.forgotPassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -244,32 +167,8 @@ const ResetPasswordCard = ({ token }: ResetPasswordCardProps = {}): ReactElement
         <AuthCard title={t.resetPassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.confirmPassword}
-                    label={t.confirmPasswordLabel}
-                    name="confirmPassword"
-                    onBlur={() => {
-                        actions.blur("confirmPassword");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("confirmPassword", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -290,57 +189,10 @@ const ResetPasswordOtpCard = (): ReactElement => {
         <AuthCard description={t.resetPasswordOtpDescription} title={t.resetPassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
-                <Field
-                    autoComplete="one-time-code"
-                    field={state.fields.otp}
-                    label={t.codeLabel}
-                    name="otp"
-                    onBlur={() => {
-                        actions.blur("otp");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("otp", value);
-                    }}
-                />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.confirmPassword}
-                    label={t.confirmPasswordLabel}
-                    name="confirmPassword"
-                    onBlur={() => {
-                        actions.blur("confirmPassword");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("confirmPassword", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                <FormField actions={actions} autoComplete="one-time-code" field="otp" label={t.codeLabel} state={state} />
+                <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -365,19 +217,7 @@ const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): Re
         <AuthCard footer={<AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>
                     {t.magicLink}
                     {lastUsed === LAST_METHOD_MAGIC_LINK ? <LastUsedBadge /> : null}
@@ -479,18 +319,7 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
             >
                 <form className="lunora-auth-form" noValidate onSubmit={onSubmit(backupActions.submit)}>
                     <FormBanner error={backupState.formError} />
-                    <Field
-                        autoComplete="one-time-code"
-                        field={backupState.fields.code}
-                        label={t.backupCodeLabel}
-                        name="code"
-                        onBlur={() => {
-                            backupActions.blur("code");
-                        }}
-                        onChange={(value) => {
-                            backupActions.setField("code", value);
-                        }}
-                    />
+                    <FormField actions={backupActions} autoComplete="one-time-code" field="code" label={t.backupCodeLabel} state={backupState} />
                     <SubmitButton pending={backupState.status === "submitting"}>{t.twoFactor}</SubmitButton>
                 </form>
             </AuthCard>
@@ -514,18 +343,7 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
         >
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="one-time-code"
-                    field={state.fields.code}
-                    label={t.codeLabel}
-                    name="code"
-                    onBlur={() => {
-                        actions.blur("code");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("code", value);
-                    }}
-                />
+                <FormField actions={actions} autoComplete="one-time-code" field="code" label={t.codeLabel} state={state} />
                 <SubmitButton pending={state.status === "submitting"}>{t.twoFactor}</SubmitButton>
             </form>
         </AuthCard>

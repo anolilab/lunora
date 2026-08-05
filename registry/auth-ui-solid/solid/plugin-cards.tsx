@@ -9,17 +9,11 @@ import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS } from "../core/labels";
 import { createDeviceSessionsController } from "../core/multi-session";
 import { createTeamsController } from "../core/teams";
+import { FormField, onSubmit } from "./form";
 import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 import { UserView } from "./user-button";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: Event): void => {
-        event.preventDefault();
-        void action();
-    };
 
 /**
  * The accounts signed in on *this device*, with switch and sign-out-just-this.
@@ -335,19 +329,7 @@ const BackupCodesCard = (): JSX.Element => {
         <AuthCard title={t.backupCodesRegenerate}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.currentPasswordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.currentPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.backupCodesRegenerate}</SubmitButton>
             </form>
             <Show when={codes().length > 0}>

@@ -6,6 +6,7 @@ import type { CallExpression, Expression, Identifier, Project, SourceFile } from
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { stringPropertyFor } from "./discover-ast";
 import type { ContainerIR } from "./ir";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
@@ -40,16 +41,7 @@ const isDefineContainer = (identifier: Identifier): boolean => {
 };
 
 /** Read a property's string-literal value, or throw a located diagnostic. */
-const stringProperty = (expression: Expression, exportName: string, property: string): string => {
-    if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
-        return expression.getLiteralValue();
-    }
-
-    throw diagnosticAt(
-        expression,
-        `container "${exportName}": \`${property}\` must be a static string literal — it is deploy configuration codegen writes into wrangler.jsonc`,
-    );
-};
+const stringProperty = stringPropertyFor("container");
 
 /** Read a property's numeric-literal value, or throw a located diagnostic. */
 const numberProperty = (expression: Expression, exportName: string, property: string): number => {

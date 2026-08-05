@@ -40,6 +40,9 @@ const readRowId = (row: unknown): string | undefined => {
     return typeof id === "string" ? id : undefined;
 };
 
+/** An `_id`-indexed row set: the lookup map plus the preserved insertion order. */
+type RowIndex = { byId: Map<string, Record<string, unknown>>; order: string[] };
+
 /**
  * Index an array of rows by `_id`, preserving insertion order. Returns
  * `undefined` the moment any element lacks a string `_id` (the diff can't key
@@ -53,7 +56,7 @@ const readRowId = (row: unknown): string | undefined => {
  * full-snapshot fallback so both paths agree.
  * @returns the indexed map and insertion order, or `undefined` when any row lacks a string `_id` or ids are duplicated
  */
-const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<string, unknown>>; order: string[] } => {
+const indexRowsById = (rows: unknown[]): RowIndex | undefined => {
     const byId = new Map<string, Record<string, unknown>>();
     const order: string[] = [];
 
@@ -76,10 +79,7 @@ const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<
  * client merges updates in place and never reorders, so a survivor that moved
  * can't be expressed as deltas.
  */
-const survivorsKeepOrder = (
-    previous: { byId: Map<string, Record<string, unknown>>; order: string[] },
-    next: { byId: Map<string, Record<string, unknown>>; order: string[] },
-): boolean => {
+const survivorsKeepOrder = (previous: RowIndex, next: RowIndex): boolean => {
     const survivingPrevious = previous.order.filter((id) => next.byId.has(id));
     const survivingNext = next.order.filter((id) => previous.byId.has(id));
 
@@ -89,9 +89,6 @@ const survivorsKeepOrder = (
 
     return survivingPrevious.every((id, index) => survivingNext[index] === id);
 };
-
-/** An `_id`-indexed row set: the lookup map plus the preserved insertion order. */
-type RowIndex = { byId: Map<string, Record<string, unknown>>; order: string[] };
 
 /** A diff delta paired with its pre-serialized `delta` frame body (`JSON.stringify(delta)`). */
 type FramedDelta = { delta: MutationDelta; frame: string };

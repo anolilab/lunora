@@ -1,10 +1,11 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
-import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
+import { shallowRef, toValue, watch } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
+import onScopeDisposeOrWarn from "./scope-dispose";
 import type { UseQueryOptions } from "./types";
 
 /**
@@ -48,15 +49,11 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
             { shardKey: options.shardKey },
         );
 
-        if (getCurrentScope()) {
-            onScopeDispose(unsubscribe);
-        } else if (process.env.NODE_ENV !== "production") {
-            // eslint-disable-next-line no-console -- deliberate dev-only warning: this adapter has no injected logger, and the branch is already gated on NODE_ENV !== "production"
-            console.warn(
-                "[@lunora/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
-                    "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
-            );
-        }
+        onScopeDisposeOrWarn(
+            unsubscribe,
+            "[@lunora/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
+                "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
+        );
     }
 
     return data;

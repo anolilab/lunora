@@ -93,6 +93,7 @@
         { "from": "vue/Field.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/Field.vue" },
         { "from": "vue/ForgotPasswordCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/ForgotPasswordCard.vue" },
         { "from": "vue/FormBanner.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/FormBanner.vue" },
+        { "from": "vue/FormField.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/FormField.vue" },
         { "from": "vue/LinkedAccountsCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/LinkedAccountsCard.vue" },
         { "from": "vue/MagicLinkCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/MagicLinkCard.vue" },
         { "from": "vue/MembersCard.vue", "merge": "create-or-skip", "to": "lunora/auth-ui/vue/MembersCard.vue" },

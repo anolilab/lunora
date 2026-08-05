@@ -1,70 +1,10 @@
-import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived } from "./argument-taint";
+import { propertyInitializer, readTargetOf } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { SoftDeleteReadIR } from "./ir";
-
-/**
- * List reads whose options object honours `includeDeleted`. Only `findMany` /
- * `findFirst` / `findFirstOrThrow` take an options object that resurfaces
- * soft-deleted rows — the by-id `get` is id-only and the fluent `query(...)`
- * reader carries no options object, so both are excluded (mirrors the
- * `includeDeleted` semantics documented on `TableDefinition.softDeleteMode`).
- */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
-
-/**
- * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
- * call isn't one. Matched by receiver **shape** (not import origin), fail-closed,
- * in both surface forms Lunora exposes. Facade form
- * `ctx.db.<table>.findMany(options?)` — the form real app code writes — puts the
- * table in the receiver's property name and the options object at argument 0.
- * Table-arg form `ctx.db.findMany("table", options?)` puts the table in the
- * string-literal argument 0 and the options object at argument 1. `table` is `""`
- * when the table-arg form's first argument isn't a string literal (a dynamic
- * table — not lintable).
- */
-const readTargetOf = (call: CallExpression): { options: TsNode | undefined; table: string } | undefined => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !READ_METHODS.has(callee.getName())) {
-        return undefined;
-    }
-
-    const receiver = callee.getExpression();
-
-    // Table-arg form: the receiver is `ctx.db` (property named `db`) or a bare `db`.
-    if ((Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db")) {
-        const first = call.getArguments()[0];
-
-        return { options: call.getArguments()[1], table: first && Node.isStringLiteral(first) ? first.getLiteralText() : "" };
-    }
-
-    // Facade form: the receiver is `ctx.db.<table>` (or `db.<table>`) — its inner
-    // expression is the `db` accessor and its own name is the table.
-    if (Node.isPropertyAccessExpression(receiver)) {
-        const inner = receiver.getExpression();
-        const onDatabase = (Node.isPropertyAccessExpression(inner) && inner.getName() === "db") || (Node.isIdentifier(inner) && inner.getText() === "db");
-
-        if (onDatabase) {
-            return { options: call.getArguments()[0], table: receiver.getName() };
-        }
-    }
-
-    return undefined;
-};
-
-/** The initializer expression of a named property on an options object literal, or `undefined` when absent / not a plain assignment. */
-const optionValue = (options: TsNode | undefined, key: string): TsNode | undefined => {
-    if (!options || !Node.isObjectLiteralExpression(options)) {
-        return undefined;
-    }
-
-    const property = options.getProperty(key);
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-};
 
 /**
  * Reduce one exported procedure declaration to the `includeDeleted` list reads
@@ -97,7 +37,7 @@ const softDeleteReadsInDeclaration = (declaration: TsNode, relativePath: string)
             continue;
         }
 
-        const value = optionValue(target.options, "includeDeleted");
+        const value = propertyInitializer(target.options, "includeDeleted");
 
         if (value === undefined) {
             continue;

@@ -234,12 +234,8 @@ const validateKey = (key: string): void => {
 
     // Reject `..` as a path component (not just substring) so `a..b` is fine
     // but `a/../b`, `../b`, `b/..` are rejected.
-    const segments = key.split("/");
-
-    for (const segment of segments) {
-        if (segment === "..") {
-            throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains a `..` path component");
-        }
+    if (key.split("/").includes("..")) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains a `..` path component");
     }
 };
 
@@ -478,12 +474,6 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
     const generateUploadUrl = async (key: string, uploadUrlOptions: { contentType?: string; expiresInSeconds?: number } = {}): Promise<string> =>
         getSignedUrl(key, { contentType: uploadUrlOptions.contentType, expiresInSeconds: uploadUrlOptions.expiresInSeconds, method: "PUT" });
 
-    // `store` is `upload` under Convex's name; it forwards the full
-    // `UploadOptions` so the `maxSize` / `allowedContentTypes` guards are
-    // available through the alias too, not just `contentType`.
-    const store = async (key: string, body: UploadBody, storeOptions: UploadOptions = {}): Promise<{ etag: string; httpEtag: string; key: string }> =>
-        upload(key, body, storeOptions);
-
     return {
         createMultipartUpload,
         delete: deleteObject,
@@ -495,7 +485,9 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         getUrl,
         list,
         resumeMultipartUpload,
-        store,
+        // `store` is `upload` under Convex's name — the same function, so the
+        // `maxSize` / `allowedContentTypes` guards apply through the alias too.
+        store: upload,
         upload,
     };
 };

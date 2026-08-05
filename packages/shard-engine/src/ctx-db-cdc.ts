@@ -238,13 +238,9 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
         // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
         // row's original creation time instead of resetting it to the replay
         // clock (the default mutation path mints a fresh `clock()`).
-        const fields: Record<string, unknown> = {};
+        const fields = { ...document };
 
-        for (const [key, value] of Object.entries(document)) {
-            if (key !== "_id") {
-                fields[key] = value;
-            }
-        }
+        delete fields["_id"];
 
         await writer.replace(change.id, fields, undefined, { allowExplicitId: true });
     }

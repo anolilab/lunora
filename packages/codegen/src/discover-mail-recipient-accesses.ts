@@ -1,8 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { MailRecipientAccessIR } from "./ir";
 
 /** The mailer methods whose first argument is an options object carrying recipient fields. */
@@ -82,21 +82,6 @@ const mailAccessInCall = (call: CallExpression, relativePath: string): MailRecip
     return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
 };
 
-/** Arg-derived, unscoped mailer recipient accesses in one source file. */
-const mailAccessesInSourceFile = (sourceFile: SourceFile, relativePath: string): MailRecipientAccessIR[] => {
-    const found: MailRecipientAccessIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const access = mailAccessInCall(call, relativePath);
-
-        if (access) {
-            found.push(access);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.mail`/`ctx.email` `send`/`queue` calls in `lunora/` whose
  * `to`/`cc`/`bcc` recipient is derived from the handler's `args` with no
@@ -109,16 +94,7 @@ const mailAccessesInSourceFile = (sourceFile: SourceFile, relativePath: string):
  * direct object-literal first argument is inspected, and one finding is
  * produced per call — not per recipient property.
  */
-const discoverMailRecipientAccesses = (project: Project, lunoraDirectory: string): MailRecipientAccessIR[] => {
-    const accesses: MailRecipientAccessIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        accesses.push(...mailAccessesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return accesses;
-};
+const discoverMailRecipientAccesses = (project: Project, lunoraDirectory: string): MailRecipientAccessIR[] =>
+    collectCallRows(project, lunoraDirectory, mailAccessInCall);
 
 export default discoverMailRecipientAccesses;

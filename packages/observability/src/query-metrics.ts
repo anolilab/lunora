@@ -20,7 +20,9 @@
  * `readQueryInsights`'s `capped` is the read-side signal for this.
  */
 
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/shard-engine";
+
+import { runSql } from "./run-sql";
 
 /** Reserved table name. Auto-hidden from the data browser by the `__lunora` prefix. */
 const QUERY_METRICS_TABLE = "__lunora_metrics_queries";
@@ -92,13 +94,6 @@ interface QueryStatEntry {
     /** Total wall-clock milliseconds across all executions. */
     totalDurationMs: number;
 }
-
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
 
 /**
  * Normalise a SQL string by collapsing whitespace, stripping string literals,

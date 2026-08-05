@@ -169,25 +169,33 @@ const inspectMcpEntry = (options: { key: string; name: string; path: string }): 
 /** True when `path` already holds an entry at `[key][name]`. */
 const hasMcpEntry = (options: { key: string; name: string; path: string }): boolean => inspectMcpEntry(options) === "present";
 
+/** Splice `[key][name] = value` (jsonc-parser delete when `undefined`) into `text` and write it. Returns the error message on failure. */
+const spliceEntry = (text: string, path: string, key: string, name: string, value: unknown): string | undefined => {
+    try {
+        const edits = modify(text, [key, name], value, FORMATTING);
+
+        if (edits.length > 0) {
+            writeAtomic(path, applyEdits(text, edits));
+        }
+
+        return undefined;
+    } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error);
+    }
+};
+
 /**
  * Add (or replace) one server entry in an MCP client config, creating the file
  * and its parent directory when absent.
  */
 const upsertMcpEntry = (options: UpsertMcpEntryOptions): UpsertMcpEntryResult => {
     const { entry, force = false, key, name, path } = options;
+    const text = existsSync(path) ? readFileSync(path, "utf8") : "";
 
-    if (!existsSync(path)) {
-        mkdirSync(dirname(path), { recursive: true });
-        writeAtomic(path, `${JSON.stringify({ [key]: { [name]: entry } }, undefined, 4)}\n`);
-
-        return { action: "created", path };
-    }
-
-    const text = readFileSync(path, "utf8");
-
-    // An empty (or whitespace-only) file parses to `undefined` with no errors;
-    // treat it as a fresh file rather than as unrecoverable.
+    // A missing file — or an empty/whitespace-only one, which parses to
+    // `undefined` with no errors — is a fresh file, not unrecoverable.
     if (text.trim().length === 0) {
+        mkdirSync(dirname(path), { recursive: true });
         writeAtomic(path, `${JSON.stringify({ [key]: { [name]: entry } }, undefined, 4)}\n`);
 
         return { action: "created", path };
@@ -217,19 +225,11 @@ const upsertMcpEntry = (options: UpsertMcpEntryOptions): UpsertMcpEntryResult =>
         return { action: "skipped", path };
     }
 
-    try {
-        const edits = modify(text, [key, name], entry, FORMATTING);
+    // A splice failure is the last line of defence: report the file rather
+    // than unwinding the caller's loop over the remaining clients.
+    const spliceError = spliceEntry(text, path, key, name, entry);
 
-        if (edits.length > 0) {
-            writeAtomic(path, applyEdits(text, edits));
-        }
-    } catch (error: unknown) {
-        // Last line of defence: report the file rather than unwinding the
-        // caller's loop over the remaining clients.
-        return { action: "invalid", error: error instanceof Error ? error.message : String(error), path };
-    }
-
-    return { action: "updated", path };
+    return spliceError === undefined ? { action: "updated", path } : { action: "invalid", error: spliceError, path };
 };
 
 /** What {@link removeMcpEntry} did. */
@@ -284,17 +284,9 @@ const removeMcpEntry = (options: { key: string; name: string; path: string }): R
         return { action: "absent", path };
     }
 
-    try {
-        const edits = modify(text, [key, name], undefined, FORMATTING);
+    const spliceError = spliceEntry(text, path, key, name, undefined);
 
-        if (edits.length > 0) {
-            writeAtomic(path, applyEdits(text, edits));
-        }
-    } catch (error: unknown) {
-        return { action: "invalid", error: error instanceof Error ? error.message : String(error), path };
-    }
-
-    return { action: "removed", path };
+    return spliceError === undefined ? { action: "removed", path } : { action: "invalid", error: spliceError, path };
 };
 
 export type { RemoveAction, RemoveMcpEntryResult, UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };

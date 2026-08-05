@@ -4,13 +4,10 @@
  * `@lunora/codegen` discovery call so inference and validation can never
  * disagree about the `flagship` binding `lunora/flags.ts` implies.
  */
-import { existsSync } from "node:fs";
-
 import type { FlagsIR } from "@lunora/codegen";
 import { discoverFlags, FLAGS_FILENAME } from "@lunora/codegen";
-import { Project } from "ts-morph";
 
-import join from "./path";
+import { discoverIr } from "./discover-info";
 
 interface DiscoverFlagsInfoResult {
     /** Parse error message, when `lunora/flags.ts` exists but could not be analyzed. */
@@ -26,19 +23,9 @@ interface DiscoverFlagsInfoResult {
  * or ignorable (inference).
  */
 const discoverFlagsInfo = (projectRoot: string, schemaDirectory: string): DiscoverFlagsInfoResult => {
-    const flagsPath = join(projectRoot, schemaDirectory, FLAGS_FILENAME);
+    const { error, value } = discoverIr(projectRoot, schemaDirectory, FLAGS_FILENAME, discoverFlags);
 
-    if (!existsSync(flagsPath)) {
-        return {};
-    }
-
-    try {
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-        return { flags: discoverFlags(project, join(projectRoot, schemaDirectory)) };
-    } catch (error: unknown) {
-        return { error: error instanceof Error ? error.message : String(error) };
-    }
+    return error === undefined ? { flags: value } : { error };
 };
 
 export type { DiscoverFlagsInfoResult };

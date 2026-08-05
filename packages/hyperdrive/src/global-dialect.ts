@@ -119,8 +119,8 @@ export const postgresDialect: SqlDialect = {
             }
         }
     },
-    decode: (value, kind) => sqliteDecode(value, kind),
-    encode: (value) => sqliteEncode(value),
+    decode: sqliteDecode,
+    encode: sqliteEncode,
     frameworkColumns: () => [
         { name: "id", type: "TEXT PRIMARY KEY" },
         { name: "_creationTime", type: "DOUBLE PRECISION NOT NULL" },
@@ -193,9 +193,9 @@ export const mysqlDialect: SqlDialect = {
         // Unbounded post-image storage (CDC `doc`); never an index key, so no bound.
         text: "LONGTEXT",
     },
-    columnType: (kind) => mysqlColumnType(kind),
-    decode: (value, kind) => sqliteDecode(value, kind),
-    encode: (value) => sqliteEncode(value),
+    columnType: mysqlColumnType,
+    decode: sqliteDecode,
+    encode: sqliteEncode,
     frameworkColumns: () => [
         { name: "id", type: "VARCHAR(768) PRIMARY KEY" },
         { name: "_creationTime", type: "DOUBLE NOT NULL" },

@@ -1,6 +1,7 @@
 import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { handlerOf } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { NondeterministicCallIR } from "./ir";
 
@@ -116,42 +117,6 @@ const nondeterministicNewOf = (expression: NewExpression): string | undefined =>
     );
 
     return argumentNodes.length > 0 && allLiteral ? undefined : "new Date";
-};
-
-/**
- * The handler node of a `query`/`mutation` registration, scoped so traversal
- * only inspects code that actually runs as the procedure body:
- *
- * - bare factory (`query({ args, handler })`) → the `handler:` initializer;
- * - builder terminal (`c.use(...).query(handler)`) → the terminal's first argument.
- *
- * Returns `undefined` when the handler isn't a statically-recognisable
- * function expression (so we under-report rather than scan an unrelated node).
- */
-const handlerOf = (call: CallExpression, receiver: TsNode | undefined): TsNode | undefined => {
-    // Builder terminal: the handler is the terminal call's first argument.
-    if (receiver) {
-        const handler = call.getArguments()[0];
-
-        return handler && (Node.isArrowFunction(handler) || Node.isFunctionExpression(handler)) ? handler : undefined;
-    }
-
-    // Bare factory: pull the `handler:` property off the first object-literal argument.
-    const first = call.getArguments()[0];
-
-    if (!first || !Node.isObjectLiteralExpression(first)) {
-        return undefined;
-    }
-
-    const handlerProperty = first.getProperty("handler");
-
-    if (!handlerProperty || !Node.isPropertyAssignment(handlerProperty)) {
-        return undefined;
-    }
-
-    const initializer = handlerProperty.getInitializer();
-
-    return initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer)) ? initializer : undefined;
 };
 
 /** One resolved procedure handler with its attribution. */

@@ -29,27 +29,18 @@ const filterOnPrimaryKey: Lint = {
     name: "filter_on_primary_key",
     remediation:
         'Replace `ctx.db.query("table").filter((d) => d._id === id).first()` with `ctx.db.get(id)`. Passing a typed `Id<"table">` also narrows the result to that table\'s `Doc`, where the scan form returns the shared row type.',
-    run: (context) => {
-        const findings = [];
+    run: (context) =>
+        (context.queries ?? [])
+            .filter((read) => read.filtersPrimaryKey === true && read.table !== "")
+            .map((read) => {
+                const location = read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
 
-        for (const read of context.queries ?? []) {
-            if (read.filtersPrimaryKey !== true || read.table === "") {
-                continue;
-            }
-
-            const location = read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
-
-            findings.push(
-                emit(filterOnPrimaryKey, {
+                return emit(filterOnPrimaryKey, {
                     cacheKey: `filter_on_primary_key:${read.file}:${read.line.toString()}:${read.table}`,
                     detail: `Query on "${read.table}" at ${location} filters on \`_id\` — it scans "${read.table}" to find a row \`ctx.db.get(id)\` addresses directly.`,
                     metadata: { exportName: read.exportName, file: read.file, line: read.line, table: read.table },
-                }),
-            );
-        }
-
-        return findings;
-    },
+                });
+            }),
     source: "static",
     title: "Filter on primary key instead of ctx.db.get",
 };

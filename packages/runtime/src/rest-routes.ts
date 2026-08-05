@@ -69,19 +69,18 @@ interface RestRouteDeps {
     readJsonBody: (request: Request) => Promise<Record<string, unknown>>;
 }
 
-/** Map a registry into the shared surface-descriptor input. */
-const registryToSurfaceInput = (functions: RestRegistryLike): { exposure?: RestExposure; functionPath: string; kind: RestRegistryEntry["kind"] }[] =>
-    Object.entries(functions).map(([functionPath, entry]) => {
-        return { exposure: entry.expose, functionPath, kind: entry.kind };
-    });
-
 /**
  * The resolved REST surface for a registry — the ordered list of exposed
  * `{ functionPath, method, path, kind }`. Exported so a contract test can assert
  * the runtime surface equals the published OpenAPI (both derive from the same
  * `shared/rest-surface` helper).
  */
-const restSurfaceFromRegistry = (functions: RestRegistryLike): ReturnType<typeof describeRestSurface> => describeRestSurface(registryToSurfaceInput(functions));
+const restSurfaceFromRegistry = (functions: RestRegistryLike): ReturnType<typeof describeRestSurface> =>
+    describeRestSurface(
+        Object.entries(functions).map(([functionPath, entry]) => {
+            return { exposure: entry.expose, functionPath, kind: entry.kind };
+        }),
+    );
 
 /** Read `shardKey` from `?shardKey=` or the `x-lunora-shard-key` header; `undefined` routes to the default shard. */
 const readShardKey = (url: URL, request: Request): string | undefined => {

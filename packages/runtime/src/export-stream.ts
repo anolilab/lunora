@@ -9,22 +9,12 @@
  * `WorkerOptions`, so it imports only that type (erased at build) from
  * `create-worker` — no runtime values cross the edge.
  */
-import type { AdminTableResolver, WorkerOptions } from "./create-worker";
+import type { WorkerOptions } from "./create-worker";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 /** One exported row — a table name plus its document. */
 type ExportRow = { doc: Record<string, unknown>; table: string };
-
-/**
- * Best-effort enumeration of known tables for the auto-export / auto-sync path.
- * The runtime doesn't carry the schema, so we ask the resolver for a sentinel
- * set by probing common conventions; in practice the codegen-generated worker
- * wraps `resolveTableSharding` with `Object.keys(schema.tables)` and returns
- * via a side channel. For now this falls through to an empty list — the CLI
- * always passes explicit `--tables` so this path is mainly defensive.
- */
-const collectKnownTables = (_resolver: AdminTableResolver | undefined): string[] => [];
 
 /**
  * Split a requested table list into shard-local vs `.global()` buckets.
@@ -56,7 +46,6 @@ const partitionExportTables = (options: WorkerOptions, tables: ReadonlyArray<str
  * surfaced through the fan-out roll-up).
  */
 const exportShardLocalRows = async (
-    options: WorkerOptions,
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     tables: ReadonlyArray<string> | undefined,
@@ -70,21 +59,18 @@ const exportShardLocalRows = async (
         return;
     }
 
-    const exportTables = tables === undefined ? [] : shardLocalTables;
-    // We still need a table list to seed the registry probe. Fall back to
-    // `resolveTableSharding`'s keys if the caller passed none — best effort;
-    // a project without the resolver will simply not fan out automatically.
-    const probeFallback = tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
-    const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
-
+    // `tables === undefined` (export everything) leaves `shardLocalTables` empty:
+    // the args tell each shard "every table", and the registry probe has no seed —
+    // the runtime carries no schema, so shard discovery is best-effort there.
+    //
     // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
     // pins it once). Fanning out through it keeps export reading the SAME DOs the
     // app writes to — using the raw `options.shardDO` would resolve the un-pinned
     // global DOs (a different ID per jurisdiction) and return wrong/empty rows.
     const result = await coordinator.orchestrateExport(namespace, {
-        args: { tables: exportTables },
+        args: { tables: shardLocalTables },
         headers: forwardedHeaders,
-        tables: probeTables,
+        tables: shardLocalTables,
     });
 
     for (const shard of result.shards) {
@@ -116,20 +102,19 @@ const streamExportRows = async (
 ): Promise<void> => {
     const { globalTables, shardLocalTables } = partitionExportTables(options, tables);
 
-    await exportShardLocalRows(options, coordinator, forwardedHeaders, tables, shardLocalTables, writeRow, namespace);
+    await exportShardLocalRows(coordinator, forwardedHeaders, tables, shardLocalTables, writeRow, namespace);
 
     // Globals: stream rows from the D1 helper when configured.
     const exportGlobalsFunction = options.exportGlobals;
     const wantGlobals = tables === undefined || globalTables.length > 0;
 
     if (wantGlobals && exportGlobalsFunction) {
-        const tablesArgument = tables === undefined ? [] : globalTables;
-
-        for await (const row of exportGlobalsFunction({ tables: tablesArgument })) {
+        // `tables === undefined` leaves `globalTables` empty — "every table" on the wire.
+        for await (const row of exportGlobalsFunction({ tables: globalTables })) {
             writeRow(row);
         }
     }
 };
 
 export type { ExportRow };
-export { collectKnownTables, streamExportRows };
+export { streamExportRows };

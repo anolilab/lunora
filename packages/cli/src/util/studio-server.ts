@@ -156,6 +156,12 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         response.end(body);
     };
 
+    const sendText = (response: ServerResponse, statusCode: number, body: string): void => {
+        response.statusCode = statusCode;
+        response.setHeader("Content-Type", "text/plain");
+        response.end(body);
+    };
+
     // Local filesystem-mutating endpoints (schema edit, policy scaffold) are
     // loopback-only; off a loopback bind they answer 403 with a clear reason.
     // On a loopback bind the request is routed through the shared transport glue
@@ -167,9 +173,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return;
         }
 
-        response.statusCode = 403;
-        response.setHeader("Content-Type", "text/plain");
-        response.end(deniedMessage);
+        sendText(response, 403, deniedMessage);
     };
 
     const serveStaticAsset = (pathname: string, response: ServerResponse): boolean => {
@@ -194,9 +198,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         if (assets === undefined) {
-            response.statusCode = 501;
-            response.setHeader("Content-Type", "text/plain");
-            response.end("Lunora studio assets not found — install and build @lunora/studio.");
+            sendText(response, 501, "Lunora studio assets not found — install and build @lunora/studio.");
 
             return true;
         }
@@ -216,9 +218,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         const bytes = readStandaloneAsset(fileName, import.meta.url);
 
         if (bytes === undefined) {
-            response.statusCode = 404;
-            response.setHeader("Content-Type", "text/plain");
-            response.end("Not found");
+            sendText(response, 404, "Not found");
 
             return true;
         }
@@ -255,9 +255,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             const rejection = transportRejectionReason(request, options.logger);
 
             if (rejection !== undefined) {
-                response.statusCode = 403;
-                response.setHeader("Content-Type", "text/plain");
-                response.end(rejection);
+                sendText(response, 403, rejection);
 
                 return;
             }
@@ -268,9 +266,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // it at all — the studio stays a read-only HTML shell off loopback.
         if (pathname.startsWith(PROXY_PREFIX)) {
             if (!isLoopback) {
-                response.statusCode = 403;
-                response.setHeader("Content-Type", "text/plain");
-                response.end("Lunora studio: the worker admin proxy is only available on a loopback bind.");
+                sendText(response, 403, "Lunora studio: the worker admin proxy is only available on a loopback bind.");
 
                 return;
             }

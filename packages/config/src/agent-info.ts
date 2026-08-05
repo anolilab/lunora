@@ -5,13 +5,10 @@
  * disagree about what `lunora/agents.ts` declares. An agent compiles onto a
  * Cloudflare Workflow, so its wrangler footprint is a `workflows[]` entry.
  */
-import { existsSync } from "node:fs";
-
 import type { AgentIR } from "@lunora/codegen";
 import { AGENTS_FILENAME, discoverAgents } from "@lunora/codegen";
-import { Project } from "ts-morph";
 
-import join from "./path";
+import { discoverIr } from "./discover-info";
 
 interface DiscoverAgentInfoResult {
     /** Discovered agent definitions; `[]` when none are declared or parsing failed. */
@@ -27,19 +24,9 @@ interface DiscoverAgentInfoResult {
  * decide whether that is a warning (validator) or ignorable (inference).
  */
 const discoverAgentInfo = (projectRoot: string, schemaDirectory: string): DiscoverAgentInfoResult => {
-    const agentsPath = join(projectRoot, schemaDirectory, AGENTS_FILENAME);
+    const { error, value } = discoverIr(projectRoot, schemaDirectory, AGENTS_FILENAME, discoverAgents);
 
-    if (!existsSync(agentsPath)) {
-        return { agents: [] };
-    }
-
-    try {
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-        return { agents: discoverAgents(project, join(projectRoot, schemaDirectory)) };
-    } catch (error: unknown) {
-        return { agents: [], error: error instanceof Error ? error.message : String(error) };
-    }
+    return error === undefined ? { agents: value ?? [] } : { agents: [], error };
 };
 
 export type { DiscoverAgentInfoResult };

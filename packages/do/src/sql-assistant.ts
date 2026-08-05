@@ -160,18 +160,34 @@ const FILTER_OPERATORS = new Set(["contains", "eq", "gt", "gte", "lt", "lte", "n
 /** Chart kinds the editor can render. */
 const CHART_KINDS = new Set(["area", "bar", "line"]);
 
+/**
+ * Strip a Markdown fence (and an optional `tag` language marker on its opening
+ * line) from a model response.
+ *
+ * Fence extraction is `indexOf`, NOT a regex. The obvious pattern
+ * (`` /```(?:sql)?\s*([\s\S]*?)```/ ``) backtracks super-linearly, and this
+ * input is a model response — the one string in the flow that is neither
+ * length-capped by us nor produced by us. A scan cannot be made to blow up.
+ * An unterminated fence means the model was cut off mid-answer; take
+ * everything after the opener rather than discarding a usable answer.
+ */
+const stripFence = (raw: string, tag: string): string => {
+    const open = raw.indexOf("```");
+
+    if (open === -1) {
+        return raw;
+    }
+
+    const close = raw.indexOf("```", open + 3);
+    const inner = close === -1 ? raw.slice(open + 3) : raw.slice(open + 3, close);
+    const newline = inner.indexOf("\n");
+
+    return newline !== -1 && inner.slice(0, newline).trim().toLowerCase() === tag ? inner.slice(newline + 1) : inner;
+};
+
 /** Parse a fenced-or-bare JSON response, or `undefined` when it is not JSON. */
 const extractJson = (raw: string): unknown => {
-    const open = raw.indexOf("```");
-    let body = raw;
-
-    if (open !== -1) {
-        const close = raw.indexOf("```", open + 3);
-        const inner = close === -1 ? raw.slice(open + 3) : raw.slice(open + 3, close);
-        const newline = inner.indexOf("\n");
-
-        body = newline !== -1 && inner.slice(0, newline).trim().toLowerCase() === "json" ? inner.slice(newline + 1) : inner;
-    }
+    const body = stripFence(raw, "json");
 
     // Take the outermost bracketed span, so lead-in prose does not break the parse.
     const start = Math.min(...[body.indexOf("["), body.indexOf("{")].filter((at) => at !== -1), body.length);
@@ -259,28 +275,9 @@ const LEAD_VERB = /\b(?:explain|select|with)\b/iu;
  * Instruct models return fenced blocks more often than not, and a fenced
  * statement fails the gate on its backticks — discarding a correct answer for a
  * formatting habit. Everything extracted here still goes through the gate.
- *
- * Fence extraction is `indexOf`, NOT a regex. The obvious pattern
- * (`` /```(?:sql)?\s*([\s\S]*?)```/ ``) backtracks super-linearly, and this
- * input is a model response — the one string in the flow that is neither
- * length-capped by us nor produced by us. A scan cannot be made to blow up.
  */
 const extractStatement = (raw: string): string => {
-    const open = raw.indexOf("```");
-    let body = raw;
-
-    if (open !== -1) {
-        const close = raw.indexOf("```", open + 3);
-        // An unterminated fence means the model was cut off mid-answer; take
-        // everything after the opener rather than discarding a usable statement.
-        const inner = close === -1 ? raw.slice(open + 3) : raw.slice(open + 3, close);
-        // Drop an optional `sql` language tag on the opening line.
-        const newline = inner.indexOf("\n");
-
-        body = newline !== -1 && inner.slice(0, newline).trim().toLowerCase() === "sql" ? inner.slice(newline + 1) : inner;
-    }
-
-    const trimmed = body.trim();
+    const trimmed = stripFence(raw, "sql").trim();
     const lead = LEAD_VERB.exec(trimmed);
 
     return (lead === null ? trimmed : trimmed.slice(lead.index)).trim();

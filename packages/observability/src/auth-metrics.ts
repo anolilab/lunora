@@ -28,7 +28,9 @@
  * them automatically.
  */
 
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/shard-engine";
+
+import { runSql } from "./run-sql";
 
 /** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const AUTH_METRICS_TABLE = "__lunora_auth_metrics";
@@ -95,13 +97,6 @@ interface RecordAuthEventInput {
     /** Epoch-ms the auth attempt completed. */
     ts: number;
 }
-
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
 
 /** Floor `ts` to the start of its history bucket. */
 const bucketFloor = (ts: number): number => Math.floor(ts / AUTH_METRICS_BUCKET_MS) * AUTH_METRICS_BUCKET_MS;

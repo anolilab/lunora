@@ -95,16 +95,12 @@ type ColumnAffinity = "INTEGER" | "REAL" | "TEXT";
  * that stored an object/array must `JSON.parse` it themselves.
  */
 const inferColumnAffinity = (value: unknown): ColumnAffinity => {
-    if (typeof value === "bigint") {
+    if (typeof value === "bigint" || typeof value === "boolean") {
         return "INTEGER";
     }
 
     if (typeof value === "number") {
         return Number.isInteger(value) ? "INTEGER" : "REAL";
-    }
-
-    if (typeof value === "boolean") {
-        return "INTEGER";
     }
 
     return "TEXT";
@@ -253,16 +249,7 @@ class LocalMirror {
         applyDiffToDatabase(this.#db, diff, pkColumn);
 
         this.#eventLog.append("table-diff", diff, [diff]);
-        this.#version += 1;
-
-        // Notify change listeners (e.g. React hook subscriptions)
-        for (const listener of this.#changeListeners) {
-            try {
-                listener();
-            } catch {
-                // Listener threw — keep notifying others.
-            }
-        }
+        this.#notifyChange();
     }
 
     /**
@@ -298,6 +285,11 @@ class LocalMirror {
             }
         });
 
+        this.#notifyChange();
+    }
+
+    /** Bump {@link LocalMirror.version} and notify `onChange` subscribers (e.g. React hook subscriptions). */
+    #notifyChange(): void {
         this.#version += 1;
 
         for (const listener of this.#changeListeners) {

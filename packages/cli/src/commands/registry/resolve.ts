@@ -241,4 +241,4 @@ const resolvePlan = async (names: ReadonlyArray<string>, options: AddCommandOpti
     return { cleanups, items };
 };
 
-export { isBlockedRemoteSource, isSafeSource, readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, resolveRemoteRef, sourceGateError };
+export { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, resolveRemoteRef, sourceGateError };

@@ -10,17 +10,10 @@ import { createPasskeysController } from "../core/passkeys";
 import { createProfileController } from "../core/profile";
 import { signOut } from "../core/session-actions";
 import { createSessionsController } from "../core/sessions";
+import { FormField, onSubmit } from "./form";
 import { AuthCard, Field, FormBanner, SubmitButton, themeStyle } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
-
-/** Stop the browser's native submit and run the controller action. */
-const onSubmit =
-    (action: () => unknown) =>
-    (event: Event): void => {
-        event.preventDefault();
-        void action();
-    };
 
 interface ProfileCardProps {
     defaultImage?: string;
@@ -37,18 +30,7 @@ const ProfileCard = (props: ProfileCardProps = {}): JSX.Element => {
         <AuthCard headingLevel={2} title={t.profile}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="name"
-                    field={state.fields.name}
-                    label={t.nameLabel}
-                    name="name"
-                    onBlur={() => {
-                        actions.blur("name");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("name", value);
-                    }}
-                />
+                <FormField actions={actions} autoComplete="name" field="name" label={t.nameLabel} state={state} />
                 <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
             </form>
         </AuthCard>
@@ -63,19 +45,7 @@ const ChangeEmailCard = (): JSX.Element => {
         <AuthCard headingLevel={2} title={t.changeEmail}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.newEmail}
-                    label={t.newEmailLabel}
-                    name="newEmail"
-                    onBlur={() => {
-                        actions.blur("newEmail");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("newEmail", value);
-                    }}
-                    type="email"
-                />
+                <FormField actions={actions} autoComplete="email" field="newEmail" label={t.newEmailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>{t.changeEmail}</SubmitButton>
             </form>
         </AuthCard>
@@ -90,45 +60,16 @@ const ChangePasswordCard = (): JSX.Element => {
         <AuthCard headingLevel={2} title={t.changePassword}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
+                <FormField
+                    actions={actions}
                     autoComplete="current-password"
-                    field={state.fields.currentPassword}
+                    field="currentPassword"
                     label={t.currentPasswordLabel}
-                    name="currentPassword"
-                    onBlur={() => {
-                        actions.blur("currentPassword");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("currentPassword", value);
-                    }}
+                    state={state}
                     type="password"
                 />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.newPassword}
-                    label={t.newPasswordLabel}
-                    name="newPassword"
-                    onBlur={() => {
-                        actions.blur("newPassword");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("newPassword", value);
-                    }}
-                    type="password"
-                />
-                <Field
-                    autoComplete="new-password"
-                    field={state.fields.confirmPassword}
-                    label={t.confirmPasswordLabel}
-                    name="confirmPassword"
-                    onBlur={() => {
-                        actions.blur("confirmPassword");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("confirmPassword", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="new-password" field="newPassword" label={t.newPasswordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.changePassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -143,19 +84,7 @@ const DeleteAccountCard = (): JSX.Element => {
         <AuthCard description={t.deleteAccountWarning} headingLevel={2} title={t.deleteAccount}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.deleteAccount}</SubmitButton>
             </form>
         </AuthCard>

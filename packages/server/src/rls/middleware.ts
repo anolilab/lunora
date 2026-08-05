@@ -724,12 +724,6 @@ const evaluateWrite = <Context>(
     return sawWritePolicy;
 };
 
-/**
- * Coerce `args` into the `QueryArgs` shape. Tolerates `undefined` (no args)
- * and a `WhereInput` (legacy `count(table, where)`).
- */
-const intoQueryArgs = (args: QueryArgs | undefined): QueryArgs => args ?? {};
-
 /** The complete set of own keys a `CountArgs` options bag may carry. */
 const COUNT_ARGS_KEYS = new Set(["baseWhere", "relationBaseWhere", "restrictsCounts", "where"]);
 
@@ -1152,7 +1146,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             const { baseWhere } = readBase(tableName);
 
             return route(tableName).findFirst(tableName, {
-                ...intoQueryArgs(args),
+                ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
             });
@@ -1162,7 +1156,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             const { baseWhere } = readBase(tableName);
 
             return route(tableName).findFirstOrThrow(tableName, {
-                ...intoQueryArgs(args),
+                ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
             });
@@ -1172,7 +1166,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             const { baseWhere } = readBase(tableName);
 
             return route(tableName).findMany(tableName, {
-                ...intoQueryArgs(args),
+                ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
             });
@@ -1590,40 +1584,62 @@ const indexRolePermissions = (roles: ReadonlyArray<Role> | undefined): Map<strin
     return map;
 };
 
+/**
+ * Build the `can(...)` lookup for a request: union the permissions granted by
+ * every role the request carries, once per protected procedure, so `can(...)`
+ * inside policies is a Set lookup.
+ */
+const resolveCan = (
+    roles: ReadonlyArray<string>,
+    rolePermissions: ReadonlyMap<string, ReadonlySet<string>>,
+): ((permission: Permission | string) => boolean) => {
+    const granted = new Set<string>();
+
+    for (const roleName of roles) {
+        for (const name of rolePermissions.get(roleName) ?? []) {
+            granted.add(name);
+        }
+    }
+
+    return (permission) => granted.has(permissionName(permission));
+};
+
+/**
+ * Resolve the request's `auth` view for a policy/mask/storage-rule context.
+ * Identity is resolved once per protected procedure so policies can branch on
+ * claims (`ctx.auth.identity.email` etc.) without each policy paying for its
+ * own `getIdentity()` call; `null` covers both the anonymous case and the
+ * no-resolver case (older auth states). Shared verbatim by the rls, mask and
+ * storage-rules middlewares so the three resolve identity and grants
+ * identically.
+ */
+const resolvePolicyAuth = async (
+    auth: AuthLike,
+    rolePermissions: ReadonlyMap<string, ReadonlySet<string>>,
+): Promise<{
+    can: (permission: Permission | string) => boolean;
+    identity: Record<string, unknown> | null;
+    roles: ReadonlyArray<string>;
+    userId: null | string;
+}> => {
+    const roles = auth.roles ?? [];
+
+    return {
+        can: resolveCan(roles, rolePermissions),
+        // eslint-disable-next-line unicorn/no-null -- the public auth contexts carry `null` for the anonymous/no-resolver case
+        identity: (await auth.getIdentity?.()) ?? null,
+        roles,
+        // eslint-disable-next-line unicorn/no-null -- the public auth contexts type userId as `null | string`
+        userId: auth.userId ?? null,
+    };
+};
+
 const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options: RlsOptions = {}): Middleware<Context, Context> => {
     const perTable = indexByTable(policies);
     const rolePermissions = indexRolePermissions(options.roles);
 
     const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
-        const auth = ctx.auth ?? {};
-        // Resolve identity once per RLS-protected procedure so policies can
-        // branch on claims (`ctx.auth.identity.email` etc.) without each
-        // policy paying for its own `getIdentity()` call. `null` covers both
-        // the anonymous case and the no-resolver case (older auth states).
-        // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public type carrying `null` for the anonymous/no-resolver case
-        const identity = (await auth.getIdentity?.()) ?? null;
-        const roles = auth.roles ?? [];
-
-        // Union the permissions granted by every role the request carries, once
-        // per protected procedure, so `can(...)` inside policies is a Set lookup.
-        const granted = new Set<string>();
-
-        for (const roleName of roles) {
-            for (const name of rolePermissions.get(roleName) ?? []) {
-                granted.add(name);
-            }
-        }
-
-        const policyContext: PolicyContext<Context> = {
-            auth: {
-                can: (permission) => granted.has(permissionName(permission)),
-                identity,
-                roles,
-                // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.userId is a public `null | string` type
-                userId: auth.userId ?? null,
-            },
-            ctx,
-        };
+        const policyContext: PolicyContext<Context> = { auth: await resolvePolicyAuth(ctx.auth ?? {}, rolePermissions), ctx };
 
         // Under a `.rls("required")` schema `ctx.db` is the GUARDED writer;
         // recover the unwrapped one so the middleware can read/write the policy
@@ -1669,10 +1685,12 @@ export type { RlsDatabase };
 
 /**
  * Internal policy-evaluation primitives, exported for the in-process RLS test
- * harness (`@lunora/server/rls/testing`) so it evaluates policies through the
- * exact same logic the middleware uses at request time — never a parallel
+ * harness (`@lunora/server/rls/testing`) and the sibling mask/storage-rules
+ * middlewares so they evaluate policies and resolve identity through the exact
+ * same logic this middleware uses at request time — never a parallel
  * re-implementation that could drift. Not part of the package's public API; the
  * package root does not re-export them.
  * @internal
  */
-export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, matchesWhere, permissionName };
+export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, matchesWhere, permissionName, resolveCan, resolvePolicyAuth };
+export type { AuthLike };

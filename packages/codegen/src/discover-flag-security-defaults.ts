@@ -1,12 +1,9 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows, isContextIdentifier } from "./discover-ast";
 import type { FlagSecurityDefaultIR } from "./ir";
-
-/** True when `node` is the literal `ctx` identifier — the anchor a `ctx.flags.boolean(...)` read starts from. */
-const isContextIdentifier = (node: TsNode): boolean => Node.isIdentifier(node) && node.getText() === "ctx";
 
 /**
  * Whether `callee` is a `ctx.flags.boolean` property access — the boolean flag
@@ -66,21 +63,6 @@ const flagSecurityDefaultInCall = (call: CallExpression, relativePath: string): 
     return { defaultValue, exportName: enclosingExportName(call), file: relativePath, key, line: call.getStartLineNumber() };
 };
 
-/** `ctx.flags.boolean(key, default)` reads with a literal key + boolean-literal default in one source file. */
-const flagSecurityDefaultsInSourceFile = (sourceFile: SourceFile, relativePath: string): FlagSecurityDefaultIR[] => {
-    const found: FlagSecurityDefaultIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const flag = flagSecurityDefaultInCall(call, relativePath);
-
-        if (flag) {
-            found.push(flag);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.flags.boolean(key, default)` reads in `lunora/` whose key and
  * default are both string/boolean literals — the
@@ -93,16 +75,7 @@ const flagSecurityDefaultsInSourceFile = (sourceFile: SourceFile, relativePath: 
  * security-shape + polarity judgment. `ctx.flags.details.boolean` and the
  * non-boolean typed reads are not sinks and are not recorded.
  */
-const discoverFlagSecurityDefaults = (project: Project, lunoraDirectory: string): FlagSecurityDefaultIR[] => {
-    const flags: FlagSecurityDefaultIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        flags.push(...flagSecurityDefaultsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return flags;
-};
+const discoverFlagSecurityDefaults = (project: Project, lunoraDirectory: string): FlagSecurityDefaultIR[] =>
+    collectCallRows(project, lunoraDirectory, flagSecurityDefaultInCall);
 
 export default discoverFlagSecurityDefaults;

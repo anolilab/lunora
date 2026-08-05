@@ -171,12 +171,7 @@ const vnodeForId = (id: string, vnodeCount: number): number => {
  * on nearly every request, and several carry the coordinator's own bookkeeping
  * — distributing them would buy nothing and cost a hop.
  */
-const isSystemTable = (table: string): boolean => {
-    const segments = table.split("/");
-    const last = segments.at(-1) ?? table;
-
-    return last.startsWith("_");
-};
+const isSystemTable = (table: string): boolean => (table.split("/").at(-1) ?? "").startsWith("_");
 
 /**
  * Where does `(table, id)` live under `directory`?

@@ -3,16 +3,10 @@ import { For, Show } from "solid-js";
 
 import { isFlowEnabled } from "../core/flow-gate";
 import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
+import { onSubmit } from "./form";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: Event): void => {
-        event.preventDefault();
-        void action();
-    };
 
 const TwoFactorSetupCard = (): JSX.Element => {
     const context = useAuthUI();

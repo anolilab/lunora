@@ -19,7 +19,7 @@
  * that produced it (OpenTelemetry's exemplar model). The reserved `__lunora`
  * prefix auto-hides the table from the data browser.
  */
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/shard-engine";
 
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
@@ -27,6 +27,7 @@ import { stableStringify } from "../../../shared/stable-key";
 // Shared so the durable history and the live buffer agree byte-for-byte on what
 // "one series" is — the studio joins the two on this identity.
 import { metricSeriesKey } from "./metric-buffer";
+import { runSql } from "./run-sql";
 
 /** Reserved per-`(series, minute)` rollup table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const METRIC_HISTORY_TABLE = "__lunora_metric_history";
@@ -115,12 +116,6 @@ interface MetricHistoryRow {
     shard_key: null | string;
     sum: number;
 }
-
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...parameters: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...parameters);
-};
 
 /** Floor a timestamp to its minute-bucket, so all measurements in a window fold into one row. */
 const bucketFloor = (ts: number): number => Math.floor(ts / METRIC_HISTORY_BUCKET_MS) * METRIC_HISTORY_BUCKET_MS;

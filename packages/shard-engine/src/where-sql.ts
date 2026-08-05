@@ -19,7 +19,8 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
-import type { WhereInput } from "./where-types";
+import type { FieldOperators, WhereInput } from "./where-types";
+import { RELATION_EXISTS_KEY } from "./where-types";
 
 /** Maps a logical field name to its dialect SQL reference (already a drizzle `SQL`). */
 type FieldRefSql = (field: string) => SQL;
@@ -55,25 +56,9 @@ interface WhereSqlStrategy {
     serialize: SerializeValue;
 }
 
-/** Reserved `WhereInput` key carrying a correlated-EXISTS marker — the marker the {@link WhereSqlStrategy.relationExists} hook compiles. Mirrors the string compiler's constant. */
-const RELATION_EXISTS_KEY = "__relationExists";
-
 const OPERATOR_KEYS = ["eq", "ne", "lt", "lte", "gt", "gte", "in", "notIn", "isNull", "contains"] as const;
 const OPERATOR_KEY_SET = new Set<string>(OPERATOR_KEYS);
 const BINARY_COMPARATORS: Record<string, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
-
-interface FieldOperators {
-    contains?: string;
-    eq?: unknown;
-    gt?: unknown;
-    gte?: unknown;
-    in?: unknown[];
-    isNull?: boolean;
-    lt?: unknown;
-    lte?: unknown;
-    ne?: unknown;
-    notIn?: unknown[];
-}
 
 /** A plain object whose every own key is a known operator is an operator object; anything else is an equality literal. */
 const isOperatorObject = (value: unknown): value is FieldOperators => {

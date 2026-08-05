@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CallExpression, Expression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, PropertyAccessExpression } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { defaultExportExpression, isContextIdentifier, propertyInitializer } from "./discover-ast";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { FlagsIR } from "./ir";
 
@@ -91,42 +92,8 @@ const flagshipIrFromCall = (call: CallExpression): FlagsIR => {
     return { mode: "http", provider: "flagship" };
 };
 
-/** Resolve the `export default` expression, following one `const x = … ; export default x` indirection. */
-const defaultExportExpression = (source: SourceFile): Expression | undefined => {
-    const assignment = source.getExportAssignment((declaration) => !declaration.isExportEquals());
-
-    if (!assignment) {
-        return undefined;
-    }
-
-    const expression = assignment.getExpression();
-
-    if (!Node.isIdentifier(expression)) {
-        return expression;
-    }
-
-    // `const config = defineFlags({...}); export default config;`
-    const declaration = expression.getSymbol()?.getValueDeclaration();
-
-    if (declaration && Node.isVariableDeclaration(declaration)) {
-        return declaration.getInitializer();
-    }
-
-    return expression;
-};
-
 /** Unwrap the `provider:` initializer from a `defineFlags({...})` call's argument. */
-const providerInitializer = (defineFlagsCall: CallExpression): TsNode | undefined => {
-    const argument = defineFlagsCall.getArguments()[0];
-
-    if (!argument || !Node.isObjectLiteralExpression(argument)) {
-        return undefined;
-    }
-
-    const property = argument.getProperty("provider");
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-};
+const providerInitializer = (defineFlagsCall: CallExpression): TsNode | undefined => propertyInitializer(defineFlagsCall.getArguments()[0], "provider");
 
 /**
  * Discover the feature-flag provider a project declares in `lunora/flags.ts`.
@@ -164,9 +131,6 @@ const discoverFlags = (project: Project, lunoraDirectory: string): FlagsIR | und
 
     return { provider: "custom" };
 };
-
-/** True when `node` is the `ctx` identifier — the anchor every `ctx.flags.*` read starts from. */
-const isContextIdentifier = (node: TsNode): boolean => Node.isIdentifier(node) && node.getText() === "ctx";
 
 /**
  * Decide whether `access` is a `ctx.flags.<type>` or `ctx.flags.details.<type>`

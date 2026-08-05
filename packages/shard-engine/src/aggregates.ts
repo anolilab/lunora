@@ -125,15 +125,14 @@ const parseRequestedEqKeys = (requested: Record<string, unknown>, accept: (key: 
  * fresh merged map, or `undefined` when a static value conflicts with one the
  * request pinned. A static key the request never mentioned is carried forward
  * (every counter row was inserted under that static value, so the lookup is
- * exact). When `crossCheckRequested` is set, a static key absent from
- * `resolved` is also reconciled against the raw request before being carried.
+ * exact). A static key absent from `resolved` is also reconciled against the
+ * raw request before being carried.
  * @returns the merged key map, or `undefined` when a static value conflicts with a pinned request value
  */
 const reconcileStaticWhere = (
     staticWhere: Record<string, unknown> | undefined,
     resolved: Record<string, unknown>,
     requested: Record<string, unknown>,
-    crossCheckRequested: boolean,
 ): Record<string, unknown> | undefined => {
     const merged: Record<string, unknown> = { ...resolved };
 
@@ -146,7 +145,7 @@ const reconcileStaticWhere = (
             if (merged[key] !== value) {
                 return undefined;
             }
-        } else if (crossCheckRequested && key in requested) {
+        } else if (key in requested) {
             if (requested[key] !== value) {
                 return undefined;
             }
@@ -186,7 +185,7 @@ const planAggregateLookup = (index: AggregateIndexDefinitionLike, requestedWhere
         }
     }
 
-    return reconcileStaticWhere(index.where, resolved, requested, true);
+    return reconcileStaticWhere(index.where, resolved, requested);
 };
 
 /**
@@ -208,7 +207,7 @@ const collectPartialKey = (
         return undefined;
     }
 
-    return reconcileStaticWhere(index.where, partial, {}, false);
+    return reconcileStaticWhere(index.where, partial, {});
 };
 
 /** Internal: shared by `selectIndexForCount` and `selectIndexForAggregate`. */

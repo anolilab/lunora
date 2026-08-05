@@ -1,8 +1,8 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { HttpActionGuardIR } from "./ir";
 
 /** The `httpRoute.<verb>(...)` factory verbs — the root of a typed-REST-route builder chain. */
@@ -235,21 +235,6 @@ const guardRowFromCall = (call: CallExpression, relativePath: string): HttpActio
           };
 };
 
-/** Side-effecting HTTP handlers in one source file. */
-const guardsInSourceFile = (sourceFile: SourceFile, relativePath: string): HttpActionGuardIR[] => {
-    const rows: HttpActionGuardIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const row = guardRowFromCall(call, relativePath);
-
-        if (row) {
-            rows.push(row);
-        }
-    }
-
-    return rows;
-};
-
 /**
  * Discover `httpAction`/`httpRoute` handlers in `lunora/` that perform a side
  * effect (`ctx.runMutation` / `ctx.runAction` / a `ctx.db.{insert,patch,replace,
@@ -263,16 +248,7 @@ const guardsInSourceFile = (sourceFile: SourceFile, relativePath: string): HttpA
  * Supplied by the codegen feeder; runtime callers don't produce it, so the lint
  * finds nothing there.
  */
-const discoverHttpActionGuards = (project: Project, lunoraDirectory: string): HttpActionGuardIR[] => {
-    const rows: HttpActionGuardIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        rows.push(...guardsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return rows;
-};
+const discoverHttpActionGuards = (project: Project, lunoraDirectory: string): HttpActionGuardIR[] =>
+    collectCallRows(project, lunoraDirectory, guardRowFromCall);
 
 export default discoverHttpActionGuards;

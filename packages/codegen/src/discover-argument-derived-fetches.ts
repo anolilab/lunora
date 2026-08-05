@@ -1,8 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { ArgumentDerivedFetchIR } from "./ir";
 
 /**
@@ -35,21 +35,6 @@ const fetchInCall = (call: CallExpression, relativePath: string): ArgumentDerive
     return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber() };
 };
 
-/** Arg-derived `ctx.fetch` URLs in one source file. */
-const fetchesInSourceFile = (sourceFile: SourceFile, relativePath: string): ArgumentDerivedFetchIR[] => {
-    const found: ArgumentDerivedFetchIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const fetchCall = fetchInCall(call, relativePath);
-
-        if (fetchCall) {
-            found.push(fetchCall);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.fetch(url, …)` calls in `lunora/` whose URL argument is derived from
  * the handler's `args` — the `action_fetch_ssrf` lint input. `ctx.fetch` is the
@@ -59,16 +44,7 @@ const fetchesInSourceFile = (sourceFile: SourceFile, relativePath: string): Argu
  * `ctx.*`, is not recorded; only an arg-derived URL (directly, or through one local
  * `const` hop) reaches here.
  */
-const discoverArgumentDerivedFetches = (project: Project, lunoraDirectory: string): ArgumentDerivedFetchIR[] => {
-    const fetches: ArgumentDerivedFetchIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        fetches.push(...fetchesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return fetches;
-};
+const discoverArgumentDerivedFetches = (project: Project, lunoraDirectory: string): ArgumentDerivedFetchIR[] =>
+    collectCallRows(project, lunoraDirectory, fetchInCall);
 
 export default discoverArgumentDerivedFetches;

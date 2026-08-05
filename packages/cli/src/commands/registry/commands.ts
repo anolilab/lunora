@@ -382,4 +382,4 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
     return empty;
 };
 
-export { runAddCommand, runBuildIndexCommand, runListCommand, runRegistryViewCommand };
+export { runAddCommand, runBuildIndexCommand, runRegistryViewCommand };

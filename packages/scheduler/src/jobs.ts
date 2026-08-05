@@ -342,17 +342,14 @@ const cronJobs = (): CronJobsBuilder => {
         // its `params`). The concrete `lunora/workflows.ts` export + `WORKFLOW_*`
         // binding is resolved statically by `@lunora/codegen`; the builder only
         // records the optional stable-name override for `.jobs()` introspection.
+        let dispatchTarget: { functionPath: string } | { workflow: string };
+
         if (isWorkflowReference(target)) {
-            assertValidCronExpression(cron, `cron expression for job "${name}"`);
-
-            seen.add(name);
-            jobs.push({ args: args ?? {}, cron, name, workflow: typeof target.name === "string" ? target.name : "" });
-
-            return;
-        }
-
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-        if (!target || typeof target.__lunoraRef !== "string") {
+            dispatchTarget = { workflow: typeof target.name === "string" ? target.name : "" };
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
+        } else if (target && typeof target.__lunoraRef === "string") {
+            dispatchTarget = { functionPath: target.__lunoraRef };
+        } else {
             throw new LunoraError(
                 "INTERNAL",
                 `@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest) or a workflow reference`,
@@ -362,7 +359,7 @@ const cronJobs = (): CronJobsBuilder => {
         assertValidCronExpression(cron, `cron expression for job "${name}"`);
 
         seen.add(name);
-        jobs.push({ args: args ?? {}, cron, functionPath: target.__lunoraRef, name });
+        jobs.push({ args: args ?? {}, cron, name, ...dispatchTarget });
     };
 
     const builder: CronJobsBuilder = {

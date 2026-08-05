@@ -2,6 +2,7 @@ import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/clien
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { isClient } from "./agent";
 import { getLunoraClient } from "./context";
 
 /**
@@ -40,10 +41,6 @@ const flagKind = (value: unknown): FlagSubscribeArgs["type"] => {
 
 /** A typed reference to the reserved flags channel so `client.subscribe` infers its args/return. */
 const flagsReference = { __lunoraRef: FLAGS_EVAL_PATH } as FunctionReference<"query", FlagSubscribeArgs, FlagValue>;
-
-/** Narrow the overloaded first argument: an explicit {@link LunoraClient} carries a `subscribe` method. */
-const isClient = (value: unknown): value is LunoraClient =>
-    typeof value === "object" && value !== null && typeof (value as { subscribe?: unknown }).subscribe === "function";
 
 /** Open one flag subscription into a readable store's `set`, failing open to the default. */
 const subscribeFlag = <T extends FlagValue>(

@@ -6,16 +6,10 @@ import { ROLE_OPTIONS, slugify } from "../core/labels";
 import { createMembersController } from "../core/members";
 import { createOrganizationsController } from "../core/organization-list";
 import { createOrganizationSettingsController } from "../core/organization-settings";
-import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
+import { FormField, onSubmit } from "./form";
+import { AuthCard, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: Event): void => {
-        event.preventDefault();
-        void action();
-    };
 
 const OrganizationsCard = (): JSX.Element => {
     const context = useAuthUI();
@@ -279,39 +273,9 @@ const OrganizationSettingsCard = (props: OrganizationSettingsCardProps = {}): JS
             <Show fallback={<p class="lunora-auth-card__description">…</p>} when={!state.loading}>
                 <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                     <FormBanner error={state.formError} success={state.successMessage} />
-                    <Field
-                        field={state.fields.name}
-                        label={t.organizationName}
-                        name="organizationName"
-                        onBlur={() => {
-                            actions.blur("name");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("name", value);
-                        }}
-                    />
-                    <Field
-                        field={state.fields.slug}
-                        label={t.organizationSlug}
-                        name="organizationSlug"
-                        onBlur={() => {
-                            actions.blur("slug");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("slug", value);
-                        }}
-                    />
-                    <Field
-                        field={state.fields.logo}
-                        label={t.organizationLogo}
-                        name="organizationLogo"
-                        onBlur={() => {
-                            actions.blur("logo");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("logo", value);
-                        }}
-                    />
+                    <FormField actions={actions} field="name" label={t.organizationName} name="organizationName" state={state} />
+                    <FormField actions={actions} field="slug" label={t.organizationSlug} name="organizationSlug" state={state} />
+                    <FormField actions={actions} field="logo" label={t.organizationLogo} name="organizationLogo" state={state} />
                     <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
                 </form>
             </Show>

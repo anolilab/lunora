@@ -195,8 +195,10 @@ class VoiceSessionDO {
             return;
         }
 
-        if (this.isSocketExpired(attachment)) {
-            this.dropExpiredSocket(ws);
+        // Same shared boundary check + `TOKEN_EXPIRED`/`4001` drop helper
+        // `@lunora/do`'s `ShardDO` uses, so the two DOs can never disagree.
+        if (isIdentityExpired(attachment.expiresAt)) {
+            dropExpiredCredentialSocket(ws);
 
             return;
         }
@@ -463,27 +465,6 @@ class VoiceSessionDO {
         this.controllers.delete(attachment.connectionId);
         this.audioBuffers.delete(attachment.connectionId);
         this.bufferedBytes.delete(attachment.connectionId);
-    }
-
-    /**
-     * Whether `attachment` carries a credential whose expiry (stamped at
-     * upgrade) is now past. Delegates to the shared boundary check
-     * `@lunora/do`'s `ShardDO` uses for the same decision, so the two DOs can
-     * never disagree about it.
-     */
-    // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with dropExpiredSocket; operates only on the passed attachment
-    private isSocketExpired(attachment: VoiceSocketAttachment): boolean {
-        return isIdentityExpired(attachment.expiresAt);
-    }
-
-    /**
-     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
-     * helper `@lunora/do`'s `ShardDO` also calls, so both DOs send the
-     * client-facing wire shape from one place.
-     */
-    // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
-    private dropExpiredSocket(ws: WebSocket): void {
-        dropExpiredCredentialSocket(ws);
     }
 
     /** Send a JSON control frame, swallowing a closed-socket error (never throw from a handler). */

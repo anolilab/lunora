@@ -50,7 +50,9 @@
  * hides them automatically.
  */
 
-import type { FunctionCallStat, FunctionScanAttribution, SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { FunctionCallStat, FunctionScanAttribution, SqlExec } from "@lunora/shard-engine";
+
+import { runSql } from "./run-sql";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const FUNCTION_METRICS_TABLE = "__lunora_metrics";
@@ -196,13 +198,6 @@ interface RecordFunctionMetricInput {
     /** Epoch-ms the dispatch completed. */
     ts: number;
 }
-
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
 
 /** Floor `ts` to the start of its history bucket. */
 const bucketFloor = (ts: number): number => Math.floor(ts / FUNCTION_METRICS_BUCKET_MS) * FUNCTION_METRICS_BUCKET_MS;

@@ -51,16 +51,9 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     //   2. Inherit from a parent <QueryClientProvider> when present.
     //   3. Create one lazily (useState initializer) so the same instance
     //      survives re-renders.
-    const [internalClient] = useState<QueryClient | undefined>(() => queryClient ?? parentQueryClient ?? createDefaultQueryClient());
+    const [internalClient] = useState<QueryClient>(() => queryClient ?? parentQueryClient ?? createDefaultQueryClient());
 
     const effectiveClient = queryClient ?? parentQueryClient ?? internalClient;
-
-    if (!effectiveClient) {
-        // The useState branch always produces a client when we need one, so
-        // this is unreachable; the throw makes the type narrow for downstream
-        // code without an `as`.
-        throw new LunoraError("INTERNAL", "LunoraProvider: failed to resolve a QueryClient");
-    }
 
     const content = <LunoraContext value={client}>{children}</LunoraContext>;
 

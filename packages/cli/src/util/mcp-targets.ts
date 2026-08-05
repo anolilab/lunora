@@ -114,4 +114,4 @@ const resolveClients = (
 const isJsonTarget = (target: McpTarget): target is JsonMcpTarget => target.client.format === "json";
 
 export type { JsonMcpTarget, McpTarget };
-export { detectInstalledClients, displayPath, isJsonTarget, preferredTarget, resolveClients, SCOPES, targetsFor };
+export { detectInstalledClients, displayPath, isJsonTarget, preferredTarget, resolveClients, targetsFor };

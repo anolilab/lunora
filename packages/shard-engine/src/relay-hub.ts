@@ -471,10 +471,9 @@ class OwnerRelay extends RelayLink {
             return 0;
         }
 
-        const maxRelays = envPositiveInt(this.host.env(), "LUNORA_MAX_RELAYS", DEFAULT_MAX_RELAYS);
         const fan = envPositiveInt(this.host.env(), "LUNORA_RELAY_FAN", DEFAULT_RELAY_FAN);
 
-        return Math.min(maxRelays, Math.max(1, fan));
+        return Math.min(this.maxRelays(), Math.max(1, fan));
     }
 
     /**
@@ -531,6 +530,61 @@ class OwnerRelay extends RelayLink {
     }
 
     /**
+     * The shared owner-side poke pipeline: resolve `entry`'s shape under
+     * `identity`, skip (`undefined`) when resolution failed / the shape is
+     * global / its table didn't change / its membership diff over
+     * `(entry.cursor, frameCursor]` is empty, and otherwise advance the
+     * entry's cursor **synchronously** (before any await — see the callers'
+     * interleaving guarantees) and return the wire-encoded poke.
+     */
+    private buildShapePoke(
+        entry: { args: Record<string, unknown>; cursor: number; name: string },
+        identity: SubscriptionIdentity,
+        changed: Set<string>,
+        frameCursor: number,
+        epoch: string | undefined,
+    ): RelayShapePoke | undefined {
+        let resolved: ResolvedShape | undefined;
+
+        try {
+            resolved = this.host.resolveShape(entry.name, entry.args, identity);
+        } catch {
+            return undefined;
+        }
+
+        if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
+            return undefined;
+        }
+
+        // Alias so the cursor advance mutates a local binding, not the
+        // parameter (no-param-reassign) — same pattern as `createGeoBuilder`.
+        const staged = entry;
+        const fromCursor = staged.cursor;
+        const rowsPatch = this.host.buildShapeDiff(resolved, fromCursor, frameCursor);
+
+        if (rowsPatch.length === 0) {
+            return undefined; // the shape's membership didn't change — leave the cursor put
+        }
+
+        staged.cursor = frameCursor;
+
+        return {
+            // `args` wire-encoded for the same reason as `rowsPatch` below; the
+            // relay decodes them at `handleControl` before the routing match.
+            args: encodeWire(entry.args) as Record<string, unknown>,
+            checkpoint: frameCursor,
+            epoch,
+            fromCursor,
+            name: entry.name,
+            // Wire-encode before the poke crosses the owner→relay `JSON.stringify`
+            // hop (`requestRelayMessage`); the relay re-frames it with
+            // `preEncoded` so a `bytes`/`bigint` shape column isn't dropped/truncated.
+            rowsPatch: encodeRowsPatch(rowsPatch),
+            type: "relay_shape_poke",
+        };
+    }
+
+    /**
      * Owner side (slice B.2): for every registered relay-uniform shape whose table
      * changed this flush, compute the membership diff ONCE over `(cohort cursor,
      * frameCursor]` and multicast the `rowsPatch` to every relay. Advances the cohort
@@ -552,40 +606,11 @@ class OwnerRelay extends RelayLink {
         const sends: Promise<void>[] = [];
 
         for (const entry of this.relayShapeRegistry.values()) {
-            let resolved: ResolvedShape | undefined;
+            const poke = this.buildShapePoke(entry, RELAY_MULTICAST_IDENTITY, changed, frameCursor, epoch);
 
-            try {
-                resolved = this.host.resolveShape(entry.name, entry.args, RELAY_MULTICAST_IDENTITY);
-            } catch {
+            if (!poke) {
                 continue;
             }
-
-            if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
-                continue;
-            }
-
-            const fromCursor = entry.cursor;
-            const rowsPatch = this.host.buildShapeDiff(resolved, fromCursor, frameCursor);
-
-            if (rowsPatch.length === 0) {
-                continue; // the shape's membership didn't change — leave the cohort cursor put
-            }
-
-            entry.cursor = frameCursor;
-            const poke: RelayShapePoke = {
-                // `args` wire-encoded for the same reason as `rowsPatch` below; the
-                // relay decodes them at `handleControl` before the routing match.
-                args: encodeWire(entry.args) as Record<string, unknown>,
-                checkpoint: frameCursor,
-                epoch,
-                fromCursor,
-                name: entry.name,
-                // Wire-encode before the poke crosses the owner→relay `JSON.stringify`
-                // hop (`requestRelayMessage`); the relay re-frames it with
-                // `preEncoded` so a `bytes`/`bigint` shape column isn't dropped/truncated.
-                rowsPatch: encodeRowsPatch(rowsPatch),
-                type: "relay_shape_poke",
-            };
 
             for (const index of relays) {
                 sends.push(this.postRelayMessage(relayName(this.roleId.ownerKey, index), poke));
@@ -611,42 +636,13 @@ class OwnerRelay extends RelayLink {
         const sends: Promise<void>[] = [];
 
         for (const entry of this.relayShapeProxies.values()) {
-            let resolved: ResolvedShape | undefined;
+            const poke = this.buildShapePoke(entry, entry.identity, changed, frameCursor, epoch);
 
-            try {
-                resolved = this.host.resolveShape(entry.name, entry.args, entry.identity);
-            } catch {
+            if (!poke) {
                 continue;
             }
 
-            if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
-                continue;
-            }
-
-            const fromCursor = entry.cursor;
-            const rowsPatch = this.host.buildShapeDiff(resolved, fromCursor, frameCursor);
-
-            if (rowsPatch.length === 0) {
-                continue; // this subscriber's membership didn't change — leave its cursor put
-            }
-
-            entry.cursor = frameCursor;
-            const poke: RelayShapePoke = {
-                // `args` wire-encoded like `rowsPatch`; decoded relay-side at
-                // `handleControl` before the routing match.
-                args: encodeWire(entry.args) as Record<string, unknown>,
-                checkpoint: frameCursor,
-                epoch,
-                fromCursor,
-                name: entry.name,
-                // Wire-encode before the owner→relay `JSON.stringify` hop (see the
-                // cohort-multicast path); the relay re-frames it with `preEncoded`.
-                rowsPatch: encodeRowsPatch(rowsPatch),
-                targetConnectionId: entry.connectionId,
-                type: "relay_shape_poke",
-            };
-
-            sends.push(this.postRelayMessage(relayName(this.roleId.ownerKey, entry.relayIndex), poke));
+            sends.push(this.postRelayMessage(relayName(this.roleId.ownerKey, entry.relayIndex), { ...poke, targetConnectionId: entry.connectionId }));
         }
 
         await Promise.all(sends);

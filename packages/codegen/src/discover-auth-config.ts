@@ -1,26 +1,9 @@
-import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { calleeName, enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows, propertyInitializer } from "./discover-ast";
 import type { AuthConfigIR } from "./ir";
-
-/**
- * The initializer of a named property on an object-literal `object`, when
- * `object` is itself a statically-readable object literal and the property is a
- * plain (non-spread, non-shorthand) `PropertyAssignment`. `undefined` in every
- * other case — a missing key, a spread-only/opaque parent, or a shorthand/method
- * property with no useful initializer to read.
- */
-const propertyInitializer = (object: TsNode | undefined, name: string): TsNode | undefined => {
-    if (!object || !Node.isObjectLiteralExpression(object)) {
-        return undefined;
-    }
-
-    const property = object.getProperty(name);
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-};
 
 /** Whether `node` is the literal `true` keyword. */
 const isTrueLiteral = (node: TsNode | undefined): boolean => node?.getKind() === SyntaxKind.TrueKeyword;
@@ -114,21 +97,6 @@ const authConfigInCall = (call: CallExpression, relativePath: string): AuthConfi
     return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), ...facts };
 };
 
-/** `createAuth({...})` calls in one source file. */
-const authConfigsInSourceFile = (sourceFile: SourceFile, relativePath: string): AuthConfigIR[] => {
-    const found: AuthConfigIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const row = authConfigInCall(call, relativePath);
-
-        if (row) {
-            found.push(row);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `createAuth({...})` calls in `lunora/` — the shared input for the
  * five `auth_*` security lints (trusted-origins wildcard, CSRF check disabled,
@@ -139,16 +107,6 @@ const authConfigsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
  * `analyzable: false` and every boolean fact at its SAFE value, so no lint fires
  * on an opaque config.
  */
-const discoverAuthConfig = (project: Project, lunoraDirectory: string): AuthConfigIR[] => {
-    const rows: AuthConfigIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        rows.push(...authConfigsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return rows;
-};
+const discoverAuthConfig = (project: Project, lunoraDirectory: string): AuthConfigIR[] => collectCallRows(project, lunoraDirectory, authConfigInCall);
 
 export default discoverAuthConfig;

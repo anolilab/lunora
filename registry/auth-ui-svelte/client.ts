@@ -70,7 +70,7 @@ const ONE_TAP_CLIENT_ID: string | undefined = undefined;
  * is a ReferenceError, not an undefined.
  */
 const authBaseUrl = (): string | undefined => {
-    const viteEnv = (import.meta as { env?: Record<string, string | undefined> }).env;
+    const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
 
     if (viteEnv?.VITE_AUTH_URL) {
         return viteEnv.VITE_AUTH_URL;

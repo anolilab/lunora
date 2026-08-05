@@ -72,9 +72,6 @@ interface ChartContainerProps
             "initialDimension" | "aspect" | "debounce" | "minHeight" | "minWidth" | "maxHeight" | "height" | "width" | "onResize" | "children"
         > {
     config: ChartConfig;
-    /** Optional content rendered below the chart (e.g. EvilBrush) */
-    footer?: React.ReactNode;
-    innerResponsiveContainerStyle?: React.ComponentProps<typeof RechartsPrimitive.ResponsiveContainer>["style"];
 }
 
 const ChartContainer = ({
@@ -83,7 +80,6 @@ const ChartContainer = ({
     initialDimension = { width: 320, height: 200 },
     className,
     children,
-    footer,
     ...props
 }: Readonly<ChartContainerProps>): React.ReactElement => {
     const uniqueId = React.useId();
@@ -98,7 +94,7 @@ const ChartContainer = ({
                 className={cn(
                     "min-h-0 w-full flex-1",
                     "[&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground [&_.recharts-cartesian-axis-tick_text]:font-mono [&_.recharts-cartesian-axis-tick_text]:text-[11px] [&_.recharts-cartesian-axis-tick_text]:tracking-wide [&_.recharts-cartesian-grid_line[stroke='#ccc']]:stroke-border/50 [&_.recharts-curve.recharts-tooltip-cursor]:stroke-border [&_.recharts-polar-grid_[stroke='#ccc']]:stroke-border [&_.recharts-radial-bar-background-sector]:fill-muted [&_.recharts-rectangle.recharts-tooltip-cursor]:fill-muted [&_.recharts-reference-line_[stroke='#ccc']]:stroke-border relative flex flex-col justify-center text-xs [&_.recharts-dot[stroke='#fff']]:stroke-transparent [&_.recharts-layer]:outline-hidden [&_.recharts-sector]:outline-hidden [&_.recharts-sector[stroke='#fff']]:stroke-transparent [&_.recharts-surface]:outline-hidden",
-                    !footer && "aspect-video",
+                    "aspect-video",
                     className,
                 )}
                 data-chart={chartId}
@@ -109,24 +105,8 @@ const ChartContainer = ({
                 <RechartsPrimitive.ResponsiveContainer className="min-h-0 w-full flex-1" initialDimension={initialDimension}>
                     {children}
                 </RechartsPrimitive.ResponsiveContainer>
-                {footer}
             </div>
         </ChartContext.Provider>
-    );
-};
-
-const LoadingIndicator = ({ isLoading }: { isLoading: boolean }): React.ReactElement | null => {
-    if (!isLoading) {
-        return null;
-    }
-
-    return (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
-            <div className="text-primary bg-background flex items-center justify-center gap-2 rounded-md border px-2 py-0.5 text-sm">
-                <div className="border-border border-t-primary h-3 w-3 animate-spin rounded-full border" />
-                <span>Loading</span>
-            </div>
-        </div>
     );
 };
 
@@ -208,11 +188,6 @@ export function getPayloadConfigFromPayload(config: ChartConfig, payload: unknow
     return configLabelKey in config ? config[configLabelKey] : config[key];
 }
 
-// Format values to percent for expanded charts
-function axisValueToPercentFormatter(value: number) {
-    return `${Math.round(value * 100).toFixed(0)}%`;
-}
-
 // Get max colors count across all themes for a config entry
 function getColorsCount(config: ChartConfig[string]): number {
     if (!config.colors) {
@@ -222,15 +197,4 @@ function getColorsCount(config: ChartConfig[string]): number {
     return Math.max(...counts, 1);
 }
 
-// Generate random loading data for skeleton/loading state
-// min/max represent percentage of the range (0-100), defaults to 20-80 for realistic look
-export const getLoadingData = (points: number = 10, min: number = 0, max: number = 70): { loading: number }[] => {
-    const range = max - min;
-    return Array.from({ length: points }, () => {
-        return {
-            loading: Math.floor(Math.random() * range) + min,
-        };
-    });
-};
-
-export { axisValueToPercentFormatter, ChartContainer, ChartStyle, getColorsCount, LoadingIndicator };
+export { ChartContainer, getColorsCount };

@@ -204,17 +204,8 @@ const detectContainerResource = (): OtlpResourceAttributes => {
 };
 
 /** Resolve the `fetch` to use: the injected one, else the runtime global, else undefined. */
-const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | undefined => {
-    if (injected !== undefined) {
-        return injected;
-    }
-
-    if (typeof globalThis.fetch === "function") {
-        return globalThis.fetch;
-    }
-
-    return undefined;
-};
+const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | undefined =>
+    injected ?? (typeof globalThis.fetch === "function" ? globalThis.fetch : undefined);
 
 /** Build the OTLP trace-export body for one container span. */
 const traceBody = (

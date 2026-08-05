@@ -5,7 +5,7 @@ import { computed } from "vue";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createUsernameSignInController } from "../core/username";
 import AuthCard from "./AuthCard.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -23,23 +23,8 @@ const { actions, state } = useController(createUsernameSignInController);
     <AuthCard v-if="enabled" :title="t.signIn">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
-            <Field
-                :field="state.fields.username"
-                :label="t.usernameLabel"
-                name="username"
-                autoComplete="username"
-                @blur="actions.blur('username')"
-                @change="actions.setField('username', $event)"
-            />
-            <Field
-                :field="state.fields.password"
-                :label="t.passwordLabel"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                @blur="actions.blur('password')"
-                @change="actions.setField('password', $event)"
-            />
+            <FormField :actions="actions" field="username" :fields="state.fields" :label="t.usernameLabel" autoComplete="username" />
+            <FormField :actions="actions" field="password" :fields="state.fields" :label="t.passwordLabel" type="password" autoComplete="current-password" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.signIn }}</SubmitButton>
         </form>
     </AuthCard>

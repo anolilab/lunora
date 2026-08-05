@@ -53,17 +53,7 @@ const usePaginatedQuery = <F extends FunctionReference>(
 ): UsePaginatedQueryResult<PageItemOf<F>> => {
     const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args, options);
 
-    const results = computed<PageItemOf<F>[]>(() => {
-        const items: PageItemOf<F>[] = [];
-
-        for (const result of pageResults.value) {
-            if (result) {
-                items.push(...result.page);
-            }
-        }
-
-        return items;
-    });
+    const results = computed<PageItemOf<F>[]>(() => pageResults.value.flatMap((result) => result?.page ?? []));
 
     const isLoading = computed<boolean>(() => status.value === "LoadingFirstPage" || status.value === "LoadingMore");
 
@@ -108,17 +98,7 @@ const useInfiniteQuery = <F extends FunctionReference>(
     const { initialNumItems } = options;
     const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args, options);
 
-    const pages = computed<PageItemOf<F>[][]>(() => {
-        const result: PageItemOf<F>[][] = [];
-
-        for (const page of pageResults.value) {
-            if (page) {
-                result.push(page.page);
-            }
-        }
-
-        return result;
-    });
+    const pages = computed<PageItemOf<F>[][]>(() => pageResults.value.flatMap((result) => (result ? [result.page] : [])));
 
     const isLoading = computed<boolean>(() => status.value === "LoadingFirstPage");
     const hasNextPage = computed<boolean>(() => status.value === "CanLoadMore");

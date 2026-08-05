@@ -177,19 +177,10 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
         profile: `${resolved}-v${String(ANALYZER_VERSION)}`,
         query: (query) => {
             const raw = split(query);
-            const seen = new Set<string>();
-            const tokens: string[] = [];
 
-            for (let index = raw.length - 1; index >= 0; index -= 1) {
-                const token = raw[index] as string;
-
-                if (!seen.has(token)) {
-                    seen.add(token);
-                    tokens.unshift(token);
-                }
-            }
-
-            return tokens;
+            // Keep each token's last occurrence, in order (queries are ≤ a few
+            // dozen tokens, so the quadratic lastIndexOf never matters).
+            return raw.filter((token, index) => raw.lastIndexOf(token) === index);
         },
     };
 

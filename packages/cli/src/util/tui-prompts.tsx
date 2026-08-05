@@ -11,11 +11,10 @@
  * or there are no options, never render — return the supplied default so
  * automation never blocks. Escape (and Ctrl-C) cancels back to the default too.
  */
-/* eslint-disable react-refresh/only-export-components, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop -- render-once CLI prompt module, not an HMR app surface: components mount once per prompt and unmount on submit, so co-locating the promise-wrapping helpers is intended and inline callback/array props carry no re-render cost. */
+/* eslint-disable react-refresh/only-export-components, react-perf/jsx-no-new-function-as-prop -- render-once CLI prompt module, not an HMR app surface: components mount once per prompt and unmount on submit, so co-locating the promise-wrapping helpers is intended and inline callback/array props carry no re-render cost. */
 import type { BadgeSpec, MultiSelectOption, SelectOption } from "@lunora/config";
 import { ACCENT, BADGE_COLUMN_WIDTH, badgeLead, badgeWidth, isInteractive, LUNA_ART, LUNA_NAME, LUNA_SIGNOFF, padBadge } from "@lunora/config";
 import { render } from "@visulima/tui";
-import { BigText } from "@visulima/tui/components/big-text";
 import { Box } from "@visulima/tui/components/box";
 import { CommandPalette } from "@visulima/tui/components/command-palette";
 import { ConfirmInput } from "@visulima/tui/components/confirm-input";
@@ -242,10 +241,7 @@ const tuiStep = async (badge: BadgeSpec, message: string, answer?: string): Prom
 
     await printFrame(
         <Box flexDirection="column">
-            <Box>
-                <Badge spec={badge} />
-                <Text bold>{` ${message}`}</Text>
-            </Box>
+            <PromptHeader badge={badge} message={message} />
             {answerLines.map((line) => (
                 <Text dimColor key={line}>
                     {`${badgeIndent(badge)}${line}`}
@@ -654,54 +650,6 @@ const tuiConfirm = async (message: string, options?: { badge?: BadgeSpec; defaul
 const createTuiConfirm = (): ((message: string) => Promise<boolean>) =>
     isInteractive() ? (message: string) => tuiConfirm(message, { defaultYes: true }) : () => Promise.resolve(false);
 
-/** Branded header line that opens an interactive flow (clack-style intro). No-op off a TTY. */
-const tuiIntro = async (message: string): Promise<void> => {
-    if (!isInteractive()) {
-        return;
-    }
-
-    await printFrame(
-        <Box borderColor={ACCENT} borderStyle="round" paddingX={1}>
-            <Text bold color={ACCENT}>
-                ◆ Lunora{" "}
-            </Text>
-            <Text>{message}</Text>
-        </Box>,
-    );
-};
-
-/** Closing summary line for a completed flow (clack-style outro). No-op off a TTY. */
-const tuiOutro = async (message: string): Promise<void> => {
-    if (!isInteractive()) {
-        return;
-    }
-
-    await printFrame(
-        <Box paddingX={1}>
-            <Text color="green">✔ </Text>
-            <Text>{message}</Text>
-        </Box>,
-    );
-};
-
-/**
- * Branded ASCII title shown once at the top of an interactive flow (e.g. the
- * first thing `lunora init` prints), rendered with `@visulima/tui`'s `BigText`
- * (CFonts). No-op off a TTY so CI/piped output stays clean.
- */
-const tuiBanner = async (subtitle?: string): Promise<void> => {
-    if (!isInteractive()) {
-        return;
-    }
-
-    await printFrame(
-        <Box flexDirection="column" paddingX={1}>
-            <BigText colors={[ACCENT]} font="tiny" space={false} text="LUNORA" />
-            {subtitle === undefined ? null : <Text dimColor>{subtitle}</Text>}
-        </Box>,
-    );
-};
-
 /** Starfield + moon colors for the moonrise header (variant G). */
 const STAR_BRIGHT = "#c8a8ff";
 
@@ -880,10 +828,7 @@ const tuiNextSteps = async (badge: BadgeSpec, header: string, steps: ReadonlyArr
 
     await printFrame(
         <Box flexDirection="column">
-            <Box>
-                <Badge spec={badge} />
-                <Text bold>{` ${header}`}</Text>
-            </Box>
+            <PromptHeader badge={badge} message={header} />
             <Box flexDirection="column" marginTop={1}>
                 {steps.map((step) => (
                     <Text key={step.lead}>
@@ -912,13 +857,6 @@ interface TaskSpec<T> {
     label: string;
     run: () => Promise<T>;
 }
-
-/**
- * Indent for the task sub-rows. Markers right-align in the badge gutter — under
- * the `✔` header glyph and the badge boxes — so the row LABELS land at the shared
- * message column, in line with the header title and every badge message.
- */
-const TASK_INDENT = " ".repeat(BADGE_COLUMN_WIDTH - 1);
 
 /** Lunora's gradient for the "rocket-flame" task spinner — purple → cyan, the badge hues. */
 const SPINNER_FIRST = "#a855f7";
@@ -988,18 +926,18 @@ const GradientSpinner = ({ label }: { label: string }): ReactElement => {
 /** A sub-task row: `□` pending (dim), `▶` active (accent), `■` done (dim), `✖` failed (red). */
 const TaskRow = ({ label, status }: { label: string; status: TaskStatus }): ReactElement => {
     if (status === "running") {
-        return <Text color={ACCENT}>{`${TASK_INDENT}▶ ${label}`}</Text>;
+        return <Text color={ACCENT}>{`${HEADER_INDENT}▶ ${label}`}</Text>;
     }
 
     if (status === "failed") {
-        return <Text color="red">{`${TASK_INDENT}✖ ${label}`}</Text>;
+        return <Text color="red">{`${HEADER_INDENT}✖ ${label}`}</Text>;
     }
 
     if (status === "done") {
-        return <Text dimColor>{`${TASK_INDENT}■ ${label}`}</Text>;
+        return <Text dimColor>{`${HEADER_INDENT}■ ${label}`}</Text>;
     }
 
-    return <Text dimColor>{`${TASK_INDENT}□ ${label}`}</Text>;
+    return <Text dimColor>{`${HEADER_INDENT}□ ${label}`}</Text>;
 };
 
 interface TasksViewProps<T> {
@@ -1256,14 +1194,7 @@ const BadgeProgressView = <T,>({ badge, done, onSettle, steps }: BadgeProgressVi
         };
     }, [exit, onSettle, steps]);
 
-    return finished ? (
-        <Box>
-            <Badge spec={badge} />
-            <Text bold>{` ${done}`}</Text>
-        </Box>
-    ) : (
-        <GradientSpinner label={steps[index]?.running ?? ""} />
-    );
+    return finished ? <PromptHeader badge={badge} message={done} /> : <GradientSpinner label={steps[index]?.running ?? ""} />;
 };
 
 /**
@@ -1312,16 +1243,13 @@ const withTuiBadgeProgress = async <T,>(badge: BadgeSpec, steps: ReadonlyArray<P
 
 export {
     createTuiConfirm,
-    tuiBanner,
     tuiConfirm,
     tuiHeadline,
     tuiInfo,
-    tuiIntro,
     tuiMascot,
     tuiMoonrise,
     tuiMultiSelect,
     tuiNextSteps,
-    tuiOutro,
     tuiSelect,
     tuiStep,
     tuiTasks,

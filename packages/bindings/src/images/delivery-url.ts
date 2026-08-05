@@ -121,10 +121,9 @@ export const buildImageDeliveryUrl = (options: ImageDeliveryUrlOptions): string 
 
     // An absolute source URL is left verbatim (it's already a valid CDN source);
     // a relative key is origin-rooted and percent-encoded per segment.
-    const isAbsolute = ABSOLUTE_URL_RE.test(options.key);
-    const source = isAbsolute ? options.key : `/${encodeKey(stripLeadingSlash(options.key))}`;
+    const source = ABSOLUTE_URL_RE.test(options.key) ? options.key : encodeKey(stripLeadingSlash(options.key));
 
     const prefix = optionString === "" ? "/cdn-cgi/image" : `/cdn-cgi/image/${optionString}`;
 
-    return `${base}${prefix}${source.startsWith("/") ? source : `/${source}`}`;
+    return `${base}${prefix}/${source}`;
 };

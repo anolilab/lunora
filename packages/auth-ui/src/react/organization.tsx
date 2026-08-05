@@ -8,16 +8,11 @@ import { ROLE_OPTIONS, slugify } from "../core/labels";
 import { createMembersController } from "../core/members";
 import { createOrganizationsController } from "../core/organization-list";
 import { createOrganizationSettingsController } from "../core/organization-settings";
+import { FormField } from "./form";
+import { onSubmit } from "./on-submit";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: { preventDefault: () => void }): void => {
-        event.preventDefault();
-        void action();
-    };
 
 const OrganizationsCard = (): ReactElement | null => {
     const context = useAuthUI();
@@ -281,39 +276,9 @@ const OrganizationSettingsCard = ({ organizationId }: OrganizationSettingsCardPr
             ) : (
                 <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                     <FormBanner error={state.formError} success={state.successMessage} />
-                    <Field
-                        field={state.fields.name}
-                        label={t.organizationName}
-                        name="organizationName"
-                        onBlur={() => {
-                            actions.blur("name");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("name", value);
-                        }}
-                    />
-                    <Field
-                        field={state.fields.slug}
-                        label={t.organizationSlug}
-                        name="organizationSlug"
-                        onBlur={() => {
-                            actions.blur("slug");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("slug", value);
-                        }}
-                    />
-                    <Field
-                        field={state.fields.logo}
-                        label={t.organizationLogo}
-                        name="organizationLogo"
-                        onBlur={() => {
-                            actions.blur("logo");
-                        }}
-                        onChange={(value) => {
-                            actions.setField("logo", value);
-                        }}
-                    />
+                    <FormField actions={actions} field="name" label={t.organizationName} name="organizationName" state={state} />
+                    <FormField actions={actions} field="slug" label={t.organizationSlug} name="organizationSlug" state={state} />
+                    <FormField actions={actions} field="logo" label={t.organizationLogo} name="organizationLogo" state={state} />
                     <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
                 </form>
             )}

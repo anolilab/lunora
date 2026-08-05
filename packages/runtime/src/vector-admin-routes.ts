@@ -8,6 +8,7 @@
  */
 import type { VectorIntrospector } from "./create-worker";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const VECTOR_INDEXES_PATH = "/_lunora/admin/vector/indexes";
 const VECTOR_QUERY_PATH = "/_lunora/admin/vector/query";
@@ -27,9 +28,7 @@ const buildVectorAdminRoutes = (deps: VectorAdminRouteDeps): Record<string, (req
     const { readJsonBody, requireAdminOption } = deps;
 
     const handleVectorIndexes = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Vector-indexes endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Vector-indexes");
 
         const introspector = requireAdminOption(request, deps.vectorIntrospector, {
             code: "VECTORS_NOT_CONFIGURED",
@@ -40,9 +39,7 @@ const buildVectorAdminRoutes = (deps: VectorAdminRouteDeps): Record<string, (req
     };
 
     const handleVectorQuery = async (request: Request): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Vector-query endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "Vector-query");
 
         const introspector = requireAdminOption(request, deps.vectorIntrospector, {
             code: "VECTORS_NOT_CONFIGURED",

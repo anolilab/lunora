@@ -73,16 +73,23 @@ const assertTableNameAllowed = (name: string, node: Node): void => {
     }
 };
 
-/** Read a string-literal property from an object literal, or `undefined`. */
-const getStringProperty = (object: ObjectLiteralExpression, key: string): string | undefined => {
-    const property = object.getProperty(key);
+/** Read the named property's initializer off an object literal, or `undefined` when absent / not a plain property assignment. */
+const objectPropertyInitializer = (objectLiteral: ObjectLiteralExpression, name: string): Expression | undefined => {
+    const property = objectLiteral.getProperty(name);
 
     if (property && Node.isPropertyAssignment(property)) {
-        const initializer = property.getInitializer();
+        return property.getInitializer();
+    }
 
-        if (initializer && Node.isStringLiteral(initializer)) {
-            return initializer.getLiteralText();
-        }
+    return undefined;
+};
+
+/** Read a string-literal property from an object literal, or `undefined`. */
+const getStringProperty = (object: ObjectLiteralExpression, key: string): string | undefined => {
+    const initializer = objectPropertyInitializer(object, key);
+
+    if (initializer && Node.isStringLiteral(initializer)) {
+        return initializer.getLiteralText();
     }
 
     return undefined;
@@ -90,14 +97,10 @@ const getStringProperty = (object: ObjectLiteralExpression, key: string): string
 
 /** Read a numeric-literal property from an object literal, or `undefined`. */
 const getNumberProperty = (object: ObjectLiteralExpression, key: string): number | undefined => {
-    const property = object.getProperty(key);
+    const initializer = objectPropertyInitializer(object, key);
 
-    if (property && Node.isPropertyAssignment(property)) {
-        const initializer = property.getInitializer();
-
-        if (initializer && Node.isNumericLiteral(initializer)) {
-            return Number(initializer.getLiteralText());
-        }
+    if (initializer && Node.isNumericLiteral(initializer)) {
+        return Number(initializer.getLiteralText());
     }
 
     return undefined;
@@ -105,14 +108,10 @@ const getNumberProperty = (object: ObjectLiteralExpression, key: string): number
 
 /** Read a boolean-literal property, or `undefined` when absent (or not a literal). */
 const getBooleanProperty = (object: ObjectLiteralExpression, key: string): boolean | undefined => {
-    const property = object.getProperty(key);
+    const initializer = objectPropertyInitializer(object, key);
 
-    if (property && Node.isPropertyAssignment(property)) {
-        const initializer = property.getInitializer();
-
-        if (initializer && (Node.isTrueLiteral(initializer) || Node.isFalseLiteral(initializer))) {
-            return initializer.getLiteralValue();
-        }
+    if (initializer && (Node.isTrueLiteral(initializer) || Node.isFalseLiteral(initializer))) {
+        return initializer.getLiteralValue();
     }
 
     return undefined;
@@ -120,17 +119,13 @@ const getBooleanProperty = (object: ObjectLiteralExpression, key: string): boole
 
 /** Read an array-of-string-literals property, or `undefined`. */
 const getStringArrayProperty = (object: ObjectLiteralExpression, key: string): string[] | undefined => {
-    const property = object.getProperty(key);
+    const initializer = objectPropertyInitializer(object, key);
 
-    if (property && Node.isPropertyAssignment(property)) {
-        const initializer = property.getInitializer();
-
-        if (initializer && Node.isArrayLiteralExpression(initializer)) {
-            return initializer
-                .getElements()
-                .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
-                .map((element) => element.getLiteralText());
-        }
+    if (initializer && Node.isArrayLiteralExpression(initializer)) {
+        return initializer
+            .getElements()
+            .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
+            .map((element) => element.getLiteralText());
     }
 
     return undefined;
@@ -483,39 +478,11 @@ const softDeleteFieldOf = (optionsArgument: Node | undefined): string => {
     return "deletedAt";
 };
 
-/** Read a string-literal property off an object literal, or `undefined` when absent/non-literal. */
-const stringPropertyOf = (object: ObjectLiteralExpression, property: string): string | undefined => {
-    const node = object.getProperty(property);
-
-    if (node && Node.isPropertyAssignment(node)) {
-        const initializer = node.getInitializer();
-
-        if (initializer && Node.isStringLiteral(initializer)) {
-            return initializer.getLiteralText();
-        }
-    }
-
-    return undefined;
-};
-
-/** Read a string-array-literal property off an object literal, or `undefined`. */
+/** Read a non-empty string-array-literal property off an object literal, or `undefined`. */
 const stringArrayPropertyOf = (object: ObjectLiteralExpression, property: string): string[] | undefined => {
-    const node = object.getProperty(property);
+    const items = getStringArrayProperty(object, property);
 
-    if (node && Node.isPropertyAssignment(node)) {
-        const initializer = node.getInitializer();
-
-        if (initializer && Node.isArrayLiteralExpression(initializer)) {
-            const items = initializer
-                .getElements()
-                .filter((element) => Node.isStringLiteral(element))
-                .map((element) => element.getLiteralText());
-
-            return items.length > 0 ? items : undefined;
-        }
-    }
-
-    return undefined;
+    return items !== undefined && items.length > 0 ? items : undefined;
 };
 
 /**
@@ -540,14 +507,14 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
     }
 
     return {
-        binding: stringPropertyOf(first, "binding") ?? "",
+        binding: getStringProperty(first, "binding") ?? "",
         columns: stringArrayPropertyOf(first, "columns"),
         hasReconcile: first.getProperty("reconcileEveryMs") !== undefined,
         hasSoftDelete: first.getProperty("softDeleteColumn") !== undefined,
         hasTenantBy: first.getProperty("tenantBy") !== undefined,
-        idColumn: stringPropertyOf(first, "idColumn"),
-        mode: stringPropertyOf(first, "mode"),
-        query: stringPropertyOf(first, "query"),
+        idColumn: getStringProperty(first, "idColumn"),
+        mode: getStringProperty(first, "mode"),
+        query: getStringProperty(first, "query"),
     };
 };
 
@@ -925,17 +892,6 @@ const declarationInitializer = (declaration: TsNode): Expression | undefined => 
 
     if (Node.isShorthandPropertyAssignment(declaration)) {
         return declaration.getNameNode();
-    }
-
-    return undefined;
-};
-
-/** Read the named property's initializer off an object literal, or `undefined` when absent / not a plain property assignment. */
-const objectPropertyInitializer = (objectLiteral: ObjectLiteralExpression, name: string): Expression | undefined => {
-    const property = objectLiteral.getProperty(name);
-
-    if (property && Node.isPropertyAssignment(property)) {
-        return property.getInitializer();
     }
 
     return undefined;

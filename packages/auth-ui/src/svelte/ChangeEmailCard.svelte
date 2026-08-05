@@ -3,7 +3,7 @@
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
@@ -21,19 +21,7 @@
         }}
     >
         <FormBanner error={$form.formError} success={$form.successMessage} />
-        <Field
-            autoComplete="email"
-            field={$form.fields.newEmail}
-            label={t.newEmailLabel}
-            name="newEmail"
-            onBlur={() => {
-                actions.blur("newEmail");
-            }}
-            onChange={(value) => {
-                actions.setField("newEmail", value);
-            }}
-            type="email"
-        />
+        <FormField {actions} autoComplete="email" field="newEmail" fields={$form.fields} label={t.newEmailLabel} type="email" />
         <SubmitButton pending={$form.status === "submitting"}>{t.changeEmail}</SubmitButton>
     </form>
 </AuthCard>

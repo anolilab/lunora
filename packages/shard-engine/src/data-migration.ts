@@ -26,7 +26,8 @@
 
 import { LunoraError } from "@lunora/errors";
 
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlExec } from "./ctx-db";
+import { runSql } from "./do-exec";
 import type { DatabaseWriterLike } from "./schema-types";
 
 /** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -181,13 +182,6 @@ interface StateRow {
     status: string;
 }
 
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
-    const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;
-
-    return runner.call(sql, query, ...params);
-};
-
 const ensureStateTable = (sql: SqlExec): void => {
     runSql(
         sql,
@@ -205,6 +199,20 @@ const ensureStateTable = (sql: SqlExec): void => {
     );
 };
 
+/** Decode the run-state columns shared by {@link readState} and {@link readMigrationStatus}. */
+const decodeStateRow = (
+    row: StateRow,
+): { changed: number; cursor: null | string; direction: MigrationDirection; processed: number; status: MigrationStatus } => {
+    return {
+        changed: row.changed,
+        // eslint-disable-next-line unicorn/no-null -- mirrors the SQLite `cursor` column: a missing cursor is NULL, not undefined
+        cursor: typeof row.cursor === "string" ? row.cursor : null,
+        direction: row.direction === "down" ? "down" : "up",
+        processed: row.processed,
+        status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
+    };
+};
+
 /**
  * @returns the persisted migration state for the given id, or `undefined` when no state row exists yet
  */
@@ -217,13 +225,8 @@ const readState = (sql: SqlExec, id: string): ResumeState | undefined => {
     }
 
     return {
-        changed: row.changed,
-        // eslint-disable-next-line unicorn/no-null -- mirrors the SQLite `cursor` column: a missing cursor is NULL, not undefined
-        cursor: typeof row.cursor === "string" ? row.cursor : null,
-        direction: row.direction === "down" ? "down" : "up",
-        processed: row.processed,
+        ...decodeStateRow(row),
         startedAt: typeof row.started_at === "number" ? row.started_at : undefined,
-        status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
     };
 };
 
@@ -302,6 +305,16 @@ const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection,
 };
 
 /**
+ * Refresh a held claim's `updated_at` mid-batch (the {@link CLAIM_HEARTBEAT_INTERVAL_MS}
+ * heartbeat) so a long-running batch never lets the claim look stale to a peer.
+ * Guarded on `status = 'in_progress'` so it can only touch a live claim — never
+ * a `completed`/`failed` row.
+ */
+const touchClaim = (sql: SqlExec, id: string, now: number): void => {
+    runSql(sql, `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET updated_at = ? WHERE id = ? AND status = 'in_progress'`, now, id);
+};
+
+/**
  * Release this invocation's claim on an incomplete run so a *later* resume can
  * re-claim it without waiting out {@link STALE_CLAIM_TIMEOUT_MS}. Called only on
  * the clean `maxBatches`-bounded return: at that point every `await` has
@@ -315,16 +328,6 @@ const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection,
  */
 const releaseClaim = (sql: SqlExec, id: string): void => {
     runSql(sql, `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET updated_at = 0 WHERE id = ? AND status = 'in_progress'`, id);
-};
-
-/**
- * Refresh a held claim's `updated_at` mid-batch (the {@link CLAIM_HEARTBEAT_INTERVAL_MS}
- * heartbeat) so a long-running batch never lets the claim look stale to a peer.
- * Guarded on `status = 'in_progress'` so it can only touch a live claim — never
- * a `completed`/`failed` row.
- */
-const touchClaim = (sql: SqlExec, id: string, now: number): void => {
-    runSql(sql, `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET updated_at = ? WHERE id = ? AND status = 'in_progress'`, now, id);
 };
 
 /** One persisted run-state row, decoded for callers (admin RPC, CLI status). */
@@ -376,14 +379,10 @@ const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusRow[] =>
     return rows.map((row) => {
         /* eslint-disable unicorn/no-null -- decoded run-state row: NULL columns surface as null over the admin/CLI wire shape (MigrationStatusRow), distinct from absent */
         return {
-            changed: row.changed,
-            cursor: typeof row.cursor === "string" ? row.cursor : null,
-            direction: row.direction === "down" ? "down" : "up",
+            ...decodeStateRow(row),
             error: typeof row.error === "string" ? row.error : null,
             id: row.id,
-            processed: row.processed,
             startedAt: typeof row.started_at === "number" ? row.started_at : null,
-            status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
             updatedAt: typeof row.updated_at === "number" ? row.updated_at : null,
         };
         /* eslint-enable unicorn/no-null */

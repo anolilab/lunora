@@ -120,27 +120,17 @@ const buildGetAuthAuditLog = (deps: AuthAuditRpcDeps): AuthAuditRpcHandler => {
             });
         }
 
-        const query: ReadAuthAuditQuery = {};
         const actorId = stringArgument(args["actorId"]);
         const event = stringArgument(args["event"]);
         const sinceSeq = numericArgument(args["sinceSeq"]);
         const limit = numericArgument(args["limit"]);
 
-        if (actorId !== undefined) {
-            query.actorId = actorId;
-        }
-
-        if (event !== undefined) {
-            query.event = event;
-        }
-
-        if (sinceSeq !== undefined) {
-            query.sinceSeq = sinceSeq;
-        }
-
-        if (limit !== undefined) {
-            query.limit = limit;
-        }
+        const query: ReadAuthAuditQuery = {
+            ...(actorId === undefined ? {} : { actorId }),
+            ...(event === undefined ? {} : { event }),
+            ...(sinceSeq === undefined ? {} : { sinceSeq }),
+            ...(limit === undefined ? {} : { limit }),
+        };
 
         let entries: AuthAuditEntry[];
 

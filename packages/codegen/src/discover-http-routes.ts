@@ -1,14 +1,10 @@
-import { relative, sep } from "node:path";
-
 import type { CallExpression, Node as TsNode, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { lunoraRelativePath } from "./discover-ast";
 import { listLunoraSourceFiles, unwrapHandlerReturn } from "./discover-functions";
 import type { HttpRouteIR, ValidatorIR } from "./ir";
 import { parseObjectShape, parseValidator } from "./parse-validator";
-
-/** Strips a trailing `.ts` extension from a relative source path. */
-const TS_EXTENSION_RE = /\.ts$/u;
 
 /**
  * The `httpRoute.<verb>(...)` factory verbs. Each opens a fresh typed-route
@@ -251,7 +247,7 @@ const discoverHttpRoutes = (project: Project, lunoraDirectory: string): HttpRout
 
     for (const filePath of filePaths) {
         const source: SourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         routes.push(...discoverFileRoutes(source, relativePath));
     }

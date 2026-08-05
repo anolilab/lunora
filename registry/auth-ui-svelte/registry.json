@@ -93,6 +93,7 @@
         { "from": "svelte/Field.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/Field.svelte" },
         { "from": "svelte/ForgotPasswordCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/ForgotPasswordCard.svelte" },
         { "from": "svelte/FormBanner.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/FormBanner.svelte" },
+        { "from": "svelte/FormField.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/FormField.svelte" },
         { "from": "svelte/LinkedAccountsCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/LinkedAccountsCard.svelte" },
         { "from": "svelte/MagicLinkCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/MagicLinkCard.svelte" },
         { "from": "svelte/MembersCard.svelte", "merge": "create-or-skip", "to": "lunora/auth-ui/svelte/MembersCard.svelte" },

@@ -10,14 +10,6 @@ function Sheet({ ...props }: SheetPrimitive.Root.Props): React.ReactElement {
     return <SheetPrimitive.Root data-slot="sheet" {...props} />;
 }
 
-function SheetTrigger({ ...props }: SheetPrimitive.Trigger.Props): React.ReactElement {
-    return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />;
-}
-
-function SheetClose({ ...props }: SheetPrimitive.Close.Props): React.ReactElement {
-    return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
-}
-
 function SheetPortal({ ...props }: SheetPrimitive.Portal.Props): React.ReactElement {
     return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />;
 }
@@ -73,10 +65,6 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">): Reac
     return <div data-slot="sheet-header" className={cn("flex flex-col gap-0.5 p-4", className)} {...props} />;
 }
 
-function SheetFooter({ className, ...props }: React.ComponentProps<"div">): React.ReactElement {
-    return <div data-slot="sheet-footer" className={cn("mt-auto flex flex-col gap-2 p-4", className)} {...props} />;
-}
-
 function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props): React.ReactElement {
     return <SheetPrimitive.Title data-slot="sheet-title" className={cn("text-sm font-medium text-foreground", className)} {...props} />;
 }
@@ -85,4 +73,4 @@ function SheetDescription({ className, ...props }: SheetPrimitive.Description.Pr
     return <SheetPrimitive.Description data-slot="sheet-description" className={cn("text-xs/relaxed text-muted-foreground", className)} {...props} />;
 }
 
-export { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetPortal, SheetTitle, SheetTrigger };
+export { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle };

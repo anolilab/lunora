@@ -84,15 +84,10 @@ interface ParsedLine {
     value: string;
 }
 
-const parseDevVariables = (content: string): Map<string, ParsedLine> => {
-    const map = new Map<string, ParsedLine>();
+const parseDevVariables = (content: string): Map<string, ParsedLine> => new Map(parseDevVariableEntries(content).map((entry) => [entry.key, entry]));
 
-    for (const entry of parseDevVariableEntries(content)) {
-        map.set(entry.key, entry);
-    }
-
-    return map;
-};
+/** Raw `.dev.vars` text, or `""` when the file does not exist yet. */
+const readDevVariablesRaw = (devVariablesPath: string): string => (existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "");
 
 /**
  * Surgically remove every `.dev.vars` line defining `key` (and its trailing
@@ -114,13 +109,7 @@ const redact = (value: string): string => {
     return `${value.slice(0, 4)}${"*".repeat(Math.min(8, value.length - 4))}`;
 };
 
-const loadDevVariables = (devVariablesPath: string): Map<string, ParsedLine> => {
-    if (!existsSync(devVariablesPath)) {
-        return new Map();
-    }
-
-    return parseDevVariables(readFileSync(devVariablesPath, "utf8"));
-};
+const loadDevVariables = (devVariablesPath: string): Map<string, ParsedLine> => parseDevVariables(readDevVariablesRaw(devVariablesPath));
 
 interface EnvContext {
     cwd: string;
@@ -215,7 +204,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    const raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+    const raw = readDevVariablesRaw(devVariablesPath);
 
     writeFileSync(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value), "utf8");
     logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
@@ -238,7 +227,7 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    const raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+    const raw = readDevVariablesRaw(devVariablesPath);
 
     if (!parseDevVariables(raw).has(options.key)) {
         logger.warn(`env: ${options.key} was not set in ${DEV_VARS_FILE}`);
@@ -492,7 +481,7 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
     });
 
     if (options.set === true) {
-        let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+        let raw = readDevVariablesRaw(devVariablesPath);
 
         for (const entry of generated) {
             raw = upsertDevVariableLine(raw, entry.key, entry.value);
@@ -555,16 +544,10 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
     }
 };
 
+const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generate", "get", "list", "push", "set", "unset"]);
+
 /** Narrow a raw argument to a known {@link EnvSubcommand}. */
-const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
-    value === "list" ||
-    value === "get" ||
-    value === "set" ||
-    value === "unset" ||
-    value === "push" ||
-    value === "diff" ||
-    value === "doctor" ||
-    value === "generate";
+const isEnvSubcommand = (value: unknown): value is EnvSubcommand => typeof value === "string" && ENV_SUBCOMMANDS.has(value);
 
 /** `lunora env <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {

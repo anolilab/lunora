@@ -5,15 +5,7 @@ import { contentText, describeError, describeToolOutcome, readField, summarizeUs
 
 /** Default sink: route to the matching `globalThis.console` method. */
 const defaultLogger: ConsoleLogger = (level, message, fields) => {
-    const target = globalThis.console;
-
-    if (level === "error") {
-        target.error(message, fields);
-    } else if (level === "warn") {
-        target.warn(message, fields);
-    } else {
-        target.info(message, fields);
-    }
+    globalThis.console[level](message, fields);
 };
 
 /**

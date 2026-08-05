@@ -136,7 +136,7 @@ class RateLimiter<Names extends string = string> {
         const config = this.resolve(name);
         const shards = config.shards ?? 1;
         const now = this.now();
-        const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
+        const normalizedKey = this.normalizeKey(args.key);
 
         // Route to the exact bucket run() consumes from — for a sharded limit
         // that is the single shard this key hashes to; summing siblings would
@@ -155,9 +155,13 @@ class RateLimiter<Names extends string = string> {
     /** Clear accounting for a `(name, key)` pair (e.g. on successful login). */
     public async reset(name: Names, args: { key?: string } = {}): Promise<void> {
         const shards = this.resolve(name).shards ?? 1;
-        const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
+        const normalizedKey = this.normalizeKey(args.key);
 
         await Promise.all(shardKeysFor(name, normalizedKey, shards).map((storageKey) => Promise.resolve(this.store.delete(storageKey))));
+    }
+
+    private normalizeKey(key: string | undefined): string | undefined {
+        return key === undefined ? undefined : this.normalize(key);
     }
 
     private resolve(name: Names): RateLimitConfig {
@@ -175,7 +179,7 @@ class RateLimiter<Names extends string = string> {
 
     private async run(name: Names, args: RateLimitArgs, consume: boolean): Promise<RateLimitStatus> {
         const config = this.resolve(name);
-        const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
+        const normalizedKey = this.normalizeKey(args.key);
 
         // The deny list short-circuits before any token accounting. Both the
         // normalizer's output and the raw input are checked so callers can

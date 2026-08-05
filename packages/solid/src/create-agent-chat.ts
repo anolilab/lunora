@@ -296,15 +296,15 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         }
     };
 
-    const approve = async (toolCallId: string, note?: string): Promise<void> => {
+    const resolveApproval = async (decision: "approve" | "reject", toolCallId: string, note?: string): Promise<void> => {
         const instanceId = thread()?.instanceId;
 
         if (instanceId === undefined) {
-            throw new Error("createAgentChat: cannot approve — no in-flight run (thread has no instanceId)");
+            throw new Error(`createAgentChat: cannot ${decision} — no in-flight run (thread has no instanceId)`);
         }
 
         await approvalMutation.mutate({
-            decision: "approve",
+            decision,
             instanceId,
             threadKey: resolveMaybe(threadKey),
             toolCallId,
@@ -312,21 +312,9 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         });
     };
 
-    const reject = async (toolCallId: string, note?: string): Promise<void> => {
-        const instanceId = thread()?.instanceId;
+    const approve = async (toolCallId: string, note?: string): Promise<void> => resolveApproval("approve", toolCallId, note);
 
-        if (instanceId === undefined) {
-            throw new Error("createAgentChat: cannot reject — no in-flight run (thread has no instanceId)");
-        }
-
-        await approvalMutation.mutate({
-            decision: "reject",
-            instanceId,
-            threadKey: resolveMaybe(threadKey),
-            toolCallId,
-            ...(note === undefined ? {} : { note }),
-        });
-    };
+    const reject = async (toolCallId: string, note?: string): Promise<void> => resolveApproval("reject", toolCallId, note);
 
     const cancel = async (): Promise<void> => {
         const instanceId = thread()?.instanceId;
