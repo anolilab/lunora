@@ -94,8 +94,12 @@ const CascadeRow = ({ depth, node }: { depth: number; node: CascadeNode }): Reac
                 </span>
             )}
         </li>
-        {node.children.map((child) => (
-            <CascadeRow depth={depth + 1} key={`${child.table}-${child.relation?.field ?? "root"}`} node={child} />
+        {node.children.map((child, index) => (
+            // Key includes the index because the cascade walk pushes one child
+            // per sampled parent row id, so several children can share the same
+            // `(table, relation.field)` pair — without a per-instance
+            // disambiguator React collapses them and warns.
+            <CascadeRow depth={depth + 1} key={`${child.table}-${child.relation?.field ?? "root"}-${index.toString()}`} node={child} />
         ))}
     </>
 );

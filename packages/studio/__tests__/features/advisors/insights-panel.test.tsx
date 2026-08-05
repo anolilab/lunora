@@ -7,6 +7,7 @@ import type { AdvisoryFinding, FunctionStatsResult, MetricsSnapshot, ShardMetric
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+import { wrapInRouter } from "../../render-with-router";
 
 const HEALTHY: ShardMetrics = {
     cache: { bytes: 0, entries: 4, evictions: 0, hits: 90, misses: 10 },
@@ -115,11 +116,12 @@ const createClient = (metrics: ShardMetrics, stats: FunctionStatsResult, advisor
         },
     });
 
-const renderPanel = (mock: MockClientHooks) => (
-    <LunoraProvider client={mock.asClient}>
-        <InsightsPanel />
-    </LunoraProvider>
-);
+const renderPanel = (mock: MockClientHooks) =>
+    wrapInRouter(
+        <LunoraProvider client={mock.asClient}>
+            <InsightsPanel />
+        </LunoraProvider>,
+    );
 
 describe("insightsPanel", () => {
     it("renders a detected slow-function insight on the Info tab", async () => {
@@ -325,9 +327,11 @@ describe("insightsPanel", () => {
         });
 
         render(
-            <LunoraProvider client={mock.asClient}>
-                <InsightsPanel initialShardKey="shardA" />
-            </LunoraProvider>,
+            wrapInRouter(
+                <LunoraProvider client={mock.asClient}>
+                    <InsightsPanel initialShardKey="shardA" />
+                </LunoraProvider>,
+            ),
         );
 
         // Wait for shardA's batched call to have been issued (and left pending)
@@ -496,9 +500,11 @@ describe("insightsPanel", () => {
         });
 
         render(
-            <LunoraProvider client={mock.asClient}>
-                <InsightsPanel loadShardTraffic={loadSkewedTraffic} />
-            </LunoraProvider>,
+            wrapInRouter(
+                <LunoraProvider client={mock.asClient}>
+                    <InsightsPanel loadShardTraffic={loadSkewedTraffic} />
+                </LunoraProvider>,
+            ),
         );
 
         // hot_shard is WARN-severity → the Warnings tab.
@@ -541,9 +547,11 @@ describe("insightsPanel", () => {
         });
 
         render(
-            <LunoraProvider client={mock.asClient}>
-                <InsightsPanel loadShardTraffic={loadEvenTraffic} />
-            </LunoraProvider>,
+            wrapInRouter(
+                <LunoraProvider client={mock.asClient}>
+                    <InsightsPanel loadShardTraffic={loadEvenTraffic} />
+                </LunoraProvider>,
+            ),
         );
 
         // The empty-state lands once the (only) tab has no rows.

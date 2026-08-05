@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -124,10 +124,15 @@ describe("apiDocsPanel", () => {
         expect(tableEntry).toBeDefined();
     });
 
-    it("shows React, Client, and CLI snippets for a selected query", () => {
+    it("shows React, Client, and CLI snippets for a selected query", async () => {
         expect.assertions(3);
 
         render(renderPanel(createClient()));
+
+        // Flush the listTables effect's state update inside an act scope.
+        await act(async () => {
+            await Promise.resolve();
+        });
 
         fireEvent.click(screen.getByTestId("api-rail-fn-messages:list"));
 
