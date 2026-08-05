@@ -113,13 +113,8 @@ export class EventLogDOClient {
      * Pass `sinceSeq = 0` to fetch the entire log.
      */
     public async getSince(sinceSeq: number): Promise<EventLogEntry[]> {
-        const response = await this.#fetch(new Request(`https://do/since?seq=${String(sinceSeq)}`));
+        const data = await this.#get<{ entries: EventLogEntry[] }>(`/since?seq=${String(sinceSeq)}`, "getSince");
 
-        if (!response.ok) {
-            throw await EventLogDOClient.#toError(response, "getSince");
-        }
-
-        const data = (await response.json()) as { entries: EventLogEntry[] };
         return data.entries;
     }
 
@@ -129,26 +124,15 @@ export class EventLogDOClient {
      * page exists (i.e. the DO returned `limit + 1` rows).
      */
     public async getRange(fromSeq: number, limit: number = 50): Promise<{ entries: EventLogEntry[]; hasMore: boolean }> {
-        const response = await this.#fetch(new Request(`https://do/range?from=${String(fromSeq)}&limit=${String(limit)}`));
-
-        if (!response.ok) {
-            throw await EventLogDOClient.#toError(response, "getRange");
-        }
-
-        return (await response.json()) as { entries: EventLogEntry[]; hasMore: boolean };
+        return this.#get(`/range?from=${String(fromSeq)}&limit=${String(limit)}`, "getRange");
     }
 
     /**
      * Return the total number of entries currently in the log.
      */
     public async getSize(): Promise<number> {
-        const response = await this.#fetch(new Request("https://do/size"));
+        const data = await this.#get<{ count: number }>("/size", "getSize");
 
-        if (!response.ok) {
-            throw await EventLogDOClient.#toError(response, "getSize");
-        }
-
-        const data = (await response.json()) as { count: number };
         return data.count;
     }
 
@@ -156,16 +140,21 @@ export class EventLogDOClient {
      * Return the full log state — all entries plus the next seq number.
      */
     public async getState(): Promise<{ entries: EventLogEntry[]; nextSeq: number }> {
-        const response = await this.#fetch(new Request("https://do/state"));
-
-        if (!response.ok) {
-            throw await EventLogDOClient.#toError(response, "getState");
-        }
-
-        return (await response.json()) as { entries: EventLogEntry[]; nextSeq: number };
+        return this.#get("/state", "getState");
     }
 
     // ── Internal ────────────────────────────────────────────────────────
+
+    /** GET `path` from the DO, throwing a descriptive error on a non-OK status. */
+    async #get<T>(path: string, method: string): Promise<T> {
+        const response = await this.#fetch(new Request(`https://do${path}`));
+
+        if (!response.ok) {
+            throw await EventLogDOClient.#toError(response, method);
+        }
+
+        return (await response.json()) as T;
+    }
 
     /** Parse an error response body and return a descriptive `Error`. */
     static async #toError(response: Response, method: string): Promise<Error> {

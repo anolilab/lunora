@@ -1,3 +1,4 @@
+import { dedupeCacheKeys } from "../../dedupe-cache-keys";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
@@ -32,33 +33,18 @@ const plaintextSecretInWranglerVariables: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        // Per-(file, key) occurrence counter — a given key appears once per file,
-        // but guard against duplicate evidence rows collapsing to one dismissible
-        // finding all the same.
-        const occurrenceCount = new Map<string, number>();
-
-        for (const wranglerVariable of context.wranglerVariables) {
-            const baseKey = `${wranglerVariable.file}:${wranglerVariable.key}`;
-            const occurrence = (occurrenceCount.get(baseKey) ?? 0) + 1;
-
-            occurrenceCount.set(baseKey, occurrence);
-
-            // Suffix the occurrence index only for the second and beyond so
-            // existing single-occurrence cacheKeys remain stable across runs.
-            const occurrenceSuffix = occurrence > 1 ? `:${occurrence.toString()}` : "";
-
-            findings.push(
+        // A given key appears once per file, but guard against duplicate evidence
+        // rows collapsing to one dismissible finding all the same: the shared
+        // `dedupeCacheKeys` pass suffixes repeats of a (file, key) cacheKey.
+        return dedupeCacheKeys(
+            context.wranglerVariables.map((wranglerVariable) =>
                 emit(plaintextSecretInWranglerVariables, {
-                    cacheKey: `plaintext_secret_in_wrangler_vars:${baseKey}${occurrenceSuffix}`,
+                    cacheKey: `plaintext_secret_in_wrangler_vars:${wranglerVariable.file}:${wranglerVariable.key}`,
                     detail: `The \`vars\` entry \`${wranglerVariable.key}\` in ${wranglerVariable.file} holds a plaintext ${wranglerVariable.kind.replaceAll("_", " ")} (${wranglerVariable.preview}). \`vars\` ship in cleartext to the deployed Worker and are committed to source control — move it to a Secrets Store binding or \`wrangler secret put\` and rotate the exposed value.`,
                     metadata: { file: wranglerVariable.file, key: wranglerVariable.key, kind: wranglerVariable.kind, preview: wranglerVariable.preview },
                 }),
-            );
-        }
-
-        return findings;
+            ),
+        );
     },
     source: "static",
     title: "Plaintext secret in wrangler vars",

@@ -6,7 +6,7 @@
     import AuthLink from "./AuthLink.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import PasswordStrength from "./PasswordStrength.svelte";
     import SocialButtons from "./SocialButtons.svelte";
@@ -51,44 +51,9 @@
             }}
         >
             <FormBanner error={$form.formError} />
-            <Field
-                autoComplete="name"
-                field={$form.fields.name}
-                label={t.nameLabel}
-                name="name"
-                onBlur={() => {
-                    actions.blur("name");
-                }}
-                onChange={(value) => {
-                    actions.setField("name", value);
-                }}
-            />
-            <Field
-                autoComplete="email"
-                field={$form.fields.email}
-                label={t.emailLabel}
-                name="email"
-                onBlur={() => {
-                    actions.blur("email");
-                }}
-                onChange={(value) => {
-                    actions.setField("email", value);
-                }}
-                type="email"
-            />
-            <Field
-                autoComplete="new-password"
-                field={$form.fields.password}
-                label={t.passwordLabel}
-                name="password"
-                onBlur={() => {
-                    actions.blur("password");
-                }}
-                onChange={(value) => {
-                    actions.setField("password", value);
-                }}
-                type="password"
-            />
+            <FormField {actions} autoComplete="name" field="name" fields={$form.fields} label={t.nameLabel} />
+            <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
+            <FormField {actions} autoComplete="new-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
             <PasswordStrength value={$form.fields.password.value} />
             <SubmitButton pending={$form.status === "submitting"}>{t.signUp}</SubmitButton>
         </form>

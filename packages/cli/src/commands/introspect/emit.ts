@@ -368,4 +368,4 @@ const emitIntrospection = (database: IntrospectedDatabase, options: EmitOptions)
 };
 
 export type { EmitOptions, EmitResult, EmittedFile };
-export { emitIntrospection, identifierFor, indexedColumns, procedureSource, schemaSource };
+export { emitIntrospection, identifierFor, indexedColumns };

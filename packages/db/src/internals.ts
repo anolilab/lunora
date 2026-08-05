@@ -204,15 +204,8 @@ export interface SyncWriter<T extends object> {
 }
 
 /** Index a row list into a keyed map. */
-export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T) => string): Map<string, T> => {
-    const map = new Map<string, T>();
-
-    for (const row of rows) {
-        map.set(getKey(row), row);
-    }
-
-    return map;
-};
+export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T) => string): Map<string, T> =>
+    new Map(rows.map((row): [string, T] => [getKey(row), row]));
 
 /**
  * Build an `emit(next)` that diffs a desired keyed snapshot into a collection's

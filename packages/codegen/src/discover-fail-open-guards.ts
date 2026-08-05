@@ -1,8 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { calleeName, enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows, limitNameOf } from "./discover-ast";
 import type { FailOpenGuardIR } from "./ir";
 
 /**
@@ -39,13 +39,6 @@ const setsFailOpenTrue = (options: TsNode | undefined): boolean => {
     return property !== undefined && Node.isPropertyAssignment(property) && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword;
 };
 
-/** The string-literal value of a call's second (`name`) argument, or `""` when it isn't one. */
-const limitNameOf = (call: CallExpression): string => {
-    const argument = call.getArguments()[1];
-
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralValue() : "";
-};
-
 /** The IR row for a `rateLimit`/`dbRateLimit`/`verifyTurnstileMiddleware` call, or `undefined` when the callee is none of those. */
 const failOpenGuardInCall = (call: CallExpression, relativePath: string): FailOpenGuardIR | undefined => {
     const callee = calleeName(call.getExpression());
@@ -70,21 +63,6 @@ const failOpenGuardInCall = (call: CallExpression, relativePath: string): FailOp
     };
 };
 
-/** `rateLimit`/`dbRateLimit`/`verifyTurnstileMiddleware` guard calls in one source file. */
-const failOpenGuardsInSourceFile = (sourceFile: SourceFile, relativePath: string): FailOpenGuardIR[] => {
-    const found: FailOpenGuardIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const guard = failOpenGuardInCall(call, relativePath);
-
-        if (guard) {
-            found.push(guard);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover rate-limit / Turnstile middleware calls in `lunora/` — the
  * `ratelimit_middleware_fail_open` lint input. Records every
@@ -97,16 +75,6 @@ const failOpenGuardsInSourceFile = (sourceFile: SourceFile, relativePath: string
  * auth/payment-sensitive. Only a provable boolean-literal `failOpen: true` is
  * recorded as fail-open — everything else is treated as fail-closed.
  */
-const discoverFailOpenGuards = (project: Project, lunoraDirectory: string): FailOpenGuardIR[] => {
-    const guards: FailOpenGuardIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        guards.push(...failOpenGuardsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return guards;
-};
+const discoverFailOpenGuards = (project: Project, lunoraDirectory: string): FailOpenGuardIR[] => collectCallRows(project, lunoraDirectory, failOpenGuardInCall);
 
 export default discoverFailOpenGuards;

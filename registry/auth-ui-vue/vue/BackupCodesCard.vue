@@ -9,7 +9,7 @@ import { computed, onScopeDispose, shallowRef } from "vue";
 import { createBackupCodesController } from "../core/backup-codes";
 import { isFlowEnabled } from "../core/flow-gate";
 import AuthCard from "./AuthCard.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -40,14 +40,13 @@ onScopeDispose(stop);
     <AuthCard v-if="enabled" :title="t.backupCodesRegenerate">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
-            <Field
-                :field="state.fields.password"
+            <FormField
+                :actions="actions"
+                field="password"
+                :fields="state.fields"
                 :label="t.currentPasswordLabel"
-                name="password"
                 type="password"
                 autoComplete="current-password"
-                @blur="actions.blur('password')"
-                @change="actions.setField('password', $event)"
             />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.backupCodesRegenerate }}</SubmitButton>
         </form>

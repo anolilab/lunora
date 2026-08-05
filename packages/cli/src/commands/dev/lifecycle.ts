@@ -15,6 +15,7 @@ import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { DevServerState } from "@lunora/config";
 import {
@@ -130,11 +131,6 @@ const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: st
     // `<manager> run dev` is valid for npm, pnpm, yarn, and bun alike.
     return { args: ["run", "dev"], command: manager };
 };
-
-const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
 
 /**
  * True when an HTTP server answers at `origin` — ANY response counts,
@@ -900,19 +896,9 @@ const runLifecycleSubcommand = (parameters: {
     return undefined;
 };
 
-export type {
-    BackgroundCommandOptions,
-    DetachedChild,
-    DetachedSpawner,
-    DevFlavor,
-    LogsCommandOptions,
-    ReadinessProbe,
-    StatusCommandOptions,
-    StopCommandOptions,
-};
+export type { DevFlavor };
 export {
     detectDevFlavor,
-    printLifecycleHints,
     reportExistingServer,
     runDevBackground,
     runDevLogs,

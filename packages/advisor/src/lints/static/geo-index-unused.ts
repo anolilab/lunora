@@ -42,25 +42,18 @@ const geoIndexUnused: Lint = {
         }
 
         const used = new Set(usages.map((usage) => usage.indexName));
-        const findings = [];
 
-        for (const table of context.schema.tables) {
-            for (const index of table.indexes) {
-                if (index.kind !== "geo" || used.has(index.name)) {
-                    continue;
-                }
-
-                findings.push(
+        return context.schema.tables.flatMap((table) =>
+            table.indexes
+                .filter((index) => index.kind === "geo" && !used.has(index.name))
+                .map((index) =>
                     emit(geoIndexUnused, {
                         cacheKey: `geo_index_unused:${table.name}:${index.name}`,
                         detail: `No handler reads geo index "${index.name}" on table "${table.name}" via \`withGeoIndex("${index.name}", …)\` — it's declared but never queried, so its geohash companion is maintained on every write for nothing.`,
                         metadata: { index: index.name, table: table.name },
                     }),
-                );
-            }
-        }
-
-        return findings;
+                ),
+        );
     },
     source: "static",
     title: "Geo index is declared but never queried",

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import { callDO, getDO } from "./do-client";
+import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
 
@@ -10,16 +10,7 @@ import { isWorkflowReference } from "./types";
  * thin RPC wrapper.
  */
 const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
-    // Defensive runtime guard: required by the type, but JS callers can omit it
-    // (exercised by createScheduler({} as never) in the tests).
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-    if (!options.namespace) {
-        throw new LunoraError("INTERNAL", "@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
-    }
-
-    if (!options.originUrl) {
-        throw new LunoraError("INTERNAL", "@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
-    }
+    assertSchedulerOptions(options);
 
     const runAt = async <T extends CronTarget>(
         date: Date | number,

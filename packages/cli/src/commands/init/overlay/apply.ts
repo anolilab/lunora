@@ -192,7 +192,8 @@ const NEWLINE = /\r?\n/;
 const ensureGitignore = (target: string): void => {
     const path = join(target, ".gitignore");
     const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const missing = GITIGNORE_ADDITIONS.filter((entry) => !existing.split(NEWLINE).includes(entry));
+    const existingLines = new Set(existing.split(NEWLINE));
+    const missing = GITIGNORE_ADDITIONS.filter((entry) => !existingLines.has(entry));
 
     if (missing.length === 0) {
         return;
@@ -212,12 +213,12 @@ const isLunoraDep = (name: string): boolean => name === "lunorash" || name.start
  * their range. Pinning the exact version stops a stale lockfile/metadata cache
  * silently installing an older release than the channel currently points at.
  */
-const stampRange = (name: string, range: string, distTag: string, versions?: ReadonlyMap<string, string>): string =>
-    isLunoraDep(name) ? (versions?.get(name) ?? distTag) : range;
+const stampRange = (name: string, range: string, distTag: string, versions: ReadonlyMap<string, string>): string =>
+    isLunoraDep(name) ? (versions.get(name) ?? distTag) : range;
 
-/** A pure "add this dep (channel-stamped)" — returns a new map, never mutating the input. */
-const withDependency = (map: Record<string, string>, name: string, range: string, distTag: string): Record<string, string> => {
-    return { ...map, [name]: stampRange(name, range, distTag) };
+/** A pure "add this dep" — returns a new map, never mutating the input. Lunora ranges are pinned later by {@link restampLunora}. */
+const withDependency = (map: Record<string, string>, name: string, range: string): Record<string, string> => {
+    return { ...map, [name]: range };
 };
 
 /** Stamp every Lunora-scoped range in a dep map to its concrete version (or the tag fallback). */
@@ -238,31 +239,31 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
         scripts?: Record<string, string>;
     };
 
-    let dependencies = withDependency(parsed.dependencies ?? {}, "lunorash", distTag, distTag);
+    let dependencies = withDependency(parsed.dependencies ?? {}, "lunorash", distTag);
 
     // The scaffolded `lunora/messages.ts` rate-limits its public `send` mutation
     // (so the starter passes the advisor clean), which imports `@lunora/ratelimit`.
-    dependencies = withDependency(dependencies, "@lunora/ratelimit", distTag, distTag);
+    dependencies = withDependency(dependencies, "@lunora/ratelimit", distTag);
 
     // Vanilla talks to Lunora through `lunorash/client` (a subpath of the
     // umbrella) — no separate adapter package to install.
     if (adapter.adapter.startsWith("@lunora/")) {
-        dependencies = withDependency(dependencies, adapter.adapter, distTag, distTag);
+        dependencies = withDependency(dependencies, adapter.adapter, distTag);
     }
 
     for (const [depName, range] of Object.entries(adapter.extraDependencies ?? {})) {
-        dependencies = withDependency(dependencies, depName, range, distTag);
+        dependencies = withDependency(dependencies, depName, range);
     }
 
-    let devDependencies = withDependency(parsed.devDependencies ?? {}, "@lunora/vite", distTag, distTag);
+    let devDependencies = withDependency(parsed.devDependencies ?? {}, "@lunora/vite", distTag);
 
     // The local Studio (served at `/__lunora` in dev) is an OPTIONAL peer of
     // `@lunora/vite`, so pnpm won't install it transitively — list it as a
     // dev dependency so the studio works out of the box.
-    devDependencies = withDependency(devDependencies, "@lunora/studio", distTag, distTag);
+    devDependencies = withDependency(devDependencies, "@lunora/studio", distTag);
 
     for (const [depName, range] of Object.entries(COMMON_DEV_DEPENDENCIES)) {
-        devDependencies = withDependency(devDependencies, depName, range, distTag);
+        devDependencies = withDependency(devDependencies, depName, range);
     }
 
     // Resolve every Lunora-scoped dep's tag → concrete version once, then pin.
@@ -282,11 +283,15 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
     writeFileSync(path, `${JSON.stringify(parsed, undefined, 4)}\n`, "utf8");
 };
 
+/** Ordered list of vite config filenames to probe. */
+const VITE_CONFIG_CANDIDATES = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"] as const;
+
+/** The first existing `vite.config.*` in `cwd`, or `undefined` when none exists. */
+const findExistingViteConfig = (cwd: string): string | undefined => VITE_CONFIG_CANDIDATES.map((file) => join(cwd, file)).find((path) => existsSync(path));
+
 /** Add `lunora()` to whichever `vite.config.*` create-vite shipped (keeps the framework plugin). */
 const patchBaseViteConfig = (target: string, logger: Logger): void => {
-    const candidate = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"]
-        .map((file) => join(target, file))
-        .find((path) => existsSync(path));
+    const candidate = findExistingViteConfig(target);
 
     if (candidate === undefined) {
         logger.warn("overlay: no vite.config found in the create-vite base — add `lunora()` to your Vite plugins manually.");
@@ -341,5 +346,5 @@ const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<Readonl
     return written;
 };
 
-export { applyLunoraOverlay };
+export { applyLunoraOverlay, findExistingViteConfig, isLunoraDep };
 export type { ApplyOverlayOptions };

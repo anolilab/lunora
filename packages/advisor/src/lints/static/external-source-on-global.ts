@@ -25,25 +25,16 @@ const externalSourceOnGlobal: Lint = {
     name: "external_source_on_global",
     remediation:
         'Drop either `.source(...)` or `.global()`. To ingest an external database into per-tenant DOs, use `.source(...)` with `.shardBy(...)`; to read it in place as a global table, use `.global({ backend: "hyperdrive" })`.',
-    run: (context) => {
-        const findings = [];
-
-        for (const table of context.schema.tables) {
-            if (table.externalSource === undefined || table.shardKind !== "global") {
-                continue;
-            }
-
-            findings.push(
+    run: (context) =>
+        context.schema.tables
+            .filter((table) => table.externalSource !== undefined && table.shardKind === "global")
+            .map((table) =>
                 emit(externalSourceOnGlobal, {
                     cacheKey: `external_source_on_global:${table.name}`,
                     detail: `Table \`${table.name}\` is both \`.source(...)\` and \`.global()\` — contradictory. A sourced table materializes into a shard DO's SQLite; a global table lives in the external tier.`,
                     metadata: { table: table.name },
                 }),
-            );
-        }
-
-        return findings;
-    },
+            ),
     source: "static",
     title: "Sourced table cannot also be global",
 };

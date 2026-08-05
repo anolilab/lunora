@@ -75,59 +75,34 @@ interface LunoraAuthPluginToggles {
 // `createAuthClient({ plugins })` expects at the call site.
 type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 
+/**
+ * Toggle → client-plugin factory. Key order is the legacy toggle-check order
+ * (not alphabetical) — the assembled plugin array is observable, and keeping
+ * the historical sequence preserves behavior for consumers that read it.
+ */
+const PLUGIN_FACTORIES: Record<keyof LunoraAuthPluginToggles, () => LunoraAuthClientPlugin> = {
+    organization: organizationClient,
+    twoFactor: twoFactorClient,
+    passkey: passkeyClient,
+    magicLink: magicLinkClient,
+    emailOtp: emailOTPClient,
+    admin: adminClient,
+    username: usernameClient,
+    phoneNumber: phoneNumberClient,
+    multiSession: multiSessionClient,
+    anonymous: anonymousClient,
+    deviceAuthorization: deviceAuthorizationClient,
+    lastLoginMethod: lastLoginMethodClient,
+    oauthProvider: oauthProviderClient,
+};
+
 const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthClientPlugin[] => {
     const plugins: LunoraAuthClientPlugin[] = [];
 
-    if (toggles.organization) {
-        plugins.push(organizationClient());
-    }
-
-    if (toggles.twoFactor) {
-        plugins.push(twoFactorClient());
-    }
-
-    if (toggles.passkey) {
-        plugins.push(passkeyClient());
-    }
-
-    if (toggles.magicLink) {
-        plugins.push(magicLinkClient());
-    }
-
-    if (toggles.emailOtp) {
-        plugins.push(emailOTPClient());
-    }
-
-    if (toggles.admin) {
-        plugins.push(adminClient());
-    }
-
-    if (toggles.username) {
-        plugins.push(usernameClient());
-    }
-
-    if (toggles.phoneNumber) {
-        plugins.push(phoneNumberClient());
-    }
-
-    if (toggles.multiSession) {
-        plugins.push(multiSessionClient());
-    }
-
-    if (toggles.anonymous) {
-        plugins.push(anonymousClient());
-    }
-
-    if (toggles.deviceAuthorization) {
-        plugins.push(deviceAuthorizationClient());
-    }
-
-    if (toggles.lastLoginMethod) {
-        plugins.push(lastLoginMethodClient());
-    }
-
-    if (toggles.oauthProvider) {
-        plugins.push(oauthProviderClient());
+    for (const key of Object.keys(PLUGIN_FACTORIES) as (keyof LunoraAuthPluginToggles)[]) {
+        if (toggles[key]) {
+            plugins.push(PLUGIN_FACTORIES[key]());
+        }
     }
 
     return plugins;

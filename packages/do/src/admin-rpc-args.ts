@@ -1227,14 +1227,12 @@ const extractBearerToken = (authorization: string | null): string | undefined =>
 };
 
 export {
-    badRequest,
     bookmarkHeaders,
     buildTestMailInput,
     cdcSuffix,
     decodeIndexHitKey,
     dispatchSpanKey,
     extractBearerToken,
-    isIssueSeverity,
     isIssueStatus,
     parseApplyCdcArgs,
     parseAssigneeArgument,
@@ -1249,7 +1247,6 @@ export {
     parseIssueHash,
     parsePositiveInt,
     parseRankBeforeArgs,
-    parseRankPageAfter,
     parseRankPageArgs,
     parseRecordAuthEventArgs,
     parseRecordContainerEventArgs,
@@ -1264,7 +1261,6 @@ export {
     parseTablePageFilters,
     parseTablePageOrderBy,
     parseWriteRowArgs,
-    requireNonEmptyString,
     sampleHit,
     setsIntersect,
     tablesFromDeps,

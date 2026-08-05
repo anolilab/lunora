@@ -4,13 +4,10 @@
  * one `@lunora/codegen` discovery call so inference and validation can never
  * disagree about what `lunora/containers.ts` declares.
  */
-import { existsSync } from "node:fs";
-
 import type { ContainerIR } from "@lunora/codegen";
 import { CONTAINERS_FILENAME, discoverContainers } from "@lunora/codegen";
-import { Project } from "ts-morph";
 
-import join from "./path";
+import { discoverIr } from "./discover-info";
 
 interface DiscoverContainerInfoResult {
     /** Discovered container definitions; `[]` when none are declared or parsing failed. */
@@ -27,25 +24,15 @@ interface DiscoverContainerInfoResult {
  * (inference).
  */
 const discoverContainerInfo = (projectRoot: string, schemaDirectory: string): DiscoverContainerInfoResult => {
-    const containersPath = join(projectRoot, schemaDirectory, CONTAINERS_FILENAME);
+    // skipFileDependencyResolution: container discovery only AST-walks
+    // containers.ts and resolves the local `defineContainer` import specifier
+    // (which lives in this file). Without this flag ts-morph eagerly loads the
+    // imported module's declarations (@lunora/container, …); from a scaffold/
+    // temp workdir where those aren't resolvable it can stall for tens of
+    // seconds in CI — manifesting as a deploy-test timeout.
+    const { error, value } = discoverIr(projectRoot, schemaDirectory, CONTAINERS_FILENAME, discoverContainers, { skipFileDependencyResolution: true });
 
-    if (!existsSync(containersPath)) {
-        return { containers: [] };
-    }
-
-    try {
-        // skipFileDependencyResolution: container discovery only AST-walks
-        // containers.ts and resolves the local `defineContainer` import specifier
-        // (which lives in this file). Without this flag ts-morph eagerly loads the
-        // imported module's declarations (@lunora/container, …); from a scaffold/
-        // temp workdir where those aren't resolvable it can stall for tens of
-        // seconds in CI — manifesting as a deploy-test timeout.
-        const project = new Project({ skipAddingFilesFromTsConfig: true, skipFileDependencyResolution: true, useInMemoryFileSystem: false });
-
-        return { containers: discoverContainers(project, join(projectRoot, schemaDirectory)) };
-    } catch (error: unknown) {
-        return { containers: [], error: error instanceof Error ? error.message : String(error) };
-    }
+    return error === undefined ? { containers: value ?? [] } : { containers: [], error };
 };
 
 export type { DiscoverContainerInfoResult };

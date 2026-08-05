@@ -245,20 +245,13 @@ const forEachRowPaged = async (
 
     while (hasMore && (remaining === undefined || remaining > 0)) {
         const pageSize = remaining === undefined ? BACKFILL_BATCH_SIZE : Math.min(BACKFILL_BATCH_SIZE, remaining);
-        const pageRows =
-            cursorId === undefined
-                ? // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-                  await queryAll(
-                      exec,
-                      dialect,
-                      sql`SELECT * FROM ${sql.identifier(tableName)} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(pageSize))}`,
-                  )
-                : // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-                  await queryAll(
-                      exec,
-                      dialect,
-                      sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} > ${cursorId} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(pageSize))}`,
-                  );
+        const seek = cursorId === undefined ? sql`` : sql` WHERE ${sql.identifier("id")} > ${cursorId}`;
+        // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+        const pageRows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT * FROM ${sql.identifier(tableName)}${seek} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(pageSize))}`,
+        );
 
         for (const row of pageRows) {
             const decoded = decodeRow(definition, row);

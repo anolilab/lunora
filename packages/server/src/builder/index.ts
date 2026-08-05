@@ -170,17 +170,7 @@ const makeStreamHandler =
  * equivalent guarded query would deny.
  */
 const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): undefined | { tags: ReadonlyArray<RlsTag> } => {
-    const tags: RlsTag[] = [];
-
-    for (const middleware of middlewares) {
-        const tag = readRlsTag(middleware);
-
-        if (!tag) {
-            continue;
-        }
-
-        tags.push(tag);
-    }
+    const tags = middlewares.map((middleware) => readRlsTag(middleware)).filter((tag): tag is RlsTag => tag !== undefined);
 
     return tags.length > 0 ? { tags } : undefined;
 };

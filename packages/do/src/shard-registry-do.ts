@@ -217,13 +217,7 @@ class ShardRegistryDO {
     }
 
     private handleSnapshot(): Response {
-        const out: PersistedTables = {};
-
-        for (const [table, set] of this.tables) {
-            out[table] = [...set];
-        }
-
-        return jsonResponse({ tables: out }, 200);
+        return jsonResponse({ tables: this.serializeTables() }, 200);
     }
 
     private async handleUnregister(request: Request): Promise<Response> {
@@ -259,13 +253,12 @@ class ShardRegistryDO {
 
     /** Serialize the in-memory map to a single JSON-safe object and put. */
     private async persist(): Promise<void> {
-        const out: PersistedTables = {};
+        await this.state.storage.put(STORAGE_KEY, this.serializeTables());
+    }
 
-        for (const [table, set] of this.tables) {
-            out[table] = [...set];
-        }
-
-        await this.state.storage.put(STORAGE_KEY, out);
+    /** The in-memory map as a JSON-safe `table → [keys]` object. */
+    private serializeTables(): PersistedTables {
+        return Object.fromEntries([...this.tables].map(([table, set]) => [table, [...set]]));
     }
 }
 

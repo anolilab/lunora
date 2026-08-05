@@ -22,7 +22,7 @@
  * `query` guarded by the same policies.
  */
 
-import { computeReadBaseWhere, indexRolePermissions, permissionName } from "./middleware";
+import { computeReadBaseWhere, indexRolePermissions, resolveCan } from "./middleware";
 import type { RlsTag } from "./policy-tag";
 import { readRlsTag } from "./policy-tag";
 import { deny } from "./predicates";
@@ -157,25 +157,16 @@ const andMerge = (injected: undefined | WhereInput, caller: WhereInput): WhereIn
  * roles — restricted to the grants of the rls() middleware that declared it, so
  * a permission registered on a different middleware can never satisfy it.
  */
-const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput => {
-    const granted = new Set<string>();
-
-    for (const roleName of request.roles) {
-        for (const name of group.rolePermissions.get(roleName) ?? []) {
-            granted.add(name);
-        }
-    }
-
-    return computeReadBaseWhere(group.policies, {
+const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput =>
+    computeReadBaseWhere(group.policies, {
         auth: {
-            can: (permission) => granted.has(permissionName(permission)),
+            can: resolveCan(request.roles, group.rolePermissions),
             identity: request.identity,
             roles: request.roles,
             userId: request.userId,
         },
         ctx: request.ctx,
     });
-};
 
 /** Resolve the table's read base-where (or the fail-closed sentinel), or `undefined` when unrestricted. */
 const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhereRequest): undefined | WhereInput => {

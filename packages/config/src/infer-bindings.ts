@@ -650,22 +650,6 @@ const detectClassExports = <Definition extends ClassExportable>(
     });
 };
 
-/** Whether the worker entry exports each declared container's generated DO class. */
-const detectContainerExports = (entryPath: string | undefined, containers: ReadonlyArray<ContainerIR>): InferredContainer[] =>
-    detectClassExports(entryPath, containers, "containers");
-
-/** Whether the worker entry exports each declared workflow's generated `WorkflowEntrypoint` class. */
-const detectWorkflowExports = (entryPath: string | undefined, workflows: ReadonlyArray<WorkflowIR>): InferredWorkflow[] =>
-    detectClassExports(entryPath, workflows, "workflows");
-
-/**
- * Whether the worker entry exports each declared agent's generated
- * WorkflowEntrypoint class. An agent compiles onto a Cloudflare Workflow, so —
- * exactly like {@link detectWorkflowExports} — only an exported class is safe
- * to reconcile into `workflows[]`.
- */
-const detectAgentExports = (entryPath: string | undefined, agents: ReadonlyArray<AgentIR>): InferredAgent[] => detectClassExports(entryPath, agents, "agents");
-
 /**
  * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
  * Delegates to the shared `discoverSchemaInfo` so inference and the wrangler
@@ -839,11 +823,11 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const entryPath = resolveWorkerEntry(options.projectRoot);
     const durableObjects = entryPath ? detectExportedDurableObjects(entryPath) : [];
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
-    const containers = detectContainerExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers);
-    const workflows = detectWorkflowExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows);
+    const containers = detectClassExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
+    const workflows = detectClassExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
     // exported agent WorkflowEntrypoint class is safe to reconcile into `workflows[]`.
-    const agents = detectAgentExports(entryPath, discoverAgentInfo(options.projectRoot, schemaDirectory).agents);
+    const agents = detectClassExports(entryPath, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
     const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];

@@ -19,6 +19,11 @@ import type { WhereInput } from "./where-types";
 /** Marker keys distinguishing a restrictable-query option set from a bare `WhereInput` tree. */
 const COUNT_OPTION_KEYS = new Set(["baseWhere", "relationBaseWhere", "restrictsCounts", "where"]);
 
+/** Shared thrower behind both {@link throwingScheduler} methods. */
+const noScheduler = (): never => {
+    throw new LunoraError("INTERNAL", "ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
+};
+
 /**
  * Cheap predicate test against a flat literal `where` (the shape baked into
  * an `aggregateIndex.where`). Only handles literal equality and `{ eq: … }` —
@@ -105,11 +110,4 @@ export const aggregateSqlFunction = (op: string): string => {
  * method throws a clear error. Shared by both `createShardCtxDb` (DO) and
  * `createD1CtxDb` (D1).
  */
-export const throwingScheduler: SchedulerLike = {
-    runAfter: () => {
-        throw new LunoraError("INTERNAL", "ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
-    },
-    runAt: () => {
-        throw new LunoraError("INTERNAL", "ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
-    },
-};
+export const throwingScheduler: SchedulerLike = { runAfter: noScheduler, runAt: noScheduler };

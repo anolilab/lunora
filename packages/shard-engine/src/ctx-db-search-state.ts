@@ -29,23 +29,19 @@ const SEARCH_STATE_TABLE = "__lunora_search_state";
 
 /** Create the progress table. Idempotent; called from `runShardMigrations`. */
 const migrateSearchState = (sql: SqlExec): void => {
-    // A table created by an earlier build has no `profile` column, and
-    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then
-    // fail on the missing column. Mirrors the sql-store twin.
-    const addProfileColumn = (): void => {
-        try {
-            runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("profile")} TEXT`);
-        } catch {
-            // Already present (or the table was just created with it).
-        }
-    };
-
     runDrizzle(
         sql,
         dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT)`,
     );
 
-    addProfileColumn();
+    // A table created by an earlier build has no `profile` column, and
+    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then
+    // fail on the missing column. Mirrors the sql-store twin.
+    try {
+        runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("profile")} TEXT`);
+    } catch {
+        // Already present (or the table was just created with it).
+    }
 };
 
 /** The persisted `done` flag, however this engine's driver spells a boolean. */

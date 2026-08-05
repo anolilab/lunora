@@ -270,13 +270,11 @@ export const emitRpcEvent = (
         return;
     }
 
-    if (decision !== undefined) {
-        // Settled-verdict path: honor the decision the dispatch already made
-        // (including a trusted upstream's sampled-out `00`), never re-derive it.
-        if (!shouldExportTrace(decision, !event.ok)) {
-            return;
-        }
-    } else if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
+    // Honor a decision the dispatch already settled (including a trusted
+    // upstream's sampled-out `00`) over re-deriving one from the legacy config.
+    const verdict = decision ?? (sampling !== undefined && event.traceId !== undefined ? resolveTraceSampling(sampling, event.traceId) : undefined);
+
+    if (verdict !== undefined && !shouldExportTrace(verdict, !event.ok)) {
         return;
     }
 

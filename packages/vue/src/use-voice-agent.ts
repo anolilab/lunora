@@ -241,9 +241,7 @@ const useVoiceAgent = (options: UseVoiceAgentOptions): UseVoiceAgentResult => {
         audioLevel.value = 0;
     };
 
-    const endCall = (): void => {
-        teardown();
-    };
+    const endCall = teardown;
 
     const handleServerFrame = (frame: VoiceServerFrame): void => {
         const connection = current;

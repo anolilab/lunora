@@ -49,14 +49,6 @@ const resolveGatewayOption = (
 };
 
 /**
- * Build the Workers AI provider from a binding, threading the optional AI
- * Gateway config through. Isolated so {@link createAi} can fall back to a
- * caller-supplied `provider` without duplicating the construction. `AiBindingLike`
- * is the structural subset of `createWorkersAI`'s binding that we actually call.
- */
-const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gateway"]): WorkersAiProviderLike => createWorkersAI({ binding, gateway });
-
-/**
  * Create the `ctx.ai` helper over a Workers `AI` binding.
  *
  * Workers AI is the zero-config default, but `@lunora/ai` is provider-agnostic:
@@ -91,7 +83,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
     // Resolved once so the raw `ai.run()` path below routes through the same gateway.
     const resolvedGateway = resolveGatewayOption(gateway, env, metadata);
-    const workersai: WorkersAiProviderLike = provider ?? buildProvider(binding as AiBindingLike, resolvedGateway);
+    const workersai: WorkersAiProviderLike = provider ?? createWorkersAI({ binding: binding as AiBindingLike, gateway: resolvedGateway });
 
     const model = (input?: ModelInput): LanguageModel => {
         if (input === undefined) {

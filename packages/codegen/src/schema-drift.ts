@@ -209,28 +209,29 @@ const evaluateSchemaDrift = (options: {
     const drift = diffSchemaSnapshots(baseline, current);
     const breaking = drift.changes.filter((change) => change.severity === "breaking");
     const newMigrationIds = current.migrationIds.filter((id) => !(baseline?.migrationIds ?? []).includes(id));
+    const decide = (blocked: boolean, reason: string): SchemaDriftDecision => {
+        return { blocked, changes: drift.changes, newMigrationIds, reason };
+    };
 
     // No drift at all, or a first-ever capture (no baseline to compare against) —
     // never block.
     if (drift.changes.length === 0 || baseline === undefined) {
-        return { blocked: false, changes: drift.changes, newMigrationIds, reason: "" };
+        return decide(false, "");
     }
 
     if (breaking.length === 0) {
         const summary = drift.changes.map((change) => `  - ${change.summary}`).join("\n");
 
-        return { blocked: false, changes: drift.changes, newMigrationIds, reason: `schema drift detected (all additive/safe):\n${summary}` };
+        return decide(false, `schema drift detected (all additive/safe):\n${summary}`);
     }
 
     const breakingSummary = breaking.map((change) => `  - ${change.summary}`).join("\n");
 
     if (newMigrationIds.length > 0) {
-        return {
-            blocked: false,
-            changes: drift.changes,
-            newMigrationIds,
-            reason: `breaking schema drift detected, but ${String(newMigrationIds.length)} new migration(s) were added (${newMigrationIds.join(", ")}):\n${breakingSummary}`,
-        };
+        return decide(
+            false,
+            `breaking schema drift detected, but ${String(newMigrationIds.length)} new migration(s) were added (${newMigrationIds.join(", ")}):\n${breakingSummary}`,
+        );
     }
 
     // "Schema drift" means the current schema differs from the last deployed
@@ -247,10 +248,10 @@ const evaluateSchemaDrift = (options: {
         `${remediationFlagLines(command)}Docs: https://lunora.dev/docs/migrations`;
 
     if (allowDrift) {
-        return { blocked: false, changes: drift.changes, newMigrationIds, reason: `${reason}\n\n(overridden by --allow-schema-drift)` };
+        return decide(false, `${reason}\n\n(overridden by --allow-schema-drift)`);
     }
 
-    return { blocked: true, changes: drift.changes, newMigrationIds, reason };
+    return decide(true, reason);
 };
 
 // The snapshot format, its diff, and the serializer moved to

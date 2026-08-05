@@ -16,6 +16,7 @@ import type {
     StorageUploadFn as StorageUploadFunction,
 } from "./create-worker";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const STORAGE_PATH = "/_lunora/admin/storage";
 const STORAGE_URL_PATH = "/_lunora/admin/storage/url";
@@ -82,9 +83,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
     };
 
     const handleStorageBuckets = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Storage-buckets");
 
         assertAdmin(request);
 
@@ -150,9 +149,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
     };
 
     const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Storage URL");
 
         const storageSignedUrl = requireAdminOption(request, storage.storageSignedUrl, {
             code: "STORAGE_URL_NOT_CONFIGURED",

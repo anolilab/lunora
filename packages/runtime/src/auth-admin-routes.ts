@@ -259,6 +259,21 @@ const optionalBodyObject = (body: Record<string, unknown>, field: string): Recor
 };
 
 /**
+ * Read + validate a required `role` off a body. Rejects a missing role AND an
+ * empty/whitespace one — `setRole("")` would otherwise clear the user's role
+ * rather than being a no-op.
+ */
+const requireRole = (body: Record<string, unknown>): string | string[] => {
+    const role = parseRoleInput(body["role"]);
+
+    if (role === undefined || (typeof role === "string" && role.trim() === "")) {
+        throw new LunoraError("`role` is required", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return role;
+};
+
+/**
  * Read + validate a required `permission` grant off a body: a plain object whose
  * values are string arrays (a `resource → actions[]` map). Non-conforming entries
  * are dropped; a non-object throws 400.
@@ -386,10 +401,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
     [`${AUTH_BASE}/users/create`]: {
         build: ({ body }) => {
             return {
-                data:
-                    typeof body["data"] === "object" && body["data"] !== null && !Array.isArray(body["data"])
-                        ? (body["data"] as Record<string, unknown>)
-                        : undefined,
+                data: optionalBodyObject(body, "data"),
                 email: requireBodyString(body, "email"),
                 name: requireBodyString(body, "name"),
                 password: optionalBodyString(body, "password"),
@@ -414,15 +426,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
     },
     [`${AUTH_BASE}/users/role`]: {
         build: ({ body }) => {
-            const role = parseRoleInput(body["role"]);
-
-            // Reject a missing role AND an empty/whitespace one — `setRole("")` would
-            // otherwise clear the user's role rather than being a no-op.
-            if (role === undefined || (typeof role === "string" && role.trim() === "")) {
-                throw new LunoraError("`role` is required", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            return { role, userId: requireBodyString(body, "userId") };
+            return { role: requireRole(body), userId: requireBodyString(body, "userId") };
         },
         http: "POST",
         method: "setRole",
@@ -583,13 +587,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
     },
     [`${AUTH_BASE}/organizations/members/role`]: {
         build: ({ body }) => {
-            const role = parseRoleInput(body["role"]);
-
-            if (role === undefined || (typeof role === "string" && role.trim() === "")) {
-                throw new LunoraError("`role` is required", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            return { memberId: requireBodyString(body, "memberId"), role };
+            return { memberId: requireBodyString(body, "memberId"), role: requireRole(body) };
         },
         http: "POST",
         method: "updateMemberRole",

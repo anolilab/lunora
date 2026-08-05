@@ -491,112 +491,88 @@ const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings
     }
 };
 
+/** A non-empty string — the shape every binding's required fields must satisfy. */
+const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+/**
+ * `Array.isArray` widens the readonly element type to `any`; restore it as a
+ * record of untrusted parsed entries (each may be `null`/malformed) so the
+ * generic checkers below can index arbitrary string fields type-safely.
+ */
+const asBindingEntries = (value: ReadonlyArray<unknown>): ReadonlyArray<Record<string, unknown> | null | undefined> =>
+    value as ReadonlyArray<Record<string, unknown> | null | undefined>;
+
+/** The shape checks for one binding array whose entries carry required string fields. */
+interface RequiredFieldsRule {
+    arrayMessage: string;
+    fields: ReadonlyArray<{ field: string; message: (label: string) => string }>;
+    objectMessage: (label: string) => string;
+}
+
+/**
+ * Validate one required-fields binding array: a non-array value errors with the
+ * rule's array message, a non-object entry with its object message; otherwise
+ * every declared field must be a non-empty string. The one core behind the
+ * workflows / queues / secrets-store validators and
+ * {@link REQUIRED_FIELD_BINDING_RULES}.
+ */
+const validateRequiredFieldEntries = (value: unknown, labelPrefix: string, rule: RequiredFieldsRule, errors: string[]): void => {
+    if (value === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(value)) {
+        errors.push(rule.arrayMessage);
+
+        return;
+    }
+
+    for (const [index, entry] of asBindingEntries(value).entries()) {
+        const label = `${labelPrefix}[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(rule.objectMessage(label));
+
+            continue;
+        }
+
+        for (const field of rule.fields) {
+            if (!isNonEmptyString(entry[field.field])) {
+                errors.push(field.message(label));
+            }
+        }
+    }
+};
+
 /**
  * Each `workflows[]` entry must be a well-formed `{ name, binding, class_name }`
  * triple. Workflows are not Durable Objects, so there is nothing to cross-check
  * against `durable_objects`/`migrations` — only the shape matters here; the
  * deployed worker is responsible for exporting each `class_name`.
  */
-const validateWorkflows = (wrangler: WranglerConfig, errors: string[]): void => {
-    if (wrangler.workflows === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(wrangler.workflows)) {
-        errors.push("workflows must be an array of { name, binding, class_name } entries");
-
-        return;
-    }
-
-    // `Array.isArray` widens the readonly element type to `any`; restore it so
-    // member access below stays type-safe (mirrors `validateContainers`).
-    const entries = wrangler.workflows as ReadonlyArray<WranglerWorkflowEntry | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `workflows[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { name, binding, class_name } object`);
-
-            continue;
-        }
-
-        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the Workflow binding (e.g. WORKFLOW_ORDER_PIPELINE)`);
-        }
-
-        if (typeof entry.class_name !== "string" || entry.class_name.length === 0) {
-            errors.push(`${label} must have a non-empty "class_name" naming the exported WorkflowEntrypoint class`);
-        }
-
-        if (typeof entry.name !== "string" || entry.name.length === 0) {
-            errors.push(`${label} must have a non-empty "name" naming the deployed workflow`);
-        }
-    }
+const WORKFLOWS_RULE: RequiredFieldsRule = {
+    arrayMessage: "workflows must be an array of { name, binding, class_name } entries",
+    fields: [
+        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. WORKFLOW_ORDER_PIPELINE)` },
+        { field: "class_name", message: (label) => `${label} must have a non-empty "class_name" naming the exported WorkflowEntrypoint class` },
+        { field: "name", message: (label) => `${label} must have a non-empty "name" naming the deployed workflow` },
+    ],
+    objectMessage: (label) => `${label} must be a { name, binding, class_name } object`,
 };
 
-/** Validate the `queues.producers[]` array: each entry needs `{ binding, queue }`. */
-const validateQueueProducers = (producers: ReadonlyArray<WranglerQueueProducer | null | undefined> | undefined, errors: string[]): void => {
-    if (producers === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(producers)) {
-        errors.push("queues.producers must be an array of { binding, queue } entries");
-
-        return;
-    }
-
-    // `Array.isArray` widens the readonly element type to `any`; restore it.
-    const entries = producers as ReadonlyArray<WranglerQueueProducer | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `queues.producers[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { binding, queue } object`);
-
-            continue;
-        }
-
-        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the Queue producer (e.g. QUEUE_EMAIL)`);
-        }
-
-        if (typeof entry.queue !== "string" || entry.queue.length === 0) {
-            errors.push(`${label} must have a non-empty "queue" naming the deployed queue`);
-        }
-    }
+const QUEUE_PRODUCERS_RULE: RequiredFieldsRule = {
+    arrayMessage: "queues.producers must be an array of { binding, queue } entries",
+    fields: [
+        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Queue producer (e.g. QUEUE_EMAIL)` },
+        { field: "queue", message: (label) => `${label} must have a non-empty "queue" naming the deployed queue` },
+    ],
+    objectMessage: (label) => `${label} must be a { binding, queue } object`,
 };
 
-/** Validate the `queues.consumers[]` array: each entry needs a `queue`. */
-const validateQueueConsumers = (consumers: ReadonlyArray<WranglerQueueConsumer | null | undefined> | undefined, errors: string[]): void => {
-    if (consumers === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(consumers)) {
-        errors.push("queues.consumers must be an array of { queue } entries");
-
-        return;
-    }
-
-    // `Array.isArray` widens the readonly element type to `any`; restore it.
-    const entries = consumers as ReadonlyArray<WranglerQueueConsumer | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `queues.consumers[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { queue } object`);
-
-            continue;
-        }
-
-        if (typeof entry.queue !== "string" || entry.queue.length === 0) {
-            errors.push(`${label} must have a non-empty "queue" naming the consumed queue`);
-        }
-    }
+const QUEUE_CONSUMERS_RULE: RequiredFieldsRule = {
+    arrayMessage: "queues.consumers must be an array of { queue } entries",
+    fields: [{ field: "queue", message: (label) => `${label} must have a non-empty "queue" naming the consumed queue` }],
+    objectMessage: (label) => `${label} must be a { queue } object`,
 };
 
 /**
@@ -617,55 +593,22 @@ const validateQueues = (wrangler: WranglerConfig, errors: string[]): void => {
         return;
     }
 
-    validateQueueProducers(wrangler.queues.producers, errors);
-    validateQueueConsumers(wrangler.queues.consumers, errors);
+    validateRequiredFieldEntries(wrangler.queues.producers, "queues.producers", QUEUE_PRODUCERS_RULE, errors);
+    validateRequiredFieldEntries(wrangler.queues.consumers, "queues.consumers", QUEUE_CONSUMERS_RULE, errors);
 };
 
 /**
- * Validate `secrets_store_secrets[]`: each entry references a remote store +
- * secret by name (both created out-of-band), so only the `{ binding, store_id,
+ * Each `secrets_store_secrets[]` entry references a remote store + secret by
+ * name (both created out-of-band), so only the `{ binding, store_id,
  * secret_name }` shape is checked — Lunora can't mint the store/secret.
  */
-const validateSecretsStore = (wrangler: WranglerConfig, errors: string[]): void => {
-    if (wrangler.secrets_store_secrets === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(wrangler.secrets_store_secrets)) {
-        errors.push("secrets_store_secrets must be an array of { binding, store_id, secret_name } entries");
-
-        return;
-    }
-
-    const entries = wrangler.secrets_store_secrets as ReadonlyArray<{ binding?: string; secret_name?: string; store_id?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `secrets_store_secrets[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { binding, store_id, secret_name } object`);
-
-            continue;
-        }
-
-        for (const field of ["binding", "store_id", "secret_name"] as const) {
-            if (typeof entry[field] !== "string" || entry[field].length === 0) {
-                errors.push(`${label} must have a non-empty "${field}"`);
-            }
-        }
-    }
+const SECRETS_STORE_RULE: RequiredFieldsRule = {
+    arrayMessage: "secrets_store_secrets must be an array of { binding, store_id, secret_name } entries",
+    fields: ["binding", "store_id", "secret_name"].map((field) => {
+        return { field, message: (label: string) => `${label} must have a non-empty "${field}"` };
+    }),
+    objectMessage: (label) => `${label} must be a { binding, store_id, secret_name } object`,
 };
-
-/** A non-empty string — the shape every binding's required fields must satisfy. */
-const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
-
-/**
- * `Array.isArray` widens the readonly element type to `any`; restore it as a
- * record of untrusted parsed entries (each may be `null`/malformed) so the
- * generic checkers below can index arbitrary string fields type-safely.
- */
-const asBindingEntries = (value: ReadonlyArray<unknown>): ReadonlyArray<Record<string, unknown> | null | undefined> =>
-    value as ReadonlyArray<Record<string, unknown> | null | undefined>;
 
 /**
  * Hint-style binding arrays: each entry needs a non-empty `binding` (error); its
@@ -827,47 +770,7 @@ const REQUIRED_FIELD_BINDING_RULES = [
         key: "mtls_certificates",
         objectMessage: (label: string) => `${label} must be a { binding, certificate_id } object`,
     },
-] as const satisfies ReadonlyArray<{
-    arrayMessage: string;
-    fields: ReadonlyArray<{ field: string; message: (label: string) => string }>;
-    key: keyof WranglerConfig;
-    objectMessage: (label: string) => string;
-}>;
-
-/**
- * Validate one required-fields binding array (see {@link REQUIRED_FIELD_BINDING_RULES}):
- * a non-object entry errors with the rule's object message; otherwise every
- * declared field must be a non-empty string.
- */
-const validateRequiredFieldsBinding = (wrangler: WranglerConfig, rule: (typeof REQUIRED_FIELD_BINDING_RULES)[number], errors: string[]): void => {
-    const value = wrangler[rule.key];
-
-    if (value === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(value)) {
-        errors.push(rule.arrayMessage);
-
-        return;
-    }
-
-    for (const [index, entry] of asBindingEntries(value).entries()) {
-        const label = `${rule.key}[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(rule.objectMessage(label));
-
-            continue;
-        }
-
-        for (const field of rule.fields) {
-            if (!isNonEmptyString(entry[field.field])) {
-                errors.push(field.message(label));
-            }
-        }
-    }
-};
+] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
 
 /**
  * `send_email[]` (Email Routing outbound, used for auto-reply/forward from an
@@ -1259,9 +1162,9 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
     validateContainers(wrangler, errors, warnings);
-    validateWorkflows(wrangler, errors);
+    validateRequiredFieldEntries(wrangler.workflows, "workflows", WORKFLOWS_RULE, errors);
     validateQueues(wrangler, errors);
-    validateSecretsStore(wrangler, errors);
+    validateRequiredFieldEntries(wrangler.secrets_store_secrets, "secrets_store_secrets", SECRETS_STORE_RULE, errors);
 
     // Cloudflare-coverage bindings (plans 027-043), driven by descriptor tables.
     // Hint bindings warn on a missing remote id; self-describing + passthrough
@@ -1272,7 +1175,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     }
 
     for (const rule of REQUIRED_FIELD_BINDING_RULES) {
-        validateRequiredFieldsBinding(wrangler, rule, errors);
+        validateRequiredFieldEntries(wrangler[rule.key], rule.key, rule, errors);
     }
 
     for (const rule of SELF_DESCRIBING_BINDING_RULES) {

@@ -1,25 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Project } from "ts-morph";
 
 import { calleeName, enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows, propertyInitializer } from "./discover-ast";
 import type { ImageDeliveryUrlAccessIR } from "./ir";
-
-/**
- * The initializer of a `key` property on `options`, or `undefined` when
- * `options` is not a direct object-literal argument, or has no `key` property
- * assignment. A shorthand `{ key }` is deliberately skipped — keeps the check
- * single-hop/low-FP, matching the other sink feeders.
- */
-const keyInitializer = (options: TsNode): TsNode | undefined => {
-    if (!Node.isObjectLiteralExpression(options)) {
-        return undefined;
-    }
-
-    const property = options.getProperty("key");
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-};
 
 /**
  * The IR row for a `buildImageDeliveryUrl({ key, … })` call whose `key` is
@@ -36,7 +19,7 @@ const imageDeliveryUrlAccessInCall = (call: CallExpression, relativePath: string
         return undefined;
     }
 
-    const key = keyInitializer(options);
+    const key = propertyInitializer(options, "key");
 
     // Arg-derived (directly or through one local `const` hop) *and* not scoped by
     // a server-trusted `ctx.*` value — a key like `` `${ctx.auth.userId}/…` ``
@@ -46,21 +29,6 @@ const imageDeliveryUrlAccessInCall = (call: CallExpression, relativePath: string
     }
 
     return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber() };
-};
-
-/** Arg-derived, unscoped `buildImageDeliveryUrl` `key` accesses in one source file. */
-const imageDeliveryUrlAccessesInSourceFile = (sourceFile: SourceFile, relativePath: string): ImageDeliveryUrlAccessIR[] => {
-    const found: ImageDeliveryUrlAccessIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const access = imageDeliveryUrlAccessInCall(call, relativePath);
-
-        if (access) {
-            found.push(access);
-        }
-    }
-
-    return found;
 };
 
 /**
@@ -75,16 +43,7 @@ const imageDeliveryUrlAccessesInSourceFile = (sourceFile: SourceFile, relativePa
  * through one local `const` hop) reaches here. Only a direct object-literal
  * first argument is inspected, and one finding is produced per call.
  */
-const discoverImageDeliveryUrlAccesses = (project: Project, lunoraDirectory: string): ImageDeliveryUrlAccessIR[] => {
-    const accesses: ImageDeliveryUrlAccessIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        accesses.push(...imageDeliveryUrlAccessesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return accesses;
-};
+const discoverImageDeliveryUrlAccesses = (project: Project, lunoraDirectory: string): ImageDeliveryUrlAccessIR[] =>
+    collectCallRows(project, lunoraDirectory, imageDeliveryUrlAccessInCall);
 
 export default discoverImageDeliveryUrlAccesses;

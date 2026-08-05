@@ -767,18 +767,6 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
 };
 
 /**
- * Supervise the spawned dev children until dev ends. Wires SIGINT/SIGTERM to
- * signal BOTH the framework dev server and the sidecar together (Ctrl-C once →
- * SIGTERM, again → SIGKILL; a grace timer escalates the first SIGINT), then
- * resolves when the FIRST child exits — a stopped framework dev server and a
- * crashed sidecar both mean "dev is over" — tearing the other down and awaiting
- * it so neither is orphaned holding a port. Returns that first child's exit
- * code. With no sidecar (single-process flavors) this collapses to plain
- * single-child supervision. Extracted from {@link runDevCommand} to keep its
- * orchestration legible (and under the cognitive-complexity budget).
- */
-
-/**
  * Block until SIGINT/SIGTERM, then resolve 0.
  *
  * The `--no-worker` counterpart to {@link superviseWorkers}: with no child to
@@ -805,17 +793,30 @@ const waitForInterrupt = async (logger: Logger): Promise<number> =>
             resolve(0);
         };
 
-        handlers.sigint = (): void => {
+        const onSigint = (): void => {
             stop("SIGINT");
         };
-        handlers.sigterm = (): void => {
+        const onSigterm = (): void => {
             stop("SIGTERM");
         };
 
-        process.on("SIGINT", handlers.sigint);
-        process.on("SIGTERM", handlers.sigterm);
+        handlers.sigint = onSigint;
+        handlers.sigterm = onSigterm;
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
     });
 
+/**
+ * Supervise the spawned dev children until dev ends. Wires SIGINT/SIGTERM to
+ * signal BOTH the framework dev server and the sidecar together (Ctrl-C once →
+ * SIGTERM, again → SIGKILL; a grace timer escalates the first SIGINT), then
+ * resolves when the FIRST child exits — a stopped framework dev server and a
+ * crashed sidecar both mean "dev is over" — tearing the other down and awaiting
+ * it so neither is orphaned holding a port. Returns that first child's exit
+ * code. With no sidecar (single-process flavors) this collapses to plain
+ * single-child supervision. Extracted from {@link runDevCommand} to keep its
+ * orchestration legible (and under the cognitive-complexity budget).
+ */
 const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | undefined, logger: Logger): Promise<number> => {
     let sigintCount = 0;
     let escalationTimer: NodeJS.Timeout | undefined;
@@ -845,21 +846,18 @@ const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | 
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
 
-    const exits: Promise<{ code: number; who: "sidecar" | "worker" }>[] = [
+    const first = await Promise.race([
         worker.exited.then((code) => {
             return { code, who: "worker" as const };
         }),
-    ];
-
-    if (sidecar !== undefined) {
-        exits.push(
-            sidecar.exited.then((code) => {
-                return { code, who: "sidecar" as const };
-            }),
-        );
-    }
-
-    const first = await Promise.race(exits);
+        ...(sidecar === undefined
+            ? []
+            : [
+                  sidecar.exited.then((code) => {
+                      return { code, who: "sidecar" as const };
+                  }),
+              ]),
+    ]);
 
     if (sidecar !== undefined) {
         if (first.who === "sidecar") {
@@ -1153,4 +1151,4 @@ export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, W
 // planning surface (`planDevCommand` and friends) stays importable from one module.
 export type { DevFlavor } from "./lifecycle";
 export { detectDevFlavor } from "./lifecycle";
-export { planDevCommand, resolveRemotePlan, resolveWorkerPort, runDevCommand };
+export { planDevCommand, resolveWorkerPort, runDevCommand };

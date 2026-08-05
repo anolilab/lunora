@@ -1,8 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { StorageUploadIR } from "./ir";
 
 /**
@@ -119,21 +119,6 @@ const storageUploadInCall = (call: CallExpression, relativePath: string): Storag
     };
 };
 
-/** Tracked `ctx.storage` upload/signing calls in one source file. */
-const storageUploadsInSourceFile = (sourceFile: SourceFile, relativePath: string): StorageUploadIR[] => {
-    const found: StorageUploadIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const row = storageUploadInCall(call, relativePath);
-
-        if (row) {
-            found.push(row);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.storage.<bucket>.<method>(...)` upload/signing calls in
  * `lunora/` — the shared input for the storage config-hygiene security lints
@@ -147,16 +132,6 @@ const storageUploadsInSourceFile = (sourceFile: SourceFile, relativePath: string
  * absent key or a near-ceiling literal means; a non-analyzable options argument
  * (a variable, call result, or a spread) is never used to infer absence.
  */
-const discoverStorageUploads = (project: Project, lunoraDirectory: string): StorageUploadIR[] => {
-    const rows: StorageUploadIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        rows.push(...storageUploadsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return rows;
-};
+const discoverStorageUploads = (project: Project, lunoraDirectory: string): StorageUploadIR[] => collectCallRows(project, lunoraDirectory, storageUploadInCall);
 
 export default discoverStorageUploads;

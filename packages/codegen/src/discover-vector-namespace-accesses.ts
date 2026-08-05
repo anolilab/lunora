@@ -1,8 +1,8 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows, propertyInitializer } from "./discover-ast";
 import type { VectorNamespaceAccessIR } from "./ir";
 
 /**
@@ -38,22 +38,6 @@ const vectorsNamespaceMethod = (node: TsNode): string | undefined => {
     return node.getExpression().getText() === "ctx.vectors" ? method : undefined;
 };
 
-/**
- * The initializer of a `namespace` property on `input`, or `undefined` when
- * `input` is not a direct object-literal argument, or has no `namespace`
- * property assignment. A shorthand `{ namespace }` is deliberately skipped —
- * keeps the check single-hop/low-FP, matching the other Wave 3 sink feeders.
- */
-const namespaceInitializer = (input: TsNode): TsNode | undefined => {
-    if (!Node.isObjectLiteralExpression(input)) {
-        return undefined;
-    }
-
-    const property = input.getProperty("namespace");
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-};
-
 /** The IR row for a `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */
 const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string): VectorNamespaceAccessIR | undefined => {
     const method = vectorsNamespaceMethod(call.getExpression());
@@ -68,7 +52,7 @@ const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string)
         return undefined;
     }
 
-    const namespace = namespaceInitializer(input);
+    const namespace = propertyInitializer(input, "namespace");
 
     // Arg-derived (directly or through one local `const` hop) *and* not scoped by
     // a server-trusted `ctx.*` value — a namespace like `` `${ctx.auth.orgId}` ``
@@ -78,21 +62,6 @@ const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string)
     }
 
     return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
-};
-
-/** Arg-derived, unscoped `ctx.vectors` namespace accesses in one source file. */
-const vectorNamespaceAccessesInSourceFile = (sourceFile: SourceFile, relativePath: string): VectorNamespaceAccessIR[] => {
-    const found: VectorNamespaceAccessIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const access = vectorNamespaceAccessInCall(call, relativePath);
-
-        if (access) {
-            found.push(access);
-        }
-    }
-
-    return found;
 };
 
 /**
@@ -107,16 +76,7 @@ const vectorNamespaceAccessesInSourceFile = (sourceFile: SourceFile, relativePat
  * with a `namespace` property, is not recorded; only an arg-derived, unscoped
  * `namespace` (directly, or through one local `const` hop) reaches here.
  */
-const discoverVectorNamespaceAccesses = (project: Project, lunoraDirectory: string): VectorNamespaceAccessIR[] => {
-    const accesses: VectorNamespaceAccessIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        accesses.push(...vectorNamespaceAccessesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return accesses;
-};
+const discoverVectorNamespaceAccesses = (project: Project, lunoraDirectory: string): VectorNamespaceAccessIR[] =>
+    collectCallRows(project, lunoraDirectory, vectorNamespaceAccessInCall);
 
 export default discoverVectorNamespaceAccesses;

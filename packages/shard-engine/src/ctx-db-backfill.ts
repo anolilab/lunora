@@ -25,12 +25,20 @@ import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./ag
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
+import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue, tryRowToDocument } from "./do-sql";
-import { param } from "./drizzle";
-import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
+import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
+import { matchesRankStaticWhere, rankTableName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
+
+/** True when `table` already carries rows — the backfills' idempotence check. */
+const hasRows = (sql: SqlExec, table: string): boolean =>
+    runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(table)}`).one().count > 0;
+
+/** One full scan of `tableName`'s stored rows, decoded per row by the caller. */
+const scanRows = (sql: SqlExec, tableName: string): Record<string, unknown>[] =>
+    runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
@@ -38,15 +46,14 @@ import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./sc
  */
 const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike): void => {
     const aggTable = aggregateTableName(tableName, index.name);
-    const existing = runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(aggTable)}`).one();
 
-    if (existing.count > 0) {
+    if (hasRows(sql, aggTable)) {
         return;
     }
 
     const by = index.by ?? [];
     const tallies = new Map<string, AggregateTally>();
-    const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
+    const rows = scanRows(sql, tableName);
 
     for (const row of rows) {
         const record = rowToDocument(row);
@@ -95,18 +102,13 @@ const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
  */
 const backfillRankIndex = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike): void => {
     const rankTable = rankTableName(tableName, index.name);
-    const existing = runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(rankTable)}`).one();
 
-    if (existing.count > 0) {
+    if (hasRows(sql, rankTable)) {
         return;
     }
 
-    const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-    const columnsSql = dsql.join(
-        ["__id__", "__partition__", ...sortColumns].map((column) => dsql.identifier(column)),
-        dsql`, `,
-    );
-    const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
+    const columnsSql = rankColumnsSql(index);
+    const rows = scanRows(sql, tableName);
 
     for (const row of rows) {
         const record = rowToDocument(row);
@@ -115,15 +117,7 @@ const backfillRankIndex = (sql: SqlExec, tableName: string, index: RankIndexDefi
             continue;
         }
 
-        const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
-        // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
-        const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
-        const valuesSql = dsql.join(
-            [record["_id"] as string, partitionKey, ...sortValues].map((value) => param(value)),
-            dsql`, `,
-        );
-
-        runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+        insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
     }
 };
 
@@ -204,6 +198,12 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
         lastId = id;
 
+        // Drop whatever the companion still holds for this id first: the
+        // DELETE-then-INSERT makes re-running a page converge, and on an
+        // unparseable document it clears a stale row serving text the
+        // document no longer has — worse than the row being unsearchable.
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
+
         // Safe-parsing, not `rowToDocument`: this runs inside
         // `runShardMigrations`, so an unparseable document would brick the
         // whole shard's cold start. The cursor still advances past it, so the
@@ -211,15 +211,9 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
         const record = tryRowToDocument(row);
 
         if (!record) {
-            // Drop whatever the companion still holds for this id. Skipping
-            // outright would leave a stale row serving text the document no
-            // longer has — worse than the row being unsearchable.
-            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
-
             continue;
         }
 
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
         runDrizzle(
             sql,
             dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(record, index)}, ${id})`,

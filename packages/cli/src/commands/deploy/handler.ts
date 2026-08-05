@@ -209,6 +209,13 @@ interface WranglerD1Shape {
     vars?: Record<string, unknown>;
 }
 
+/** Find and parse the project's wrangler.jsonc; `undefined` when absent or unparseable. */
+const readWranglerShape = (cwd: string): WranglerD1Shape | undefined => {
+    const wranglerPath = findWranglerFile(cwd);
+
+    return wranglerPath ? readWranglerJsonc<WranglerD1Shape>(wranglerPath).parsed : undefined;
+};
+
 /**
  * Worker-origin `vars` that must resolve to the deployed worker's public URL.
  * A Cloudflare Worker can't reach `localhost`, so a localhost value here means
@@ -239,14 +246,7 @@ const isLocalImagePath = (image: string): boolean => image.startsWith("./") || i
  * when no local image build is needed or Docker is available.
  */
 const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvailable: DockerProbe): string | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (!wranglerPath) {
-        return undefined;
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
-    const localImages = (parsed?.containers ?? []).filter((entry) => typeof entry?.image === "string" && isLocalImagePath(entry.image));
+    const localImages = (readWranglerShape(cwd)?.containers ?? []).filter((entry) => typeof entry?.image === "string" && isLocalImagePath(entry.image));
 
     if (localImages.length === 0 || dockerAvailable()) {
         return undefined;
@@ -326,23 +326,8 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
  * when no placeholder is found (or when wrangler.jsonc is absent/unparseable —
  * the validator will report the real problem in that case).
  */
-const findD1PlaceholderBinding = (cwd: string): string | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (!wranglerPath) {
-        return undefined;
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
-
-    if (!parsed) {
-        return undefined;
-    }
-
-    const placeholder = (parsed.d1_databases ?? []).find((entry) => entry.database_id === D1_PLACEHOLDER_ID);
-
-    return placeholder?.binding;
-};
+const findD1PlaceholderBinding = (cwd: string): string | undefined =>
+    (readWranglerShape(cwd)?.d1_databases ?? []).find((entry) => entry.database_id === D1_PLACEHOLDER_ID)?.binding;
 
 /**
  * Build + push any Railpack `{ build }` containers before wrangler runs. Reads
@@ -726,7 +711,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
             error:
                 `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
                 `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
-                `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`), then re-deploy.`,
+                `(or \`lunora env generate --set\` then \`lunora env push --yes${environmentFlag}\`), then re-deploy.`,
         };
     }
 
@@ -769,7 +754,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
 
     logger.warn(
         `${String(mintable.length)} required secret(s) not set on the target: ${mintable.join(", ")}. ` +
-            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : ` --env ${options.env}`}\`.`,
+            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${environmentFlag}\`.`,
     );
 
     return {};
@@ -877,7 +862,9 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
         return message;
     }
 
-    if ((options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN) === undefined || (options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN) === "") {
+    const migrateToken = options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN;
+
+    if (migrateToken === undefined || migrateToken === "") {
         const message = "admin token required for --migrate — pass --migrate-token or set LUNORA_ADMIN_TOKEN";
 
         options.logger.error(message);
@@ -1004,14 +991,7 @@ const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => 
  * that).
  */
 const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (!wranglerPath) {
-        return undefined;
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
-    const variables = parsed?.vars;
+    const variables = readWranglerShape(cwd)?.vars;
 
     if (!variables) {
         return undefined;
@@ -1103,23 +1083,16 @@ const finalizeSuccessfulDeploy = async (
     // filtered on immediately afterwards.
     await provisionVectorMetadataIndexes(options, cwd);
 
-    if (options.migrate) {
-        const migrateCode = await runPostDeployMigrations(options, cwd);
+    const migrateCode = options.migrate ? await runPostDeployMigrations(options, cwd) : 0;
 
-        // Only advance the committed baseline when deploy AND its migrations
-        // succeeded; a failed migration leaves the gate measuring against the
-        // pre-deploy baseline on the retry.
-        if (migrateCode === 0) {
-            reblessSchemaBaseline?.();
-        }
-
-        return { code: migrateCode, descriptor, mintedSecretsFile, validation };
+    // Only advance the committed baseline when deploy AND its migrations
+    // succeeded; a failed migration leaves the gate measuring against the
+    // pre-deploy baseline on the retry.
+    if (migrateCode === 0) {
+        reblessSchemaBaseline?.();
     }
 
-    // Deploy succeeded — safe to advance the committed schema baseline.
-    reblessSchemaBaseline?.();
-
-    return { code: 0, descriptor, mintedSecretsFile, validation };
+    return { code: migrateCode, descriptor, mintedSecretsFile, validation };
 };
 
 /**
@@ -1213,6 +1186,17 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     return driver.toolchain.deploy(request);
 };
 
+/** Failed-deploy result with the empty validation shape shared by every pre-wrangler abort. */
+const abortResult = (error: string, extra?: Partial<DeployCommandResult>): DeployCommandResult => {
+    return {
+        code: 1,
+        descriptor: undefined,
+        error,
+        validation: { problems: [], wranglerPath: undefined },
+        ...extra,
+    };
+};
+
 /** Log wrangler.jsonc validation problems (if any) and report whether the deploy must abort. */
 const reportWranglerProblems = (validation: { problems: ReadonlyArray<string> }, logger: Logger): boolean => {
     if (validation.problems.length === 0) {
@@ -1247,7 +1231,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         // `--format json` mode, so a bare return exits 1 in silence.
         options.logger.error(message);
 
-        return { code: 1, descriptor: undefined, error: message, validation: { problems: [], wranglerPath: undefined } };
+        return abortResult(message);
     }
 
     const { target } = resolvedTarget;
@@ -1267,12 +1251,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         );
 
         if (codegenStep.error !== undefined) {
-            return {
-                code: 1,
-                descriptor: undefined,
-                error: codegenStep.error,
-                validation: { problems: [], wranglerPath: undefined },
-            };
+            return abortResult(codegenStep.error);
         }
 
         codegen = codegenStep.result;
@@ -1300,13 +1279,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         });
 
         if (gate.blocked) {
-            return {
-                code: 1,
-                descriptor: undefined,
-                error: "schema drift gate blocked deploy",
-                schemaDrift: { blocked: true, reason: gate.reason },
-                validation: { problems: [], wranglerPath: undefined },
-            };
+            return abortResult("schema drift gate blocked deploy", { schemaDrift: { blocked: true, reason: gate.reason } });
         }
 
         reblessSchemaBaseline = gate.rebless;
@@ -1317,7 +1290,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
     if (migratePreflightError !== undefined) {
-        return { code: 1, descriptor: undefined, error: migratePreflightError, validation: { problems: [], wranglerPath: undefined } };
+        return abortResult(migratePreflightError);
     }
 
     // Pre-wrangler gates: the D1 placeholder hard-block, the Dockerfile-container
@@ -1326,7 +1299,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     const preflightError = await runPreDeployGates(cwd, options);
 
     if (preflightError !== undefined) {
-        return { code: 1, descriptor: undefined, error: preflightError, validation: { problems: [], wranglerPath: undefined } };
+        return abortResult(preflightError);
     }
 
     // `--env <name>` validates the env-scoped view — a binding present only
@@ -1387,16 +1360,11 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
-    // A dry run published nothing — never run migrations or advance the schema
-    // baseline against a deploy that didn't happen.
-    if (options.dryRun) {
-        return { code: 0, descriptor, mintedSecretsFile, validation };
-    }
-
-    // A preview uploaded a Version but didn't go live — skip the post-deploy
-    // finalize (migrations / baseline re-bless) and auto-link, which only apply
-    // to a production deploy. wrangler prints the preview URL itself.
-    if (options.preview) {
+    // A dry run published nothing, and a preview uploaded a Version without
+    // going live — either way, skip the post-deploy finalize (migrations /
+    // baseline re-bless) and auto-link, which only apply to a production
+    // deploy. wrangler prints the preview URL itself.
+    if (options.dryRun || options.preview) {
         return { code: 0, descriptor, mintedSecretsFile, validation };
     }
 
@@ -1418,7 +1386,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
+        return abortResult(formatError);
     }
 
     const result = await executeDeploy({ ...options, logger: loggerForFormat(options.format, options.logger) });

@@ -30,23 +30,19 @@ const hardcodedSecret: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const secret of context.secretLiterals) {
-            findings.push(
+        // Two secrets of the same kind on one physical source line (e.g.
+        // `[STRIPE_LIVE_A, STRIPE_LIVE_B]`) would otherwise share a cacheKey and
+        // collapse to one dismissible finding, hiding the second. The shared
+        // `dedupeCacheKeys` pass suffixes the repeat so both survive.
+        return dedupeCacheKeys(
+            context.secretLiterals.map((secret) =>
                 emit(hardcodedSecret, {
                     cacheKey: `hardcoded_secret:${secret.file}:${secret.line.toString()}:${secret.kind}`,
                     detail: `A ${secret.kind.replaceAll("_", " ")} (${secret.preview}) is hard-coded at ${secret.file}:${secret.line.toString()}. Move it to \`.dev.vars\` / \`wrangler secret put\` and read it from \`env\`. Rotate the exposed value.`,
                     metadata: { file: secret.file, kind: secret.kind, line: secret.line, preview: secret.preview },
                 }),
-            );
-        }
-
-        // Two secrets of the same kind on one physical source line (e.g.
-        // `[STRIPE_LIVE_A, STRIPE_LIVE_B]`) would otherwise share a cacheKey and
-        // collapse to one dismissible finding, hiding the second. The shared
-        // `dedupeCacheKeys` pass suffixes the repeat so both survive.
-        return dedupeCacheKeys(findings);
+            ),
+        );
     },
     source: "static",
     title: "Hard-coded secret in source",

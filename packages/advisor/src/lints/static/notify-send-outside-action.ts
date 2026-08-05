@@ -32,19 +32,13 @@ const notifySendOutsideAction: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const call of context.notifyCalls) {
-            findings.push(
-                emit(notifySendOutsideAction, {
-                    cacheKey: `notify_send_outside_action:${call.file}:${call.line.toString()}:${call.callee}`,
-                    detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — a notification send is non-deterministic external I/O and a retried ${call.kind} would re-send it. Move it into an \`action\`, or enqueue/schedule the send.`,
-                    metadata: { callee: call.callee, exportName: call.exportName, file: call.file, kind: call.kind, line: call.line },
-                }),
-            );
-        }
-
-        return findings;
+        return context.notifyCalls.map((call) =>
+            emit(notifySendOutsideAction, {
+                cacheKey: `notify_send_outside_action:${call.file}:${call.line.toString()}:${call.callee}`,
+                detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — a notification send is non-deterministic external I/O and a retried ${call.kind} would re-send it. Move it into an \`action\`, or enqueue/schedule the send.`,
+                metadata: { callee: call.callee, exportName: call.exportName, file: call.file, kind: call.kind, line: call.line },
+            }),
+        );
     },
     source: "static",
     title: "Notification send used outside an action",

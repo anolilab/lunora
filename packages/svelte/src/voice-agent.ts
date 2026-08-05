@@ -224,9 +224,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
         audioLevelStore.set(0);
     };
 
-    const endCall = (): void => {
-        teardown();
-    };
+    const endCall = teardown;
 
     const handleServerFrame = (frame: VoiceServerFrame): void => {
         const connection = current;

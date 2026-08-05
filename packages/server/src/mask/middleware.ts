@@ -87,9 +87,11 @@ import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
 import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
+import type { AuthLike } from "../rls/middleware";
+import { indexRolePermissions, isFacadeEntry, resolvePolicyAuth } from "../rls/middleware";
 import type { IndexFieldsByTable } from "../schema";
 import { tagMaskMiddleware } from "./policy-tag";
-import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies, Permission, Role } from "./types";
+import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies } from "./types";
 
 interface QueryPage {
     continueCursor: null | string;
@@ -190,30 +192,10 @@ interface MaskDatabase {
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
-/** Roles list source on the context. Tolerant of older auth states (mirrors RLS's `AuthLike`). */
-type AuthLike = {
-    getIdentity?: () => Promise<Record<string, unknown> | null>;
-    roles?: ReadonlyArray<string>;
-    userId?: null | string;
-};
-
 interface MaskContextIn {
     auth?: AuthLike;
     db: MaskDatabase;
 }
-
-const permissionName = (permission: Permission | string): string => (typeof permission === "string" ? permission : permission.name);
-
-/** Build a `roleName → granted-permission-names` index (mirrors RLS / storage-rules). */
-const indexRolePermissions = (roles: ReadonlyArray<Role> | undefined): Map<string, ReadonlySet<string>> => {
-    const map = new Map<string, ReadonlySet<string>>();
-
-    for (const role of roles ?? []) {
-        map.set(role.name, new Set((role.permissions ?? []).map((permission) => permissionName(permission))));
-    }
-
-    return map;
-};
 
 /**
  * FNV-1a (32-bit) digest as 8-char hex — the `"hash"` strategy's token. A fast,
@@ -359,21 +341,6 @@ const assertIndexFieldsAllowed = <Context>(
             throw new LunoraError("MASK_UNSUPPORTED", `${method}() filtering "${tableName}" by masked column "${field}" is not supported`);
         }
     }
-};
-
-/**
- * A value glued onto `ctx.db` is a per-table facade entry when it carries the
- * `findMany` + `withSearchIndex` accessor pair (mirrors RLS's check). Used to
- * find the entries that need re-binding through the masked writer.
- */
-const isFacadeEntry = (value: unknown): boolean => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        return false;
-    }
-
-    const candidate = value as Record<string, unknown>;
-
-    return typeof candidate["findMany"] === "function" && typeof candidate["withSearchIndex"] === "function";
 };
 
 /**
@@ -612,15 +579,8 @@ const wrapDatabase = <Context>(
             return { row: null, tableName: undefined };
         }
 
-        let probeTables: string[];
-
-        if (expectedTable === undefined) {
-            probeTables = [...perTable.keys()];
-        } else if (perTable.has(expectedTable)) {
-            probeTables = [expectedTable];
-        } else {
-            probeTables = [];
-        }
+        const pinnedProbe = expectedTable !== undefined && perTable.has(expectedTable) ? [expectedTable] : [];
+        const probeTables = expectedTable === undefined ? [...perTable.keys()] : pinnedProbe;
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
@@ -789,8 +749,7 @@ const wrapDatabase = <Context>(
             // A masked-column `where` is an existence/value oracle even through a
             // row-count (no value returned but presence leaks). `count(where)` may
             // pass a bare `where` or an args wrapper — unwrap the client `where`.
-            const wrapper =
-                whereOrArgs && typeof whereOrArgs === "object" && !Array.isArray(whereOrArgs) ? (whereOrArgs as Record<string, unknown>) : undefined;
+            const wrapper = asOptionsRecord(whereOrArgs);
             const where = wrapper && ("where" in wrapper || "baseWhere" in wrapper || "restrictsCounts" in wrapper) ? wrapper.where : whereOrArgs;
 
             assertWhereAllowed(tableName, where, "count");
@@ -955,29 +914,7 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
     const rolePermissions = indexRolePermissions(options.roles);
 
     const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
-        const auth = ctx.auth ?? {};
-        // eslint-disable-next-line unicorn/no-null -- MaskContext.auth.identity carries `null` for the anonymous/no-resolver case
-        const identity = (await auth.getIdentity?.()) ?? null;
-        const roles = auth.roles ?? [];
-
-        const granted = new Set<string>();
-
-        for (const roleName of roles) {
-            for (const name of rolePermissions.get(roleName) ?? []) {
-                granted.add(name);
-            }
-        }
-
-        const maskContext: MaskContext<Context> = {
-            auth: {
-                can: (permission) => granted.has(permissionName(permission)),
-                identity,
-                roles,
-                // eslint-disable-next-line unicorn/no-null -- MaskContext.auth.userId is a public `null | string` type
-                userId: auth.userId ?? null,
-            },
-            ctx,
-        };
+        const maskContext: MaskContext<Context> = { auth: await resolvePolicyAuth(ctx.auth ?? {}, rolePermissions), ctx };
 
         // Procedure-wide escape hatch: a privileged caller sees raw values, so
         // we forward the unwrapped ctx untouched (no wrap, no facade rebind).

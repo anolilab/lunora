@@ -124,6 +124,9 @@ const toCheckerType = (kind: HealthProbeKind | undefined): ("liveness" | "readin
         return ["readiness"];
     }
 
+    // `undefined`, `"both"`, and any value outside the union (untyped config)
+    // all run both checkers — an unknown kind must not be handed raw to the
+    // health-check library as a checker type it does not know.
     return ["liveness", "readiness"];
 };
 

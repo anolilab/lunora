@@ -144,44 +144,30 @@ const guardShardSweep = (
 };
 
 /**
- * The guarded forms of the two erase primitives, as a spreadable partial.
- *
- * Both are optional on {@link GuardableWriter} (the `.global()` twins omit them), and
- * both are destructive enough that the `...raw` spread must never expose them
- * unguarded. Built here rather than inline so {@link guardWriter} stays within its
- * complexity budget.
+ * Every method whose FIRST argument is the table name, gated by one uniform
+ * table-level check. Includes the optional members (`deleteAll`, `rankBefore`,
+ * `rankPageRows`) — a base without them simply isn't overridden, so they stay
+ * absent on the guarded writer exactly as the `...raw` spread left them.
+ * `deleteWhere`/`patchWhere` are handled inline instead: their keys must exist
+ * (as `undefined`) even when the base has no implementation.
  */
-const guardEraseMethods = (base: GuardableWriter, schema: GuardableSchema, guardTable: (tableName: string) => void): Record<string, unknown> => {
-    const overrides: Record<string, unknown> = {};
-    const { deleteAll, wipeShard } = base;
-
-    if (deleteAll) {
-        // Table-level gate, like `deleteWhere` — this is the most destructive method
-        // on the writer.
-        overrides["deleteAll"] = (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => {
-            guardTable(tableName);
-
-            return deleteAll(tableName, options);
-        };
-    }
-
-    if (wipeShard) {
-        overrides["wipeShard"] = (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => {
-            // Denied outright while any swept table is protected — erase from an
-            // admin/system writer (built without `enforceRls`) instead.
-            //
-            // Only the tables `wipeShard` actually touches are gated. It skips
-            // `.global()` tables by design (their rows live in D1, shared across
-            // shards), so gating them here would let a protected global table block a
-            // wipe whose real, shard-local targets are all `.public()`.
-            guardShardSweep(shardLocalTableNames(schema), options, guardTable);
-
-            return wipeShard(options);
-        };
-    }
-
-    return overrides;
-};
+const TABLE_FIRST_METHODS = [
+    "aggregate",
+    "count",
+    "deleteAll",
+    "findFirst",
+    "findFirstOrThrow",
+    "findMany",
+    "groupBy",
+    "insert",
+    "insertMany",
+    "insertManyUnsafe",
+    "query",
+    "rank",
+    "rankBefore",
+    "rankPage",
+    "rankPageRows",
+] as const;
 
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
@@ -282,24 +268,10 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
         }
     };
 
-    const baseRankBefore = base.rankBefore;
-    const baseRankPageRows = base.rankPageRows;
-
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
-        ...guardEraseMethods(base, schema, guardTable),
         [RLS_UNWRAP_SYMBOL]: raw,
 
-        aggregate: (tableName: string, options: unknown) => {
-            guardTable(tableName);
-
-            return base.aggregate(tableName, options);
-        },
-        count: (tableName: string, whereOrArgs?: unknown) => {
-            guardTable(tableName);
-
-            return base.count(tableName, whereOrArgs);
-        },
         delete: async (id: string, expectedTable?: string, options?: { hard?: boolean }) => {
             await guardById(id, expectedTable);
 
@@ -323,50 +295,10 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
                   return await base.deleteWhere?.(tableName, where, options);
               }
             : undefined,
-        findFirst: (tableName: string, args?: unknown) => {
-            guardTable(tableName);
-
-            return base.findFirst(tableName, args);
-        },
-        findFirstOrThrow: (tableName: string, args?: unknown) => {
-            guardTable(tableName);
-
-            return base.findFirstOrThrow(tableName, args);
-        },
-        findMany: (tableName: string, args?: unknown) => {
-            guardTable(tableName);
-
-            return base.findMany(tableName, args);
-        },
         get: async (id: string, expectedTable?: string) => {
             await guardById(id, expectedTable);
 
             return base.get(id, expectedTable);
-        },
-        groupBy: (tableName: string, options: unknown) => {
-            guardTable(tableName);
-
-            return base.groupBy(tableName, options);
-        },
-        insert: (tableName: string, document: unknown, options?: unknown) => {
-            guardTable(tableName);
-
-            return base.insert(tableName, document, options);
-        },
-        insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => {
-            // Every row targets the same table, so one table-level guard covers
-            // the batch; the payload cap is enforced by the delegated writer.
-            guardTable(tableName);
-
-            return base.insertMany(tableName, documents, options);
-        },
-        insertManyUnsafe: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { allowExplicitId?: boolean; limit?: number }) => {
-            // "Unsafe" skips validators/triggers, NOT the guard: the table-level
-            // secure-by-default check still runs (the spread in this writer would
-            // otherwise expose the raw method unguarded).
-            guardTable(tableName);
-
-            return base.insertManyUnsafe(tableName, documents, options);
         },
         lookupById: async (id: string, expectedTable?: string) => {
             // The spread would otherwise expose the raw lookup, letting a bare id
@@ -399,21 +331,6 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
                   return await base.patchWhere?.(tableName, args, options);
               }
             : undefined,
-        query: (tableName: string) => {
-            guardTable(tableName);
-
-            return base.query(tableName);
-        },
-        rank: (tableName: string, indexName: string, options: unknown) => {
-            guardTable(tableName);
-
-            return base.rank(tableName, indexName, options);
-        },
-        rankPage: (tableName: string, indexName: string, options?: unknown) => {
-            guardTable(tableName);
-
-            return base.rankPage(tableName, indexName, options);
-        },
         replace: async (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => {
             await guardById(id, expectedTable);
 
@@ -429,19 +346,40 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
         },
     };
 
-    if (baseRankBefore) {
-        guarded["rankBefore"] = (tableName: string, indexName: string, options: unknown) => {
-            guardTable(tableName);
+    // One uniform gate for every table-name-first method, `insertManyUnsafe`
+    // and `deleteAll` included — "unsafe" skips validators/triggers, NOT the
+    // guard, and the `...raw` spread must never expose a destructive raw
+    // method unguarded. A batch (`insertMany`) needs only this one table-level
+    // check: every row targets the same table, and the payload cap is enforced
+    // by the delegated writer.
+    const methods = base as unknown as Record<string, ((...args: unknown[]) => unknown) | undefined>;
 
-            return baseRankBefore(tableName, indexName, options);
-        };
+    for (const name of TABLE_FIRST_METHODS) {
+        const method = methods[name];
+
+        if (typeof method === "function") {
+            guarded[name] = (tableName: string, ...rest: unknown[]) => {
+                guardTable(tableName);
+
+                return method.call(base, tableName, ...rest);
+            };
+        }
     }
 
-    if (baseRankPageRows) {
-        guarded["rankPageRows"] = (tableName: string, indexName: string, options?: unknown) => {
-            guardTable(tableName);
+    if (base.wipeShard) {
+        const { wipeShard } = base;
 
-            return baseRankPageRows(tableName, indexName, options);
+        guarded["wipeShard"] = (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => {
+            // Denied outright while any swept table is protected — erase from an
+            // admin/system writer (built without `enforceRls`) instead.
+            //
+            // Only the tables `wipeShard` actually touches are gated. It skips
+            // `.global()` tables by design (their rows live in D1, shared across
+            // shards), so gating them here would let a protected global table block a
+            // wipe whose real, shard-local targets are all `.public()`.
+            guardShardSweep(shardLocalTableNames(schema), options, guardTable);
+
+            return wipeShard.call(base, options);
         };
     }
 

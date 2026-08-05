@@ -80,17 +80,7 @@ const clampLimit = (limit: number | undefined): number => {
 
     // Floor first so a fractional request can't slip past the integer LIMIT the
     // builder's `assertLimit` enforces, then bound to the documented range.
-    const floored = Math.floor(limit);
-
-    if (floored < 1) {
-        return 1;
-    }
-
-    if (floored > MAX_LIMIT) {
-        return MAX_LIMIT;
-    }
-
-    return floored;
+    return Math.min(Math.max(Math.floor(limit), 1), MAX_LIMIT);
 };
 
 /** Coerce a stored `ts` cell (number, or numeric string from some engines) to epoch-millis. */
@@ -387,28 +377,12 @@ export const createPipelineLogReader = (client: R2SqlClient, options: PipelineLo
             out.fields = decodeFields(fields);
         }
 
-        const shardKey = row[columns.shardKey];
+        for (const field of ["shardKey", "userId", "traceId", "spanId"] as const) {
+            const value = row[columns[field]];
 
-        if (shardKey !== undefined && shardKey !== null) {
-            out.shardKey = renderCell(shardKey);
-        }
-
-        const userId = row[columns.userId];
-
-        if (userId !== undefined && userId !== null) {
-            out.userId = renderCell(userId);
-        }
-
-        const traceId = row[columns.traceId];
-
-        if (traceId !== undefined && traceId !== null) {
-            out.traceId = renderCell(traceId);
-        }
-
-        const spanId = row[columns.spanId];
-
-        if (spanId !== undefined && spanId !== null) {
-            out.spanId = renderCell(spanId);
+            if (value !== undefined && value !== null) {
+                out[field] = renderCell(value);
+            }
         }
 
         return out;

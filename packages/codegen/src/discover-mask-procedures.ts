@@ -1,6 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
+import { tablesAccessedIn } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { MaskColumnMetadataIR, MaskMetadataIR, MaskProcedureIR, MaskStrategyIR } from "./ir";
 
@@ -138,54 +139,6 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
 /** Write-access call sites: `ctx.db.insert/patch/replace/delete` (masking never touches these — captured only for completeness). */
 const WRITE_METHODS = new Set(["delete", "insert", "patch", "replace"]);
 
-/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call against `methodSet`. */
-const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !methodSet.has(callee.getName())) {
-        return false;
-    }
-
-    const receiver = callee.getExpression();
-
-    if (Node.isPropertyAccessExpression(receiver)) {
-        return receiver.getName() === "db";
-    }
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "db";
-};
-
-/** String-literal first argument of a `ctx.db.<method>("table", ...)` call, or `""` when the argument is not a string literal (dynamic table — not lintable). */
-const tableArgumentOf = (call: CallExpression): string => {
-    const argument = call.getArguments()[0];
-
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralText() : "";
-};
-
-/** Discover the set of tables read and written inside the lexical scope of the exported procedure binding (including helper closures in the body). */
-const tablesAccessedIn = (declaration: TsNode): { tablesRead: string[]; tablesWritten: string[] } => {
-    const tablesRead = new Set<string>();
-    const tablesWritten = new Set<string>();
-
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (isDatabaseCall(call, READ_METHODS)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesRead.add(table);
-            }
-        } else if (isDatabaseCall(call, WRITE_METHODS)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesWritten.add(table);
-            }
-        }
-    }
-
-    return { tablesRead: [...tablesRead], tablesWritten: [...tablesWritten] };
-};
-
 // ---------------------------------------------------------------------------
 // Top-level discovery
 // ---------------------------------------------------------------------------
@@ -215,7 +168,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     }
 
     const chain = classified.receiver ? maskFromBuilderChain(classified.receiver) : { maskColumns: [], usesMask: false };
-    const { tablesRead, tablesWritten } = tablesAccessedIn(declaration);
+    const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
         exportName: declaration.getName(),

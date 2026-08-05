@@ -20,25 +20,16 @@ const containerPublicInternet: Lint = {
     level: "INFO",
     name: "container_public_internet",
     remediation: "Set `enableInternet: false` on the container if it doesn't call external services, or `true` to opt in deliberately.",
-    run: (context) => {
-        const findings = [];
-
-        for (const container of context.containers ?? []) {
-            if (container.enableInternet !== undefined) {
-                continue;
-            }
-
-            findings.push(
+    run: (context) =>
+        (context.containers ?? [])
+            .filter((container) => container.enableInternet === undefined)
+            .map((container) =>
                 emit(containerPublicInternet, {
                     cacheKey: `container_public_internet:${container.exportName}`,
                     detail: `Container "${container.exportName}" doesn't set enableInternet, so outbound internet is on by default (egress is billed).`,
                     metadata: { container: container.exportName },
                 }),
-            );
-        }
-
-        return findings;
-    },
+            ),
     source: "static",
     title: "Container egress enabled by default",
 };

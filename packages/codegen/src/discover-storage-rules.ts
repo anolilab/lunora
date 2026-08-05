@@ -9,6 +9,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { stringPropertyOf } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { StorageRuleIR, StorageRulesMetadataIR } from "./ir";
 
@@ -54,23 +55,6 @@ const storageRulesCallsInChain = (receiver: TsNode): CallExpression[] => {
     }
 
     return calls;
-};
-
-/** Read a string-literal property from an object literal, or `undefined` when absent/non-literal. */
-const stringPropertyOf = (object: TsNode, name: string): string | undefined => {
-    if (!Node.isObjectLiteralExpression(object)) {
-        return undefined;
-    }
-
-    const property = object.getProperty(name);
-
-    if (!property || !Node.isPropertyAssignment(property)) {
-        return undefined;
-    }
-
-    const initializer = property.getInitializer();
-
-    return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralText() : undefined;
 };
 
 /** Extract `{ bucket, on, prefix }` from each object-literal element of a `storageRules(rules)` array literal. */

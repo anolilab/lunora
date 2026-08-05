@@ -26,7 +26,7 @@
  * ada.cannot("insert", "docs", { ownerId: "x" }); // true  — denied
  * ```
  */
-import { computeReadBaseWhere, evaluateWrite, indexRolePermissions, matchesWhere, permissionName } from "./middleware";
+import { computeReadBaseWhere, evaluateWrite, indexRolePermissions, matchesWhere, resolveCan } from "./middleware";
 import type { Policy, PolicyContext, PolicyOperation, Role, WhereInput } from "./types";
 
 /**
@@ -102,19 +102,11 @@ export const expectPolicy = <Context = unknown>(policies: ReadonlyArray<Policy<C
             const auth = identity ?? {};
             const roles = auth.roles ?? [];
 
-            // Union the permissions of every role the identity carries — the
-            // same resolution the middleware performs once per request.
-            const granted = new Set<string>();
-
-            for (const roleName of roles) {
-                for (const name of rolePermissions.get(roleName) ?? []) {
-                    granted.add(name);
-                }
-            }
-
             const baseContext: PolicyContext<Context> = {
                 auth: {
-                    can: (permission) => granted.has(permissionName(permission)),
+                    // The same role→permission resolution the middleware performs
+                    // once per request.
+                    can: resolveCan(roles, rolePermissions),
                     // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public `… | null` type, mirroring the middleware
                     identity: auth.identity ?? null,
                     roles,

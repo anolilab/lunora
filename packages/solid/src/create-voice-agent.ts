@@ -243,9 +243,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
         setAudioLevel(0);
     };
 
-    const endCall = (): void => {
-        teardown();
-    };
+    const endCall = teardown;
 
     const handleServerFrame = (frame: VoiceServerFrame): void => {
         const connection = current;

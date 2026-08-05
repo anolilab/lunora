@@ -5,16 +5,11 @@ import type { ReactElement } from "react";
 import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
-import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
+import { FormField } from "./form";
+import { onSubmit } from "./on-submit";
+import { AuthCard, FormBanner, Skeleton, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
-
-const onSubmit =
-    (run: () => unknown) =>
-    (event: { preventDefault: () => void }): void => {
-        event.preventDefault();
-        void run();
-    };
 
 /**
  * The page the verification link lands on.
@@ -60,19 +55,7 @@ const ResendVerificationCard = (): ReactElement => {
         <AuthCard title={t.verifyEmail}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>{t.verifyEmailResend}</SubmitButton>
             </form>
         </AuthCard>

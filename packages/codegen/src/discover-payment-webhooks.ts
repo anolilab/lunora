@@ -1,8 +1,8 @@
-import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { calleeName, enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows } from "./discover-ast";
 import type { PaymentWebhookIR } from "./ir";
 
 /**
@@ -25,30 +25,24 @@ const toleranceFromOptions = (objectLiteral: ObjectLiteralExpression): number | 
     return property && Node.isPropertyAssignment(property) ? numericLiteralValue(property.getInitializer()) : undefined;
 };
 
-/** Every payment-adapter construction in one source file, tagged with the statically-known webhook replay tolerance (when the option is a numeric literal). */
-const paymentWebhooksInSourceFile = (sourceFile: SourceFile, relativePath: string): PaymentWebhookIR[] => {
-    const rows: PaymentWebhookIR[] = [];
+/** The IR row for a payment-adapter construction, tagged with the statically-known webhook replay tolerance (when the option is a numeric literal), or `undefined`. */
+const paymentWebhookInCall = (call: CallExpression, relativePath: string): PaymentWebhookIR | undefined => {
+    const callee = calleeName(call.getExpression());
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const callee = calleeName(call.getExpression());
-
-        if (callee === undefined || !WEBHOOK_ADAPTER_CALLEES.has(callee)) {
-            continue;
-        }
-
-        const [argument] = call.getArguments();
-        const toleranceSeconds = argument && Node.isObjectLiteralExpression(argument) ? toleranceFromOptions(argument) : undefined;
-
-        rows.push({
-            callee: callee as PaymentWebhookIR["callee"],
-            exportName: enclosingExportName(call),
-            file: relativePath,
-            line: call.getStartLineNumber(),
-            ...(toleranceSeconds === undefined ? {} : { toleranceSeconds }),
-        });
+    if (callee === undefined || !WEBHOOK_ADAPTER_CALLEES.has(callee)) {
+        return undefined;
     }
 
-    return rows;
+    const [argument] = call.getArguments();
+    const toleranceSeconds = argument && Node.isObjectLiteralExpression(argument) ? toleranceFromOptions(argument) : undefined;
+
+    return {
+        callee: callee as PaymentWebhookIR["callee"],
+        exportName: enclosingExportName(call),
+        file: relativePath,
+        line: call.getStartLineNumber(),
+        ...(toleranceSeconds === undefined ? {} : { toleranceSeconds }),
+    };
 };
 
 /**
@@ -65,16 +59,7 @@ const paymentWebhooksInSourceFile = (sourceFile: SourceFile, relativePath: strin
  * `undefined` and never flagged. The lint fires only above a conservative ceiling
  * so a normal skew tolerance is never a finding.
  */
-const discoverPaymentWebhooks = (project: Project, lunoraDirectory: string): PaymentWebhookIR[] => {
-    const rows: PaymentWebhookIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        rows.push(...paymentWebhooksInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return rows;
-};
+const discoverPaymentWebhooks = (project: Project, lunoraDirectory: string): PaymentWebhookIR[] =>
+    collectCallRows(project, lunoraDirectory, paymentWebhookInCall);
 
 export default discoverPaymentWebhooks;

@@ -1,9 +1,11 @@
 /**
  * The `/_lunora/admin/scheduled*` route cluster, extracted from `create-worker.ts`
  * (mirrors `./auth-admin-routes`). These back the studio's scheduled-jobs view:
- * list the pending jobs, read the SchedulerDO workpool status, subscribe to the
- * live job list over a WebSocket, and cancel a job by id. Each one proxies a
- * single SchedulerDO route on the resolved scheduler instance.
+ * list the pending jobs, read the SchedulerDO workpool status (the SLO view's
+ * per-pool `{ queued, inFlight, maxConcurrency }` + app-wide totals), list the
+ * dead-letter records, subscribe to the live job list over a WebSocket, and
+ * cancel / retry / purge a job by id. Each one proxies a single SchedulerDO
+ * route on the resolved scheduler instance.
  *
  * Every handler is closure-free of the worker's internals — it reaches the
  * admin-token gate, the scheduler-namespace requirement, and the resolved stub
@@ -38,32 +40,46 @@ interface ScheduledAdminRouteDeps {
 const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string, (request: Request) => Promise<Response> | Response> => {
     const { checkWsAdmin, requireSchedulerNamespace, resolveSchedulerStub, schedulerInstanceName } = deps;
 
-    const handleScheduledList = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Scheduled-list endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+    /** Admin-gated GET proxy to one SchedulerDO route; `label` names the endpoint in the 405. */
+    const proxyGet =
+        (doPath: string, label: string) =>
+        (request: Request): Promise<Response> => {
+            if (request.method !== "GET") {
+                throw new LunoraError(`${label} endpoint requires GET`, { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
 
-        const stub = resolveSchedulerStub(request);
-
-        return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
-    };
+            return resolveSchedulerStub(request).fetch(new Request(`https://scheduler.internal${doPath}`, { method: "GET" }));
+        };
 
     /**
-     * Proxy the SchedulerDO's `GET /status` so the studio can read the
-     * app-level workpool backlog (per-pool `{ queued, inFlight, maxConcurrency }`
-     * plus app-wide `backlog`/`inFlight` totals) that powers the SLO view. A
-     * sibling of {@link handleScheduledList}: same admin gate + scheduler-instance
-     * resolution via `resolveSchedulerStub`, just a different DO route.
+     * Admin-gated `POST { id }` proxy to one SchedulerDO route — the shared
+     * shape of cancel (`/cancel`), dead-letter retry (`/dead/retry`, resurrect a
+     * job that exhausted its retry budget), and dead-letter cancel
+     * (`/dead/cancel`, purge it). `label` names the endpoint in the id-missing
+     * 400; `endpointLabel` (defaulting to it) names it in the 405.
      */
-    const handleSchedulerStatus = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Scheduler-status endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+    const proxyPost =
+        (doPath: string, label: string, endpointLabel: string = label) =>
+        async (request: Request): Promise<Response> => {
+            if (request.method !== "POST") {
+                throw new LunoraError(`${endpointLabel} requires POST`, { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
 
-        const stub = resolveSchedulerStub(request);
+            const stub = resolveSchedulerStub(request);
+            const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
 
-        return stub.fetch(new Request("https://scheduler.internal/status", { method: "GET" }));
-    };
+            if (typeof body?.id !== "string" || body.id === "") {
+                throw new LunoraError(`${label} requires a string \`id\``, { code: "BAD_REQUEST", status: 400 });
+            }
+
+            return stub.fetch(
+                new Request(`https://scheduler.internal${doPath}`, {
+                    body: JSON.stringify({ id: body.id }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+        };
 
     /**
      * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
@@ -89,79 +105,13 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
         return stub.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
     };
 
-    const handleScheduledCancel = async (request: Request): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Scheduled-cancel endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-        const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
-
-        if (typeof body?.id !== "string" || body.id === "") {
-            throw new LunoraError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        return stub.fetch(
-            new Request("https://scheduler.internal/cancel", {
-                body: JSON.stringify({ id: body.id }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            }),
-        );
-    };
-
-    /**
-     * Proxy the SchedulerDO's `GET /dead` so the studio can list the
-     * dead-letter records — jobs that exhausted their retry budget and were
-     * parked instead of dropped. Same admin gate + scheduler-instance
-     * resolution as {@link handleScheduledList}.
-     */
-    const handleDeadList = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Scheduled dead-letter endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-
-        return stub.fetch(new Request("https://scheduler.internal/dead", { method: "GET" }));
-    };
-
-    /**
-     * Proxy `POST /dead/retry { id }` (resurrect a dead job) or
-     * `POST /dead/cancel { id }` (purge it) to the matching SchedulerDO route.
-     * Both share the admin gate, id validation, and instance resolution of
-     * {@link handleScheduledCancel}; only the upstream path differs.
-     */
-    const proxyDeadAction =
-        (doPath: string) =>
-        async (request: Request): Promise<Response> => {
-            if (request.method !== "POST") {
-                throw new LunoraError("Scheduled dead-letter action requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-            }
-
-            const stub = resolveSchedulerStub(request);
-            const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
-
-            if (typeof body?.id !== "string" || body.id === "") {
-                throw new LunoraError("Scheduled dead-letter action requires a string `id`", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            return stub.fetch(
-                new Request(`https://scheduler.internal${doPath}`, {
-                    body: JSON.stringify({ id: body.id }),
-                    headers: { "content-type": "application/json" },
-                    method: "POST",
-                }),
-            );
-        };
-
     return {
-        [SCHEDULED_CANCEL_PATH]: handleScheduledCancel,
-        [SCHEDULED_DEAD_CANCEL_PATH]: proxyDeadAction("/dead/cancel"),
-        [SCHEDULED_DEAD_PATH]: handleDeadList,
-        [SCHEDULED_DEAD_RETRY_PATH]: proxyDeadAction("/dead/retry"),
-        [SCHEDULED_PATH]: handleScheduledList,
-        [SCHEDULED_STATUS_PATH]: handleSchedulerStatus,
+        [SCHEDULED_CANCEL_PATH]: proxyPost("/cancel", "Scheduled-cancel", "Scheduled-cancel endpoint"),
+        [SCHEDULED_DEAD_CANCEL_PATH]: proxyPost("/dead/cancel", "Scheduled dead-letter action"),
+        [SCHEDULED_DEAD_PATH]: proxyGet("/dead", "Scheduled dead-letter"),
+        [SCHEDULED_DEAD_RETRY_PATH]: proxyPost("/dead/retry", "Scheduled dead-letter action"),
+        [SCHEDULED_PATH]: proxyGet("/list", "Scheduled-list"),
+        [SCHEDULED_STATUS_PATH]: proxyGet("/status", "Scheduler-status"),
         [SCHEDULED_WS_PATH]: handleScheduledWebSocket,
     };
 };

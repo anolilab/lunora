@@ -4,13 +4,10 @@
  * `@lunora/codegen` discovery call so inference and validation can never
  * disagree about what `lunora/queues.ts` declares.
  */
-import { existsSync } from "node:fs";
-
 import type { QueueIR } from "@lunora/codegen";
 import { discoverQueues, QUEUES_FILENAME } from "@lunora/codegen";
-import { Project } from "ts-morph";
 
-import join from "./path";
+import { discoverIr } from "./discover-info";
 
 interface DiscoverQueueInfoResult {
     /** Parse error message, when `lunora/queues.ts` exists but could not be analyzed. */
@@ -26,19 +23,9 @@ interface DiscoverQueueInfoResult {
  * decide whether that is a warning (validator) or ignorable (inference).
  */
 const discoverQueueInfo = (projectRoot: string, schemaDirectory: string): DiscoverQueueInfoResult => {
-    const queuesPath = join(projectRoot, schemaDirectory, QUEUES_FILENAME);
+    const { error, value } = discoverIr(projectRoot, schemaDirectory, QUEUES_FILENAME, discoverQueues);
 
-    if (!existsSync(queuesPath)) {
-        return { queues: [] };
-    }
-
-    try {
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-        return { queues: discoverQueues(project, join(projectRoot, schemaDirectory)) };
-    } catch (error: unknown) {
-        return { error: error instanceof Error ? error.message : String(error), queues: [] };
-    }
+    return error === undefined ? { queues: value ?? [] } : { error, queues: [] };
 };
 
 export type { DiscoverQueueInfoResult };

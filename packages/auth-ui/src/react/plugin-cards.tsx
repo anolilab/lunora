@@ -11,17 +11,12 @@ import { isFlowEnabled } from "../core/flow-gate";
 import { ROLE_OPTIONS } from "../core/labels";
 import { createDeviceSessionsController } from "../core/multi-session";
 import { createTeamsController } from "../core/teams";
+import { FormField } from "./form";
+import { onSubmit } from "./on-submit";
 import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 import { UserView } from "./user-button";
-
-const onSubmit =
-    (run: () => void) =>
-    (event: { preventDefault: () => void }): void => {
-        event.preventDefault();
-        run();
-    };
 
 /**
  * The accounts signed in on *this device*, with switch and sign-out-just-this.
@@ -324,19 +319,7 @@ const BackupCodesCard = (): ReactElement | null => {
                 })}
             >
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.currentPasswordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.currentPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.backupCodesRegenerate}</SubmitButton>
             </form>
             {codes.length > 0 ? (

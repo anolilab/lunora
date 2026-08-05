@@ -21,6 +21,7 @@
  */
 import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/shard-engine";
 
+import { fromBase64, toBase64 } from "../../../shared/base64";
 import { LunoraError } from "./errors";
 import type { ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
@@ -116,7 +117,9 @@ const mergeStrategyForAggregate = (
             return { kind: "min" };
         }
 
-        // avg requires (sum, count) — see jsdoc on MergeStrategy.
+        // avg (or any op the union does not yet list) must fail loudly — a
+        // silent default would mis-merge per-shard aggregate results across the
+        // fan-out.
         throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
             code: "BAD_REQUEST",
             status: 400,
@@ -714,6 +717,15 @@ const RANK_CLASS_NULL = 0;
 const RANK_CLASS_NUMBER = 1;
 const RANK_CLASS_TEXT = 2;
 
+/** Three-way `<` comparison. Code-unit order for strings (NOT locale-aware — must match SQLite's BINARY collation), and NaN/±Infinity-safe for numbers where subtraction is not. */
+const compareAsc = (a: number | string, b: number | string): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
+
 const rankValueClass = (value: unknown): number => {
     if (value === null || value === undefined) {
         return RANK_CLASS_NULL;
@@ -742,25 +754,11 @@ const compareRankValueAsc = (a: unknown, b: unknown): number => {
     }
 
     if (classA === RANK_CLASS_NUMBER) {
-        const numberA = a as number;
-        const numberB = b as number;
-
-        if (numberA < numberB) {
-            return -1;
-        }
-
-        return numberA > numberB ? 1 : 0;
+        return compareAsc(a as number, b as number);
     }
 
     // Text: code-unit comparison, matching the shard's BINARY collation default.
-    const textA = String(a);
-    const textB = String(b);
-
-    if (textA < textB) {
-        return -1;
-    }
-
-    return textA > textB ? 1 : 0;
+    return compareAsc(String(a), String(b));
 };
 
 /**
@@ -806,32 +804,11 @@ interface RankPageCursorState {
 }
 
 /** Encode the composite cursor as base64-of-JSON — opaque to callers, same envelope style as the shard-local rank cursor. */
-const encodeRankPageCursor = (state: RankPageCursorState): string => {
-    const json = JSON.stringify(state);
-    const bytes = new TextEncoder().encode(json);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary);
-};
+const encodeRankPageCursor = (state: RankPageCursorState): string => toBase64(new TextEncoder().encode(JSON.stringify(state)));
 
 const decodeRankPageCursor = (cursor: string): RankPageCursorState => {
-    let json: string;
-
     try {
-        const binary = atob(cursor);
-        const bytes = Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
-
-        json = new TextDecoder().decode(bytes);
-    } catch {
-        return { perShard: {} };
-    }
-
-    try {
-        const parsed = JSON.parse(json) as unknown;
+        const parsed = JSON.parse(new TextDecoder().decode(fromBase64(cursor))) as unknown;
 
         if (parsed !== null && typeof parsed === "object" && "perShard" in parsed) {
             const { perShard } = parsed as { perShard?: unknown };
@@ -880,20 +857,18 @@ const readRankPageResult = (payload: unknown): ShardRankPageResult => {
  * {@link compareRankKeys}, or `undefined` when every slice is drained. The
  * single step of the k-way merge.
  */
-const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPageDirection>): ShardSlice | undefined => {
-    let best: ShardSlice | undefined;
-    let bestKey: RankPageKey | undefined;
+const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPageDirection>): { row: RankPageRow; slice: ShardSlice } | undefined => {
+    let best: { row: RankPageRow; slice: ShardSlice } | undefined;
 
     for (const slice of slices) {
-        const candidate = slice.rows[slice.head];
+        const row = slice.rows[slice.head];
 
-        if (candidate === undefined) {
+        if (row === undefined) {
             continue;
         }
 
-        if (bestKey === undefined || compareRankKeys(candidate.key, bestKey, directions) < 0) {
-            best = slice;
-            bestKey = candidate.key;
+        if (best === undefined || compareRankKeys(row.key, best.row.key, directions) < 0) {
+            best = { row, slice };
         }
     }
 
@@ -971,14 +946,9 @@ const kWayMergeRankPages = (
             break;
         }
 
-        const row = best.rows[best.head];
-
-        if (row !== undefined) {
-            page.push(row.doc);
-            lastConsumedKey[best.shardKey] = row.key;
-        }
-
-        best.head += 1;
+        page.push(best.row.doc);
+        lastConsumedKey[best.slice.shardKey] = best.row.key;
+        best.slice.head += 1;
     }
 
     const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey);
@@ -1294,6 +1264,13 @@ const runBoundedJobs = async <T, R>(jobs: ReadonlyArray<T>, concurrency: number,
     return results;
 };
 
+/** Union of the live shard keys across every requested table, so a multi-table fan-out reaches each shard once. */
+const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<string>): Promise<string[]> => {
+    const perTableKeys = await Promise.all(tables.map(async (table) => registry.listShardKeys(table)));
+
+    return [...new Set(perTableKeys.flat())];
+};
+
 const runBoundedFanOut = async (
     namespace: ShardNamespaceLike,
     keys: ReadonlyArray<string>,
@@ -1311,21 +1288,13 @@ const runBoundedFanOut = async (
  * uses to stay stable across runs. Lets two shards file the same `{ a, b }`
  * group under the same merged bucket regardless of property order.
  */
-// Code-unit ordering (NOT locale-aware) is load-bearing: it must match the
-// aggregate counter's canonical key order across shards, so a localeCompare
-// comparator would risk bucketing the same key tuple differently per shard.
-const compareCodeUnits = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
-
 const canonicalJson = (record: Record<string, unknown>): string => {
     const ordered: Record<string, unknown> = {};
 
-    for (const key of Object.keys(record).toSorted(compareCodeUnits)) {
+    // Code-unit order (NOT locale-aware) is load-bearing: it must match the
+    // aggregate counter's canonical key order across shards, so a localeCompare
+    // comparator would risk bucketing the same key tuple differently per shard.
+    for (const key of Object.keys(record).toSorted(compareAsc)) {
         // eslint-disable-next-line unicorn/no-null -- the JSON canonical key encoding must serialize missing fields as `null` to stay byte-stable with the aggregate counter across shards
         ordered[key] = record[key] ?? null;
     }
@@ -1333,17 +1302,7 @@ const canonicalJson = (record: Record<string, unknown>): string => {
     return JSON.stringify(ordered);
 };
 
-const mergeConcat = (values: ReadonlyArray<unknown>): unknown[] => {
-    const out: unknown[] = [];
-
-    for (const v of values) {
-        if (Array.isArray(v)) {
-            out.push(...(v as ReadonlyArray<unknown>));
-        }
-    }
-
-    return out;
-};
+const mergeConcat = (values: ReadonlyArray<unknown>): unknown[] => values.flatMap((v) => (Array.isArray(v) ? (v as ReadonlyArray<unknown>) : []));
 
 type GroupByMergeOp = "max" | "min" | "sum";
 
@@ -1364,7 +1323,9 @@ const combineGroupByValue = (current: number, incoming: number, op: GroupByMerge
         }
 
         default: {
-            // Compile-time exhaustiveness guard (no runtime effect).
+            // Compile-time exhaustiveness guard; an op outside the union can
+            // only arrive via untyped input, and `mergeStrategyForAggregate`
+            // already rejected it upstream — never evaluate `Math[op]` on it.
             op satisfies never;
 
             return current;
@@ -1509,19 +1470,8 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
     }
 
     const direction = strategy.direction ?? "desc";
-    const ascending = (x: number, y: number): number => {
-        if (x < y) {
-            return -1;
-        }
 
-        if (x > y) {
-            return 1;
-        }
-
-        return 0;
-    };
-
-    collected.sort((a, b) => (direction === "asc" ? ascending(a.score, b.score) : ascending(b.score, a.score)));
+    collected.sort((a, b) => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score)));
 
     return collected.slice(0, strategy.k).map((entry) => entry.row);
 };
@@ -1541,11 +1491,11 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
         }
 
         case "max": {
-            return mergeNumeric(values, (best, candidate) => Math.max(best, candidate));
+            return mergeNumeric(values, Math.max);
         }
 
         case "min": {
-            return mergeNumeric(values, (best, candidate) => Math.min(best, candidate));
+            return mergeNumeric(values, Math.min);
         }
 
         case "rank": {
@@ -1586,41 +1536,28 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             const okValues: unknown[] = [];
-            const okShards: string[] = [];
             const errors: ShardError[] = [];
 
             for (const result of results) {
                 if (result.kind === "ok") {
                     okValues.push(result.value);
-                    okShards.push(result.shardKey);
                 } else {
                     errors.push({ message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
                 }
             }
 
-            const merged = mergeShardResults(okValues, request.fanOut.merge);
-
             return {
-                data: merged as T,
+                data: mergeShardResults(okValues, request.fanOut.merge) as T,
                 errors,
                 failed: errors.length,
-                ok: okShards.length,
+                ok: okValues.length,
             };
         },
         async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
-            const union = new Set<string>();
-            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
-
-            for (const keys of perTableKeys) {
-                for (const key of keys) {
-                    union.add(key);
-                }
-            }
-
-            const shardKeys = [...union];
+            const shardKeys = await unionShardKeys(options.registry, request.tables);
 
             const exportRequest: ShardRpcRequest = {
                 // Spread the caller's `args` (`batchSize`, future export knobs)
@@ -1640,16 +1577,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
             // same-args-to-all model; we drive a per-shard-args worker loop.
-            const union = new Set<string>();
-            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
-
-            for (const keys of perTableKeys) {
-                for (const key of keys) {
-                    union.add(key);
-                }
-            }
-
-            const shardKeys = [...union];
+            const shardKeys = await unionShardKeys(options.registry, request.tables);
             const cursors = request.cursors ?? {};
 
             const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {

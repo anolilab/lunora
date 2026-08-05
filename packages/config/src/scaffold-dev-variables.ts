@@ -162,6 +162,26 @@ const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: nu
 const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);
 
 /**
+ * The content's lines with every mintable placeholder secret replaced by a
+ * fresh generated value (recorded into `filledKeys`); comments and every other
+ * line are preserved verbatim. Shared by the full-file scaffold and the
+ * in-place fill.
+ */
+const fillSecretLines = (content: string, randomHex: (bytes: number) => string, filledKeys: string[]): string[] =>
+    content.split(DEV_VARS_NEWLINE).map((line) => {
+        const parsed = splitDevVariableLine(line);
+        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
+
+        if (!parsed || secret === undefined) {
+            return line;
+        }
+
+        filledKeys.push(parsed.key);
+
+        return `${parsed.key}="${secret}"`;
+    });
+
+/**
  * The outcome of planning a scaffold — a discriminated union so the orchestrator
  * never has to re-derive whether `content` is present.
  *
@@ -186,21 +206,8 @@ const planDevVariablesScaffold = (input: {
         return { status: "no-example" };
     }
 
-    const randomHex = input.randomHex ?? defaultRandomHex;
     const generatedKeys: string[] = [];
-
-    const lines = input.exampleContent.split(DEV_VARS_NEWLINE).map((line) => {
-        const parsed = splitDevVariableLine(line);
-        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
-
-        if (!parsed || secret === undefined) {
-            return line;
-        }
-
-        generatedKeys.push(parsed.key);
-
-        return `${parsed.key}="${secret}"`;
-    });
+    const lines = fillSecretLines(input.exampleContent, input.randomHex ?? defaultRandomHex, generatedKeys);
 
     return { content: lines.join("\n"), generatedKeys, status: "generate" };
 };
@@ -290,24 +297,24 @@ interface EnsureDevVariablesResult {
 const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
 
 /**
- * Atomically (over)write a `.dev.vars`-shaped file: write the content to a
- * sibling temp file with owner-only permissions (`mode: 0o600`), then
- * `rename` it over the target. The rename is atomic within one filesystem,
- * so a reader can never observe a half-written file, and an interrupt
- * mid-write can't truncate the target — for a file holding secrets that
- * would destroy every other local value alongside the new one, and the new
- * value itself has no other recoverable copy if it was never disclosed
- * anywhere else (Cloudflare secrets are write-only). On any failure the temp
- * file is removed before the error propagates; never logs or throws the
- * content. Exported so a caller writing to a `.dev.vars`-shaped path outside
- * this module (`lunora deploy`'s minted-secret disclosure) reuses this
- * instead of hand-rolling another copy of the pattern below.
+ * Atomically write `path`: write the content to a sibling temp file, then
+ * `rename` it over the target. The rename is atomic within one filesystem, so
+ * a reader can never observe a half-written file, and an interrupt mid-write
+ * can't truncate the target. The temp lives in the same directory so the
+ * rename never crosses devices (`EXDEV`); on any failure it is removed before
+ * the error propagates, and the content is never logged or thrown.
+ *
+ * `mode: 0o600` for secret-bearing files so they are owner-only, not
+ * world-readable on a shared host (Node otherwise defaults to 0o666 → 0o644
+ * under the usual umask); `rename` preserves the temp file's mode. `flag:
+ * "wx"` makes the temp write exclusive-create for callers racing a concurrent
+ * `lunora dev` / Vite dev server.
  */
-const writeDevVariablesFileAtomically = (path: string, content: string): void => {
+const atomicWrite = (path: string, content: string, options: { flag?: "wx"; mode?: number } = {}): void => {
     const temporaryPath = `${path}.tmp-${String(process.pid)}`;
 
     try {
-        writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+        writeFileSync(temporaryPath, content, { encoding: "utf8", ...options });
         renameSync(temporaryPath, path);
     } catch (error) {
         rmSync(temporaryPath, { force: true });
@@ -317,27 +324,16 @@ const writeDevVariablesFileAtomically = (path: string, content: string): void =>
 };
 
 /**
- * Atomically create `.dev.vars`: write the content to a sibling temp file with
- * exclusive-create (`wx`), then `rename` it over the target. The rename is atomic
- * within one filesystem, so a concurrent `lunora dev` / Vite dev server can never
- * observe a half-written file or clobber a peer's freshly generated secrets. The
- * temp lives in the same directory so the rename never crosses devices (`EXDEV`).
- * On any failure the temp file is removed before the error propagates.
+ * Atomically (over)write a `.dev.vars`-shaped file, owner-only. For a file
+ * holding secrets a torn write would destroy every other local value alongside
+ * the new one, and the new value itself has no other recoverable copy if it
+ * was never disclosed anywhere else (Cloudflare secrets are write-only).
+ * Exported so a caller writing to a `.dev.vars`-shaped path outside this
+ * module (`lunora deploy`'s minted-secret disclosure) reuses this instead of
+ * hand-rolling another copy of the pattern.
  */
-const atomicCreateDevVariables = (path: string, content: string): void => {
-    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
-
-    try {
-        // `mode: 0o600` so the freshly generated secrets are owner-only, not
-        // world-readable on a shared host (Node otherwise defaults to 0o666 →
-        // 0o644 under the usual umask). `rename` preserves the temp file's mode.
-        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-        renameSync(temporaryPath, path);
-    } catch (error) {
-        rmSync(temporaryPath, { force: true });
-
-        throw error;
-    }
+const writeDevVariablesFileAtomically = (path: string, content: string): void => {
+    atomicWrite(path, content, { mode: 0o600 });
 };
 
 /** Retry budget for {@link appendDevVariables}'s compare-and-swap loop. */
@@ -372,7 +368,7 @@ const sameFingerprint = (a: FileFingerprint | undefined, b: FileFingerprint | un
  * Append lines to an existing `.dev.vars`, atomically and owner-only, via a
  * compare-and-swap retry loop.
  *
- * Mirrors {@link atomicCreateDevVariables} in shape (sibling temp file, `mode:
+ * Mirrors {@link atomicWrite} in shape (sibling temp file, `mode:
  * 0o600`, atomic `rename`), but a plain read-modify-write is not enough here:
  * two concurrent `lunora dev` / Vite processes could both read the same old
  * content, each append their own additions, and the second `rename` would
@@ -476,12 +472,13 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
 
         // Re-check right before the write: another process may have created the
         // file since the `existsSync` above. If so, bail rather than overwrite the
-        // peer's (possibly secret-bearing) file.
+        // peer's (possibly secret-bearing) file. The `wx` temp write keeps the
+        // create exclusive against a peer racing this same path.
         if (existsSync(devVariablesPath)) {
             return { addedKeys: [], generatedKeys: [], status: "skipped-exists" };
         }
 
-        atomicCreateDevVariables(devVariablesPath, plan.content);
+        atomicWrite(devVariablesPath, plan.content, { flag: "wx", mode: 0o600 });
         deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
 
         return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };
@@ -593,19 +590,9 @@ const ensureDevVariablesExample = (cwd: string, packageNames: ReadonlyArray<stri
     }
 
     const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-    const newContent = `${existing}${separator}\n${block}\n`;
 
-    const temporaryPath = `${examplePath}.tmp-${String(process.pid)}`;
-
-    try {
-        // `.dev.vars.example` is committed and public — no need for 0o600.
-        writeFileSync(temporaryPath, newContent, { encoding: "utf8" });
-        renameSync(temporaryPath, examplePath);
-    } catch (error) {
-        rmSync(temporaryPath, { force: true });
-
-        throw error;
-    }
+    // `.dev.vars.example` is committed and public — no need for 0o600.
+    atomicWrite(examplePath, `${existing}${separator}\n${block}\n`);
 
     // Return the keys we actually added.
     return requiredSecrets(packageNames)
@@ -641,18 +628,7 @@ const planDevSecretsFill = (input: { existingContent: string; randomHex?: (bytes
     const filledKeys: string[] = [];
 
     // 1. Fill empty/placeholder secret-keyed values in place.
-    const lines = input.existingContent.split(DEV_VARS_NEWLINE).map((line) => {
-        const parsed = splitDevVariableLine(line);
-        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
-
-        if (!parsed || secret === undefined) {
-            return line;
-        }
-
-        filledKeys.push(parsed.key);
-
-        return `${parsed.key}="${secret}"`;
-    });
+    const lines = fillSecretLines(input.existingContent, randomHex, filledKeys);
 
     // 2. Append any missing core secret (a present-but-empty one is already
     //    handled by the fill pass — every CORE_SECRETS key matches SECRET_KEY).
@@ -713,16 +689,7 @@ const fillDevSecrets = (deps: { cwd: string; info?: (message: string) => void; r
         return { addedKeys: [], filledKeys: [], status: "unchanged" };
     }
 
-    const temporaryPath = `${devVariablesPath}.tmp-${String(process.pid)}`;
-
-    try {
-        writeFileSync(temporaryPath, plan.content, { encoding: "utf8", mode: 0o600 });
-        renameSync(temporaryPath, devVariablesPath);
-    } catch (error) {
-        rmSync(temporaryPath, { force: true });
-
-        throw error;
-    }
+    atomicWrite(devVariablesPath, plan.content, { mode: 0o600 });
 
     const generated = [...plan.filledKeys, ...plan.addedKeys];
 

@@ -23,6 +23,7 @@
 import type { WorkflowInstanceStatus, WorkflowsRestClient } from "@lunora/workflow";
 
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const WORKFLOWS_INSTANCES_PATH = "/_lunora/admin/workflows/instances";
 const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
@@ -113,9 +114,7 @@ const buildWorkflowsAdminRoutes = (
     const { assertAdmin, resolveWorkflowsClient } = deps;
 
     const handleInstances = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Workflows instances endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Workflows instances");
 
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);
@@ -146,9 +145,7 @@ const buildWorkflowsAdminRoutes = (
     };
 
     const handleInstance = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Workflows instance endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Workflows instance");
 
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);
@@ -161,9 +158,7 @@ const buildWorkflowsAdminRoutes = (
     };
 
     const handleStatus = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Workflows status endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "Workflows status");
 
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);

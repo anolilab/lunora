@@ -963,6 +963,20 @@ const listTables = (sql: SqlExec): TableInfo[] => {
 const tableExists = (sql: SqlExec, table: string): boolean =>
     sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", table).toArray().length > 0;
 
+/** Reject an internal or unknown table with the data browser's typed 404 before any SQL interpolation. */
+const assertUserTable = (sql: SqlExec, table: string): void => {
+    if (isInternalTable(table) || !tableExists(sql, table)) {
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
+    }
+};
+
+/** Physical column names of `quotedTable`, from PRAGMA. */
+const physicalColumnNames = (sql: SqlExec, quotedTable: string): string[] =>
+    sql
+        .exec<{ name: string }>(`PRAGMA table_info(${quotedTable})`)
+        .toArray()
+        .map((column) => column.name);
+
 /** SQL operator per direct {@link FilterOperator} (everything but `contains`, which uses LIKE). */
 const FILTER_SQL_OPERATOR: Record<Exclude<FilterOperator, "contains">, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
 
@@ -1071,7 +1085,7 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
     let to: number;
 
     if (day !== undefined) {
-        to = Date.UTC(year, month === undefined ? 0 : month - 1, day + 1);
+        to = Date.UTC(year, (month ?? 1) - 1, day + 1);
     } else if (month === undefined) {
         to = Date.UTC(year + 1, 0, 1);
     } else {
@@ -1169,18 +1183,12 @@ const buildOrderBy = (orderBy: OrderByClause | undefined, physicalColumns: strin
 const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage => {
     const { table } = options;
 
-    if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
-    }
+    assertUserTable(sql, table);
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
     const offset = Math.max(0, Math.trunc(options.offset ?? 0));
     const quoted = quoteIdentifier(table);
-
-    const columns = sql
-        .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
-        .toArray()
-        .map((column) => column.name);
+    const columns = physicalColumnNames(sql, quoted);
 
     const needle = options.search?.trim() ?? "";
 
@@ -1247,17 +1255,11 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
 const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { hasMore: boolean; ids: string[] } => {
     const { table } = options;
 
-    if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
-    }
+    assertUserTable(sql, table);
 
     const limit = clamp(Math.trunc(options.limit ?? MAX_PAGE_SIZE), 1, MAX_PAGE_SIZE);
     const quoted = quoteIdentifier(table);
-
-    const columns = sql
-        .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
-        .toArray()
-        .map((column) => column.name);
+    const columns = physicalColumnNames(sql, quoted);
 
     const needle = options.search?.trim() ?? "";
     const predicate = buildTablePredicate(columns, needle, options.filters);
@@ -1270,7 +1272,7 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
             : sql.exec<{ id: string }>(`SELECT id FROM ${quoted} WHERE ${predicate.where} LIMIT ?`, ...predicate.parameters, limit + 1).toArray();
 
     const hasMore = fetched.length > limit;
-    const ids = (hasMore ? fetched.slice(0, limit) : fetched).map((row) => row.id);
+    const ids = fetched.slice(0, limit).map((row) => row.id);
 
     return { hasMore, ids };
 };
@@ -1324,15 +1326,10 @@ const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns:
 const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResult => {
     const { column, table } = options;
 
-    if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
-    }
+    assertUserTable(sql, table);
 
     const quoted = quoteIdentifier(table);
-    const physicalColumns = sql
-        .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
-        .toArray()
-        .map((info) => info.name);
+    const physicalColumns = physicalColumnNames(sql, quoted);
 
     if (!knownDisplayColumns(sql, quoted, physicalColumns).has(column)) {
         throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
@@ -1370,11 +1367,10 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
         .toArray();
 
     const truncated = rows.length > limit;
-    const kept = truncated ? rows.slice(0, limit) : rows;
 
     return {
         truncated,
-        values: kept.map((row) => {
+        values: rows.slice(0, limit).map((row) => {
             return { count: Number(row.count), value: row.value };
         }),
     };
@@ -1436,10 +1432,7 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
         }
 
         const quoted = quoteIdentifier(table);
-        const physicalColumns = sql
-            .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
-            .toArray()
-            .map((column) => column.name);
+        const physicalColumns = physicalColumnNames(sql, quoted);
 
         for (const column of columns) {
             const resolved = resolveColumnExpression(column, physicalColumns);

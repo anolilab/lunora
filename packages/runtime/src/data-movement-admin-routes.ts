@@ -14,7 +14,7 @@
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
  * and the coordinator / connector-format types.
  */
-import { readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
+import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
@@ -44,19 +44,7 @@ interface ExportBody {
 }
 
 const parseExportBody = async (request: Request): Promise<ExportBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof LunoraError) {
-            throw error;
-        }
-
-        throw new LunoraError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
+    const body = await readLooseJsonBody(request, "Export");
 
     const candidate = (body ?? {}) as { tables?: unknown };
 
@@ -80,6 +68,10 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
 
     return { tables };
 };
+
+/** Narrow an untrusted `tables` value to its string entries, or `undefined` when it isn't an array. */
+const stringTables = (raw: unknown): string[] | undefined =>
+    Array.isArray(raw) ? raw.filter((table): table is string => typeof table === "string") : undefined;
 
 /** The worker internals the data-movement routes reach through injection rather than closure. */
 interface DataMovementAdminRouteDeps {
@@ -207,7 +199,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
         const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
         const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+        const requestedTables = stringTables(raw["tables"]);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -261,7 +253,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const raw = await readJsonBodyWithLimit(request);
         const state = decodeConnectorCursor(raw["cursor"]);
         const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+        const requestedTables = stringTables(raw["tables"]);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -400,7 +392,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const raw = await readJsonBodyWithLimit(request);
         const sinkName = typeof raw["sink"] === "string" ? raw["sink"] : undefined;
         const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+        const requestedTables = stringTables(raw["tables"]);
 
         if (sinkName === undefined) {
             throw new LunoraError("Export-tap `sink` must name a configured sink", { code: "BAD_REQUEST", status: 400 });

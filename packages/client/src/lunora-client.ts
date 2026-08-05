@@ -456,31 +456,32 @@ const withQuery = (path: string, params: Record<string, number | string | undefi
 const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
 
 /**
- * Build a coded `Error` from a stream-scoped server `error` frame. Pulls the
- * `code`/`message` off either the top-level fields or the nested `error`
- * envelope (the server uses both shapes), falling back to "stream error".
+ * Pull the `code`/`message` off a server `error` frame — either the top-level
+ * fields or the nested `error` envelope (the server uses both shapes) — falling
+ * back to `fallbackMessage` when neither carries a usable message.
  */
-const buildStreamError = (message: ServerErrorMessage): Error => {
+const parseServerError = (message: ServerErrorMessage, fallbackMessage: string): { code: string | undefined; messageText: string } => {
     const errorEnvelope = message.error as { code?: unknown; message?: unknown } | undefined;
     const code = typeof errorEnvelope?.code === "string" ? errorEnvelope.code : undefined;
     const nestedMessage = typeof errorEnvelope?.message === "string" ? errorEnvelope.message : undefined;
-    const messageText = (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? "stream error";
+
+    return { code, messageText: (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? fallbackMessage };
+};
+
+/** Build a coded `Error` from a stream-scoped server `error` frame. */
+const buildStreamError = (message: ServerErrorMessage): Error => {
+    const { code, messageText } = parseServerError(message, "stream error");
 
     return code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
 };
 
 /**
  * Build a {@link SubscriptionError} from a subscription-scoped server `error`
- * frame. Pulls `code`/`message` off either the top-level fields or the nested
- * `error` envelope (the server uses both shapes), mirroring
- * {@link buildStreamError}, so an `onError` consumer can branch on a coded
- * rejection instead of only seeing the human message.
+ * frame, so an `onError` consumer can branch on a coded rejection instead of
+ * only seeing the human message.
  */
 const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError => {
-    const errorEnvelope = message.error as { code?: unknown; message?: unknown } | undefined;
-    const code = typeof errorEnvelope?.code === "string" ? errorEnvelope.code : undefined;
-    const nestedMessage = typeof errorEnvelope?.message === "string" ? errorEnvelope.message : undefined;
-    const messageText = (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? "subscription error";
+    const { code, messageText } = parseServerError(message, "subscription error");
 
     return { message: messageText, ...(code === undefined ? {} : { code }) };
 };
@@ -1812,9 +1813,7 @@ class LunoraClient {
     // --- RPC ---------------------------------------------------------------
 
     public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
     }
@@ -1834,9 +1833,7 @@ class LunoraClient {
      * incompatible with DO hibernation).
      */
     public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         if (!this.fetchImpl) {
             throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
@@ -1905,9 +1902,7 @@ class LunoraClient {
         args: ArgsOf<F>,
         options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
     ): Promise<ReturnOf<F>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const argsRecord = args as Record<string, unknown>;
 
@@ -1989,9 +1984,7 @@ class LunoraClient {
     }
 
     public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
     }
@@ -2065,9 +2058,7 @@ class LunoraClient {
             toArgs?: (chunk: ReadonlyArray<unknown>) => Record<string, unknown>;
         } = {},
     ): Promise<{ chunks: number; imported: number }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const chunkSize = Math.max(1, Math.trunc(options.chunkSize ?? 500));
         const toArgs =
@@ -2112,9 +2103,7 @@ class LunoraClient {
      * absent field so an older worker yields an empty-but-valid shape.
      */
     public async shardTraffic(table: string): Promise<ShardTrafficResult> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SHARD_TRAFFIC_PATH, "POST", { table })) as Partial<ShardTrafficResult>;
 
@@ -2131,9 +2120,7 @@ class LunoraClient {
      * must match. Powers `@lunora/studio`'s scheduled-jobs panel.
      */
     public async listScheduledJobs(): Promise<ScheduleRecord[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
 
@@ -2150,9 +2137,7 @@ class LunoraClient {
      * Defaults any absent field so an older worker still yields a valid shape.
      */
     public async schedulerStatus(): Promise<SchedulerStatus> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SCHEDULED_STATUS_PATH, "GET")) as Partial<SchedulerStatus>;
 
@@ -2165,9 +2150,7 @@ class LunoraClient {
 
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
     public async cancelScheduledJob(id: string): Promise<{ cancelled: boolean }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
 
@@ -2183,9 +2166,7 @@ class LunoraClient {
      * {@link listScheduledJobs}. Powers `@lunora/studio`'s dead-letter panel.
      */
     public async listDeadJobs(): Promise<ScheduleRecord[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SCHEDULED_DEAD_PATH, "GET")) as { records?: ScheduleRecord[] };
 
@@ -2198,9 +2179,7 @@ class LunoraClient {
      * matched. Hits the admin-gated `POST /_lunora/admin/scheduled/dead/retry`.
      */
     public async retryDeadJob(id: string): Promise<{ retried: boolean }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SCHEDULED_DEAD_RETRY_PATH, "POST", { id })) as { retried?: boolean };
 
@@ -2213,9 +2192,7 @@ class LunoraClient {
      * admin-gated `POST /_lunora/admin/scheduled/dead/cancel`.
      */
     public async removeDeadJob(id: string): Promise<{ removed: boolean }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(SCHEDULED_DEAD_CANCEL_PATH, "POST", { id })) as { removed?: boolean };
 
@@ -2239,9 +2216,7 @@ class LunoraClient {
         perPage?: number;
         status?: WorkflowInstanceStatus;
     }): Promise<WorkflowInstancePage> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const query = new URLSearchParams({ name: options.name });
 
@@ -2270,9 +2245,7 @@ class LunoraClient {
 
     /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */
     public async getWorkflowInstance(options: { id: string; name: string }): Promise<WorkflowInstanceDetail> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const query = new URLSearchParams({ id: options.id, name: options.name });
         const body = (await this.adminFetch(`${WORKFLOWS_INSTANCE_PATH}?${query.toString()}`, "GET")) as Partial<WorkflowInstanceDetail>;
@@ -2292,9 +2265,7 @@ class LunoraClient {
 
     /** Pause / resume / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
     public async setWorkflowInstanceStatus(options: { action: WorkflowInstanceAction; id: string; name: string }): Promise<{ status: WorkflowInstanceStatus }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(WORKFLOWS_STATUS_PATH, "POST", { action: options.action, id: options.id, name: options.name })) as {
             status?: WorkflowInstanceStatus;
@@ -2314,9 +2285,7 @@ class LunoraClient {
      * unsubscribe function that closes the socket and stops reconnecting.
      */
     public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         if (this.WebSocketImpl === undefined) {
             return () => undefined;
@@ -2452,9 +2421,7 @@ class LunoraClient {
      * runner auto-discovery.
      */
     public async listFunctions(): Promise<FunctionDescriptor[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
 
@@ -2471,9 +2438,7 @@ class LunoraClient {
      * scheduler jobs.
      */
     public async getCronJobs(): Promise<CronJobInfo[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(CRON_JOBS_PATH, "GET")) as { jobs?: CronJobInfo[] };
 
@@ -2490,9 +2455,7 @@ class LunoraClient {
      * and rejects with the dispatch error otherwise.
      */
     public async runCronJob(name: string): Promise<{ name: string; ran: boolean }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(CRON_JOBS_RUN_PATH, "POST", { name })) as { name?: string; ran?: boolean };
 
@@ -2508,9 +2471,7 @@ class LunoraClient {
      * document (no `paths`), so callers can render a "not configured" state.
      */
     public async fetchOpenApi(): Promise<Record<string, unknown>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         return (await this.adminFetch(OPENAPI_PATH, "GET")) as Record<string, unknown>;
     }
@@ -2526,9 +2487,7 @@ class LunoraClient {
      * document (no `methods`), so callers can render a "not configured" state.
      */
     public async fetchOpenRpc(): Promise<Record<string, unknown>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         return (await this.adminFetch(OPENRPC_PATH, "GET")) as Record<string, unknown>;
     }
@@ -2543,30 +2502,9 @@ class LunoraClient {
      * `@lunora/studio`'s file browser.
      */
     public async listStorageObjects(options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
-        const params = new URLSearchParams();
-
-        if (options.prefix !== undefined && options.prefix !== "") {
-            params.set("prefix", options.prefix);
-        }
-
-        if (options.cursor !== undefined && options.cursor !== "") {
-            params.set("cursor", options.cursor);
-        }
-
-        if (options.limit !== undefined) {
-            params.set("limit", String(options.limit));
-        }
-
-        if (options.bucket !== undefined && options.bucket !== "") {
-            params.set("bucket", options.bucket);
-        }
-
-        const query = params.toString();
-        const path = query === "" ? STORAGE_PATH : `${STORAGE_PATH}?${query}`;
+        const path = withQuery(STORAGE_PATH, { bucket: options.bucket, cursor: options.cursor, limit: options.limit, prefix: options.prefix });
         const body = (await this.adminFetch(path, "GET")) as { cursor?: string; objects?: StorageObject[] };
 
         return { cursor: body.cursor, objects: body.objects ?? [] };
@@ -2579,9 +2517,7 @@ class LunoraClient {
      * browser's per-row delete; resolves `{ deleted, key }`.
      */
     public async deleteStorageObject(key: string, options?: { bucket?: string }): Promise<{ deleted: boolean; key: string }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}${bucketQuery(options?.bucket)}`;
         const body = (await this.adminFetch(path, "DELETE")) as { deleted?: boolean; key?: string };
@@ -2596,9 +2532,7 @@ class LunoraClient {
      * array when the worker configures no `storageBuckets`, i.e. single-bucket).
      */
     public async listStorageBuckets(): Promise<string[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(STORAGE_BUCKETS_PATH, "GET")) as { buckets?: string[] };
 
@@ -2618,9 +2552,7 @@ class LunoraClient {
         contentType?: string;
         key: string;
     }): Promise<{ etag?: string; key: string }> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const path = `${STORAGE_PATH}?key=${encodeURIComponent(options.key)}${bucketQuery(options.bucket)}`;
         const body = (await this.adminFetch(path, "PUT", options.body, options.contentType)) as { etag?: string; key?: string };
@@ -2640,9 +2572,7 @@ class LunoraClient {
      * as future fields there).
      */
     public async signedStorageUrl(key: string, options?: { bucket?: string; expiresInSeconds?: number }): Promise<string> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const expiresInSeconds = options?.expiresInSeconds;
         const expiryQuery = expiresInSeconds === undefined ? "" : `&expiresIn=${encodeURIComponent(expiresInSeconds.toString())}`;
@@ -2665,9 +2595,7 @@ class LunoraClient {
      * browser's global mode.
      */
     public async listGlobalTables(): Promise<GlobalTableInfo[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         return (await this.adminFetch(GLOBAL_TABLES_PATH, "GET")) as GlobalTableInfo[];
     }
@@ -2679,9 +2607,7 @@ class LunoraClient {
      * query param and the values are bound server-side.
      */
     public async readGlobalTablePage(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const params = new URLSearchParams({ table: options.table });
 
@@ -2708,9 +2634,7 @@ class LunoraClient {
      * server-side. Powers the global data browser's facet sidebar.
      */
     public async facetGlobalColumn(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }): Promise<GlobalFacetResult> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const params = new URLSearchParams({ column: options.column, table: options.table });
 
@@ -2737,9 +2661,7 @@ class LunoraClient {
      * from the generated `LUNORA_VECTOR_INDEXES` registry.
      */
     public async listVectorIndexes(): Promise<VectorIndexSummary[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(VECTOR_INDEXES_PATH, "GET")) as { indexes?: VectorIndexSummary[] };
 
@@ -2754,9 +2676,7 @@ class LunoraClient {
      * wired (the index lists read-only).
      */
     public async queryVectorIndex(options: { name: string; text: string; topK?: number }): Promise<VectorQueryMatch[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(VECTOR_QUERY_PATH, "POST", options)) as { matches?: VectorQueryMatch[] };
 
@@ -2774,9 +2694,7 @@ class LunoraClient {
      * state rather than an error.
      */
     public async queryLogArchive(query: PipelineLogQuery = {}): Promise<PipelineLogPage> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         // `PipelineLogQuery` is a named interface (no index signature), so widen it
         // to the record shape `adminFetch` serializes.
@@ -2794,9 +2712,7 @@ class LunoraClient {
      * studio's KV browser.
      */
     public async listKvNamespaces(): Promise<KvNamespaceSummary[]> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const body = (await this.adminFetch(KV_NAMESPACES_PATH, "GET")) as { namespaces?: KvNamespaceSummary[] };
 
@@ -2809,9 +2725,7 @@ class LunoraClient {
      * `GET /_lunora/admin/kv/keys` endpoint.
      */
     public async listKvKeys(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }): Promise<KvKeyListResult> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const path = withQuery(KV_KEYS_PATH, {
             cursor: options.cursor,
@@ -2829,9 +2743,7 @@ class LunoraClient {
      * when the key is absent.
      */
     public async getKvValue(options: { key: string; namespace: string }): Promise<KvValueResult> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
 
@@ -2852,9 +2764,7 @@ class LunoraClient {
         namespace: string;
         value: string;
     }): Promise<void> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         await this.adminFetch(KV_VALUE_PATH, "PUT", options);
     }
@@ -2864,9 +2774,7 @@ class LunoraClient {
      * admin-gated `DELETE /_lunora/admin/kv/value` endpoint.
      */
     public async deleteKvKey(options: { key: string; namespace: string }): Promise<void> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
 
@@ -2893,9 +2801,7 @@ class LunoraClient {
             sortDirection?: "asc" | "desc";
         } = {},
     ): Promise<AuthPage<AuthUser>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const path = withQuery(AUTH_USERS_PATH, {
             filterField: options.filterField,
@@ -3153,27 +3059,11 @@ class LunoraClient {
 
     /** List auth sessions, paged and optionally filtered to one user. */
     public async listAuthSessions(options: { limit?: number; offset?: number; userId?: string } = {}): Promise<AuthPage<AuthSession>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
-        const params = new URLSearchParams();
+        const path = withQuery(AUTH_SESSIONS_PATH, { limit: options.limit, offset: options.offset, userId: options.userId });
 
-        if (options.userId !== undefined && options.userId !== "") {
-            params.set("userId", options.userId);
-        }
-
-        if (options.limit !== undefined) {
-            params.set("limit", String(options.limit));
-        }
-
-        if (options.offset !== undefined) {
-            params.set("offset", String(options.offset));
-        }
-
-        const query = params.toString();
-
-        return (await this.adminFetch(query === "" ? AUTH_SESSIONS_PATH : `${AUTH_SESSIONS_PATH}?${query}`, "GET")) as AuthPage<AuthSession>;
+        return (await this.adminFetch(path, "GET")) as AuthPage<AuthSession>;
     }
 
     // --- Subscriptions ------------------------------------------------------
@@ -3184,9 +3074,7 @@ class LunoraClient {
         callback: (data: ReturnOf<F>) => void,
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         const argsRecord = (args ?? {}) as Record<string, unknown>;
         const key = SubscriptionRegistry.key(function_.__lunoraRef, argsRecord, options.shardKey);
@@ -3260,13 +3148,7 @@ class LunoraClient {
             }
 
             if (subscriptionState.callbacks.size === 0) {
-                const conn = this.getConnection(subscriptionState.shardKey);
-                const ok = conn ? sendOn(conn, { id: subscriptionState.id, type: "unsubscribe" }) : false;
-
-                if (!ok && conn) {
-                    conn.pendingUnsubscribes.push({ id: subscriptionState.id, type: "unsubscribe" });
-                }
-
+                this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
                 this.subscriptions.remove(subscriptionState);
             }
         };
@@ -3289,9 +3171,7 @@ class LunoraClient {
         callback: ShapeCallback,
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         this.nextShapeId += 1;
         const id = `shape_${this.nextShapeId.toString()}`;
@@ -3315,12 +3195,7 @@ class LunoraClient {
 
         return () => {
             this.shapeSubscriptions.delete(id);
-            const conn = this.getConnection(state.shardKey);
-            const ok = conn ? sendOn(conn, { id, type: "shape_unsubscribe" }) : false;
-
-            if (!ok && conn) {
-                conn.pendingUnsubscribes.push({ id, type: "shape_unsubscribe" });
-            }
+            this.sendOrQueueUnsubscribe(state.shardKey, id, "shape_unsubscribe");
         };
     }
 
@@ -3347,9 +3222,7 @@ class LunoraClient {
         args: ArgsOf<F>,
         options: { maxBuffer?: number; shardKey?: string } = {},
     ): StreamIterable<ReturnOf<F>> {
-        if (this.closed) {
-            throw new LunoraError("INTERNAL", "LunoraClient is closed");
-        }
+        this.assertOpen();
 
         if (this.WebSocketImpl === undefined) {
             throw new LunoraError("INTERNAL", "LunoraClient: streams require a WebSocket implementation");
@@ -3526,6 +3399,13 @@ class LunoraClient {
         this.tabCoordinator = undefined;
     }
 
+    /** Guard shared by every public entry point: a closed client accepts no further calls. */
+    private assertOpen(): void {
+        if (this.closed) {
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
+        }
+    }
+
     /**
      * Tear down one {@link ShardConnection}'s live state: clear its reconnect/
      * connect timers, stop its heartbeat, and close its socket (if any).
@@ -3690,14 +3570,9 @@ class LunoraClient {
                     }
 
                     dropConfirmedLayers(state, cursor);
-                    notifySubscription(state, state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers));
-
-                    return;
                 }
 
-                const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
-
-                notifySubscription(state, folded);
+                notifySubscription(state, foldOptimistic(data, state.optimisticLayers));
             },
             onSubscriptionError: (key, error) => {
                 const state = this.subscriptions.get(key);
@@ -4179,9 +4054,7 @@ class LunoraClient {
         } catch {
             // Unwind only this callback's own writes, most-recent first, so a
             // throwing localStore update leaves the cache as it found it.
-            for (let index = rollbacks.length - 1; index >= 0; index -= 1) {
-                rollbacks[index]?.();
-            }
+            rollbackOptimistic(rollbacks);
 
             return;
         }
@@ -4192,6 +4065,18 @@ class LunoraClient {
 
     private getConnection(shardKey: string | undefined): ShardConnection | undefined {
         return this.connections.get(connectionKey(shardKey));
+    }
+
+    /**
+     * Send an unsubscribe frame (tagged with its wire type) on the shard's
+     * socket, or queue it for the next reconnect when the send can't go out.
+     */
+    private sendOrQueueUnsubscribe(shardKey: string | undefined, id: string, type: "shape_unsubscribe" | "unsubscribe"): void {
+        const conn = this.getConnection(shardKey);
+
+        if (conn && !sendOn(conn, { id, type })) {
+            conn.pendingUnsubscribes.push({ id, type });
+        }
     }
 
     /**
@@ -5339,7 +5224,7 @@ class LunoraClient {
         // is at/under this frame's cursor), then display `serverBase` re-folded
         // through whatever optimistic layers remain pending (rebasing).
         dropConfirmedLayers(state, state.serverCursor);
-        notifySubscription(state, state.optimisticLayers.length === 0 ? payload : foldOptimistic(payload, state.optimisticLayers));
+        notifySubscription(state, foldOptimistic(payload, state.optimisticLayers));
 
         // When cross-tab sync is active and we're the WS leader, broadcast
         // the new value to follower tabs so they stay in sync without their

@@ -236,10 +236,6 @@ const useVoiceAgent = (options: UseVoiceAgentOptions): UseVoiceAgentResult => {
         setAudioLevel(0);
     }, []);
 
-    const endCall = useCallback((): void => {
-        teardown();
-    }, [teardown]);
-
     const handleServerFrame = useCallback((frame: VoiceServerFrame): void => {
         const connection = connectionRef.current;
 
@@ -489,7 +485,7 @@ const useVoiceAgent = (options: UseVoiceAgentOptions): UseVoiceAgentResult => {
     // Tear the call down if the component unmounts mid-call.
     useEffect(() => teardown, [teardown]);
 
-    return { audioLevel, connected, endCall, error, interimTranscript, isMuted, sendText, startCall, status, toggleMute, transcript };
+    return { audioLevel, connected, endCall: teardown, error, interimTranscript, isMuted, sendText, startCall, status, toggleMute, transcript };
 };
 
 export type { UseVoiceAgentOptions, UseVoiceAgentResult, VoiceReference, VoiceStatus };

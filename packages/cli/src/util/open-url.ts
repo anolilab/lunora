@@ -31,19 +31,8 @@ const platformCommand = (): { args: ReadonlyArray<string>; command: string } => 
 // Characters that cmd.exe re-parses even inside an argv slot (libuv only
 // double-quotes args containing space/tab/quote, so these leak through to
 // `cmd /c start`). Percent-encoding each keeps the value a valid URL while
-// stripping its shell meaning. `%` is encoded first so we don't double-encode.
-const escapeForCmd = (url: string): string =>
-    url
-        .replaceAll("%", "%25")
-        .replaceAll("&", "%26")
-        .replaceAll("|", "%7C")
-        .replaceAll("^", "%5E")
-        .replaceAll("<", "%3C")
-        .replaceAll(">", "%3E")
-        .replaceAll("(", "%28")
-        .replaceAll(")", "%29")
-        .replaceAll('"', "%22")
-        .replaceAll("!", "%21");
+// stripping its shell meaning; the single pass can't double-encode `%`.
+const escapeForCmd = (url: string): string => url.replaceAll(/[!"%&()<>^|]/gu, (char) => `%${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}`);
 
 const platformOpener = (url: string): Promise<void> =>
     new Promise<void>((resolve, reject) => {

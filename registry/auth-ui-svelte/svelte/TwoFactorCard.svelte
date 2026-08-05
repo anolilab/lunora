@@ -5,7 +5,7 @@
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
@@ -40,18 +40,7 @@
             }}
         >
             <FormBanner error={$backupForm.formError} />
-            <Field
-                autoComplete="one-time-code"
-                field={$backupForm.fields.code}
-                label={t.backupCodeLabel}
-                name="code"
-                onBlur={() => {
-                    backupActions.blur("code");
-                }}
-                onChange={(value) => {
-                    backupActions.setField("code", value);
-                }}
-            />
+            <FormField actions={backupActions} autoComplete="one-time-code" field="code" fields={$backupForm.fields} label={t.backupCodeLabel} />
             <SubmitButton pending={$backupForm.status === "submitting"}>{t.twoFactor}</SubmitButton>
         </form>
         {#snippet footer()}
@@ -77,18 +66,7 @@
             }}
         >
             <FormBanner error={$form.formError} />
-            <Field
-                autoComplete="one-time-code"
-                field={$form.fields.code}
-                label={t.codeLabel}
-                name="code"
-                onBlur={() => {
-                    actions.blur("code");
-                }}
-                onChange={(value) => {
-                    actions.setField("code", value);
-                }}
-            />
+            <FormField {actions} autoComplete="one-time-code" field="code" fields={$form.fields} label={t.codeLabel} />
             <SubmitButton pending={$form.status === "submitting"}>{t.twoFactor}</SubmitButton>
         </form>
         {#snippet footer()}

@@ -5,16 +5,10 @@ import type { ReactElement } from "react";
 import { createAccountsController } from "../core/accounts";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createTwoFactorSetupController, totpSecret } from "../core/two-factor-setup";
+import { onSubmit } from "./on-submit";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: { preventDefault: () => void }): void => {
-        event.preventDefault();
-        void action();
-    };
 
 const TwoFactorSetupCard = (): ReactElement | null => {
     // Enrolment needs the account's password, which an OAuth-only user does not

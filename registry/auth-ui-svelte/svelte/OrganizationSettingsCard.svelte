@@ -4,7 +4,7 @@
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
@@ -31,39 +31,9 @@
                 }}
             >
                 <FormBanner error={$form.formError} success={$form.successMessage} />
-                <Field
-                    field={$form.fields.name}
-                    label={t.organizationName}
-                    name="organizationName"
-                    onBlur={() => {
-                        actions.blur("name");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("name", value);
-                    }}
-                />
-                <Field
-                    field={$form.fields.slug}
-                    label={t.organizationSlug}
-                    name="organizationSlug"
-                    onBlur={() => {
-                        actions.blur("slug");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("slug", value);
-                    }}
-                />
-                <Field
-                    field={$form.fields.logo}
-                    label={t.organizationLogo}
-                    name="organizationLogo"
-                    onBlur={() => {
-                        actions.blur("logo");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("logo", value);
-                    }}
-                />
+                <FormField {actions} field="name" fields={$form.fields} label={t.organizationName} name="organizationName" />
+                <FormField {actions} field="slug" fields={$form.fields} label={t.organizationSlug} name="organizationSlug" />
+                <FormField {actions} field="logo" fields={$form.fields} label={t.organizationLogo} name="organizationLogo" />
                 <SubmitButton pending={$form.status === "submitting"}>{t.saveChanges}</SubmitButton>
             </form>
         {/if}

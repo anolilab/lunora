@@ -10,31 +10,35 @@ const MULTI_SELECT_SEPARATOR = /[\s,]+/u;
  */
 const isInteractive = (): boolean => process.stdin.isTTY;
 
+/** Ask one question on stdin and resolve with the raw answer, always closing the readline interface. */
+const askLine = async (prompt: string): Promise<string> => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    try {
+        return await new Promise<string>((resolve) => {
+            rl.question(prompt, (input) => {
+                resolve(input);
+            });
+        });
+    } finally {
+        rl.close();
+    }
+};
+
 /**
  * Ask a yes/no question on stdin. With `defaultYes`, an empty answer (just
  * Enter) counts as yes and the prompt should read `[Y/n]`; otherwise empty is
  * no (`[y/N]`). Shared by the CLI (`reset`, `dev`) and the Vite dev server.
  */
 const promptYesNo = async (prompt: string, options?: { defaultYes?: boolean }): Promise<boolean> => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await askLine(prompt);
+    const normalised = answer.trim().toLowerCase();
 
-    try {
-        const answer = await new Promise<string>((resolve) => {
-            rl.question(prompt, (input) => {
-                resolve(input);
-            });
-        });
-
-        const normalised = answer.trim().toLowerCase();
-
-        if (normalised === "") {
-            return options?.defaultYes === true;
-        }
-
-        return normalised === "y" || normalised === "yes";
-    } finally {
-        rl.close();
+    if (normalised === "") {
+        return options?.defaultYes === true;
     }
+
+    return normalised === "y" || normalised === "yes";
 };
 
 /**
@@ -73,34 +77,23 @@ const promptSelect = async <T extends string>(message: string, options: Readonly
     );
     const promptMessage = `${message}\n${lines.join("\n")}\n> ${defaultIndex >= 0 ? `[${String(defaultIndex + 1)}] ` : ""}`;
 
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await askLine(promptMessage);
+    const trimmed = answer.trim();
 
-    try {
-        const answer = await new Promise<string>((resolve) => {
-            rl.question(promptMessage, (input) => {
-                resolve(input);
-            });
-        });
-
-        const trimmed = answer.trim();
-
-        if (trimmed === "") {
-            return settings?.default;
-        }
-
-        const choice = Number.parseInt(trimmed, 10);
-
-        if (Number.isInteger(choice) && choice >= 1 && choice <= options.length) {
-            return options[choice - 1]?.value;
-        }
-
-        // Also accept the option's value or label typed verbatim.
-        const byText = options.find((option) => option.value === trimmed || option.label.toLowerCase() === trimmed.toLowerCase());
-
-        return byText?.value ?? settings?.default;
-    } finally {
-        rl.close();
+    if (trimmed === "") {
+        return settings?.default;
     }
+
+    const choice = Number.parseInt(trimmed, 10);
+
+    if (Number.isInteger(choice) && choice >= 1 && choice <= options.length) {
+        return options[choice - 1]?.value;
+    }
+
+    // Also accept the option's value or label typed verbatim.
+    const byText = options.find((option) => option.value === trimmed || option.label.toLowerCase() === trimmed.toLowerCase());
+
+    return byText?.value ?? settings?.default;
 };
 
 /**
@@ -115,21 +108,10 @@ const promptText = async (message: string, settings?: { default?: string }): Pro
         return settings?.default;
     }
 
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await askLine(message);
+    const trimmed = answer.trim();
 
-    try {
-        const answer = await new Promise<string>((resolve) => {
-            rl.question(message, (input) => {
-                resolve(input);
-            });
-        });
-
-        const trimmed = answer.trim();
-
-        return trimmed === "" ? settings?.default : trimmed;
-    } finally {
-        rl.close();
-    }
+    return trimmed === "" ? settings?.default : trimmed;
 };
 
 /** One choice in a {@link promptMultiSelect} list. Identical shape to {@link SelectOption}; `value` is returned when picked. */
@@ -162,53 +144,42 @@ const promptMultiSelect = async <T extends string>(
     const defaultHint = defaults.length === 0 ? "" : `[${defaults.join(", ")}] `;
     const promptMessage = `${message} (comma-separated; Enter for default)\n${lines.join("\n")}\n> ${defaultHint}`;
 
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await askLine(promptMessage);
+    const trimmed = answer.trim();
 
-    try {
-        const answer = await new Promise<string>((resolve) => {
-            rl.question(promptMessage, (input) => {
-                resolve(input);
-            });
-        });
-
-        const trimmed = answer.trim();
-
-        if (trimmed === "") {
-            return [...defaults];
-        }
-
-        // Tokens split on commas or whitespace; each is a 1-based index or a
-        // value/label typed verbatim. Resolve to values, preserving option order.
-        const tokens = trimmed
-            .split(MULTI_SELECT_SEPARATOR)
-            .map((token) => token.trim())
-            .filter((token) => token !== "");
-        const picked = new Set<T>();
-
-        for (const token of tokens) {
-            const choice = Number.parseInt(token, 10);
-
-            if (Number.isInteger(choice) && choice >= 1 && choice <= options.length && String(choice) === token) {
-                const byIndex = options[choice - 1]?.value;
-
-                if (byIndex !== undefined) {
-                    picked.add(byIndex);
-                }
-
-                continue;
-            }
-
-            const byText = options.find((option) => option.value === token || option.label.toLowerCase() === token.toLowerCase());
-
-            if (byText !== undefined) {
-                picked.add(byText.value);
-            }
-        }
-
-        return options.filter((option) => picked.has(option.value)).map((option) => option.value);
-    } finally {
-        rl.close();
+    if (trimmed === "") {
+        return [...defaults];
     }
+
+    // Tokens split on commas or whitespace; each is a 1-based index or a
+    // value/label typed verbatim. Resolve to values, preserving option order.
+    const tokens = trimmed
+        .split(MULTI_SELECT_SEPARATOR)
+        .map((token) => token.trim())
+        .filter((token) => token !== "");
+    const picked = new Set<T>();
+
+    for (const token of tokens) {
+        const choice = Number.parseInt(token, 10);
+
+        if (Number.isInteger(choice) && choice >= 1 && choice <= options.length && String(choice) === token) {
+            const byIndex = options[choice - 1]?.value;
+
+            if (byIndex !== undefined) {
+                picked.add(byIndex);
+            }
+
+            continue;
+        }
+
+        const byText = options.find((option) => option.value === token || option.label.toLowerCase() === token.toLowerCase());
+
+        if (byText !== undefined) {
+            picked.add(byText.value);
+        }
+    }
+
+    return options.filter((option) => picked.has(option.value)).map((option) => option.value);
 };
 
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo };

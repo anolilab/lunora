@@ -5,7 +5,7 @@ import { cacheControlValue, cacheVaryValue, restMethodForKind, restPathForFuncti
 import { GENERATED_HEADER } from "./emit";
 import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
-import { argsObjectSchema, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
+import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenAPI document assembly ───────────────────────────────────────────────
 
@@ -24,6 +24,9 @@ const pathParameterNames = (path: string): string[] => [...path.matchAll(ROUTE_P
  */
 const toOpenApiPath = (path: string): string => path.replaceAll(ROUTE_PARAM_RE, "{$1}");
 
+/** Unwrap a `v.optional(inner)` validator to its inner validator for parameter schemas. */
+const unwrapOptional = (validator: ValidatorIR): ValidatorIR => (validator.kind === "optional" ? (validator.inner ?? validator) : validator);
+
 /** An OpenAPI parameter object built from one declared validator. */
 interface OpenApiParameter {
     description?: string;
@@ -39,7 +42,7 @@ const buildParameters = (route: HttpRouteIR): OpenApiParameter[] => {
     const parameters: OpenApiParameter[] = [];
 
     for (const [name, validator] of Object.entries(route.searchParams)) {
-        const inner = validator.kind === "optional" ? (validator.inner ?? validator) : validator;
+        const inner = unwrapOptional(validator);
 
         parameters.push({
             description: `Query parameter \`${name}\``,
@@ -51,7 +54,7 @@ const buildParameters = (route: HttpRouteIR): OpenApiParameter[] => {
     }
 
     for (const [name, validator] of Object.entries(route.params)) {
-        const inner = validator.kind === "optional" ? (validator.inner ?? validator) : validator;
+        const inner = unwrapOptional(validator);
 
         parameters.push({
             description: `Path parameter \`${name}\``,
@@ -130,13 +133,13 @@ const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
  * `shardKey`.
  */
 const rpcOperation = (definition: FunctionIR): { operation: Record<string, unknown>; pathKey: string } => {
-    const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
     const tag = sanitizeNamespace(definition.filePath);
+    const functionPath = `${tag}:${definition.exportName}`;
 
     const requestSchema: JsonSchema = {
         additionalProperties: false,
         properties: {
-            args: argsObjectSchema(definition.args),
+            args: objectSchema(definition.args),
             functionPath: { const: functionPath, type: "string" },
             shardKey: { description: "Optional shard key; omitted routes to the default shard.", type: "string" },
         },
@@ -239,14 +242,14 @@ const cacheResponseHeaders = (cache: ExposeCacheIR | undefined, method: "get" | 
  * query parameters; a `mutation`/`action` maps to `POST` with a JSON request body.
  */
 const restOperation = (definition: FunctionIR): { method: "get" | "post"; operation: Record<string, unknown>; path: string } | undefined => {
-    const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
+    const tag = sanitizeNamespace(definition.filePath);
+    const functionPath = `${tag}:${definition.exportName}`;
     const path = restPathForFunction(functionPath);
 
     if (path === undefined) {
         return undefined;
     }
 
-    const tag = sanitizeNamespace(definition.filePath);
     // Single-source the transport method from the shared REST-surface contract (the
     // same mapping the runtime router derives), so the spec cannot drift on method.
     // `stream` is already filtered upstream, so the narrowing cast is safe here.
@@ -276,7 +279,7 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
     if (isQuery) {
         // A query's args ride the query string; each becomes an optional query parameter.
         const parameters = Object.entries(definition.args).map(([name, validator]) => {
-            const inner = validator.kind === "optional" ? (validator.inner ?? validator) : validator;
+            const inner = unwrapOptional(validator);
 
             return {
                 description: `Argument \`${name}\` (JSON-encoded for non-string values).`,
@@ -295,7 +298,7 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
     }
 
     operation.requestBody = {
-        content: { "application/json": { schema: argsObjectSchema(definition.args) } },
+        content: { "application/json": { schema: objectSchema(definition.args) } },
         required: Object.keys(definition.args).length > 0,
     };
 
@@ -376,7 +379,6 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
 
         pathItem[rest.method] = rest.operation;
         paths[rest.path] = pathItem;
-        tagNames.add(sanitizeNamespace(definition.filePath));
     }
 
     const tags = [...tagNames]

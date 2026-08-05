@@ -62,6 +62,23 @@ const RUN_AS_PATH = "__lunora_admin__:runAs";
 /** Reserved admin function prefix — these carry the admin bearer rather than a user session. */
 const ADMIN_PREFIX = "__lunora_admin__:";
 
+/** Read the response body (JSON when parseable, raw text otherwise) and log it pretty-printed. Returns the body. */
+const readAndLogBody = async (response: { text: () => Promise<string> }, logger: Logger): Promise<unknown> => {
+    const text = await response.text();
+
+    let body: unknown;
+
+    try {
+        body = JSON.parse(text);
+    } catch {
+        body = text;
+    }
+
+    logger.info(JSON.stringify(body, undefined, 2));
+
+    return body;
+};
+
 /**
  * A shard denial on a plain call is almost always "this app gates on identity
  * and the CLI brought none" — say so, rather than leaving the operator to work
@@ -202,17 +219,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         method: "POST",
     });
 
-    const text = await response.text();
-
-    let body: unknown;
-
-    try {
-        body = JSON.parse(text);
-    } catch {
-        body = text;
-    }
-
-    options.logger.info(JSON.stringify(body, undefined, 2));
+    const body = await readAndLogBody(response, options.logger);
 
     hintOnShardDenial(options.logger, { body, runAs, status: response.status });
 
@@ -248,4 +255,4 @@ const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ a
 
 export { execute };
 export type { FetchLike, RunCommandOptions, RunCommandResult };
-export { runRpcCommand };
+export { readAndLogBody, runRpcCommand };

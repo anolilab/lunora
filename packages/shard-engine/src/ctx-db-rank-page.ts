@@ -31,7 +31,7 @@ import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { SCAN_DEP } from "./dependency-tracker";
 import { runDrizzle } from "./do-exec";
 import { param } from "./drizzle";
-import { decodeCursor } from "./query-args";
+import { decodeCursor, toBase64 } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "./schema-types";
 
@@ -41,20 +41,10 @@ const DOC_COLUMN = "__doc__";
  * Encode an array of cursor values as a base64 JSON string. Matches the
  * format `decodeCursor` (`query-args.ts`) round-trips, so rank-page cursors
  * decode through the same helper as the keyset cursors that drive
- * `findMany`/`paginate`. Inlined (rather than reusing `encodeCursor` which is
- * row-shaped) so rank cursors can be N-tuples.
+ * `findMany`/`paginate`. Not `encodeCursor` (which is row-shaped) — rank
+ * cursors are N-tuples.
  */
-const encodeRankCursor = (values: ReadonlyArray<unknown>): string => {
-    const json = JSON.stringify(values);
-    const bytes = new TextEncoder().encode(json);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary);
-};
+const encodeRankCursor = (values: ReadonlyArray<unknown>): string => toBase64(JSON.stringify(values));
 
 /**
  * Resolve a `rankPage` keyset resume point to the flat `[partitionKey,

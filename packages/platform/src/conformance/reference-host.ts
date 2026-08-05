@@ -444,7 +444,8 @@ const createReferenceHost = (): ReferenceHost => {
             return id;
         },
         removeTag: (handle, tag) => {
-            const socketState = runtimeSockets.get(handleIds.get(handle) ?? "");
+            const id = handleIds.get(handle) ?? "";
+            const socketState = runtimeSockets.get(id);
 
             if (socketState === undefined) {
                 return;
@@ -456,7 +457,7 @@ const createReferenceHost = (): ReferenceHost => {
                 socketState.tags.delete(tag);
             }
 
-            durableTags.set(handleIds.get(handle) ?? "", new Set(socketState.tags));
+            durableTags.set(id, new Set(socketState.tags));
         },
         setTag: (handle, tag) => {
             const id = handleIds.get(handle) ?? "";
