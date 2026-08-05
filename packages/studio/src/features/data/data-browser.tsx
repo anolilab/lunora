@@ -11,7 +11,7 @@ import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
 import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
 import { backRelationKey, backRelationsFor } from "./back-relations";
-import { DataBrowserPage } from "./data-browser-page";
+import DataBrowserPage from "./data-browser-page";
 import DataFacets from "./data-facets";
 import { GenerateRowsDialog } from "./generate-rows-dialog";
 import { CellDetailDialog } from "./grid-features";

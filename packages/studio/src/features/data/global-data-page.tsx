@@ -114,4 +114,4 @@ const GlobalDataPage = ({
     );
 };
 
-export { GlobalDataPage };
+export default GlobalDataPage;

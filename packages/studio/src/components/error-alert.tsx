@@ -22,7 +22,7 @@ interface ErrorAlertProps {
  * message paragraphs so the studio surfaces the same fix the CLI and error
  * overlay show.
  */
-export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement => {
+const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement => {
     const t = useT();
     // `undefined` when no console is mounted above this tree (a host embedding a
     // single panel, or a standalone render in a test). The affordance is then not
@@ -68,3 +68,4 @@ export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): React
         </Alert>
     );
 };
+export default ErrorAlert;

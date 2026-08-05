@@ -26,7 +26,7 @@ const reasonMessage = (reason: GenerateSqlDegradedReason): string => {
  * anything they typed. It has already passed the same read-only gate the server
  * enforces before it gets here.
  */
-export const SqlAssistantBar = ({
+const SqlAssistantBar = ({
     assistant,
     failed,
     onGenerated,
@@ -125,3 +125,4 @@ export const SqlAssistantBar = ({
         </div>
     );
 };
+export default SqlAssistantBar;

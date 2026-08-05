@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { AuthSessionsPanel } from "../../../src/features/auth/auth-sessions-panel";
+import AuthSessionsPanel from "../../../src/features/auth/auth-sessions-panel";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 

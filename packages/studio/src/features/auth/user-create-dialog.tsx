@@ -8,7 +8,7 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { ModalShell } from "../../components/ui/modal-shell";
-import { useAsyncSubmit } from "../../hooks/use-async-submit";
+import useAsyncSubmit from "../../hooks/use-async-submit";
 import { useAuthConfig } from "../../hooks/use-auth-config";
 import { useT } from "../../i18n/i18n-context";
 

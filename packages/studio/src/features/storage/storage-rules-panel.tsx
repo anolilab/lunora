@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -36,7 +36,7 @@ const sortRules = (rules: StorageRuleMetadata[]): StorageRuleMetadata[] =>
  * served by `__lunora_admin__:storageRules`, refreshing on every codegen run.
  */
 
-export const StorageRulesPanel = (): ReactElement => {
+const StorageRulesPanel = (): ReactElement => {
     const t = useT();
 
     const { data, error, errorSource } = useAdminQuery<StorageRulesResult>(ADMIN_FUNCTIONS.storageRules, {});
@@ -98,3 +98,4 @@ export const StorageRulesPanel = (): ReactElement => {
         </div>
     );
 };
+export default StorageRulesPanel;

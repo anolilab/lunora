@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";

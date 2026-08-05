@@ -43,7 +43,7 @@ const toChartPoints = (buckets: ReadonlyArray<QueryInsightBucket>): ChartPoint[]
  * `@lunora/do`'s `readQueryInsights`), so they are accurate to a bucket's width
  * rather than exact — read them as an order of magnitude.
  */
-export const QueryInsightsRange = ({ shardKey = "" }: { readonly shardKey?: string }): ReactElement => {
+const QueryInsightsRange = ({ shardKey = "" }: { readonly shardKey?: string }): ReactElement => {
     const t = useT();
 
     const [range, setRange] = useState<QueryInsightRange>("15m");
@@ -123,3 +123,4 @@ export const QueryInsightsRange = ({ shardKey = "" }: { readonly shardKey?: stri
         </div>
     );
 };
+export default QueryInsightsRange;

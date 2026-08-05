@@ -43,7 +43,7 @@ import { Skeleton } from "../components/ui/skeleton";
 // so it — and its heavy deps (`@xyflow/react`, `recharts`, the SQL editor, the
 // data grid) — loads in its own on-demand `chunk-*.js`, not in Home's first load.
 import { HomePanel } from "../features/home/home-panel";
-import { OperationConsole } from "../features/logs/operation-console";
+import OperationConsole from "../features/logs/operation-console";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
@@ -56,8 +56,8 @@ import { cn } from "../lib/utils";
 import { CommandPalette, openCommandPalette } from "./command-palette";
 import { useNavLabels } from "./nav-labels";
 import type { NavGroup, NavGroupKey, StudioTab } from "./nav-types";
-import { StudioHeader } from "./studio-header";
-import { useConsoleShortcut } from "./use-console-shortcut";
+import StudioHeader from "./studio-header";
+import useConsoleShortcut from "./use-console-shortcut";
 
 // Route-level lazy panels. Each becomes its own on-demand `chunk-*.js` under
 // `dist/standalone/` (esbuild `splitting` in `scripts/build-standalone.mjs`),
@@ -84,19 +84,19 @@ const InsightsPanel = lazyNamed(() => import("../features/advisors/insights-pane
 const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
 const AdvisorHealthPanel = lazy(() => import("../features/advisors/advisor-health-panel"));
 const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
-const AgentsPanel = lazyNamed(() => import("../features/agents/agents-panel"), "AgentsPanel");
+const AgentsPanel = lazy(() => import("../features/agents/agents-panel"));
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
-const AuthAuditPanel = lazyNamed(() => import("../features/auth/auth-audit-panel"), "AuthAuditPanel");
-const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-panel"), "AuthConfigPanel");
-const AuthSessionsPanel = lazyNamed(() => import("../features/auth/auth-sessions-panel"), "AuthSessionsPanel");
-const OrganizationsPanel = lazyNamed(() => import("../features/auth/organizations-panel"), "OrganizationsPanel");
+const AuthAuditPanel = lazy(() => import("../features/auth/auth-audit-panel"));
+const AuthConfigPanel = lazy(() => import("../features/auth/auth-config-panel"));
+const AuthSessionsPanel = lazy(() => import("../features/auth/auth-sessions-panel"));
+const OrganizationsPanel = lazy(() => import("../features/auth/organizations-panel"));
 const UsersPanel = lazyNamed(() => import("../features/auth/users-panel"), "UsersPanel");
-const ContainersPanel = lazyNamed(() => import("../features/containers/containers-panel"), "ContainersPanel");
+const ContainersPanel = lazy(() => import("../features/containers/containers-panel"));
 const DeploymentHealthPanel = lazyNamed(() => import("../features/health/deployment-health-panel"), "DeploymentHealthPanel");
 const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
 const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
-const MigrationsRoutePanel = lazyNamed(() => import("../features/database/migrations-route"), "MigrationsRoutePanel");
+const MigrationsRoutePanel = lazy(() => import("../features/database/migrations-route"));
 
 /**
  * Per-route search-param validators. A route absent from this map takes no typed
@@ -113,12 +113,12 @@ const SEARCH_VALIDATORS: Partial<Record<StudioTab, (search: Record<string, unkno
     migrations: validateSchemaVersionSearch,
 };
 const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
-const FlagsPanel = lazyNamed(() => import("../features/flags/flags-panel"), "FlagsPanel");
+const FlagsPanel = lazy(() => import("../features/flags/flags-panel"));
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
 const FunctionStatsPanel = lazyNamed(() => import("../features/functions/function-stats"), "FunctionStatsPanel");
-const IssuesPanel = lazyNamed(() => import("../features/issues/issues-panel"), "IssuesPanel");
+const IssuesPanel = lazy(() => import("../features/issues/issues-panel"));
 const AuditPanel = lazyNamed(() => import("../features/logs/audit-panel"), "AuditPanel");
-const LogDrainsPanel = lazyNamed(() => import("../features/logs/log-drains-panel"), "LogDrainsPanel");
+const LogDrainsPanel = lazy(() => import("../features/logs/log-drains-panel"));
 // `logs-panel` re-exports several types alongside the component, which trips the
 // generic prop inference in `lazyNamed` (it mis-infers the panel's props). The
 // explicit unwrap keeps `LogsPanel`'s exact props type.
@@ -132,7 +132,7 @@ const SchedulePanel = lazyNamed(() => import("../features/logs/schedule-panel"),
 const SubscriptionsPanel = lazy(() => import("../features/logs/subscriptions-panel"));
 const SyncClientPanel = lazy(() => import("../features/logs/sync-client-panel"));
 const KvBrowser = lazyNamed(() => import("../features/kv/kv-browser"), "KvBrowser");
-const NotificationsPanel = lazyNamed(() => import("../features/notifications/notifications-panel"), "NotificationsPanel");
+const NotificationsPanel = lazy(() => import("../features/notifications/notifications-panel"));
 const PaymentsPanel = lazyNamed(() => import("../features/payments/payments-panel"), "PaymentsPanel");
 const PermissionsPanel = lazyNamed(() => import("../features/permissions/permissions-panel"), "PermissionsPanel");
 const QueuesPanel = lazy(() => import("../features/queues/queues-panel"));
@@ -144,8 +144,8 @@ const SchemaViewer = lazyNamed(() => import("../features/schema/schema-viewer"),
 const SettingsPanel = lazyNamed(() => import("../features/settings/settings-panel"), "SettingsPanel");
 const SqlEditorPanel = lazyNamed(() => import("../features/sql/sql-editor-panel"), "SqlEditorPanel");
 const FileBrowser = lazyNamed(() => import("../features/storage/file-browser"), "FileBrowser");
-const StorageRulesPanel = lazyNamed(() => import("../features/storage/storage-rules-panel"), "StorageRulesPanel");
-const TracesPanel = lazyNamed(() => import("../features/traces/traces-panel"), "TracesPanel");
+const StorageRulesPanel = lazy(() => import("../features/storage/storage-rules-panel"));
+const TracesPanel = lazy(() => import("../features/traces/traces-panel"));
 const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 

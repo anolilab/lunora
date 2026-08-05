@@ -7,6 +7,7 @@ import type { ShardMetrics } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+import wrapInRouter from "../../render-with-router";
 
 const METRICS: ShardMetrics = {
     cache: { bytes: 2048, entries: 3, evictions: 1, hits: 8, misses: 2 },
@@ -29,11 +30,12 @@ const createClient = (metrics: ShardMetrics = METRICS): MockClientHooks =>
         },
     });
 
-const renderPanel = (mock: MockClientHooks) => (
-    <LunoraProvider client={mock.asClient}>
-        <MetricsPanel />
-    </LunoraProvider>
-);
+const renderPanel = (mock: MockClientHooks) =>
+    wrapInRouter(
+        <LunoraProvider client={mock.asClient}>
+            <MetricsPanel />
+        </LunoraProvider>,
+    );
 
 describe("metricsPanel", () => {
     afterEach(() => {

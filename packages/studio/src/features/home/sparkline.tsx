@@ -14,7 +14,7 @@ const SPARKLINE_CONFIG = { value: { colors: { dark: ["var(--foreground)"], light
  * chart engine off the studio's entry bundle — Home's structure paints first and
  * each sparkline streams in on its own chunk.
  */
-export const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement | null => {
+const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement | null => {
     const bars = data.slice(-16);
 
     // A single point can't read as a trend (and renders as one fat block), so a
@@ -35,3 +35,4 @@ export const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): R
         </div>
     );
 };
+export default Sparkline;

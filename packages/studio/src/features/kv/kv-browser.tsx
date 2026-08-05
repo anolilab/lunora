@@ -8,7 +8,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
-import { KvKeyList } from "./kv-key-list";
+import KvKeyList from "./kv-key-list";
 
 interface KvBrowserProps {
     /**

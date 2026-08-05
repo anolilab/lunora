@@ -89,7 +89,7 @@ const valueReducer = (state: ValueState, action: ValueAction): ValueState => {
  * metadata on mount; saves the edited value (with editable TTL + metadata) or
  * deletes the key.
  */
-export const KvValueEditor = ({
+const KvValueEditor = ({
     expiration,
     keyName,
     namespace,
@@ -296,3 +296,4 @@ export const KvValueEditor = ({
         </div>
     );
 };
+export default KvValueEditor;

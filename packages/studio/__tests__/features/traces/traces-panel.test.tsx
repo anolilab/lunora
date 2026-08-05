@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features/traces/trace-geometry";
-import { TracesPanel } from "../../../src/features/traces/traces-panel";
+import TracesPanel from "../../../src/features/traces/traces-panel";
 import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { clearPendingTraceFilter, peekPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";

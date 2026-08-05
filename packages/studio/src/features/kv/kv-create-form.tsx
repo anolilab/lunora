@@ -50,7 +50,7 @@ const createReducer = (state: CreateState, action: CreateAction): CreateState =>
  * success it calls `onCreated` so the parent list reloads. Shares the value/TTL/
  * metadata fields + the `putKvValue` payload contract with the value editor.
  */
-export const KvCreateForm = ({
+const KvCreateForm = ({
     namespace,
     onCancel,
     onCreated,
@@ -157,3 +157,4 @@ export const KvCreateForm = ({
         </div>
     );
 };
+export default KvCreateForm;

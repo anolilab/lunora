@@ -7,7 +7,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { Textarea } from "../../components/ui/textarea";
-import { useAsyncSubmit } from "../../hooks/use-async-submit";
+import useAsyncSubmit from "../../hooks/use-async-submit";
 import { useT } from "../../i18n/i18n-context";
 import { formatCell } from "../../lib/internal";
 import type { Row } from "./types";

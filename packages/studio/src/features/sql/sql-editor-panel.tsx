@@ -13,11 +13,11 @@ import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
 import { useSqlEditorSurface } from "./hooks/use-sql-editor-surface";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
-import { SqlEditorPane } from "./sql-editor-pane";
+import SqlEditorPane from "./sql-editor-pane";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
-import { SqlResultsPane } from "./sql-results-pane";
+import SqlResultsPane from "./sql-results-pane";
 import { useSqlSchema } from "./sql-schema";
-import { SqlTabStrip } from "./sql-tab-strip";
+import SqlTabStrip from "./sql-tab-strip";
 import type { ResultTab, SqlTab } from "./sql-tabs";
 import { makeTab } from "./sql-tabs";
 

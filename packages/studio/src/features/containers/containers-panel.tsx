@@ -133,4 +133,4 @@ const ContainersPanel = (): ReactElement => {
     );
 };
 
-export { ContainersPanel };
+export default ContainersPanel;

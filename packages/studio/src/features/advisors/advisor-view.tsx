@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { useState } from "react";
 
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { TFunction } from "../../i18n/i18n-context";

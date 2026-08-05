@@ -9,6 +9,7 @@ import type { AdvisoryFinding, FunctionStatsResult, ShardMetrics } from "../../.
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+import wrapInRouter from "../../render-with-router";
 
 // ── unit tests: composeCreateIndex ──────────────────────────────────────────
 
@@ -206,9 +207,11 @@ describe("insights panel — apply-index action on FK findings", () => {
         const mock = createClient([FK_ADVISORY]);
 
         render(
-            <LunoraProvider client={mock.asClient}>
-                <InsightsPanel />
-            </LunoraProvider>,
+            wrapInRouter(
+                <LunoraProvider client={mock.asClient}>
+                    <InsightsPanel />
+                </LunoraProvider>,
+            ),
         );
 
         // unindexed_foreign_key is INFO-severity → switch to the Info tab.
@@ -235,9 +238,11 @@ describe("insights panel — apply-index action on FK findings", () => {
         const mock = createClient([advisory]);
 
         render(
-            <LunoraProvider client={mock.asClient}>
-                <InsightsPanel />
-            </LunoraProvider>,
+            wrapInRouter(
+                <LunoraProvider client={mock.asClient}>
+                    <InsightsPanel />
+                </LunoraProvider>,
+            ),
         );
 
         fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
