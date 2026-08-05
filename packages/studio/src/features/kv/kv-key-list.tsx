@@ -11,9 +11,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
-import { KvCreateForm } from "./kv-create-form";
+import KvCreateForm from "./kv-create-form";
 import { formatExpiration } from "./kv-fields";
-import { KvValueEditor } from "./kv-value-editor";
+import KvValueEditor from "./kv-value-editor";
 
 /** Default page size for the key list. */
 const DEFAULT_PAGE_SIZE = 100;
@@ -139,7 +139,7 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
  * not per keystroke — paginates with "Load more", and supports creating a key
  * and bulk-deleting selected keys.
  */
-export const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement => {
+const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement => {
     const client = useLunora();
     const t = useT();
 
@@ -416,3 +416,4 @@ export const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactE
         </>
     );
 };
+export default KvKeyList;

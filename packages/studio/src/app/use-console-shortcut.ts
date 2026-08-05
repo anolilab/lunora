@@ -43,4 +43,4 @@ const useConsoleShortcut = (toggleConsole: (() => void) | undefined): void => {
     }, [toggleConsole]);
 };
 
-export { useConsoleShortcut };
+export default useConsoleShortcut;

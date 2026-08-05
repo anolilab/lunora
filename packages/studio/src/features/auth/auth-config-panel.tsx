@@ -69,7 +69,7 @@ const KeyValue = ({ label, value }: { label: string; value: ReactNode }): ReactE
  * deployment in the server's better-auth setup), so this panel only reflects it.
  * The note points at the Mail tab for email output.
  */
-export const AuthConfigPanel = (): ReactElement => {
+const AuthConfigPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
 
@@ -217,3 +217,4 @@ export const AuthConfigPanel = (): ReactElement => {
         </div>
     );
 };
+export default AuthConfigPanel;

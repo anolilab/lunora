@@ -106,7 +106,7 @@ const OperationRow = ({ entry, focused }: { readonly entry: OperationEntry; read
  * Rendered as a drawer rather than a nav page because it is a companion to
  * whatever page you are on, not a destination.
  */
-export const OperationConsole = ({
+const OperationConsole = ({
     focusSeq,
     onClose,
     onShownChange,
@@ -208,3 +208,4 @@ export const OperationConsole = ({
         </section>
     );
 };
+export default OperationConsole;

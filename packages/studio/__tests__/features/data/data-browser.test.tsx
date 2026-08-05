@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { encodeWire } from "../../../../../shared/wire-codec";
 import type { DataBrowserProps } from "../../../src/features/data/data-browser";
 import { DataBrowser } from "../../../src/features/data/data-browser";
-import { useMirroredRef } from "../../../src/hooks/use-mirrored-ref";
+import useMirroredRef from "../../../src/hooks/use-mirrored-ref";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { dataViewToSearch, searchToDataView } from "../../../src/lib/data-view-params";
 import type { DataView } from "../../../src/lib/saved-queries";

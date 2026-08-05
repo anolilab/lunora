@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
-import { useMirroredRef } from "../../../hooks/use-mirrored-ref";
+import useMirroredRef from "../../../hooks/use-mirrored-ref";
 import type { BulkDeleteResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";

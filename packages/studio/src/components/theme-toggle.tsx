@@ -66,7 +66,7 @@ const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value
  * provider) and slides an aurora-free hairline indicator under the active
  * segment via a shared-layout `motion` element.
  */
-export const ThemeToggle = (): ReactElement => {
+const ThemeToggle = (): ReactElement => {
     const { theme, setTheme } = useTheme();
     const t = useT();
 
@@ -119,3 +119,4 @@ export const ThemeToggle = (): ReactElement => {
         </div>
     );
 };
+export default ThemeToggle;

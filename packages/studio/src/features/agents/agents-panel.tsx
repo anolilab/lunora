@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -352,4 +352,4 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
     );
 };
 
-export { AgentsPanel };
+export default AgentsPanel;

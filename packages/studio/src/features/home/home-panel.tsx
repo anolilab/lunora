@@ -12,17 +12,13 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
-import { BindingsOverview } from "./bindings-overview";
+import BindingsOverview from "./bindings-overview";
 import { ConnectAgentCard } from "./connect-agent";
 
 // The stat-card sparkline is Home's only `recharts` consumer. Lazy-loading it
 // keeps the (heavy) chart engine out of the studio's entry bundle — Home's
 // structure paints immediately and each sparkline streams in on its own chunk.
-const Sparkline = lazy(() =>
-    import("./sparkline").then((m) => {
-        return { default: m.Sparkline };
-    }),
-);
+const Sparkline = lazy(() => import("./sparkline"));
 
 interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */

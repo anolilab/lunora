@@ -55,7 +55,7 @@ export type { MailPanelProps } from "./features/logs/mail-panel";
 export { MailPanel } from "./features/logs/mail-panel";
 export type { ScheduledJobsProps } from "./features/logs/scheduled-jobs";
 export { ScheduledJobs } from "./features/logs/scheduled-jobs";
-export { NotificationsPanel } from "./features/notifications/notifications-panel";
+export { default as NotificationsPanel } from "./features/notifications/notifications-panel";
 export type { HealthPanelProps } from "./features/reports/health-panel";
 export { HealthPanel } from "./features/reports/health-panel";
 export type { AggregateMetrics, ShardMetricsResult } from "./features/reports/metrics-aggregate";

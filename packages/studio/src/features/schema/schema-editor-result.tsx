@@ -70,4 +70,4 @@ const SchemaEditorResult = ({
     );
 };
 
-export { SchemaEditorResult };
+export default SchemaEditorResult;

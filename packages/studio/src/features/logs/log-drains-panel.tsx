@@ -60,7 +60,7 @@ const DestinationRow = ({ destination }: { readonly destination: DestinationCard
  * collector and confirm it is reachable. Nothing here is persisted server-side.
  */
 
-export const LogDrainsPanel = (): ReactElement => {
+const LogDrainsPanel = (): ReactElement => {
     const t = useT();
 
     const destinations: DestinationCard[] = [
@@ -206,3 +206,4 @@ export const LogDrainsPanel = (): ReactElement => {
         </div>
     );
 };
+export default LogDrainsPanel;

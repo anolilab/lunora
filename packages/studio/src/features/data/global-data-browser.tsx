@@ -5,12 +5,12 @@ import { useEffect, useRef, useState } from "react";
 
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
-import { useMirroredRef } from "../../hooks/use-mirrored-ref";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
 import DataFacets from "./data-facets";
-import { GlobalDataPage } from "./global-data-page";
-import { GlobalTablesEmptyState } from "./global-tables-empty-state";
+import GlobalDataPage from "./global-data-page";
+import GlobalTablesEmptyState from "./global-tables-empty-state";
 import { useFacets } from "./hooks/use-facets";
 import { TableListSidebar } from "./table-list-sidebar";
 

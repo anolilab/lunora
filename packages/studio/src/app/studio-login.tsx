@@ -104,4 +104,4 @@ const StudioLogin = ({ i18n, onSubmit }: StudioLoginProps): ReactElement => {
     );
 };
 
-export { StudioLogin };
+export default StudioLogin;

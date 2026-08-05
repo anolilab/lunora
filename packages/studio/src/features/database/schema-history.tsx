@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { useMemo } from "react";
 
 import type { DriftChange } from "../../../../../shared/schema-snapshot";
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import type { StorageTier } from "../../components/storage-tier";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";

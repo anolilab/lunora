@@ -169,13 +169,12 @@ export default createConfig(
             "react-hooks/exhaustive-deps": "warn",
         },
     },
-    // The repo convention (AGENTS.md) is named exports only — uniform `import { x }`
-    // sites, no default-vs-named ambiguity. `import/prefer-default-export` would push
-    // single-export files the other way (to a default), so it's off; `exports-last`
-    // (kept on) still enforces export placement.
+    // The repo convention (AGENTS.md): a sole-export file exports `default`; files
+    // with multiple exports use named-only. `import/prefer-default-export` (on via
+    // the base config) enforces the single-export half, keeping import sites uniform.
     {
         rules: {
-            "import/prefer-default-export": "off",
+            "import/prefer-default-export": "error",
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the

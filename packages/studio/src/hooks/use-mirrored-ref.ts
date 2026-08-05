@@ -40,4 +40,4 @@ function useMirroredRef<T>(value: T): RefObject<T> {
     return ref;
 }
 
-export { useMirroredRef };
+export default useMirroredRef;

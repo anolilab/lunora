@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { StatCard } from "../../components/stat-card";
+import StatCard from "../../components/stat-card";
 import { useT } from "../../i18n/i18n-context";
 import type { ShardMetrics } from "../../lib/admin";
 import { formatBytes } from "../../lib/internal";
@@ -96,4 +96,4 @@ const MetricsOverviewStats = ({
     );
 };
 
-export { MetricsOverviewStats };
+export default MetricsOverviewStats;

@@ -40,4 +40,4 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
     );
 };
 
-export { SqlResultTable };
+export default SqlResultTable;

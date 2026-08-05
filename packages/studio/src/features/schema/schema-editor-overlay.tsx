@@ -12,7 +12,7 @@ import type { AdditiveEdit, SchemaEditResult, SchemaEditTable } from "../../lib/
 import { applyEdit } from "../../lib/schema-edit";
 import type { Mode } from "./schema-editor-mode-bar";
 import { SchemaEditorModeBar } from "./schema-editor-mode-bar";
-import { SchemaEditorResult } from "./schema-editor-result";
+import SchemaEditorResult from "./schema-editor-result";
 
 /** Validator palette for an added optional column. Each maps to a `v.*` call. */
 const COLUMN_TYPES: ReadonlyArray<{ label: string; validator: string }> = [

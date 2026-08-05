@@ -2,9 +2,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { ErrorAlert } from "../../src/components/error-alert";
+import ErrorAlert from "../../src/components/error-alert";
 import { OperationConsoleProvider, useOperationConsole } from "../../src/components/operation-console-provider";
-import { OperationConsole } from "../../src/features/logs/operation-console";
+import OperationConsole from "../../src/features/logs/operation-console";
 import { operationLog } from "../../src/lib/operation-log";
 import { withOperationRecording } from "../../src/lib/recording-client";
 

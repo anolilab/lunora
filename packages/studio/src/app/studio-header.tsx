@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { ThemeToggle } from "../components/theme-toggle";
+import ThemeToggle from "../components/theme-toggle";
 import { SidebarTrigger } from "../components/ui/sidebar";
 import { useT } from "../i18n/i18n-context";
 
@@ -58,4 +58,4 @@ const StudioHeader = ({
     );
 };
 
-export { StudioHeader };
+export default StudioHeader;

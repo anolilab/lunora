@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 // Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
 // sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
 import { formatLogFields } from "../../../../../shared/log-fields";
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -204,7 +204,7 @@ interface TracesPanelProps {
  * readout, NOT a durable trace store — production tracing ships to a real
  * collector via the runtime's OTLP sink.
  */
-export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
+const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
     const t = useT();
 
     // Apply a one-shot exemplar hand-off (a metric's Trace link): seed the search
@@ -333,3 +333,4 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
         </div>
     );
 };
+export default TracesPanel;

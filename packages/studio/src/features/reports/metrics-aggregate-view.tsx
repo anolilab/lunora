@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { StatCard } from "../../components/stat-card";
+import StatCard from "../../components/stat-card";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
@@ -82,4 +82,4 @@ const MetricsAggregateView = ({
     );
 };
 
-export { MetricsAggregateView };
+export default MetricsAggregateView;

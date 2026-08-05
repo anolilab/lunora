@@ -49,7 +49,7 @@ const tabClass = (active: boolean): string =>
  * through `useT()` — `buildRouter` is a plain function and cannot call hooks,
  * which is how these headings once shipped hard-coded in English.
  */
-export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShardKey?: string }): ReactElement => {
+const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShardKey?: string }): ReactElement => {
     const t = useT();
 
     const [pane, setPane] = useState<MigrationsPane>("diagram");
@@ -96,3 +96,4 @@ export const MigrationsRoutePanel = ({ initialShardKey }: { readonly initialShar
         </div>
     );
 };
+export default MigrationsRoutePanel;
