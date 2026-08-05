@@ -28,4 +28,4 @@ const wrapInRouter = (children: ReactNode): ReactElement => {
     return <RouterProvider router={router} />;
 };
 
-export { wrapInRouter };
+export default wrapInRouter;

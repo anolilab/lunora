@@ -7,7 +7,7 @@ import type { AdvisoryFinding, FunctionStatsResult, MetricsSnapshot, ShardMetric
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
-import { wrapInRouter } from "../../render-with-router";
+import wrapInRouter from "../../render-with-router";
 
 const HEALTHY: ShardMetrics = {
     cache: { bytes: 0, entries: 4, evictions: 0, hits: 90, misses: 10 },

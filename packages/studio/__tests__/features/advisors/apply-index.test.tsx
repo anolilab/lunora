@@ -9,7 +9,7 @@ import type { AdvisoryFinding, FunctionStatsResult, ShardMetrics } from "../../.
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
-import { wrapInRouter } from "../../render-with-router";
+import wrapInRouter from "../../render-with-router";
 
 // ── unit tests: composeCreateIndex ──────────────────────────────────────────
 
