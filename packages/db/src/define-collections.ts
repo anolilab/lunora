@@ -89,6 +89,42 @@ type RowOf<C extends AnyDef> = C["list"] extends FunctionReference<infer _K, inf
 /** The action input type, inferred structurally from the def's optimistic insert. */
 type InputOf<C> = C extends { insert: { optimistic: (input: infer I, id: string) => unknown } } ? I : never;
 
+/**
+ * One-shot diagnostic for a table bound by more than one `defineCollections`
+ * call on the same client. Each call mints its own live collection *and* its own
+ * outbox for that table, so the copies can only drift — an optimistic write or
+ * sync delta lands on one, and code that reads the other silently reads stale
+ * rows (the quiet failure the "One source of truth per table" docs section warns
+ * about). Keyed by client + table name, so a fresh client or a split into two
+ * calls with *disjoint* tables is never penalised.
+ */
+const duplicateTableBindings = new WeakMap<LunoraClient, Map<string, number>>();
+
+const warnDuplicateTable = (client: LunoraClient, name: string): void => {
+    let bindings = duplicateTableBindings.get(client);
+
+    if (bindings === undefined) {
+        bindings = new Map();
+        duplicateTableBindings.set(client, bindings);
+    }
+
+    const count = bindings.get(name) ?? 0;
+
+    bindings.set(name, count + 1);
+
+    // Warn exactly when the second binding happens (the first is legitimate).
+    if (count !== 1) {
+        return;
+    }
+
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[@lunora/db] table "${name}" is bound by more than one defineCollections call on this client. Each call creates its ` +
+            `own live collection and outbox for the table, so the two can drift and derived indexes built from one can silently ` +
+            `read stale rows. Bind every table in a single defineCollections call (see the "One source of truth per table" docs section).`,
+    );
+};
+
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
 export interface WriteRejectedEvent {
     /**
@@ -182,6 +218,11 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
  *
  * This is the hand-written form; `@lunora/codegen` can emit a fully-typed call to
  * it from `schema.ts`, so an app writes nothing.
+ *
+ * Keep a single instance and treat the returned collections as the one source of
+ * truth per table — do not mirror rows into a parallel store, or derived indexes
+ * built from the copy can silently read stale data (see the `@lunora/db` docs,
+ * "One source of truth per table").
  */
 export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options: DefineCollectionsOptions = {}): LunoraDb<D> => {
     const collections: Record<string, Collection<Row, string>> = {};
@@ -192,6 +233,8 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
 
     for (const [name, definition] of entries) {
         const insert = definition.insert as InsertBinding<Row, unknown> | undefined;
+
+        warnDuplicateTable(client, name);
 
         // Build the live-sync read path from the shared collection-options core
         // (same diff-into-channel + auto-index + scoped-resubscribe behavior).
