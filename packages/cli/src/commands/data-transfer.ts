@@ -22,6 +22,12 @@ import { resolveAdminBaseUrl } from "../util/admin-url";
 import type { Logger } from "../util/logger";
 import type { FetchLike } from "./run/handler";
 
+/** Shape of `lunora/import-convex.json` mapping file. */
+interface ImportConvexMapping {
+    keyPrefix?: string;
+    storageColumns?: Record<string, string[]>;
+}
+
 const EXPORT_ENDPOINT_PATH = "/_lunora/admin/export";
 const IMPORT_ENDPOINT_PATH = "/_lunora/admin/import";
 const STORAGE_ENDPOINT_PATH = "/_lunora/admin/storage";
@@ -677,6 +683,7 @@ const migrateStorageBlobs = async (
 const remapStorageReferences = (
     document_: Record<string, unknown>,
     storageIdMap: Map<string, string>,
+    storageColumns?: Record<string, string[]>,
 ): Record<string, unknown> => {
     const remapped: Record<string, unknown> = {};
 
@@ -689,7 +696,8 @@ const remapStorageReferences = (
             remapped[key] = mappedKey ?? value;
         } else if (typeof value === "string" && storageIdMap.has(value)) {
             // Plain string that matches a storage id — rewrite to the content-hash key.
-            remapped[key] = storageIdMap.get(value) ?? value;
+            // Only rewrite if this column is in the mapping (if mapping provided).
+            remapped[key] = (!storageColumns || storageColumns[key]) ? (storageIdMap.get(value) ?? value) : value;
         } else {
             remapped[key] = value;
         }
@@ -833,6 +841,20 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     // Phase 1 (W2): migrate Convex `_storage` blobs when `--with-storage` is set.
     let storageIdMap: Map<string, string> | undefined;
+    let storageColumns: Record<string, string[]> | undefined;
+
+    // W3: read import-convex.json mapping file if it exists.
+    if (options.withStorage && options.cwd) {
+        try {
+            const mappingPath = join(options.cwd, "lunora", "import-convex.json");
+            const mappingContent = await readFile(mappingPath, "utf8");
+            const mapping = JSON.parse(mappingContent) as ImportConvexMapping;
+
+            storageColumns = mapping.storageColumns;
+        } catch {
+            // Mapping file doesn't exist or is invalid — proceed without it.
+        }
+    }
 
     if (options.withStorage && convexTables) {
         const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
@@ -956,7 +978,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
                     if (parsed.doc && typeof parsed.doc === "object" && !Array.isArray(parsed.doc)) {
                         const storageDocument = parsed.doc as Record<string, unknown>;
 
-                        parsed.doc = remapStorageReferences(storageDocument, storageIdMap);
+                        parsed.doc = remapStorageReferences(storageDocument, storageIdMap, storageColumns);
                         batch.push(JSON.stringify({ doc: parsed.doc, table: typeof parsed.table === "string" ? parsed.table : "" }));
                         return;
                     }
@@ -985,7 +1007,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
         // W3: remap storage references in the document.
         if (storageIdMap && parsedDocument && typeof parsedDocument === "object" && !Array.isArray(parsedDocument)) {
-            parsedDocument = remapStorageReferences(parsedDocument as Record<string, unknown>, storageIdMap);
+            parsedDocument = remapStorageReferences(parsedDocument as Record<string, unknown>, storageIdMap, storageColumns);
         }
 
         batch.push(JSON.stringify({ doc: parsedDocument, table: options.table }));
