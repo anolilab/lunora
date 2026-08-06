@@ -201,6 +201,14 @@ and `bindMutators` runs the optimistic transaction + the watermarked server push
 Framework adapters add a thin `useMutator(handle)` hook over the bound handle —
 reads stay on the existing `useLiveQuery`, no new query hook needed.
 
+The synced collection is the **one source of truth** for its rows. Don't mirror
+them into a parallel store of your own — a write, a rollback, or a sync delta
+lands only on the Lunora collection, so a derived index (a tree, a search index,
+an undo capture) built from a copy can silently read stale rows while the UI
+renders through `useLiveQuery`. When you adopt Lunora over an existing store,
+delete the old read paths rather than keeping both. See [One source of truth per
+table](/docs/packages/db#one-source-of-truth-per-table).
+
 Each server mutator is generated as a typed reference on `api.mutators.<name>`,
 so the client body **binds to it** rather than naming it in a string:
 

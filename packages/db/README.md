@@ -85,6 +85,12 @@ export const createCollections = (client: LunoraClient) =>
 
 > `vis generate lunora-collections` scaffolds this from your `schema.ts` + functions.
 
+Keep a **single `db` instance**, and treat its collections as the one source of
+truth per table — don't mirror rows into your own store. A derived index (a tree,
+a search index, an undo capture) built from a copy of the rows can silently read
+stale data while the UI renders through `useLiveQuery`. See [One source of truth
+per table](https://lunora.sh/docs/addons/db#one-source-of-truth-per-table).
+
 ### Local-first sync engine
 
 Beyond whole-table collections, the `@lunora/db/collections` and

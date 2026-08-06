@@ -167,6 +167,13 @@ schema + functions into live TanStack DB collections). Reach for it when the app
 needs client-side indexes/joins or a persistent optimistic outbox; raw `useQuery`
 /`useMutation` are enough for straightforward live lists.
 
+Call `defineCollections` **once** at module scope and treat the returned
+collections as the single source of truth for each table. Don't mirror rows into
+a parallel store, and never build derived indexes (trees, search, undo captures)
+from a copy — optimistic writes and sync deltas land only on the Lunora
+collection, so code reading a copy silently reads stale rows while `useLiveQuery`
+renders fresh data.
+
 ## Common Pitfalls
 
 1. **Creating `LunoraClient` inside a component.** It re-opens the socket every
@@ -178,6 +185,10 @@ needs client-side indexes/joins or a persistent optimistic outbox; raw `useQuery
 4. **Optimistic shape drift.** The provisional value must match the query's
    element shape (including `_id`/`_creationTime`) or the UI flickers when the
    real delta lands.
+5. **Two sources of truth for the same rows.** `defineCollections` more than once
+   per table (or a parallel store of your own) mints copies that drift — reads
+   through `useLiveQuery` look fine while derived indexes built from the copy
+   silently miss or stale rows. One instance, one collection per table.
 
 ## Checklist
 
@@ -188,3 +199,5 @@ needs client-side indexes/joins or a persistent optimistic outbox; raw `useQuery
 - [ ] Query `args` scoped narrowly to avoid over-broad re-renders.
 - [ ] Pagination via `usePaginatedQuery`/`useInfiniteQuery` over `.paginate`.
 - [ ] Considered `@lunora/db` if the app needs local indexes/joins or an outbox.
+- [ ] `@lunora/db`: one `defineCollections` instance; no parallel copy of rows;
+      derived indexes built from the same collection the UI renders.
