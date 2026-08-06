@@ -186,9 +186,11 @@ renders fresh data.
    element shape (including `_id`/`_creationTime`) or the UI flickers when the
    real delta lands.
 5. **Two sources of truth for the same rows.** `defineCollections` more than once
-   per table (or a parallel store of your own) mints copies that drift — reads
-   through `useLiveQuery` look fine while derived indexes built from the copy
-   silently miss or stale rows. One instance, one collection per table.
+   per table (or a parallel store of your own) mints copies that drift. Reads
+   through `useLiveQuery` look fine, but derived indexes built from the copy can
+   **miss rows** — rows written to the collection after the copy was taken never
+   appear in the index — or **hold stale rows** — rows updated or deleted in the
+   collection still show their old value. One instance, one collection per table.
 
 ## Checklist
 
