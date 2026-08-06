@@ -11,15 +11,16 @@
  * against accidentally targeting localhost in production scripts.
  */
 import { createReadStream, createWriteStream } from "node:fs";
-import { readdir, readFile, stat, unlink } from "node:fs/promises";
+import { readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 
 import { LunoraError } from "@lunora/errors";
 
 import { resolveAdminBearer } from "../util/admin-token";
 import { resolveAdminBaseUrl } from "../util/admin-url";
 import type { Logger } from "../util/logger";
+import type { ConvexSnapshot, ConvexSnapshotTable } from "./convex-snapshot";
+import { listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, readSnapshotText, resolveConvexSnapshot } from "./convex-snapshot";
 import type { FetchLike } from "./run/handler";
 
 /** Shape of `lunora/import-convex.json` mapping file. */
@@ -411,47 +412,21 @@ const CONVEX_STORAGE_TABLE = "_storage";
  * Returns `undefined` when `path` is not such a directory, which is how the
  * import command decides between the Convex layout and a plain NDJSON file.
  */
-const convexExportTables = async (path: string): Promise<undefined | { file: string; table: string }[]> => {
-    const info = await stat(path).catch(() => undefined);
-
-    if (!info?.isDirectory()) {
-        return undefined;
-    }
-
-    const found: { file: string; table: string }[] = [];
-
-    for (const entry of await readdir(path, { withFileTypes: true })) {
-        if (!entry.isDirectory()) {
-            continue;
-        }
-
-        const file = join(path, entry.name, "documents.jsonl");
-
-        // eslint-disable-next-line no-await-in-loop -- one cheap stat per table directory; the set is small.
-        const documents = await stat(file).catch(() => undefined);
-
-        if (documents?.isFile()) {
-            found.push({ file, table: entry.name });
-        }
-    }
-
-    return found.length > 0 ? found.toSorted((a, b) => a.table.localeCompare(b.table)) : undefined;
-};
 
 /** Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines. */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
-async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<string> {
-    for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(file, { encoding: "utf8" }) })) {
+async function* wrapJsonlLines(snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): AsyncGenerator<string> {
+    for await (const raw of readSnapshotLines(snapshot, tableEntry)) {
         const line = raw.trim();
 
         if (line.length > 0) {
-            yield `${JSON.stringify({ doc: JSON.parse(line) as unknown, table })}\n`;
+            yield `${JSON.stringify({ doc: JSON.parse(line) as unknown, table: tableEntry.table })}\n`;
         }
     }
 }
 
 /**
- * Stream a Convex export directory as the `{ table, doc }` NDJSON the admin
+ * Stream a Convex export snapshot as the `{ table, doc }` NDJSON the admin
  * import endpoint accepts.
  *
  * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
@@ -464,31 +439,39 @@ async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<stri
  * unchanged, and a plain single-pass import is correct.
  */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
-async function* readConvexExport(tables: ReadonlyArray<{ file: string; table: string }>, logger: Logger): AsyncGenerator<string> {
-    for (const { file, table } of tables) {
-        if (table === CONVEX_STORAGE_TABLE) {
+async function* readConvexExport(snapshot: ConvexSnapshot, tables: ReadonlyArray<ConvexSnapshotTable>, logger: Logger): AsyncGenerator<string> {
+    for (const tableEntry of tables) {
+        if (tableEntry.table === CONVEX_STORAGE_TABLE) {
             logger.warn(`skipping "${CONVEX_STORAGE_TABLE}" — those rows describe stored files. Upload the exported blobs to R2 and re-point the keys.`);
 
             continue;
         }
 
-        yield* wrapJsonlLines(file, table);
+        yield* wrapJsonlLines(snapshot, tableEntry);
     }
 }
 
 /**
- * Decide whether the positional path is a Convex export directory or a plain
- * NDJSON file, rejecting the shapes that cannot be either.
+ * Decide whether the positional path is a Convex export snapshot (directory or
+ * `.zip`) or a plain NDJSON file, rejecting the shapes that cannot be either.
  */
 const resolveImportSource = async (
     options: ImportCommandOptions,
-): Promise<{ convexTables?: ReadonlyArray<{ file: string; table: string }>; error: boolean }> => {
-    const convexTables = await convexExportTables(options.file);
-    const stats = await stat(options.file);
+): Promise<{ convexSnapshot?: ConvexSnapshot; convexTables?: ReadonlyArray<ConvexSnapshotTable>; error: boolean }> => {
+    const snapshot = await resolveConvexSnapshot(options.file);
+    const convexTables = snapshot === undefined ? undefined : await listConvexSnapshotTables(snapshot);
 
-    if (convexTables === undefined && stats.isDirectory()) {
+    if (convexTables === undefined && snapshot?.kind === "directory") {
         options.logger.error(
             `${options.file} is a directory but holds no <table>/documents.jsonl — expected a \`npx convex export --path <dir>\` dump, or pass an NDJSON file.`,
+        );
+
+        return { error: true };
+    }
+
+    if (convexTables === undefined && snapshot?.kind === "zip") {
+        options.logger.error(
+            `${options.file} is a .zip but holds no <table>/documents.jsonl — expected a \`npx convex export --path <snapshot.zip>\` snapshot, or pass an NDJSON file.`,
         );
 
         return { error: true };
@@ -500,29 +483,31 @@ const resolveImportSource = async (
         return { error: true };
     }
 
-    return { convexTables, error: false };
+    return { convexSnapshot: snapshot, convexTables, error: false };
 };
 
 /**
  * Decide whether the positional path is a Convex export directory or a plain
  * NDJSON file, rejecting the shapes that cannot be either.
  */
-const readStorageMetadata = async (exportDirectory: string, logger: Logger): Promise<{ _id: string; contentType?: string; sha256: string; size: number }[]> => {
-    const metadataFile = join(exportDirectory, "_storage", "documents.jsonl");
+const readStorageMetadata = async (
+    snapshot: ConvexSnapshot,
+    storageTableEntry: ConvexSnapshotTable,
+    logger: Logger,
+): Promise<{ _id: string; contentType?: string; sha256: string; size: number }[]> => {
     const rows: { _id: string; contentType?: string; sha256: string; size: number }[] = [];
 
     try {
-        const stream = createReadStream(metadataFile, { encoding: "utf8" });
-        const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream });
+        const text = await readSnapshotText(snapshot, storageTableEntry);
 
-        for await (const raw of rl) {
-            const line = raw.trim();
+        for (const line of text.split("\n")) {
+            const trimmed = line.trim();
 
-            if (line.length === 0) {
+            if (trimmed.length === 0) {
                 continue;
             }
 
-            const storageDocument = JSON.parse(line) as { _id: string; contentType?: string; sha256: string; size: number };
+            const storageDocument = JSON.parse(trimmed) as { _id: string; contentType?: string; sha256: string; size: number };
 
             rows.push({ _id: storageDocument._id, contentType: storageDocument.contentType, sha256: storageDocument.sha256, size: storageDocument.size });
         }
@@ -639,13 +624,11 @@ const uploadLargeBlob = async (
 const uploadStorageBlob = async (
     baseUrl: string,
     token: string,
-    blobPath: string,
+    blobBytes: Buffer,
     metadata: { contentType?: string; sha256: string; size: number },
     keyPrefix: string,
 ): Promise<string> => {
     const key = `${keyPrefix}${metadata.sha256}`;
-
-    const blobBytes = await readFile(blobPath);
 
     const MAX_VERIFIED_UPLOAD_BYTES = 1_048_576;
 
@@ -661,19 +644,26 @@ const uploadStorageBlob = async (
  * blob with sha256+size verification, and build the `storageId → key` map.
  * Fail-close on any mismatch or missing file.
  */
-const migrateStorageBlobs = async (baseUrl: string, adminToken: string, exportDirectory: string, logger: Logger): Promise<Map<string, string>> => {
-    const metadataRows = await readStorageMetadata(exportDirectory, logger);
+const migrateStorageBlobs = async (
+    baseUrl: string,
+    adminToken: string,
+    snapshot: ConvexSnapshot,
+    storageTableEntry: ConvexSnapshotTable,
+    logger: Logger,
+): Promise<Map<string, string>> => {
+    const metadataRows = await readStorageMetadata(snapshot, storageTableEntry, logger);
     const keyPrefix = ""; // TODO: read from lunora/import-convex.json (W3)
     const storageIdMap = new Map<string, string>();
 
     logger.info(`migrating ${String(metadataRows.length)} storage blobs...`);
 
     for (const row of metadataRows) {
-        const blobPath = join(exportDirectory, "_storage", row._id);
-
         try {
+            // eslint-disable-next-line no-await-in-loop -- sequential: each blob is read + verified before the next starts
+            const blobBytes = await readSnapshotStorageBlob(snapshot, storageTableEntry, row._id);
+
             // eslint-disable-next-line no-await-in-loop -- sequential upload: each blob must be verified before the next starts
-            const key = await uploadStorageBlob(baseUrl, adminToken, blobPath, row, keyPrefix);
+            const key = await uploadStorageBlob(baseUrl, adminToken, blobBytes, row, keyPrefix);
 
             storageIdMap.set(row._id, key);
         } catch (error: unknown) {
@@ -753,24 +743,28 @@ const reportImportOutcome = (
  * `import-convex.json` mapping file.
  */
 /* eslint-disable sonarjs/cognitive-complexity -- the scan function iterates over tables and rows; complexity is justified */
-const scanStorageColumns = async (exportDirectory: string, convexTables: ReadonlyArray<{ file: string; table: string }>, logger: Logger): Promise<void> => {
+const scanStorageColumns = async (snapshot: ConvexSnapshot, convexTables: ReadonlyArray<ConvexSnapshotTable>, logger: Logger): Promise<void> => {
     const storageIds = new Set<string>();
     const storageColumns: Record<string, string[]> = {};
+    const storageTable = convexTables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
     // Read _storage metadata to get the set of valid storage ids.
+    if (storageTable === undefined) {
+        logger.warn("no _storage metadata found — cannot scan for storage columns");
+        return;
+    }
+
     try {
-        const metadataFile = join(exportDirectory, "_storage", "documents.jsonl");
-        const stream = createReadStream(metadataFile, { encoding: "utf8" });
-        const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream });
+        const metadataText = await readSnapshotText(snapshot, storageTable);
 
-        for await (const raw of rl) {
-            const line = raw.trim();
+        for (const line of metadataText.split("\n")) {
+            const trimmed = line.trim();
 
-            if (line.length === 0) {
+            if (trimmed.length === 0) {
                 continue;
             }
 
-            const storageDocument = JSON.parse(line) as { _id: string };
+            const storageDocument = JSON.parse(trimmed) as { _id: string };
             storageIds.add(storageDocument._id);
         }
     } catch {
@@ -781,16 +775,13 @@ const scanStorageColumns = async (exportDirectory: string, convexTables: Readonl
     logger.info(`found ${String(storageIds.size)} storage ids`);
 
     // Scan all table documents for storage id references.
-    for (const { file, table } of convexTables) {
-        if (table === "_storage") {
+    for (const tableEntry of convexTables) {
+        if (tableEntry.table === CONVEX_STORAGE_TABLE) {
             continue;
         }
 
-        const tableStream = createReadStream(file, { encoding: "utf8" });
-        const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: tableStream });
-
-        // eslint-disable-next-line no-await-in-loop -- sequential scan: each line must be processed before the next
-        for await (const raw of rl) {
+        // eslint-disable-next-line no-await-in-loop -- sequential scan: each table stream is drained before the next
+        for await (const raw of readSnapshotLines(snapshot, tableEntry)) {
             const line = raw.trim();
 
             if (line.length === 0) {
@@ -799,6 +790,7 @@ const scanStorageColumns = async (exportDirectory: string, convexTables: Readonl
 
             try {
                 const row = JSON.parse(line) as Record<string, unknown>;
+                const { table } = tableEntry;
 
                 for (const [key, value] of Object.entries(row)) {
                     if (typeof value === "string" && storageIds.has(value)) {
@@ -826,27 +818,23 @@ const scanStorageColumns = async (exportDirectory: string, convexTables: Readonl
  * Returns a map from table → row count, or undefined when the directory is not
  * a Convex export layout.
  */
-const countConvexSourceRows = async (exportDirectory: string, logger: Logger): Promise<Record<string, number> | undefined> => {
-    const tables = await convexExportTables(exportDirectory);
-
-    if (tables === undefined) {
-        return undefined;
-    }
-
+const countConvexSourceRows = async (
+    snapshot: ConvexSnapshot,
+    convexTables: ReadonlyArray<ConvexSnapshotTable>,
+    logger: Logger,
+): Promise<Record<string, number>> => {
     const counts: Record<string, number> = {};
 
-    for (const { file, table } of tables) {
-        if (table === CONVEX_STORAGE_TABLE) {
+    for (const tableEntry of convexTables) {
+        if (tableEntry.table === CONVEX_STORAGE_TABLE) {
             continue;
         }
 
         let count = 0;
 
         try {
-            const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(file, { encoding: "utf8" }) });
-
             // eslint-disable-next-line no-await-in-loop -- sequential: one source table read before the next
-            for await (const raw of rl) {
+            for await (const raw of readSnapshotLines(snapshot, tableEntry)) {
                 if (raw.trim().length > 0) {
                     count += 1;
                 }
@@ -854,10 +842,10 @@ const countConvexSourceRows = async (exportDirectory: string, logger: Logger): P
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
-            logger.warn(`failed to count ${table} source rows: ${message}`);
+            logger.warn(`failed to count ${tableEntry.table} source rows: ${message}`);
         }
 
-        counts[table] = count;
+        counts[tableEntry.table] = count;
     }
 
     return counts;
@@ -886,11 +874,11 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         return { body: undefined, code: 1, inserted: 0 };
     }
 
-    const { convexTables } = source;
+    const { convexSnapshot, convexTables } = source;
 
     // W3: scan for storage columns and emit candidate mapping.
-    if (options.scan && convexTables) {
-        await scanStorageColumns(options.file, convexTables, options.logger);
+    if (options.scan && convexTables && convexSnapshot) {
+        await scanStorageColumns(convexSnapshot, convexTables, options.logger);
 
         return { body: undefined, code: 0, inserted: 0 };
     }
@@ -906,7 +894,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         storageColumns = mapping?.storageColumns;
     }
 
-    if (options.withStorage && convexTables) {
+    if (options.withStorage && convexTables && convexSnapshot) {
         const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
         if (baseUrl === undefined) {
@@ -921,7 +909,15 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             return { body: undefined, code: 1, inserted: 0 };
         }
 
-        storageIdMap = await migrateStorageBlobs(baseUrl, adminToken, options.file, options.logger);
+        const storageTableEntry = convexTables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+        if (storageTableEntry === undefined) {
+            options.logger.error("--with-storage requires a Convex export with a `_storage` metadata table — none found.");
+
+            return { body: undefined, code: 1, inserted: 0 };
+        }
+
+        storageIdMap = await migrateStorageBlobs(baseUrl, adminToken, convexSnapshot, storageTableEntry, options.logger);
 
         options.logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
     }
@@ -938,9 +934,10 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // Convex reader is already a line-at-a-time generator and slots straight in,
     // since both are `for await`-able sources of text chunks.
     // W4: count source rows per table up front when verifying parity.
-    const sourceRows = options.verify && convexTables ? await countConvexSourceRows(options.file, options.logger) : undefined;
+    const sourceRows = options.verify && convexSnapshot && convexTables ? await countConvexSourceRows(convexSnapshot, convexTables, options.logger) : undefined;
 
-    const stream = convexTables ? readConvexExport(convexTables, options.logger) : createReadStream(options.file, { encoding: "utf8" });
+    const stream =
+        convexSnapshot && convexTables ? readConvexExport(convexSnapshot, convexTables, options.logger) : createReadStream(options.file, { encoding: "utf8" });
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;

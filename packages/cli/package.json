@@ -85,6 +85,7 @@
         "@visulima/path": "3.0.0",
         "@visulima/spinner": "1.0.0",
         "@visulima/tui": "1.0.5",
+        "adm-zip": "catalog:prod",
         "cfonts": "^3.3.1",
         "giget": "3.3.1",
         "jsonc-parser": "catalog:vite",
