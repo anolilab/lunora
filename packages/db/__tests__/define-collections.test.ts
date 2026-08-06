@@ -392,4 +392,29 @@ describe(defineCollections, () => {
             vi.unstubAllGlobals();
         }
     });
+
+    it("warns once when a table is bound by a second defineCollections call on the same client", () => {
+        const { client } = makeClient();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const first = defineCollections(client, { users: { list: usersList } } as never);
+            executors.push(first.executor);
+
+            // A disjoint table on the same client is legitimate — no warning.
+            const disjoint = defineCollections(client, { messages: { list: messagesList } } as never);
+            executors.push(disjoint.executor);
+
+            expect(warn).not.toHaveBeenCalled();
+
+            // Re-binding `users` on the same client mints a second live copy.
+            const duplicate = defineCollections(client, { users: { list: usersList } } as never);
+            executors.push(duplicate.executor);
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0]?.[0])).toContain("users");
+        } finally {
+            warn.mockRestore();
+        }
+    });
 });
