@@ -6,6 +6,9 @@ const importCommand: Command = {
     examples: [
         ["lunora import backup.ndjson", "Bulk-insert rows from an NDJSON file"],
         ["lunora import ./convex-export", "Import a `npx convex export --path` directory (ids are preserved, so no remapping)"],
+        ["lunora import ./convex-export --with-storage", "Also migrate blobs (verified sha256 upload) + `{ $storage }` refs"],
+        ["lunora import ./convex-export --with-storage --scan", "Print a candidate `lunora/import-convex.json` storage-column mapping"],
+        ["lunora import ./snapshot.zip --with-storage --verify", "Import a `npx convex export --path` zip snapshot with blob + row-parity checks"],
     ],
     group: "Data",
     loader: () =>

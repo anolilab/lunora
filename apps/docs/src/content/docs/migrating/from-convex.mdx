@@ -250,9 +250,10 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
    `INSERT INTO channels … FROM <exported.jsonl>` step. Run
    `lunora migrate generate init` to get the schema SQL, then add a
    one-off data-import migration alongside it.
-5. **Export Convex data**: `npx convex export --path ./convex-export` produces a
-   JSONL dump per table. Point `lunora import` straight at that directory —
-   it reads the export layout, so there is no reshaping step:
+5. **Export Convex data**: `npx convex export --path ./convex-export --include-file-storage`
+   produces a JSONL dump per table (plus `_storage/`, the file metadata + blob
+   bytes if your app uses file storage). Point `lunora import` straight at that
+   directory — it reads the export layout, so there is no reshaping step:
 
     ```bash
     lunora import ./convex-export
@@ -264,6 +265,31 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     makes self-referential and cross-table cycles (a folder's `parentId`, a
     supersession chain) ordinary rows rather than special cases — there is
     nothing to remap, so there is no ordering problem to solve.
+
+    **File storage needs the opt-in.** `lunora import` skips the `_storage`
+    table by default (those rows describe blobs, not application data). To
+    migrate the files too — uploading every blob to R2 with a sha256 + size
+    check before write, then rewriting references — pass `--with-storage`:
+
+    ```bash
+    lunora import ./convex-export --with-storage
+    ```
+
+    Blobs are stored under content-hash keys (`sha256` hex of the bytes), and
+    every `{ $storage: id }` reference is rewritten automatically. Plain-string
+    columns that hold storage ids (validated with `v.id("_storage")` in Convex)
+    are ambiguous, so they are rewritten only through a
+    `lunora/import-convex.json` mapping — run with `--scan` to have the CLI
+    detect the candidate columns and print the file for you to confirm:
+
+    ```bash
+    lunora import ./convex-export --with-storage --scan
+    ```
+
+    A `snapshot.zip` from `npx convex export --path ./snapshot.zip` imports the
+    same way (`lunora import ./snapshot.zip --with-storage`); and `--verify`
+    checks each table's inserted count against its source line count, exiting
+    non-zero on a mismatch.
 
     <Callout type="warn">
         `ctx.db.insert` does the **opposite**: it discards a supplied `_id` and mints a fresh one. So a hand-rolled importer that batch-inserts through a

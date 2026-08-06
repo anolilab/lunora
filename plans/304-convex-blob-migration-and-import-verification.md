@@ -1,7 +1,7 @@
 # Plan 304 — Migrate Convex `_storage` blobs and verify imports
 
 **Baseline:** `9ddd16f63` (2026-08-05)
-**Status:** TODO
+**Status:** DONE (landed on PR #354)
 **Priority:** P1 · **Effort:** M · **Risk:** MED · **Category:** data/migration
 
 > **Executor instructions**: follow this plan step by step, run every verification
@@ -207,23 +207,23 @@ is naturally at hand during import.
 
 All S/M, sequenced in §7. **Status is recorded here as each lands.**
 
-- **W1 (S) — Admin route verification.** `expectedSha256`/`expectedSize` on
+- **[x] W1 (S) — Admin route verification.** `expectedSha256`/`expectedSize` on
   `handleStorageUpload` (`storage-admin-routes.ts:109`), a registered
   `STORAGE_CHECKSUM_MISMATCH` error, computed-hash response, and route tests
   (mismatch → 400 before write; missing param → today's behaviour; match → 200).
   Also an idempotency affordance for re-runs (see Q3).
-- **W2 (M) — `_storage` snapshot reader + blob uploader (CLI).** `--with-storage`
+- **[x] W2 (M) — `_storage` snapshot reader + blob uploader (CLI).** `--with-storage`
   opt-in on `lunora import`; read `_storage/documents.jsonl`, stream each
   `_storage/<id>` file to the route with `key=[keyPrefix]sha256`,
   `expectedSha256`/`expectedSize`, building the `storageId → key` map; fail-close
   on any mismatch/missing file. `adm-zip` path for `.zip`.
-- **W3 (M) — Remap layer + `--scan` + dangling report.** `{ $storage }`
+- **[x] W3 (M) — Remap layer + `--scan` + dangling report.** `{ $storage }`
   auto-rewrite; `lunora/import-convex.json` mapping applied to the specified
   columns during doc streaming; `--scan` emits the candidate mapping; candidates
   outside the mapping are listed, not rewritten.
-- **W4 (S) — `--verify`.** Per-table parity vs the source JSONL line counts,
+- **[x] W4 (S) — `--verify`.** Per-table parity vs the source JSONL line counts,
   dangling-storage list, optional FK spot check; non-zero exit on mismatch.
-- **W5 (S) — Docs + CLI help.** `from-convex.mdx` "files" step rewritten around
+- **[x] W5 (S) — Docs + CLI help.** `from-convex.mdx` "files" step rewritten around
   `npx convex export --include-file-storage` + the opt-in; `import` command help
   and examples updated; the `_storage` warn message reworded to name the opt-in.
 
