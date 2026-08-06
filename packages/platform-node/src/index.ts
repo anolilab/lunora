@@ -19,9 +19,11 @@
  *
  * **Still missing**, and rated accordingly in `NODE_CAPABILITIES`
  * (`@lunora/platform`): a dev server — so `lunora dev --target node` does not
- * exist yet — and every Cloudflare product binding (R2, Queues, Workflows,
- * Vectorize, Workers AI, Browser Rendering, Containers, Analytics Engine,
- * Pipelines, Secrets Store, Hyperdrive). Cross-shard fan-out is emulated via
+ * exist yet — plus most Cloudflare product bindings (Queues, Vectorize, Workers
+ * AI, Browser Rendering, Containers, Analytics Engine, Pipelines, Secrets Store,
+ * Hyperdrive). R2 buckets are emulated over the local filesystem
+ * (`./node-r2-bucket`) and Workflows over the `@visulima/workflow` engine
+ * (`./node-workflow-host`). Cross-shard fan-out is emulated via
  * `@lunora/runtime`'s query coordinator over the in-process shard registry, and
  * a `@lunora/config` deploy driver makes `--target node` resolve. See
  * `plans/234-node-host-findings.md`.
@@ -32,6 +34,8 @@ export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodePlatform, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
+export type { NodeR2BucketOptions } from "./node-r2-bucket";
+export { createNodeR2Bucket } from "./node-r2-bucket";
 export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";
 export { createNodeSchedulerHost } from "./node-scheduler-host";
 export type { NodeShardHostOptions } from "./node-shard-host";
@@ -42,3 +46,5 @@ export type { NodeShardState } from "./node-shard-state";
 export { createNodeShardState } from "./node-shard-state";
 export type { NodeSocketHost } from "./node-socket-host";
 export { createNodeSocketHost } from "./node-socket-host";
+export type { NodeWorkflowHost, NodeWorkflowHostOptions } from "./node-workflow-host";
+export { createNodeWorkflowHost } from "./node-workflow-host";

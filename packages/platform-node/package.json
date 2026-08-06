@@ -61,8 +61,11 @@
     },
     "dependencies": {
         "@lunora/d1": "1.0.0-alpha.56",
+        "@lunora/errors": "1.0.0-alpha.12",
         "@lunora/platform": "1.0.0-alpha.3",
         "@lunora/sql-store": "1.0.0-alpha.58",
+        "@lunora/workflow": "1.0.0-alpha.17",
+        "@visulima/workflow": "catalog:workflow",
         "better-sqlite3": "^12.11.1",
         "cron-parser": "5.6.2"
     },
@@ -72,6 +75,7 @@
         "@lunora/platform-cloudflare": "1.0.0-alpha.3",
         "@lunora/runtime": "1.0.0-alpha.49",
         "@lunora/shard-engine": "1.0.0-alpha.6",
+        "@lunora/storage": "1.0.0-alpha.17",
         "@types/better-sqlite3": "^7.6.13",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

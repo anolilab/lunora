@@ -11,11 +11,13 @@
  * options it is constructed with, so there is nothing to reconcile.
  *
  * That makes `provision` a *reporting* step rather than a writing one, and the
- * report is the valuable part: an app that declares a queue, a workflow, a
- * container or a bucket gets told, once, at provision time, that this target
- * cannot serve it — instead of discovering it when `ctx.queues` is undefined at
- * runtime. The warnings mirror `NODE_CAPABILITIES` in `@lunora/platform`; that
- * matrix is what codegen gates on, and this is what the operator reads.
+ * report is the valuable part: an app that declares a queue or a container gets
+ * told, once, at provision time, that this target cannot serve it — instead of
+ * discovering it when `ctx.queues` is undefined at runtime. Workflows and
+ * object storage are emulated on this target (`createNodeWorkflowHost` /
+ * `createNodeR2Bucket` in `@lunora/platform-node`), so they are not warned
+ * about here. The warnings mirror `NODE_CAPABILITIES` in `@lunora/platform`;
+ * that matrix is what codegen gates on, and this is what the operator reads.
  *
  * `toolchain` is deliberately **absent**. `DriverToolchain` describes a vendor
  * CLI to shell out to — `wrangler deploy`, `wrangler tail`, `wrangler secret
@@ -38,16 +40,8 @@ import toResourceGraph from "../resource-graph";
  */
 const UNSUPPORTED: ReadonlyArray<{ detect: (graph: ResourceGraph) => boolean; warning: string }> = [
     {
-        detect: (graph) => graph.objectStorage,
-        warning: "object storage (R2) has no Node equivalent in @lunora/platform-node — ctx.storage will be unavailable",
-    },
-    {
         detect: (graph) => graph.queues.length > 0,
         warning: "queues have no Node equivalent in @lunora/platform-node — ctx.queues will be unavailable",
-    },
-    {
-        detect: (graph) => graph.workflows.length > 0,
-        warning: "workflows have no Node equivalent in @lunora/platform-node — ctx.workflows will be unavailable",
     },
     {
         detect: (graph) => graph.containers.length > 0,
