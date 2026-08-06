@@ -276,6 +276,7 @@ interface ImportCommandOptions {
      * is bare docs from a single table — Convex's `convex import --table users`
      * shape.
      */
+    scan?: boolean;
     table?: string;
     token?: string;
     url?: string;
@@ -286,6 +287,7 @@ interface ImportCommandOptions {
      * Off by default so the plain-document import path is unchanged.
      */
     withStorage?: boolean;
+
     /** Confirm bulk-writing production. Required alongside `--prod`. */
     yes?: boolean;
 }
@@ -723,6 +725,81 @@ const reportImportOutcome = (
 };
 
 /**
+ * Scan a Convex export directory for storage id references and emit a candidate
+ * `import-convex.json` mapping file.
+ */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- the scan function iterates over tables and rows; complexity is justified
+const scanStorageColumns = async (
+    exportDirectory: string,
+    convexTables: ReadonlyArray<{ file: string; table: string }>,
+    logger: Logger,
+): Promise<void> => {
+    const storageIds = new Set<string>();
+    const storageColumns: Record<string, string[]> = {};
+
+    // Read _storage metadata to get the set of valid storage ids.
+    try {
+        const metadataFile = join(exportDirectory, "_storage", "documents.jsonl");
+        const stream = createReadStream(metadataFile, { encoding: "utf8" });
+        const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream });
+
+        for await (const raw of rl) {
+            const line = raw.trim();
+
+            if (line.length === 0) {
+                continue;
+            }
+
+            const storageDocument = JSON.parse(line) as { _id: string };
+            storageIds.add(storageDocument._id);
+        }
+    } catch {
+        logger.warn("no _storage metadata found — cannot scan for storage columns");
+        return;
+    }
+
+    logger.info(`found ${String(storageIds.size)} storage ids`);
+
+    // Scan all table documents for storage id references.
+    for (const { file, table } of convexTables) {
+        if (table === "_storage") {
+            continue;
+        }
+
+        const tableStream = createReadStream(file, { encoding: "utf8" });
+        const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: tableStream });
+
+        // eslint-disable-next-line no-await-in-loop -- sequential scan: each line must be processed before the next
+        for await (const raw of rl) {
+            const line = raw.trim();
+
+            if (line.length === 0) {
+                continue;
+            }
+
+            try {
+                const row = JSON.parse(line) as Record<string, unknown>;
+
+                for (const [key, value] of Object.entries(row)) {
+                    if (typeof value === "string" && storageIds.has(value)) {
+                        storageColumns[table] ??= [];
+
+                        if (!storageColumns[table].includes(key)) {
+                            storageColumns[table].push(key);
+                        }
+                    }
+                }
+            } catch {
+                // Skip invalid JSON lines.
+            }
+        }
+    }
+
+    logger.info("candidate storage column mapping:");
+    logger.info(JSON.stringify({ keyPrefix: "", storageColumns }, undefined, 2));
+};
+
+/**
  * Stream an NDJSON file — or a `npx convex export --path <dir>` directory — in
  * chunks, POSTing each batch to `/_lunora/admin/import`. The line buffer stays
  * bounded by `batchSize`, so a multi-GiB source imports without buffering
@@ -746,6 +823,13 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     }
 
     const { convexTables } = source;
+
+    // W3: scan for storage columns and emit candidate mapping.
+    if (options.scan && convexTables) {
+        await scanStorageColumns(options.file, convexTables, options.logger);
+
+        return { body: undefined, code: 0, inserted: 0 };
+    }
 
     // Phase 1 (W2): migrate Convex `_storage` blobs when `--with-storage` is set.
     let storageIdMap: Map<string, string> | undefined;

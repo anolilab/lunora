@@ -24,6 +24,7 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ a
         file,
         logger,
         prod: options.prod === true,
+        scan: options.scan === true,
         table: options.table,
         token: options.token,
         url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
