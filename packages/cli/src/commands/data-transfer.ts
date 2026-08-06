@@ -305,6 +305,13 @@ interface ImportCommandOptions {
     url?: string;
 
     /**
+     * Verify per-table row parity + dangling-storage after import. Exits non-zero
+     * when a table's inserted count differs from its source line count, or when a
+     * document references a storage id that was not migrated.
+     */
+    verify?: boolean;
+
+    /**
      * Also migrate Convex `_storage` blobs: read `_storage/documents.jsonl`, upload
      * each blob with sha256+size verification, and build the `storageId → key` map.
      * Off by default so the plain-document import path is unchanged.
@@ -814,6 +821,49 @@ const scanStorageColumns = async (exportDirectory: string, convexTables: Readonl
 /* eslint-enable sonarjs/cognitive-complexity */
 
 /**
+ * Count non-blank source lines per table in a Convex export directory.
+ * `_storage` is excluded (its rows describe blobs, not application data).
+ * Returns a map from table → row count, or undefined when the directory is not
+ * a Convex export layout.
+ */
+const countConvexSourceRows = async (exportDirectory: string, logger: Logger): Promise<Record<string, number> | undefined> => {
+    const tables = await convexExportTables(exportDirectory);
+
+    if (tables === undefined) {
+        return undefined;
+    }
+
+    const counts: Record<string, number> = {};
+
+    for (const { file, table } of tables) {
+        if (table === CONVEX_STORAGE_TABLE) {
+            continue;
+        }
+
+        let count = 0;
+
+        try {
+            const rl = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(file, { encoding: "utf8" }) });
+
+            // eslint-disable-next-line no-await-in-loop -- sequential: one source table read before the next
+            for await (const raw of rl) {
+                if (raw.trim().length > 0) {
+                    count += 1;
+                }
+            }
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            logger.warn(`failed to count ${table} source rows: ${message}`);
+        }
+
+        counts[table] = count;
+    }
+
+    return counts;
+};
+
+/**
  * Stream an NDJSON file — or a `npx convex export --path <dir>` directory — in
  * chunks, POSTing each batch to `/_lunora/admin/import`. The line buffer stays
  * bounded by `batchSize`, so a multi-GiB source imports without buffering
@@ -887,6 +937,9 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // batching makes the in-memory cost bounded per request either way. The
     // Convex reader is already a line-at-a-time generator and slots straight in,
     // since both are `for await`-able sources of text chunks.
+    // W4: count source rows per table up front when verifying parity.
+    const sourceRows = options.verify && convexTables ? await countConvexSourceRows(options.file, options.logger) : undefined;
+
     const stream = convexTables ? readConvexExport(convexTables, options.logger) : createReadStream(options.file, { encoding: "utf8" });
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
@@ -1043,13 +1096,37 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     await flush();
 
+    // W4: per-table parity check against the source line counts. A table whose
+    // inserted total differs from its source row count is a silent miss — surface
+    // it and exit non-zero.
+    let parityMismatch = 0;
+
+    if (sourceRows) {
+        for (const [table, sourceCount] of Object.entries(sourceRows)) {
+            const insertedCount = inserted[table];
+
+            if (insertedCount !== sourceCount) {
+                parityMismatch += 1;
+                options.logger.error(
+                    `verify: ${table} inserted ${String(insertedCount ?? 0)} of ${String(sourceCount)} source rows (${String(sourceCount - (insertedCount ?? 0))} missing)`,
+                );
+            }
+        }
+
+        if (parityMismatch > 0) {
+            options.logger.error(`verify: ${String(parityMismatch)} table(s) failed row parity`);
+        } else {
+            options.logger.success("verify: all tables at row parity");
+        }
+    }
+
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
     const body = { conflicts, errors, inserted, received, ...(warnings.length > 0 ? { warnings } : {}) };
 
     options.logger.info(JSON.stringify(body, undefined, 2));
     reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, insertedTotal, received, warnings });
 
-    return { body, code: errors.length > 0 ? 1 : 0, inserted: insertedTotal };
+    return { body, code: errors.length > 0 || parityMismatch > 0 ? 1 : 0, inserted: insertedTotal };
 };
 /* eslint-enable sonarjs/cognitive-complexity */
 

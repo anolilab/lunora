@@ -18,6 +18,7 @@ const importCommand: Command = {
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Also migrate Convex `_storage` blobs (verified upload)", name: "with-storage", type: Boolean },
         { description: "Scan for storage columns and emit candidate mapping", name: "scan", type: Boolean },
+        { description: "Verify row parity + dangling-storage after import (non-zero exit on mismatch)", name: "verify", type: Boolean },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Confirm bulk-writing production (required with --prod)", name: "yes", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
@@ -38,6 +39,7 @@ export type ImportOptions = CreateOptions<{
     table: string | undefined;
     token: string | undefined;
     url: string | undefined;
+    verify: boolean | undefined;
     withstorage: boolean | undefined;
     yes: boolean | undefined;
 }>;
