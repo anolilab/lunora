@@ -736,7 +736,7 @@ const reportImportOutcome = (
  * Scan a Convex export directory for storage id references and emit a candidate
  * `import-convex.json` mapping file.
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity -- the scan function iterates over tables and rows; complexity is justified
+ 
 const scanStorageColumns = async (
     exportDirectory: string,
     convexTables: ReadonlyArray<{ file: string; table: string }>,
