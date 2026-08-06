@@ -1,6 +1,6 @@
 /**
  * `createNodeR2Bucket` — a Node implementation of the `R2BucketLike` structural
- * (`@lunora/platform`) over the local filesystem, so `@lunora/storage`'s
+ * contract (`@lunora/platform`) over the local filesystem, so `@lunora/storage`'s
  * `createStorage({ bucket })` runs on the Node host.
  *
  * `@visulima/storage`'s providers were deliberately NOT wrapped: its `BaseStorage`
@@ -10,12 +10,12 @@
  * contract `ctx.storage` consumes. The R2 contract is small enough to implement
  * directly over `fs/promises`, so that is what this does:
  *
- * - object bytes live at `&lt;directory>/&lt;key>` (one file per object, nested dirs
- *   from `/`);
- * - metadata lives in a parallel sidecar tree `&lt;directory>/.lunora-meta/&lt;key>.json`
- *   (content-type, custom metadata, size, upload time, SHA-256);
+ * - object bytes live at `directory/key` (one file per object, nested dirs
+ * from `/`);
+ * - metadata lives in a parallel sidecar tree `directory/.lunora-meta/key.json`
+ * (content-type, custom metadata, size, upload time, SHA-256);
  * - puts are atomic (write to `.lunora-tmp/` then rename), so a crash never
- *   leaves a half-written object;
+ * leaves a half-written object;
  * - `head` reads only the sidecar + stat (no body transfer), matching R2 HEAD.
  *
  * Reserved top-level names: `.lunora-meta` and `.lunora-tmp`. Keys whose first
@@ -23,7 +23,7 @@
  * the object and metadata trees must stay disjoint and confined to the bucket
  * directory.
  *
- * Not emulated: multipart uploads (`createMultipartUpload`/`resumeMultipartUpload`
+ * Not emulated: multipart upload (`createMultipartUpload`/`resumeMultipartUpload`
  * are absent, so `@lunora/storage` throws its clear "binding does not support
  * multipart" error) and S3 presigned URLs (those need real R2 credentials anyway).
  */
@@ -51,7 +51,7 @@ interface NodeObjectMeta {
 }
 
 /** Options for {@link createNodeR2Bucket}. */
-export interface NodeR2BucketOptions {
+interface NodeR2BucketOptions {
     /** The bucket directory — created on first write. Objects live here, one file per key. */
     directory: string;
 }
@@ -116,23 +116,39 @@ const hexToArrayBuffer = (hex: string): ArrayBuffer => {
     return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 };
 
+/** Compute the uploaded date from meta and file stat. */
+const getUploadedDate = (meta: NodeObjectMeta | undefined, fileStat?: { mtimeMs: number; size: number }): Date | undefined => {
+    if (meta?.uploaded !== undefined) {
+        return new Date(meta.uploaded);
+    }
+
+    if (fileStat !== undefined) {
+        return new Date(fileStat.mtimeMs);
+    }
+
+    return undefined;
+};
+
 /** Build the body-free {@link R2ObjectLike} projection for a key from its sidecar + stat. */
 const toObject = (key: string, meta: NodeObjectMeta | undefined, fileStat?: { mtimeMs: number; size: number }): R2ObjectLike => {
     const { sha256Hex } = meta ?? { sha256Hex: undefined };
 
+    const checksums = sha256Hex === undefined ? undefined : { sha256: hexToArrayBuffer(sha256Hex) };
+    const etag = sha256Hex ?? `stat-${String(fileStat?.size)}-${String(fileStat?.mtimeMs)}`;
+    const httpEtag = sha256Hex === undefined ? undefined : `"${sha256Hex}"`;
+    const sha256Base64 = sha256Hex === undefined ? undefined : Buffer.from(sha256Hex, "hex").toString("base64");
+
     return {
-        checksums: sha256Hex === undefined ? undefined : { sha256: hexToArrayBuffer(sha256Hex) },
+        checksums,
         customMetadata: meta?.customMetadata,
-        // Without a sidecar the object predates checksumming — fall back to a
-        // stat-derived tag so `etag` stays defined (a stable, content-independent tag).
-        etag: sha256Hex ?? `stat-${String(fileStat?.size)}-${String(fileStat?.mtimeMs)}`,
-        httpEtag: sha256Hex === undefined ? undefined : `"${sha256Hex}"`,
+        etag,
+        httpEtag,
         httpMetadata: meta?.httpMetadata,
         key,
         sha256: sha256Hex,
-        sha256Base64: sha256Hex === undefined ? undefined : Buffer.from(sha256Hex, "hex").toString("base64"),
+        sha256Base64,
         size: meta?.size ?? fileStat?.size ?? 0,
-        uploaded: meta?.uploaded === undefined ? (fileStat === undefined ? undefined : new Date(fileStat.mtimeMs)) : new Date(meta.uploaded),
+        uploaded: getUploadedDate(meta, fileStat),
     };
 };
 
@@ -225,11 +241,11 @@ const toBytes = async (body: ReadableStream | ArrayBuffer | Blob | string | null
 const walkObjects = async (directory: string): Promise<string[]> => {
     const keys: string[] = [];
 
-    const walk = async (dir: string, relative: string): Promise<void> => {
+    const walk = async (currentPath: string, relative: string): Promise<void> => {
         let entries;
 
         try {
-            entries = await readdir(dir, { withFileTypes: true });
+            entries = await readdir(currentPath, { withFileTypes: true });
         } catch (error: unknown) {
             if (isMissing(error)) {
                 return;
@@ -238,23 +254,27 @@ const walkObjects = async (directory: string): Promise<string[]> => {
             throw error;
         }
 
+        const promises: Promise<void>[] = [];
+
         for (const entry of entries) {
             if (entry.name === META_DIR || entry.name === TMP_DIR) {
                 continue;
             }
 
-            const rel = relative === "" ? entry.name : `${relative}${sep}${entry.name}`;
+            const relativePath = relative === "" ? entry.name : `${relative}${sep}${entry.name}`;
 
             if (entry.isDirectory()) {
-                await walk(join(dir, entry.name), rel);
+                promises.push(walk(join(currentPath, entry.name), relativePath));
             } else {
-                keys.push(rel);
+                keys.push(relativePath);
             }
         }
+
+        await Promise.all(promises);
     };
 
     await walk(directory, "");
-    keys.sort();
+    keys.sort((a, b) => a.localeCompare(b));
 
     return keys;
 };
@@ -265,7 +285,7 @@ const firstIndexGreaterThan = (values: ReadonlyArray<string>, value: string): nu
     let high = values.length;
 
     while (low < high) {
-        const mid = (low + high) >> 1;
+        const mid = low + Math.floor((high - low) / 2);
         const candidate = values[mid];
 
         if (candidate === undefined || candidate <= value) {
@@ -293,7 +313,7 @@ const unlinkIfPresent = async (path: string): Promise<void> => {
  * `createStorage({ bucket })` accepts — `put`/`get`/`head`/`delete`/`list` —
  * maps directly onto a file operation.
  */
-export const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
+const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
     const { directory } = options;
 
     return {
@@ -310,7 +330,7 @@ export const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike =
             const fileStat = await statObject(directory, key);
 
             if (fileStat === undefined) {
-                return null;
+                return null; // eslint-disable-line unicorn/no-null
             }
 
             const bytes = await readFile(join(directory, key));
@@ -321,9 +341,9 @@ export const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike =
 
             return {
                 ...object,
-                arrayBuffer: async (): Promise<ArrayBuffer> => rangedBuffer,
+                arrayBuffer: (): Promise<ArrayBuffer> => Promise.resolve(rangedBuffer),
                 body: new Blob([rangedBuffer]).stream(),
-                text: async (): Promise<string> => ranged.toString("utf8"),
+                text: (): Promise<string> => Promise.resolve(ranged.toString("utf8")),
             };
         },
 
@@ -333,7 +353,7 @@ export const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike =
             const fileStat = await statObject(directory, key);
 
             if (fileStat === undefined) {
-                return null;
+                return null; // eslint-disable-line unicorn/no-null
             }
 
             return toObject(key, await readMeta(directory, key), fileStat);
@@ -342,7 +362,7 @@ export const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike =
         list: async (listOptions: { cursor?: string; delimiter?: string; limit?: number; prefix?: string } = {}) => {
             const limit = Math.min(Math.max(1, Math.floor(listOptions.limit ?? 1000)), 1000);
 
-            if (listOptions.prefix !== undefined && listOptions.prefix.includes("\0")) {
+            if (listOptions.prefix?.includes("\0")) {
                 throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 list prefix contains a NUL byte");
             }
 
@@ -389,3 +409,6 @@ export const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike =
         },
     };
 };
+
+export { createNodeR2Bucket };
+export type { NodeR2BucketOptions };

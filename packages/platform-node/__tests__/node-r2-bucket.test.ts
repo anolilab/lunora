@@ -14,7 +14,7 @@ describe("createNodeR2Bucket", () => {
     let dir: string;
 
     afterEach(() => {
-        if (dir !== undefined) {
+        if (dir) {
             rmSync(dir, { force: true, recursive: true });
         }
     });
@@ -26,6 +26,7 @@ describe("createNodeR2Bucket", () => {
     };
 
     it("round-trips a string object through put/get", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
         const stored = await bucket.put("notes/hello.txt", "hello world", { httpMetadata: { contentType: "text/plain" } });
@@ -41,6 +42,7 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("serves the body as a ReadableStream", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -53,6 +55,7 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("accepts Blob, ArrayBuffer and ReadableStream bodies", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -60,12 +63,17 @@ describe("createNodeR2Bucket", () => {
         await bucket.put("buf", new TextEncoder().encode("from-buffer").buffer);
         await bucket.put("stream", new Blob(["from-stream"]).stream());
 
-        await expect((await bucket.get("blob"))?.text()).resolves.toBe("from-blob");
-        await expect((await bucket.get("buf"))?.text()).resolves.toBe("from-buffer");
-        await expect((await bucket.get("stream"))?.text()).resolves.toBe("from-stream");
+        const blobResult = await bucket.get("blob");
+        const bufResult = await bucket.get("buf");
+        const streamResult = await bucket.get("stream");
+
+        await expect(blobResult?.text()).resolves.toBe("from-blob");
+        await expect(bufResult?.text()).resolves.toBe("from-buffer");
+        await expect(streamResult?.text()).resolves.toBe("from-stream");
     });
 
     it("head returns metadata without the body", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -81,18 +89,25 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("supports offset/length and suffix ranges on get", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
         await bucket.put("range", "0123456789");
 
-        await expect((await bucket.get("range", { range: { length: 3, offset: 2 } }))?.text()).resolves.toBe("234");
-        await expect((await bucket.get("range", { range: { length: 4 } }))?.text()).resolves.toBe("0123");
-        await expect((await bucket.get("range", { range: { offset: 7 } }))?.text()).resolves.toBe("789");
-        await expect((await bucket.get("range", { range: { suffix: 3 } }))?.text()).resolves.toBe("789");
+        const range1 = await bucket.get("range", { range: { length: 3, offset: 2 } });
+        const range2 = await bucket.get("range", { range: { length: 4 } });
+        const range3 = await bucket.get("range", { range: { offset: 7 } });
+        const range4 = await bucket.get("range", { range: { suffix: 3 } });
+
+        await expect(range1?.text()).resolves.toBe("234");
+        await expect(range2?.text()).resolves.toBe("0123");
+        await expect(range3?.text()).resolves.toBe("789");
+        await expect(range4?.text()).resolves.toBe("789");
     });
 
     it("returns null for a missing object on get and head", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -101,6 +116,7 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("delete removes the object", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -114,6 +130,7 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("lists objects with prefix, delimiter, limit and an opaque cursor", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -144,6 +161,7 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("rejects keys that would escape or collide with the bucket layout", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
 
@@ -154,6 +172,7 @@ describe("createNodeR2Bucket", () => {
     });
 
     it("drives the @lunora/storage seam (upload/download/getMetadata/list/delete)", async () => {
+        expect.hasAssertions();
 
         const bucket = freshBucket();
         const storage = createStorage({ bucket });

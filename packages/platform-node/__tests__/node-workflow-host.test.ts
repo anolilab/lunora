@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 describe("createNodeWorkflowHost", () => {
     it("runs a workflow synchronously to completion and exposes the output", async () => {
+        expect.hasAssertions();
 
         const greet = defineWorkflow<{ name: string }, string>({
             handler: async (ctx) => {
@@ -28,6 +29,7 @@ describe("createNodeWorkflowHost", () => {
     });
 
     it("memoizes step results across a sleep-and-resume replay", async () => {
+        expect.hasAssertions();
 
         let loadCount = 0;
         const replayed = defineWorkflow<Record<string, never>, number>({
@@ -46,19 +48,24 @@ describe("createNodeWorkflowHost", () => {
         const host = createNodeWorkflowHost({ workflows: { replayed } });
         const instance = await host.bindings.replayed.create({});
 
-        expect((await instance.status()).status).toBe("waiting");
+        const status1 = await instance.status();
+
+        expect(status1.status).toBe("waiting");
         expect(loadCount).toBe(1);
 
         await sleep(15);
         await instance.resume();
 
-        expect((await instance.status()).status).toBe("complete");
+        const status2 = await instance.status();
+
+        expect(status2.status).toBe("complete");
         // The sleep suspended the run, then the engine replayed the body — the
         // recorded step result is returned without re-running the side effect.
         expect(loadCount).toBe(1);
     });
 
     it("supports waitForEvent + sendEvent and rejects a mismatched event", async () => {
+        expect.hasAssertions();
 
         const poked = defineWorkflow<Record<string, unknown>, { payload: unknown; type: string }>({
             handler: async (ctx) => ctx.step.waitForEvent("ping", { type: "poke" }),
@@ -67,22 +74,25 @@ describe("createNodeWorkflowHost", () => {
         const host = createNodeWorkflowHost({ workflows: { poked } });
         const instance = await host.bindings.poked.create({});
 
-        expect((await instance.status()).status).toBe("waiting");
+        const status1 = await instance.status();
+
+        expect(status1.status).toBe("waiting");
 
         await expect(instance.sendEvent({ payload: "nope", type: "wrong" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
 
         await instance.sendEvent({ payload: { n: 42 }, type: "poke" });
 
-        const status = await instance.status();
+        const status2 = await instance.status();
 
-        expect(status.status).toBe("complete");
-        expect(status.output).toStrictEqual({ payload: { n: 42 }, type: "poke" });
+        expect(status2.status).toBe("complete");
+        expect(status2.output).toStrictEqual({ payload: { n: 42 }, type: "poke" });
 
         // A completed instance is no longer waiting — further events are rejected.
         await expect(instance.sendEvent({ payload: 1, type: "poke" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
     it("times out a waitForEvent via resume once the timeout elapses", async () => {
+        expect.hasAssertions();
 
         const timed = defineWorkflow<Record<string, unknown>, { payload: unknown; type: string }>({
             handler: async (ctx) => ctx.step.waitForEvent("ping", { timeout: 5, type: "poke" }),
@@ -91,18 +101,21 @@ describe("createNodeWorkflowHost", () => {
         const host = createNodeWorkflowHost({ workflows: { timed } });
         const instance = await host.bindings.timed.create({});
 
-        expect((await instance.status()).status).toBe("waiting");
+        const status1 = await instance.status();
+
+        expect(status1.status).toBe("waiting");
 
         await sleep(15);
         await instance.resume();
 
-        const status = await instance.status();
+        const status2 = await instance.status();
 
-        expect(status.status).toBe("complete");
-        expect(status.output).toStrictEqual({ payload: undefined, type: "poke" });
+        expect(status2.status).toBe("complete");
+        expect(status2.output).toStrictEqual({ payload: undefined, type: "poke" });
     });
 
     it("maps a failed run to errored with the error message", async () => {
+        expect.hasAssertions();
 
         const crashing = defineWorkflow<Record<string, never>, never>({
             handler: async () => {
@@ -120,6 +133,7 @@ describe("createNodeWorkflowHost", () => {
     });
 
     it("createBatch starts every instance", async () => {
+        expect.hasAssertions();
 
         const double = defineWorkflow<{ value: number }, number>({
             handler: async (ctx) => ctx.params.value * 2,
@@ -129,10 +143,19 @@ describe("createNodeWorkflowHost", () => {
         const instances = await host.bindings.double.createBatch([{ params: { value: 2 } }, { params: { value: 3 } }]);
 
         expect(instances).toHaveLength(2);
-        await expect(Promise.all(instances.map(async (instance) => (await instance.status()).output))).resolves.toStrictEqual([4, 6]);
+        await expect(
+            Promise.all(
+                instances.map(async (instance) => {
+                    const status = await instance.status();
+
+                    return status.output;
+                }),
+            ),
+        ).resolves.toStrictEqual([4, 6]);
     });
 
     it("get on an unknown id reports unknown status", async () => {
+        expect.hasAssertions();
 
         const trivial = defineWorkflow<Record<string, never>, string>({
             handler: async () => "done",
@@ -141,10 +164,13 @@ describe("createNodeWorkflowHost", () => {
         const host = createNodeWorkflowHost({ workflows: { trivial } });
         const instance = await host.bindings.trivial.get("missing-run");
 
-        expect((await instance.status()).status).toBe("unknown");
+        const status = await instance.status();
+
+        expect(status.status).toBe("unknown");
     });
 
     it("pause and restart are not implemented; terminate ends the run", async () => {
+        expect.hasAssertions();
 
         const trivial = defineWorkflow<Record<string, never>, string>({
             handler: async () => "done",
@@ -160,10 +186,13 @@ describe("createNodeWorkflowHost", () => {
 
         // Terminate is emulated as a store delete, so the run becomes unknown
         // rather than reporting the terminated status the Cloudflare host uses.
-        expect((await instance.status()).status).toBe("unknown");
+        const status = await instance.status();
+
+        expect(status.status).toBe("unknown");
     });
 
     it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {
+        expect.hasAssertions();
 
         const orderPipeline = defineWorkflow<{ orderId: string }, string>({
             handler: async (ctx) => `order-${ctx.params.orderId}`,
@@ -177,10 +206,13 @@ describe("createNodeWorkflowHost", () => {
         const workflows = createWorkflowContext(host.env, [{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" }]);
         const instance = await workflows.get("orderPipeline").create({ params: { orderId: "123" } });
 
-        expect((await instance.status()).output).toBe("order-123");
+        const status2 = await instance.status();
+
+        expect(status2.output).toBe("order-123");
     });
 
     it("rejects a value that is not a defineWorkflow result", () => {
+        expect.hasAssertions();
 
         expect(() => createNodeWorkflowHost({ workflows: { notAWorkflow: { handler: async () => 1 } as never } })).toThrow(
             /is not a defineWorkflow result/,
