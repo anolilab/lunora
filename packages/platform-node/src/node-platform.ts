@@ -21,6 +21,7 @@ import type { NodeSchedulerHostOptions } from "./node-scheduler-host";
 import { createNodeSchedulerHost } from "./node-scheduler-host";
 import type { NodeShardHostOptions } from "./node-shard-host";
 import { createNodeShardHost } from "./node-shard-host";
+import type { NodeShardRegistryOptions } from "./node-shard-registry";
 import { createNodeShardRegistry } from "./node-shard-registry";
 import { createNodeSocketHost } from "./node-socket-host";
 
@@ -79,17 +80,20 @@ export interface NodePlatform {
 
 /**
  * Options for {@link createNodePlatform} — the shard host's (`path`,
- * `shardKey`, `onAlarm`) plus the scheduler's (`onDispatch`). Both delivery
- * hooks are optional and both are what make the durable halves useful: a
- * re-armed alarm or job with nowhere to land is bookkeeping.
+ * `shardKey`, `onAlarm`), the scheduler's (`onDispatch`), and the shard
+ * registry's (`directory`, `onAlarm`, `onFetch`). Both delivery hooks are
+ * optional and both are what make the durable halves useful: a re-armed alarm
+ * or job with nowhere to land is bookkeeping. `directory` makes the shards the
+ * directory resolves for fan-out file-backed too, and `onAlarm` gives their
+ * durable alarms somewhere to land.
  */
-export type NodePlatformOptions = NodeSchedulerHostOptions & NodeShardHostOptions;
+export type NodePlatformOptions = NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
 
 /** Compose every contract this package provides over one `better-sqlite3` database. */
 export const createNodePlatform = (options: NodePlatformOptions = {}): NodePlatform => {
     const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
     const kv = createNodeShardKvStore(database);
-    const registry = createNodeShardRegistry();
+    const registry = createNodeShardRegistry(options);
     const { directory } = registry;
     const { socket: sockets } = createNodeSocketHost(database);
     const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);

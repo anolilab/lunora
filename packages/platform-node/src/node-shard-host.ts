@@ -16,6 +16,13 @@ import type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSq
 import Database from "better-sqlite3";
 
 /**
+ * Largest delay `setTimeout` accepts as a 32-bit signed integer. Any delay
+ * above this (~24.8 days) is clamped to 1 ms with a `TimeoutOverflowWarning`,
+ * which would fire an alarm or job far ahead of its target timestamp.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
  * A `better-sqlite3` binding value. `null` (not `undefined`) is the native
  * binding's own spelling of SQL `NULL` — the one place in this file that has
  * to use it, since better-sqlite3's FFI has no other way to write one.
@@ -155,6 +162,19 @@ const createAlarms = (database: Database.Database, onAlarm?: () => Promise<void>
         clearAlarmTimeout();
 
         const delay = Math.max(0, ms - Date.now());
+
+        // `setTimeout` clamps any delay above 2^31 - 1 ms (~24.8 days) down to
+        // 1 ms and warns (`TimeoutOverflowWarning`), so an alarm set further
+        // out would fire immediately — the durable row deleted, the wakeup
+        // weeks early, the original timestamp unrecoverable. Re-arm in
+        // maximum-sized chunks until the target is close enough to pass whole.
+        if (delay > MAX_TIMEOUT_MS) {
+            alarmTimeout = setTimeout(() => {
+                arm(ms);
+            }, MAX_TIMEOUT_MS);
+
+            return;
+        }
 
         alarmTimeout = setTimeout(() => {
             alarmAt = undefined;

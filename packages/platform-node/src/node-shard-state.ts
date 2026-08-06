@@ -81,7 +81,21 @@ export interface NodeShardState {
 export const createNodeShardState = (shard: NodeShard): NodeShardState => {
     return {
         acceptWebSocket: (socket, tags) => {
-            shard.sockets.accept(socket, undefined, tags);
+            const handle = shard.sockets.accept(socket, undefined, tags);
+
+            // Cloudflare's `createSocketHost.accept` stamps the attachment onto
+            // the socket AFTER `acceptWebSocket` returns, because its runtime
+            // only tracks attachments for sockets it has accepted. Node's host
+            // mints a separate wrapper handle, so that stamp would land on an
+            // object nobody reads and the durable state would keep `undefined`.
+            // Route the stamp (and mirror the read) into the wrapper's state so
+            // the two agree — the raw socket is the handle the adapter handed
+            // back, and the wrapper is what `getWebSockets` enumerates.
+            const bridge = socket as { deserializeAttachment?: () => unknown; serializeAttachment?: (value: unknown) => void };
+            bridge.serializeAttachment = (value) => {
+                handle.serializeAttachment(value);
+            };
+            bridge.deserializeAttachment = () => handle.deserializeAttachment();
         },
         blockConcurrencyWhile: (callback) => shard.shard.runSerialized(callback),
         getWebSockets: (tag) => shard.sockets.getSockets(tag),

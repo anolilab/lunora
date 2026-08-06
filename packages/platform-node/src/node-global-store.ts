@@ -50,6 +50,35 @@ import {
 import Database from "better-sqlite3";
 
 /**
+ * Per-connection cache of compiled statements, keyed by SQL text.
+ *
+ * `database.prepare(sql)` recompiles the statement on every call, and this
+ * exec wraps every read and write the `.global()` table core issues through
+ * `SqlCtxExec` — so the same SQL text would otherwise be recompiled repeatedly
+ * on a hot path. The `WeakMap` key keeps a cache from ever pinning a closed
+ * connection.
+ */
+const statementCache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
+
+const preparedStatement = (database: Database.Database, statement: string): Database.Statement => {
+    let cache = statementCache.get(database);
+
+    if (cache === undefined) {
+        cache = new Map();
+        statementCache.set(database, cache);
+    }
+
+    let prepared = cache.get(statement);
+
+    if (prepared === undefined) {
+        prepared = database.prepare(statement);
+        cache.set(statement, prepared);
+    }
+
+    return prepared;
+};
+
+/**
  * The Node store options — the shared store options minus the two this binding
  * owns. `dialect` is fixed (SQLite) and `exec` is the store's own connection;
  * letting a caller pass either would let them point the writer at a different
@@ -71,10 +100,10 @@ export type NodeGlobalContextDatabaseOptions = Omit<SqlCtxDbOptions, "dialect" |
 export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
     return {
         // eslint-disable-next-line @typescript-eslint/require-await -- the exec seam is async so a networked engine can await; better-sqlite3 is synchronous
-        all: async (statement, parameters) => database.prepare(statement).all(...(parameters as unknown[])) as Record<string, unknown>[],
+        all: async (statement, parameters) => preparedStatement(database, statement).all(...(parameters as unknown[])) as Record<string, unknown>[],
         // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
         run: async (statement, parameters) => {
-            const result = database.prepare(statement).run(...(parameters as unknown[]));
+            const result = preparedStatement(database, statement).run(...(parameters as unknown[]));
 
             return { rowsAffected: result.changes };
         },

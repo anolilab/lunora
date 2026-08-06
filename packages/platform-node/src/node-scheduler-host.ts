@@ -41,6 +41,7 @@
  * one-shot jobs.
  */
 
+import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
 import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
@@ -60,6 +61,13 @@ const DEFAULT_RETRY = {
     maxAttempts: 5,
     maxDelayMs: 60_000,
 } as const;
+
+/**
+ * Largest delay `setTimeout` accepts as a 32-bit signed integer. Any delay
+ * above this (~24.8 days) is clamped to 1 ms with a `TimeoutOverflowWarning`,
+ * which would fire a job or cron tick far ahead of its target timestamp.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
@@ -217,14 +225,6 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     /** Armed cron tick timers, keyed by cron key. */
     const cronTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-    let counter = 0;
-
-    const nextId = (): string => {
-        counter += 1;
-
-        return `node-job-${String(counter)}`;
-    };
-
     const toStatus = (row: JobRow): ScheduledJobStatus => {
         return {
             attempts: row.attempts,
@@ -246,17 +246,30 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     const armJob = (id: string, scheduledFor: number): void => {
         clearJobTimer(id);
 
-        const timer = setTimeout(
-            () => {
-                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `armJob` and `deliver` are mutually recursive by nature (a retry re-arms, an arm delivers), so one of the two references has to precede its definition
-                deliver(id).catch(() => {
-                    // `deliver` settles its own failures into the retry /
-                    // dead-letter machinery; this only keeps the promise from
-                    // floating.
-                });
-            },
-            Math.max(0, scheduledFor - Date.now()),
-        );
+        const delay = Math.max(0, scheduledFor - Date.now());
+
+        // `setTimeout` clamps any delay above 2^31 - 1 ms (~24.8 days) down to
+        // 1 ms and warns (`TimeoutOverflowWarning`), so a long-delay job would
+        // fire immediately — deleted, with its retry budget unspent. Re-arm in
+        // maximum-sized chunks until the target is close enough to pass whole.
+        if (delay > MAX_TIMEOUT_MS) {
+            const timer = setTimeout(() => {
+                armJob(id, scheduledFor);
+            }, MAX_TIMEOUT_MS);
+
+            jobTimers.set(id, timer);
+
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `armJob` and `deliver` are mutually recursive by nature (a retry re-arms, an arm delivers), so one of the two references has to precede its definition
+            deliver(id).catch(() => {
+                // `deliver` settles its own failures into the retry /
+                // dead-letter machinery; this only keeps the promise from
+                // floating.
+            });
+        }, delay);
 
         jobTimers.set(id, timer);
     };
@@ -296,8 +309,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         } catch {
             // Delivery failed. The catch is bare because *why* it failed is the
             // handler's business; all this loop decides is whether any budget is
-            // left.
-            if (!isOpen()) {
+            // left. `closed` is checked too: `dispose()` cleared `jobTimers` and
+            // may have run while this dispatch was in flight, and a re-arm after
+            // that would mint a fresh timer nothing would ever clear.
+            if (closed || !isOpen()) {
                 return;
             }
 
@@ -354,7 +369,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                         // See the docstring: a dropped tick must not stop the schedule.
                     }
 
-                    if (isOpen()) {
+                    // `closed` checked alongside `isOpen()`: a tick that lands
+                    // during `dispose()` must not arm the next one, since that
+                    // timer would be minted after `cronTimers` was cleared.
+                    if (!closed && isOpen()) {
                         armCron(row);
                     }
                 })().catch(() => {
@@ -414,6 +432,13 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             list: async () => (closed || !isOpen() ? [] : selectByState.all("dead").map((row) => toStatus(row))),
             // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
             requeue: async (id) => {
+                if (closed || !isOpen()) {
+                    // Same answer the `list` guard above gives for a closed or
+                    // closed-over connection: nothing was moved, and teardown
+                    // code must not receive a `TypeError` from better-sqlite3.
+                    return false;
+                }
+
                 // "Due immediately" rather than the original `scheduled_for`,
                 // which is by definition in the past by the time an operator
                 // requeues it: recovering a parked job means trying it now, and
@@ -443,7 +468,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 throw new Error("platform closed: cannot schedule a job");
             }
 
-            const id = nextId();
+            // A UUID rather than a per-process counter: the counter restarted
+            // at 0 on every construction, and rows persist in
+            // `_lunora_scheduler_jobs` — so a second host over the same
+            // database re-minted `node-job-1` and blew the PRIMARY KEY on the
+            // INSERT. A UUID cannot collide with a persisted row.
+            const id = `node-job-${randomUUID()}`;
             let scheduledFor: number;
 
             if (scheduleOptions?.at === undefined) {

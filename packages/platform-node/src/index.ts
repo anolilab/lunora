@@ -18,11 +18,13 @@
  * lifecycle/global-store tests.
  *
  * **Still missing**, and rated accordingly in `NODE_CAPABILITIES`
- * (`@lunora/platform`): cross-shard fan-out (no query coordinator), a deploy
- * driver — so `lunora dev --target node` does not exist yet — and every
- * Cloudflare product binding (R2, Queues, Workflows, Vectorize, Workers AI,
- * Browser Rendering, Containers, Analytics Engine, Pipelines, Secrets Store,
- * Hyperdrive). See `plans/234-node-host-findings.md`.
+ * (`@lunora/platform`): a dev server — so `lunora dev --target node` does not
+ * exist yet — and every Cloudflare product binding (R2, Queues, Workflows,
+ * Vectorize, Workers AI, Browser Rendering, Containers, Analytics Engine,
+ * Pipelines, Secrets Store, Hyperdrive). Cross-shard fan-out is emulated via
+ * `@lunora/runtime`'s query coordinator over the in-process shard registry, and
+ * a `@lunora/config` deploy driver makes `--target node` resolve. See
+ * `plans/234-node-host-findings.md`.
  */
 
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";

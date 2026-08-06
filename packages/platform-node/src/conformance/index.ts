@@ -85,8 +85,12 @@ export const createNodeConformanceHost = (): ConformanceHost => {
             // keep the event loop open — which is what produced the "worker
             // process failed to exit gracefully" / up-to-10s delay closing out
             // a TCK run.
-            disposeShard();
+            // Scheduler first, matching `createNodePlatform.close()`: `disposeShard`
+            // closes the connection, and a job timer that fired in the window
+            // would find it closed. Both are guarded, but ordering makes the
+            // guard the backstop rather than the mechanism.
             disposeScheduler();
+            disposeShard();
             registry.close();
         },
         directory,

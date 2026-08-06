@@ -65,9 +65,18 @@ const SHARD_FILE_SUFFIX = ".sqlite3";
  * readable in a directory listing (`tenant-42.sqlite3`) while staying
  * reversible and safe for keys carrying `/`, `:` or spaces — all legal in a
  * shard key, none safe in a path segment.
+ *
+ * Each disallowed code point is escaped as its **UTF-8 byte sequence** — one
+ * `%XX` per byte, uppercase — because `decodeURIComponent` (which
+ * `decodeShardKey` uses) only understands valid UTF-8 percent-escapes.
+ * Escaping the Unicode code point instead (`é` → `%E9`) corrupts every key
+ * whose character is not ASCII into an unparseable basename on the next
+ * restart.
  */
 const encodeShardKey = (key: string): string =>
-    key.replaceAll(/[^\w.-]/gu, (character) => `%${character.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}`);
+    key.replaceAll(/[^\w.-]/gu, (character) =>
+        [...Buffer.from(character, "utf8")].map((byte) => `%${byte.toString(16).padStart(2, "0").toUpperCase()}`).join(""),
+    );
 
 /** Inverse of {@link encodeShardKey}. */
 const decodeShardKey = (basename: string): string => decodeURIComponent(basename);
