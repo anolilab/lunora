@@ -347,9 +347,16 @@ type StorageUploadFunction = (
  * Mints a (signed or public) URL for one object so the admin file browser can
  * offer a "copy URL" action. The optional `expiresInSeconds` lets the caller pick
  * a share-link lifetime (the host clamps it); `bucket` selects a named bucket.
+ * `method` and `contentType` are forwarded to the underlying signer and let the
+ * caller mint a presigned PUT URL for large-blob uploads that bypass the
+ * worker's body-size cap (the importer uses this for Convex storage blobs
+ * above the 1 MiB limit).
  * Structurally compatible with `@lunora/storage`'s `Storage["getSignedUrl"]`.
  */
-type StorageSignedUrlFunction = (key: string, options?: { bucket?: string; expiresInSeconds?: number }) => Promise<string> | string;
+type StorageSignedUrlFunction = (
+    key: string,
+    options?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT" },
+) => Promise<string> | string;
 
 /** One `.global()` table plus its row count. Mirrors `@lunora/d1`'s `GlobalTableInfo`. */
 interface GlobalTableInfo {

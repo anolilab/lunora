@@ -26,6 +26,21 @@ const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 // mirror that ceiling so an over-max request is clamped, not a 500.
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 
+/**
+ * Lowercase hex-encode an `ArrayBuffer` — WebCrypto digest output (base16) as
+ * the storage importer's `sha256` surface expects it.
+ */
+const toHex = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    let out = "";
+
+    for (const byte of bytes) {
+        out += byte.toString(16).padStart(2, "0");
+    }
+
+    return out;
+};
+
 /** The worker internals the storage routes reach through injection rather than closure. */
 interface StorageAdminRouteDeps {
     /** Admin-token gate (throws 403). Used directly by the buckets route (which has no `requireAdminOption` value to gate). */
@@ -121,9 +136,36 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         const headerContentType = request.headers.get("content-type");
         const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
 
+        // Optional upload verification: the caller declares the exact byte size
+        // and/or SHA-256 (base16) of what it is sending. When either is present
+        // the worker hashes the body and rejects with `STORAGE_CHECKSUM_MISMATCH`
+        // BEFORE anything is written, so a corrupt or truncated transfer fails
+        // closed instead of persisting unverified bytes. Absent both, the
+        // endpoint behaves exactly as before (legacy uploads).
+        const expectedSha256 = queryParameter(url, "expectedSha256");
+        const expectedSize = queryParameter(url, "expectedSize");
+        let sha256: string | undefined;
+
+        if (expectedSha256 !== undefined || expectedSize !== undefined) {
+            const digest = await crypto.subtle.digest("SHA-256", body);
+            sha256 = toHex(digest);
+
+            const sizeMismatch = expectedSize !== undefined && body.byteLength !== Number(expectedSize);
+            const hashMismatch = expectedSha256 !== undefined && sha256 !== expectedSha256.toLowerCase();
+
+            if (sizeMismatch || hashMismatch) {
+                throw new LunoraError("Upload failed verification — the body did not match the declared size or SHA-256 checksum, so nothing was written", {
+                    code: "STORAGE_CHECKSUM_MISMATCH",
+                    status: 400,
+                });
+            }
+        }
+
         const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType });
 
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+        // Echo the computed hash only when verification was requested — the
+        // importer uses it to confirm the blob landed byte-identical.
+        return Response.json(sha256 === undefined ? result : { ...result, sha256 }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     /**
@@ -163,7 +205,12 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         // so clamp here to keep an over-max request a valid URL rather than a 500.
         const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
         const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
-        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), expiresInSeconds });
+        // Optional HTTP method for the presigned URL — the importer uses `PUT` for
+        // large blobs that exceed the worker's body-size cap.
+        const method = queryParameter(url, "method") as "GET" | "PUT" | undefined;
+        const contentType = queryParameter(url, "contentType");
+        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), contentType, expiresInSeconds, method });
+
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };

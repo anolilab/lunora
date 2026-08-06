@@ -1433,6 +1433,35 @@ Vetted against live code and dropped — recorded so they aren't re-audited:
   `reactive-cache` dead comment** — degenerate or comment-only; noted inside the
   relevant plans rather than filed separately.
 
+## Wave 19 — migration-ergonomics gap wave (baseline `9ddd16f63`, 2026-08-05)
+
+Competitive gap analysis of the migration story. Convex migration already has a
+working importer, but its file-storage blobs are skipped (`_storage`), imports
+are never verified against the source, and the Supabase/Firebase guides end at a
+hand-written dump-and-reshape script. Two plans land here: **304** (Convex
+`_storage` blob migration + `--verify`) and **305** (Supabase/Firebase
+importers + a stale-import lint). Scope was decided in the planning interview:
+**content-hash R2 keys** (dedup + idempotent re-imports, at the cost of a
+mapping file for string storage refs), blob upload through the **existing admin
+storage route** (no new credentials), and 305 ships **data + auth + storage
+transfer** in the CLI. `@convex-dev/*` runtime-component compatibility is an
+explicit non-goal.
+
+| Plan | Title                                                  | Category       | Pkg         | Pri | Effort | Risk | Status |
+| ---- | ------------------------------------------------------ | -------------- | ----------- | --- | ------ | ---- | ------ |
+| 304  | Convex `_storage` blob migration + import verification | data/migration | cli/runtime | P1  | M      | MED  | TODO   |
+| 305  | First-class Supabase and Firebase importers            | data/migration | cli/advisor | P2  | L      | MED  | TODO   |
+
+### Notes
+
+- **304 → 305.** 305's storage-transfer phase reuses 304's checksum-verified
+  admin upload route; 305 branches after 304 lands, not before.
+- **304 scope check:** plan **303** ("Wire-codec display leftovers from plan
+  300") already owns the `303` number — the two blob plans are 304 and 305.
+- **Blob-export parity** (exporting blobs back out of R2) is deliberately out of
+  scope for 304 and recorded as an open question; the Convex export format is
+  symmetric, so the gap is small if a future wave wants it.
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:

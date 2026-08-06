@@ -292,6 +292,15 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
     };
+    readonly STORAGE_CHECKSUM_MISMATCH: {
+        readonly hint: readonly [
+            "The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.",
+            "",
+            "Re-read the bytes from the source export and retry the transfer. A persistent mismatch means the source blob is corrupt or truncated; fix the export rather than bypassing the check."
+        ];
+        readonly status: 400;
+        readonly title: "Storage checksum mismatch";
+    };
     readonly VECTORS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Vector index introspector not configured";

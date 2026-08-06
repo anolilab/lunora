@@ -27,6 +27,7 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ a
         table: options.table,
         token: options.token,
         url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
+        withStorage: options.withstorage === true,
         yes: options.yes === true,
     });
 });
