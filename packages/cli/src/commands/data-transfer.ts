@@ -28,6 +28,23 @@ interface ImportConvexMapping {
     storageColumns?: Record<string, string[]>;
 }
 
+/**
+ * Read `lunora/import-convex.json` from the project directory.
+ * Returns the mapping if the file exists and is valid; undefined otherwise.
+ */
+const readImportConvexMapping = async (cwd: string, logger: Logger): Promise<ImportConvexMapping | undefined> => {
+    try {
+        const mappingPath = join(cwd, "lunora", "import-convex.json");
+        const content = await readFile(mappingPath, "utf8");
+
+        return JSON.parse(content) as ImportConvexMapping;
+    } catch {
+        logger.info("no import-convex.json mapping file found — using auto-detected { $storage } refs only");
+
+        return undefined;
+    }
+};
+
 const EXPORT_ENDPOINT_PATH = "/_lunora/admin/export";
 const IMPORT_ENDPOINT_PATH = "/_lunora/admin/import";
 const STORAGE_ENDPOINT_PATH = "/_lunora/admin/storage";
@@ -483,10 +500,7 @@ const resolveImportSource = async (
  * Decide whether the positional path is a Convex export directory or a plain
  * NDJSON file, rejecting the shapes that cannot be either.
  */
-const readStorageMetadata = async (
-    exportDirectory: string,
-    logger: Logger,
-): Promise<{ _id: string; contentType?: string; sha256: string; size: number }[]> => {
+const readStorageMetadata = async (exportDirectory: string, logger: Logger): Promise<{ _id: string; contentType?: string; sha256: string; size: number }[]> => {
     const metadataFile = join(exportDirectory, "_storage", "documents.jsonl");
     const rows: { _id: string; contentType?: string; sha256: string; size: number }[] = [];
 
@@ -640,12 +654,7 @@ const uploadStorageBlob = async (
  * blob with sha256+size verification, and build the `storageId → key` map.
  * Fail-close on any mismatch or missing file.
  */
-const migrateStorageBlobs = async (
-    baseUrl: string,
-    adminToken: string,
-    exportDirectory: string,
-    logger: Logger,
-): Promise<Map<string, string>> => {
+const migrateStorageBlobs = async (baseUrl: string, adminToken: string, exportDirectory: string, logger: Logger): Promise<Map<string, string>> => {
     const metadataRows = await readStorageMetadata(exportDirectory, logger);
     const keyPrefix = ""; // TODO: read from lunora/import-convex.json (W3)
     const storageIdMap = new Map<string, string>();
@@ -697,7 +706,7 @@ const remapStorageReferences = (
         } else if (typeof value === "string" && storageIdMap.has(value)) {
             // Plain string that matches a storage id — rewrite to the content-hash key.
             // Only rewrite if this column is in the mapping (if mapping provided).
-            remapped[key] = (!storageColumns || storageColumns[key]) ? (storageIdMap.get(value) ?? value) : value;
+            remapped[key] = !storageColumns || storageColumns[key] ? (storageIdMap.get(value) ?? value) : value;
         } else {
             remapped[key] = value;
         }
@@ -736,12 +745,8 @@ const reportImportOutcome = (
  * Scan a Convex export directory for storage id references and emit a candidate
  * `import-convex.json` mapping file.
  */
- 
-const scanStorageColumns = async (
-    exportDirectory: string,
-    convexTables: ReadonlyArray<{ file: string; table: string }>,
-    logger: Logger,
-): Promise<void> => {
+/* eslint-disable sonarjs/cognitive-complexity -- the scan function iterates over tables and rows; complexity is justified */
+const scanStorageColumns = async (exportDirectory: string, convexTables: ReadonlyArray<{ file: string; table: string }>, logger: Logger): Promise<void> => {
     const storageIds = new Set<string>();
     const storageColumns: Record<string, string[]> = {};
 
@@ -806,6 +811,7 @@ const scanStorageColumns = async (
     logger.info("candidate storage column mapping:");
     logger.info(JSON.stringify({ keyPrefix: "", storageColumns }, undefined, 2));
 };
+/* eslint-enable sonarjs/cognitive-complexity */
 
 /**
  * Stream an NDJSON file — or a `npx convex export --path <dir>` directory — in
@@ -813,7 +819,7 @@ const scanStorageColumns = async (
  * bounded by `batchSize`, so a multi-GiB source imports without buffering
  * everything in memory.
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity -- the import command orchestrates several phases; extracted helpers keep each small
+/* eslint-disable sonarjs/cognitive-complexity -- the import command orchestrates several phases; extracted helpers keep each small */
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const request = await resolveImportRequest(options);
 
@@ -845,15 +851,9 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     // W3: read import-convex.json mapping file if it exists.
     if (options.withStorage && options.cwd) {
-        try {
-            const mappingPath = join(options.cwd, "lunora", "import-convex.json");
-            const mappingContent = await readFile(mappingPath, "utf8");
-            const mapping = JSON.parse(mappingContent) as ImportConvexMapping;
+        const mapping = await readImportConvexMapping(options.cwd, options.logger);
 
-            storageColumns = mapping.storageColumns;
-        } catch {
-            // Mapping file doesn't exist or is invalid — proceed without it.
-        }
+        storageColumns = mapping?.storageColumns;
     }
 
     if (options.withStorage && convexTables) {
@@ -1051,6 +1051,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     return { body, code: errors.length > 0 ? 1 : 0, inserted: insertedTotal };
 };
+/* eslint-enable sonarjs/cognitive-complexity */
 
 export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike };
 export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand };
