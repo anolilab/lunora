@@ -56,7 +56,7 @@ const documentIdFromName = (name: string): string => {
 /** Protobuf `Timestamp` → epoch milliseconds; `NaN` when the parts are unusable. */
 const protoTimestampToMs = (timestamp: { nanos?: number; seconds?: number | string }): number => {
     const seconds = Number(timestamp.seconds ?? 0);
-    const nanos = Number(timestamp.nanos ?? 0);
+    const nanos = timestamp.nanos ?? 0;
 
     return Number.isFinite(seconds) && Number.isFinite(nanos) ? seconds * 1000 + Math.floor(nanos / 1_000_000) : Number.NaN;
 };
@@ -71,6 +71,43 @@ const bytesToBase64 = (value: { data?: number[]; type?: string } | number[], pat
 
     return Buffer.from(bytes).toString("base64");
 };
+
+/**
+ * `timestampValue` → epoch milliseconds, in either spelling.
+ *
+ * REST (`documents.list`) writes RFC-3339; the Admin SDK's `_fieldsProto` — what
+ * the documented dump script reads — writes the protobuf `{ seconds, nanos }`.
+ * Accepting only the first made that script fail on every collection with a
+ * `createdAt`.
+ *
+ * Both truncate to milliseconds, and Firestore stores microseconds. That is
+ * deliberate rather than overlooked: the target column is a Lunora timestamp,
+ * which IS milliseconds, and returning the RFC-3339 string for the
+ * sub-millisecond rows would make the column's type depend on its data — number
+ * for most rows, string for a few — which no schema can describe. An app that
+ * needs the rest should carry it in its own column.
+ */
+const decodeTimestamp = (raw: NonNullable<FirestoreValue["timestampValue"]>, path: string): number => {
+    const parsed = typeof raw === "string" ? Date.parse(raw) : protoTimestampToMs(raw);
+
+    if (Number.isNaN(parsed)) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${path}: \`timestampValue\` ${JSON.stringify(raw)} is neither an RFC-3339 string nor a \`{ seconds, nanos }\` protobuf timestamp`,
+        );
+    }
+
+    return parsed;
+};
+
+/**
+ * `bytesValue` → base64, in either spelling.
+ *
+ * Base64 in the REST encoding, and base64 is what survives the NDJSON hop
+ * unchanged. The Admin SDK holds a `Buffer`, which `JSON.stringify` renders as
+ * `{ type: "Buffer", data: [...] }`.
+ */
+const decodeBytes = (raw: NonNullable<FirestoreValue["bytesValue"]>, path: string): string => (typeof raw === "string" ? raw : bytesToBase64(raw, path));
 
 /**
  * Decode one typed value to plain JSON.
@@ -107,35 +144,11 @@ const decodeValue = (value: FirestoreValue, path: string): unknown => {
     }
 
     if (value.timestampValue !== undefined) {
-        // Two encodings reach here. REST (`documents.list`) writes RFC-3339; the
-        // Admin SDK's `_fieldsProto` — what the documented dump script reads —
-        // writes the protobuf Timestamp, `{ seconds, nanos }`. Accepting only
-        // the first made that script fail on every collection with a `createdAt`.
-        //
-        // Both truncate to milliseconds, and Firestore stores microseconds. That
-        // is deliberate rather than overlooked: the target column is a Lunora
-        // timestamp, which IS milliseconds, and returning the RFC-3339 string for
-        // the sub-millisecond rows would make the column's type depend on its
-        // data — number for most rows, string for a few — which no schema can
-        // describe. An app that needs the rest should carry it in its own column.
-        const parsed = typeof value.timestampValue === "string" ? Date.parse(value.timestampValue) : protoTimestampToMs(value.timestampValue);
-
-        if (Number.isNaN(parsed)) {
-            throw new LunoraError(
-                "INTERNAL",
-                `${path}: \`timestampValue\` ${JSON.stringify(value.timestampValue)} is neither an RFC-3339 string nor a \`{ seconds, nanos }\` protobuf timestamp`,
-            );
-        }
-
-        return parsed;
+        return decodeTimestamp(value.timestampValue, path);
     }
 
     if (value.bytesValue !== undefined) {
-        // Base64 in the REST encoding, and base64 is what survives the NDJSON hop
-        // unchanged. The Admin SDK holds a Buffer instead, which `JSON.stringify`
-        // renders as `{ type: "Buffer", data: [...] }` — decoded back to base64
-        // here so both dump shapes land on the same value.
-        return typeof value.bytesValue === "string" ? value.bytesValue : bytesToBase64(value.bytesValue, path);
+        return decodeBytes(value.bytesValue, path);
     }
 
     if (value.geoPointValue !== undefined) {

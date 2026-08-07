@@ -396,10 +396,10 @@ describe("lunora import --from firebase", () => {
         writeMapping("firebase", {});
 
         const { imported } = await runImport(root, "firebase");
-        const document_ = imported.find((row) => row.table === "events")?.doc as { at: number; blob: string };
+        const decoded = imported.find((row) => row.table === "events")?.doc as { at: number; blob: string };
 
-        expect(document_.at).toBe(1_704_164_645_500);
-        expect(document_.blob).toBe("SGk=");
+        expect(decoded.at).toBe(1_704_164_645_500);
+        expect(decoded.blob).toBe("SGk=");
     });
 
     it("decodes every Firestore typed value and takes `_id` from the resource path", async () => {
